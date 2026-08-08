@@ -322,7 +322,7 @@ in `docs/FRAGEN.md` aufgelistet.
 | Die **Excel-Feature-Liste** | per Skript → `docs/features.ron` (jede Zeile eine `F-ID`) → generiert `docs/TODO.md` + `docs/STATUS.md`. Datei bleibt erhalten. |
 | Ein **Feature / eine Mechanik** (aus Text/Excel) | `docs/gameplay/<thema>.md` (das Design: *warum so*, mit `F-ID`) **+ eine ⬜-Zeile in `docs/STATUS.md`** |
 | Eine **Zahl / Balance** | in die passende `assets/data/*.ron` — **niemals in den Rust-Code** (§4) |
-| Ein **Item / Titan / Trait / Einsatz** | ein Eintrag in `titans.ron` / `gear.ron` / `traits.ron` / `missions.ron` |
+| Ein **Item / Titan / Trait / Einsatz** | ein Eintrag in `titan.ron` / `gear.ron` / `traits.ron` / `missions.ron` |
 | Eine **Skizze / ein Bild** | bleibt in `gameplay/bilder/`, wird aus `docs/gameplay/` verlinkt |
 | Etwas **Unklares** | `docs/FRAGEN.md` — nicht raten, nicht drumherum bauen und hoffen |
 
@@ -443,7 +443,9 @@ Ein neuer Titan-Typ, eine Klingenstufe, ein Trait, eine Missionsvorlage, eine Ga
 ```
 assets/data/
   game.ron       Tuning: Vector Gear (Hakenreichweite, Seilzug, Gas, Boost), Kamera, Physik
-  titans.ron     die Titanen-Typen (Größe, Tempo, Regeneration, Cortex-Größe, KI-Profil)
+  titan.ron      die Titanen-Typen (Größe, Tempo, Regeneration, Cortex-Größe, KI-Profil)
+                 — benannt nach dem Gattungsbegriff **Titan** (Blatt 10: „Titan bleibt"),
+                   ohne Plural-s, wie der Projektname
   gear.ron       Klingen, Tanks, Haken, Upgrade-Stufen und ihre Kosten
   traits.ron      Traits + Lineage-Passive (Relics, Echos)
   missions.ron   Einsatzvorlagen: Ziele, Phasen, Spawn-Wellen, Belohnung
@@ -750,7 +752,7 @@ fremd, wo liegt es, und was soll es werden?* Also:
 
 ```
 assets/
-  data/                 alle RON: game.ron, titans.ron, gear.ron, traits.ron, missions.ron,
+  data/                 alle RON: game.ron, titan.ron, gear.ron, traits.ron, missions.ron,
                         assets.ron  ← die Registratur (oben)
   3d/
     blend/              ⭐ QUELLE, von Hand editierbar (§7)
