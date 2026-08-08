@@ -7,7 +7,7 @@ alles, was daneben liegt) und **`gameplay/`** (§2).
 
 Diese Datei ist der **Initialprompt**: sie sagt, *was* gebaut wird, *wie* der Baum aussieht, *was
 Bevy von dir braucht* und **wie du deinen Zustand dokumentierst, damit andere Agenten dir glauben
-können**. Lösch sie nicht — sie wird der erste Commit und geht erst am Ende (§16).
+können**. Lösch sie nicht — sie wird der erste Commit und geht erst am Ende (§18).
 
 > ## ⚠️ Zuerst: **lies ALLE Dateien in `prompts/`, bevor du eine Zeile Code schreibst**
 >
@@ -174,7 +174,7 @@ Daraus werden **Ansichten generiert**, nie parallel gepflegt (ein Schreiber pro 
 STATUS-Zeile. Damit ist für **jede** Zeile der Excel-Tabelle in einem `grep` beantwortbar: ist das
 gebaut, wo, und wie belegt?
 
-**Und die Datei selbst:** die `.xlsx` wandert bei der Auflösung des Gerüsts (§16) nach
+**Und die Datei selbst:** die `.xlsx` wandert bei der Auflösung des Gerüsts (§18) nach
 `docs/gameplay/features.xlsx` und wird **nie gelöscht**. Wenn der User eine neue Version einlegt:
 **erneut extrahieren und die Extraktion diffen** — neue Zeilen kommen als ⬜ dazu, geänderte
 Zeilen bekommen eine Notiz, **verschwundene Zeilen werden nicht stillschweigend gelöscht**, sondern
@@ -197,7 +197,7 @@ der es baubar ist, nicht nach der Reihenfolge, in der es notiert wurde. Dazu ein
 *warum* sie da steht, wo sie steht. Ein anderer Agent muss offene Arbeit finden können, **ohne**
 den Eingangskorb zu lesen.
 
-**Und: die TODO-Liste schlägt den Stufenplan (§11).** Der Stufenplan sagt, wie man von null zu
+**Und: die TODO-Liste schlägt den Stufenplan (§14).** Der Stufenplan sagt, wie man von null zu
 einem laufenden Spiel kommt; sobald die TODO-Liste da ist, sagt sie, was danach passiert. Bau nie
 etwas Großes, das in keiner der beiden Listen steht — trag es zuerst ein.
 
@@ -351,7 +351,7 @@ src/
   sound/     SoundPlugin      Gas-Zischen, Hakeneinschlag, Klingenschnitt, Titanenschritt
   net/       NetPlugin        ⭐ die Naht für Multiplayer (§6) — heute ein Stub mit dem
                               Transport `LocalOnly`, aber die Naht existiert ab Tag 1
-  debug/     DebugPlugin      F3-Overlay, Gizmos, `--script`-Fahrer (§11)
+  debug/     DebugPlugin      F3-Overlay, Gizmos, `--script`-Fahrer (§12)
 ```
 
 ### Was „standalone" konkret heißt — und wie es geprüft wird
@@ -399,7 +399,7 @@ heißt normalerweise, die Simulation neu zu schreiben.
    bestätigt werden.
 2. **Eingabe ist ein Datum, kein Tastendruck.** Es gibt **ein** Struct — `Intent` (Bewegungsvektor,
    Blickrichtung, Buttons, Tick-Nummer) — und die Simulation liest **nur** das. Wer es füllt, ist
-   ihr egal: die lokale Tastatur, das `--script`-Harness (§11) oder später das Netz. **Genau dieser
+   ihr egal: die lokale Tastatur, das `--script`-Harness (§12) oder später das Netz. **Genau dieser
    Kanal ist der, den Multiplayer braucht** — und du baust ihn in Stufe 1 sowieso, weil du nicht
    klicken kannst. Ein Aufwand, zwei Probleme gelöst.
 3. **Es gibt keinen „den Spieler".** Nie `.single()` auf eine Spieler-Query. Jeder Spieler ist
@@ -407,7 +407,7 @@ heißt normalerweise, die Simulation neu zu schreiben.
    globale `Resource`. Die Kamera hängt an einem `LocalPlayer`-Marker — das ist die **einzige**
    Stelle im Code, die weiß, welcher Spieler „ich" ist.
 4. **Fester Simulationsschritt.** Zustand ändert sich in `FixedUpdate` (z. B. 60 Hz), das Bild
-   interpoliert dazwischen. Dieselbe Regel wie §10 („nichts pro Frame"), nur strenger: im Netz ist
+   interpoliert dazwischen. Dieselbe Regel wie §11 („nichts pro Frame"), nur strenger: im Netz ist
    ein frameabhängiges Ergebnis kein Komfortproblem, sondern **Desync**.
 5. **Determinismus, wo er billig ist.** Zufall nur aus einem **geseedeten** Generator, dessen Seed
    Teil des Zustands ist (`seed + tick`), nie `rand::random()` mitten in einem System. Ein Titan,
@@ -637,7 +637,7 @@ Stufen: ⬜ nicht implementiert · 🟨 halb (gebaut, ungetestet) ·
   Richtig schlägt neu: dass eine Funktion tut, was sie soll, ist wichtiger als jedes weitere
   Feature.
 - **„Kein Bild möglich" wird hingeschrieben, nicht weggelassen.** Wenn es keine Grafiksitzung
-  gibt (§11), bleibt die Sache 🟨 mit dem Vermerk *„gebaut + getestet, Pixel ungesehen"*. Nicht
+  gibt (§12), bleibt die Sache 🟨 mit dem Vermerk *„gebaut + getestet, Pixel ungesehen"*. Nicht
   aufrunden.
 
 ### Die anderen Pflichtdateien
@@ -738,7 +738,79 @@ funktioniert. Das kostet nichts. Eine zu hohe Stufe kostet den Nächsten einen h
 
 ---
 
-## 10. Performance: die Regel, die man von Anfang an einhalten muss
+## 10. ⭐ Alles, was sich **wiederholt**, ist genormt
+
+> **Zwei Formen für dieselbe Sache heißen: keine Form.** Wenn eine Commit-Message frei erfunden
+> wird, ist die Historie kein Werkzeug mehr, sondern ein Tagebuch. Genormt heißt nicht hübsch —
+> es heißt **greppbar**: `git log --oneline | grep F-014` muss die Geschichte eines Features
+> beantworten, und `grep -rn F-014 docs/ tests/` den Rest.
+
+**Die Norm steht in `docs/konventionen.md`, mit genau EINEM Beispiel pro Zeile.** Sie ist die
+einzige Quelle; wer eine neue wiederkehrende Sache anfängt (ein neuer Dateityp, ein neues
+Protokoll), **normt sie dort, bevor er sie zum zweiten Mal benutzt**.
+
+### Commit-Messages
+
+```
+<F-ID|bereich>: <eine Zeile, was jetzt anders ist>        ← max 72 Zeichen, Deutsch, aktiv
+
+Stufe: 🟨 → 🟧                                            ← nur wenn sie sich ändert (§8)
+Beleg: tests/gas.rs::f014_boost_verbraucht_gas · docs/bilder/f014-boost.png · 12,4 → 3,1 ms [cachy]
+Grund: eine Zeile, WARUM — nur wenn es nicht offensichtlich ist
+```
+
+- **Präfix ist die `F-ID`**, wenn es zu einem Feature aus der Liste gehört (§2): `F-014 odm: …`.
+  Gibt es keine, ist es einer von **fünf** Bereichen — und nur diese fünf:
+  `docs:` · `test:` · `tool:` · `fix:` · `chore:`.
+- **Ein Commit = eine Sache.** „Diverse Fixes" ist kein Commit, das ist ein Karton.
+- **Eine Sprache**: Deutsch, durchgehend. Nicht heute `add gas drain`, morgen `Gas-Verbrauch`.
+- **Kein Punkt am Ende, keine Emoji im Betreff** (die Stufen-Marken stehen im Rumpf).
+
+### Der Rest, was ebenfalls jedes Mal gleich aussieht
+
+| Was | Norm | Beispiel |
+|---|---|---|
+| **Branch** | `<f-id>-<kurz>` bzw. `<bereich>/<kurz>` | `f014-gas-boost`, `fix/haken-kante` |
+| **Test-Name** | `<f_id>_<die Aussage, die gilt>` — nicht „test_gas" | `f014_boost_verbraucht_gas` |
+| **Test-Datei** | `tests/<domäne>.rs` | `tests/odm.rs` |
+| **Screenshot** | `docs/bilder/<f-id>-<kurz>[-vorher|-nachher].png` | `docs/bilder/f014-boost-nachher.png` |
+| **Skript** | `scripts/<f-id>-<kurz>.txt`, darin `mark <f-id>-<stichwort>` | `scripts/f014-boost.txt` |
+| **STATUS-Zeile** | `\| Sache \| Domäne \| Stufe \| Beleg \| Datum [maschine] \|`, Datum **ISO** | `… \| 🟧 \| tests/odm.rs … \| 2026-08-09 [cachy] \|` |
+| **Bug** | `B-007 <Titel>` + die vier Felder aus §9 | `B-007 Haken hält an einer Kante nicht` |
+| **Frage** | `Q-003 <Frage>` + Kontext + `ANNAHME:` (womit du bis zur Antwort weiterarbeitest) | |
+| **Fremdfund** | `FUND-005 <Symptom>` + Messung | |
+| **Doku-Kopf** | `# <name> — <ein Satz>` und darunter `Stand: <ISO> · Stufe: <marke>` | |
+| **RON-Schlüssel** | `snake_case`, **eine** Sprache pro Datei (welche, steht in `docs/konventionen.md`) | |
+| **Rust** | `snake_case` Dateien/Funktionen, `CamelCase` Typen, Domänenordner immer Einzahl | `src/odm/hook.rs` |
+| **Subagenten-Bericht** (§17) | fest: `Aufgabe · Getan · Beleg · Stufe · Offen · Funde` | ein Freitext-Bericht ist nicht integrierbar |
+
+### Die Rituale — auch ein Ablauf, der sich wiederholt, ist genormt
+
+**Sitzungsanfang** (immer in dieser Reihenfolge, immer vollständig):
+
+```bash
+hostname                                  # welche Maschine? (§14)
+ls -lt prompts/ && ls -R gameplay/        # neuer Auftrag? (Kopf dieser Datei, §2)
+git status --short && git log --oneline -5 # was hat eine andere Sitzung getan?
+cat docs/STATUS.md docs/TODO.md           # wo stehen wir wirklich?
+cargo check 2>&1 | grep '^error'          # ist der Baum grün, BEVOR ich anfasse?
+```
+
+**Sitzungsende** (nichts davon ist optional):
+`docs/STATUS.md` + `docs/TODO.md` nachziehen · Screenshots nach `docs/bilder/` mit normiertem Namen ·
+neue Erkenntnis nach `docs/lessons/` · offene Frage nach `docs/FRAGEN.md` · **committen mit
+normierter Message** · und ein ehrlicher Absatz, was ungesehen blieb.
+
+### Und die Norm wird geprüft, nicht gehofft
+
+Ein Skript `tools/normen.py` (oder ein `commit-msg`-Hook) prüft, was mechanisch prüfbar ist:
+Commit-Betreff gegen die Regex, ISO-Datum in `STATUS.md`, Testnamen mit `f\d{3}_`-Präfix, wo eine
+`F-ID` existiert, Screenshot-Namen. **Eine Norm ohne Prüfer verfällt still** — genau wie die
+Domänenregel (§5) und die 20k-Regel (§11). Der Prüfer ist zwanzig Zeilen und spart die Diskussion.
+
+---
+
+## 11. Performance: die Regel, die man von Anfang an einhalten muss
 
 Eine Stadt hat Tausende Häuser, ein Einsatz Dutzende Titanen, jeder Titan sechs Gliedmaßen.
 **Nichts darf alle Entities durchlaufen, um eine Frage über die zehn Meter vor der Nase zu
@@ -763,7 +835,7 @@ beantworten.**
 
 ---
 
-## 11. Du kannst nicht klicken — bau dir die Werkzeuge **zuerst**
+## 12. Du kannst nicht klicken — bau dir die Werkzeuge **zuerst**
 
 Das ist der Punkt, an dem solche Projekte scheitern: alles ist gebaut, nichts ist gesehen, weil
 jedes Feature hinter Maus und Tastatur liegt und niemand am Keyboard sitzt. **Also kommt die
@@ -798,7 +870,7 @@ Geschwindigkeit, Gas, Hakenzustand, Bildzeit — **im Bild**. Dazu ein `warp x y
 Skript. Damit kann der User dir eine Koordinate schicken und du stehst genau dort. Das ist
 mehr wert als jedes Bug-Formular.
 
-**d) Screenshots (niri/Wayland):**
+**d) Screenshots (niri/Wayland) — nur auf Maschine B, siehe §14:**
 ```bash
 setsid nohup cargo run -- --sandbox > /tmp/dbt.log 2>&1 < /dev/null & disown
 sleep 20   # der erste Build dauert
@@ -819,7 +891,7 @@ Landet in `~/Pictures/Screenshots/`. **Kopier die Bilder nach `docs/bilder/`** u
 
 ---
 
-## 12. Der Stufenplan — nach jeder Stufe **läuft** das Spiel
+## 13. Der Stufenplan — nach jeder Stufe **läuft** das Spiel
 
 Wer breit anfängt (Titanen-KI, Missionen, Perks gleichzeitig), hat nach einem Tag nichts, was
 startet, und keine Ahnung, welcher von zwölf Umbauten es kaputtmacht. Also schmal und tief, und
@@ -831,13 +903,14 @@ Das kostet zwanzig Sekunden und entscheidet, was heute überhaupt möglich ist. 
 als Tabelle nach `docs/umgebung.md`, damit der nächste Agent es nicht wieder herausfinden muss:
 
 ```bash
+hostname                               # ⭐ WELCHE MASCHINE? (§14 — 'debian' = kein Fenster, das ist ok)
 rustc --version && cargo --version     # Rust vorhanden? edition 2024 braucht 1.85+
 df -h /home                            # ⚠️ ein Bevy-target/ wird zweistellig GB. Unter 20 GB frei: erst reden, dann bauen
-echo "WAYLAND=$WAYLAND_DISPLAY DISPLAY=$DISPLAY"   # leer ⇒ KEIN Screenshot möglich (§11)
+echo "WAYLAND=$WAYLAND_DISPLAY DISPLAY=$DISPLAY"   # leer ⇒ KEIN Screenshot möglich (§12)
 command -v niri && niri msg --version   # der Compositor für Screenshots
 command -v blender && blender --version # fehlt ⇒ Modellkette baut nur .py, exportiert nicht (§7)
 command -v gh && gh auth status          # fehlt/nicht angemeldet ⇒ Schritt 3 der Ziellinie braucht dich
-nproc                                    # wie breit darf parallel gebaut werden (§15)
+nproc                                    # wie breit darf parallel gebaut werden (§17)
 ```
 
 **Was fehlt, wird nicht simuliert und nicht beschönigt** — es wird in `docs/umgebung.md` notiert und
@@ -862,8 +935,8 @@ Diese drei Schreibweisen bleiben so; jede steht an genau einer Stelle in der Dok
 
 | Stufe | Fertig, wenn |
 |---|---|
-| **0** | Preflight (0a) durch, `cargo init` (0b), `Cargo.toml` mit den Profilen, **leeres Fenster geht auf**. `docs/`-Skelett + `STATUS.md` + `TODO.md` + `CLAUDE.md` stehen — kurz, aber echt, damit Subagenten (§15) etwas zu lesen haben. |
-| **1** | 3D-Szene: Boden, Sonne, ein Würfel. **FPS-Kamera** dreht mit der Maus, WASD läuft, Schwerkraft und Boden-Kollision — die Bewegung liest **`Intent`**, nicht die Tastatur (§6). **Plus: `--sandbox`, `--script`, F3-Overlay, ein Screenshot, `src/net/` als `LocalOnly`-Stub und `tests/mehrspieler.rs` mit zwei Spielern.** |
+| **0** | Preflight (0a) durch, `cargo init` (0b), `Cargo.toml` mit den Profilen, **leeres Fenster geht auf**. `docs/`-Skelett + `STATUS.md` + `TODO.md` + `CLAUDE.md` stehen — kurz, aber echt, damit Subagenten (§17) etwas zu lesen haben. |
+| **1** | 3D-Szene: Boden, Sonne, ein Würfel. **FPS-Kamera** dreht mit der Maus, WASD läuft, Schwerkraft und Boden-Kollision — die Bewegung liest **`Intent`**, nicht die Tastatur (§6). **Plus: `--sandbox`, `--script`, F3-Overlay, ein Screenshot, `src/net/` als `LocalOnly`-Stub, `tests/mehrspieler.rs` mit zwei Spielern und `--headless` (§14), damit alles auch ohne Bildschirm prüfbar ist.** |
 | **1b** | ⭐ **Die Modellkette steht mit EINEM Modell** (§7): `tools/blend/scout.py` → `scout.blend` → Auto-Export → `.glb` → `nutzen: true` in `art.ron` → im Spiel gesehen. Der Platzhalter-Weg (`nutzen: false`) läuft daneben weiter. **Vor Stufe 2** — jedes weitere Modell ist danach eine Kopie dieser Kette, und der User kann ab hier jederzeit selbst modellieren. |
 | **2** | Die **Stadt** steht: Mauer, Häuser, Dächer, Bäume — hakbare Flächen (erst Platzhalter, dann `.blend`). Kollision gegen alles davon, über den räumlichen Index. |
 | **3** | ⭐ **ODM: Haken raus, einhaken, Seil einholen, schwingen, Gas verbrauchen, Boost.** Ich fliege durch die Stadt und es fühlt sich gut an. ← **die Marke für Tag 1** |
@@ -879,7 +952,68 @@ haben, *bevor* zwanzig Titanen daran hängen.
 
 ---
 
-## 13. Fallen der Umgebung (teuer bezahlt, generisch, gelten hier auch)
+## 14. ⭐ Zwei Maschinen — **frag zuerst, auf welcher du bist**
+
+Dieses Projekt läuft auf **zwei verschiedenen Rechnern**, und sie können nicht dasselbe. Das ist
+kein Problem, solange du weißt, auf welchem du sitzt — und **eine Katastrophe, wenn du es
+verwechselst**: du hältst eine fehlende Grafiksitzung für einen Bug, oder einen N100 für eine
+Performance-Regression.
+
+```bash
+hostname          # 'debian' → headless (A) · 'offlinebot' → volle Grafik (B)
+uname -r; nproc; echo "WAYLAND=$WAYLAND_DISPLAY DISPLAY=$DISPLAY"
+```
+
+| | **A — `debian`** | **B — `offlinebot`** |
+|---|---|---|
+| System | Debian 13 (trixie), Kernel 6.12 | CachyOS, Kernel 7.x |
+| Oberfläche | **keine** — kein Monitor, kein Wayland/X | **niri** (Wayland), kitty, fish |
+| CPU / GPU | Intel N100, 4 Kerne · UHD Graphics (integriert) | Ryzen 7 5800X, 16 Threads · **RTX 3080** |
+| RAM / Platte | 15 GB · 451 GB (viel frei) | 31 GB · **hier war die Platte schon voll** (§14 unten) |
+| Nutzung | **selten, aber es kommt vor** | der Normalfall |
+| **Ein Fenster** | **geht nicht — und das ist in Ordnung** | geht |
+| **Screenshot** | nur via Offscreen-Rendering, falls es läuft | ja, `niri msg action screenshot-window` |
+
+### Auf **A (headless)** wird trotzdem gearbeitet — nur anders geprüft
+
+**Kein Fenster ist kein Grund, nicht weiterzubauen.** Was dort vollständig geht:
+
+- **`cargo test`** — alles, was Logik ist: ODM-Mathematik, Trefferzonen, Schadenskurven,
+  RON-Validierung, Weltgenerierung als Zahlen, der Domänen-Test (§5), `tests/mehrspieler.rs` (§6).
+- **`--script` mit `assert`** (§12) — **aber nur, wenn das Spiel einen `--headless`-Modus hat.**
+  Deshalb ist der **Teil von Stufe 1**: kein Fenster (`primary_window: None`), fester Tick, läuft N
+  Ticks und **beendet sich mit einem Exit-Code**, der sagt, ob alle `assert` gehalten haben. Damit
+  ist eine ODM-Fahrt auf **jeder** Maschine prüfbar — und in einem CI eines Tages auch.
+- **Die Modellkette (§7)** — `blender --background` braucht **keinen** Bildschirm. `.py` → `.blend`
+  → `.glb` und der Struktur-Test (Empties, Vertexfarben, `metallicFactor`) laufen dort einwandfrei.
+- **Doku, Extraktion der Excel-Liste (§2), Aufräumen, Refactoring.**
+
+**Und was dort NICHT geht — ohne Ausrede:**
+
+- **Kein Bild ⇒ kein 🟧.** Die Obergrenze auf A ist **🟨**, mit dem Vermerk *„Logik getestet,
+  Pixel ungesehen — Maschine A"*. Nicht aufrunden, nicht „sieht sicher richtig aus".
+  *(Ausnahme, wenn du sie **belegst**: Offscreen-Rendering in eine PNG — Bevy kann in ein
+  Render-Target zeichnen, Vulkan braucht dafür keine Anzeige. **Erst beweisen, dass es auf dem N100
+  wirklich ein Bild liefert**, dann als Beleg benutzen. Behauptet ist es nichts wert.)*
+- **Keine Performance-Aussage.** Ein N100 mit integrierter Grafik und ein 5800X mit einer 3080 sind
+  keine Messreihe. **Jede Zahl in `STATUS.md`/`BUGS.md` trägt die Maschine dazu** — `[debian]` oder
+  `[cachy]`. Eine Bildzeit ohne Maschinenangabe ist keine Messung.
+- **Kein `niri msg`** (der ganze Screenshot-Abschnitt in §12 gilt nur für B), und Builds sind auf
+  4 Kernen deutlich langsamer — das ist keine Regression, sondern der N100.
+
+### Auf **B** gilt zusätzlich
+
+Volle Grafik, also volle Beweispflicht: hier werden die Screenshots gemacht, hier wird gemessen,
+hier wird aus 🟨 ein 🟧. Und hier ist die Platte der Feind (siehe unten) — **`df -h /home` vor dem
+ersten Build.**
+
+**Schreib das Ergebnis in `docs/umgebung.md`** (eine Tabelle pro Maschine: Hostname, Grafik ja/nein,
+Blender, `gh`, Kerne, freie Platte, Datum). Der nächste Agent soll es nicht wieder herausfinden —
+und beim Lesen einer alten Messung wissen, **wo** sie entstanden ist.
+
+---
+
+## 15. Fallen der Umgebung (teuer bezahlt, generisch, gelten hier auch)
 
 - ⚠️ **`ld: signal 7 / Bus error` beim Linken heißt: die Platte ist voll.** `target/debug/deps`
   staut Bevy-Binaries im dreistelligen GB-Bereich. **Erst `df -h /home`**, nicht den Code
@@ -903,13 +1037,14 @@ haben, *bevor* zwanzig Titanen daran hängen.
 
 ---
 
-## 14. Abnahme dieses Auftrags
+## 16. Abnahme dieses Auftrags
 
 Am Ende der Sitzung will ich sehen:
 
 1. **`cargo test`** — die Ausgabe, ungekürzt zusammengefasst (wie viele grün, welche rot und warum).
 2. **Mindestens zwei Screenshots** in `docs/bilder/`: einer aus der Stadt (Blick beim Schwingen),
-   einer mit einem Titanen im Bild.
+   einer mit einem Titanen im Bild — **auf Maschine B**. Auf A (headless, §14) stattdessen die
+   `--headless`-Skriptläufe mit ihren `assert`-Ergebnissen und der Vermerk „Pixel ungesehen".
 3. **`docs/STATUS.md`**, in dem jede Sache eine der vier Stufen trägt — und **kein einziges ✅**,
    weil das der User setzt.
 4. **`docs/ABNAHME.md`** mit der Liste dessen, worauf der User schauen soll.
@@ -927,10 +1062,11 @@ Minute zu *messen* — und die Erklärung war das Problem.
 
 ---
 
-## 15. Wie du das abarbeitest, wenn du **nicht allein** bist (Supervisor, Workflows, Fachexperten)
+## 17. ⭐ Wie abgearbeitet wird: **parallel und wissenschaftlich** (Supervisor, Workflows, Experten)
 
-Diese Datei ist der **Auftrag**, nicht die Arbeitsreihenfolge eines einzelnen Kopfes. Es wird mit
-Workflows und Subagenten gearbeitet — dafür gilt verbindlich:
+Diese Datei ist der **Auftrag**, nicht die Arbeitsreihenfolge eines einzelnen Kopfes. Gearbeitet wird
+mit Workflows und Subagenten — **breit parallel** und mit **wissenschaftlicher Methode**. Beides ist
+verbindlich, nicht empfohlen:
 
 ### Supervisor & Fachexperten
 
@@ -964,6 +1100,65 @@ Entscheidung, eine stille ist ein Bug mit Anlauf).
 erfinden. Bei Unklarheit messen oder eskalieren — nicht raten.** Das ist dieselbe Regel wie §9, nur
 aus der Sicht des Delegierenden: **ein Ergebnis ohne vorab festgelegtes Prüfkriterium ist kein
 Ergebnis, sondern eine Meinung.**
+
+### Parallelisieren ist die **Voreinstellung**, nicht die Ausnahme
+
+**Die Frage ist nie „kann man das parallel machen?", sondern „warum nicht?".** Serielles Arbeiten
+ist nur dort richtig, wo eine **Datei einen einzigen Schreiber** braucht (die Liste oben) oder wo
+Stufe N das **Ergebnis** von N−1 wirklich braucht. Alles andere läuft gleichzeitig.
+
+**Wie zerschnitten wird — in dieser Vorzugsordnung:**
+
+1. **Nach Domäne** — der natürliche Schnitt, weil Dateibesitz und Domäne dasselbe sind (§5).
+   `odm/`, `titan/`, `world/`, `hud/` gleichzeitig, sobald die Schnittstellen stehen.
+2. **Nach `F-ID`** — unabhängige Features aus der Liste (§2) laufen parallel; `abhaengt_von`
+   sagt dir, was **nicht** gleichzeitig geht. Genau dafür steht das Feld in `features.ron`.
+3. **Nach Prüf-Dimension** — dasselbe Stück Code von mehreren Seiten gleichzeitig: Korrektheit,
+   Ränder, Performance, „was passiert im Netz" (§6). Vier Blickwinkel finden vier verschiedene
+   Sachen; vier identische Prüfer finden dreimal dasselbe.
+4. **Nach Datei bei Massenarbeit** — ein Agent pro `tools/blend/*.py`, pro Doku-Datei, pro
+   Excel-Blatt.
+
+**Die Breite kommt von der Maschine, nicht vom Wunsch** (§14): `nproc` ist der Deckel, und der
+**Compiler ist auch ein Verbraucher**. Auf Maschine A (4 Kerne) heißt das 2–3 gleichzeitig; auf B
+(16 Threads) 8 und mehr. Zwanzig Agenten auf vier Kernen sind langsamer als drei — sie warten nur
+gemeinsam.
+
+**Pipeline statt Barriere.** Ein Feature, das fertig geprüft ist, wartet nicht darauf, dass fünf
+andere fertig werden. Nur wo eine Stufe **alle** Vorergebnisse zusammen braucht (dedupliieren,
+Gesamtzählung, „gibt es überhaupt Funde?"), ist ein Sammelpunkt richtig.
+
+**Was jede Parallelisierung vorher braucht** — sonst produziert sie Integrationsarbeit statt
+Fortschritt: **die Schnittstelle steht** (Components, Messages, Signaturen sind festgeschrieben und
+committet), **der Dateibesitz ist verteilt**, **das Abnahmekriterium ist notiert**. Danach:
+`cargo check` + `cargo test` nach jedem Zusammenlauf — fünf einzeln grüne Agenten sind zusammen
+nicht automatisch grün.
+
+### Wissenschaftlich heißt: **messbar, reproduzierbar, widerlegbar**
+
+Nicht als Attitüde, sondern als Arbeitsweise — für jede Behauptung, von „der Haken hält nicht" bis
+„das ist schneller":
+
+1. **Erst den Ist-Zustand messen, dann ändern.** Die Basismessung **vor** dem Eingriff ist der
+   wichtigste Wert überhaupt: ohne sie „behebst" du Dinge, die nie kaputt waren, und weißt nie, ob
+   deine Änderung überhaupt etwas getan hat.
+2. **Hypothese hinschreiben, bevor gemessen wird** — falsifizierbar formuliert („wenn X, dann
+   sinkt Y unter Z"), samt Prüfkriterium. Eine Erklärung, die nach der Messung entsteht, passt
+   immer; sie ist deshalb wertlos.
+3. **Eine Variable pro Experiment.** Zwei Änderungen gleichzeitig, und du weißt am Ende nur, dass
+   *irgendwas* half.
+4. **Reproduzierbar heißt: der Befehl steht daneben** — komplette Kommandozeile, Seed, Koordinate,
+   Blickrichtung, **Maschine** (`[cachy]`/`[debian]`, §14). Was niemand nachstellen kann, ist keine
+   Messung, sondern eine Anekdote.
+5. **Zeiten mehrfach messen.** Ein Lauf ist Rauschen: N Läufe, **Median und Perzentil**, nicht
+   Mittelwert. Und niemals über Maschinen hinweg vergleichen.
+6. **Erst widerlegen versuchen, dann glauben.** Zu jeder Behauptung ein unabhängiger Versuch, sie
+   zu **kippen** („finde den Fall, in dem das falsch ist"). Was keinen Angriff überlebt hat, ist
+   🟨 (§8).
+7. **Ein negatives Ergebnis ist ein Ergebnis** und wird aufgeschrieben (`docs/lessons/`,
+   `docs/BUGS.md`) — sonst probiert es in drei Wochen jemand genauso wieder.
+8. **Annahmen als `ANNAHME:` markieren, Unsicherheit ausweisen, nichts erfinden.** Bei Unklarheit
+   **messen oder eskalieren** — nicht raten (§9).
 
 ### Und praktisch:
 
@@ -1009,7 +1204,7 @@ Workflow, der etwas gebaut hat, ist nicht fertig, solange die Zeile fehlt.
 
 ---
 
-## 16. Die Ziellinie: übertragen, Repo anlegen, und **diese Datei löschen**
+## 18. Die Ziellinie: übertragen, Repo anlegen, und **diese Datei löschen**
 
 Wenn **alles aus dieser Datei abgearbeitet** ist — der Baum steht, die Modellkette läuft, der
 Stufenplan ist durch, `docs/` stimmt — dann kommen drei Schritte, **in dieser Reihenfolge**.
@@ -1029,9 +1224,10 @@ zukünftiger Agent braucht, wird ausformuliert.
 | Die Modellkette (§7) | `docs/modelle.md` (+ Kommentarkopf in jedem `tools/blend/*.py`) |
 | Die vier Stufen (§8) | Kopf von `docs/STATUS.md`, Kurzform in `CLAUDE.md` |
 | Die Bug- und Sicherheitsdoktrin (§9) | Kopf von `docs/BUGS.md`, Kurzform in `CLAUDE.md` |
-| Performance-Regeln (§10) | `docs/lessons/performance.md` |
-| Flags, `--script`, Screenshots (§11) | `docs/lessons/workflow.md` + Tastenbelegung in `README.md` |
-| Umgebungsfallen (§13) | `docs/lessons/umgebung.md` |
+| Performance-Regeln (§11) | `docs/lessons/performance.md` |
+| Flags, `--script`, Screenshots (§12) | `docs/lessons/workflow.md` + Tastenbelegung in `README.md` |
+| Zwei Maschinen + Umgebungsfallen (§14 + §15) | `docs/lessons/umgebung.md` |
+| Arbeitsweise: Parallelität + Methode (§17) | `docs/lessons/arbeitsweise.md` |
 | Spielinhalt und Vorbild (§1) | `docs/gameplay/` (zusammen mit dem, was aus `gameplay/` kam) |
 | Was bewusst später kommt (§1) | `docs/ROADMAP.md` |
 
