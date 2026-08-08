@@ -1,6 +1,6 @@
-# Auftrag: **Defeated by Titans** — ein 3D-Titanenkampfspiel in Bevy, von null
+# Auftrag: **Defeated by Titan** — ein 3D-Titanenkampfspiel in Bevy, von null
 
-**Du liest `prompts/init.md` in `~/Documents/defeated-by-titans/`.** Es gibt noch keinen Code,
+**Du liest `prompts/init.md` in `~/Documents/defeated-by-titan/`.** Es gibt noch keinen Code,
 keine Assets, kein Git — das anzulegen ist dein erster Schritt. Vorhanden ist nur das Gerüst:
 `init.md` im Wurzelverzeichnis (der Startknopf, der hierher zeigt), **`prompts/`** (diese Datei und
 alles, was daneben liegt) und **`gameplay/`** (§2).
@@ -36,7 +36,7 @@ können**. Lösch sie nicht — sie wird der erste Commit und geht erst am Ende 
 > | Datei | was sie ist | Pflicht? |
 > |---|---|---|
 > | `init.md` | **diese Datei** — der Rahmen: Struktur, Regeln, Beweispflicht, Ziellinie | ja |
-> | `DefeatedByTitans_Design-Bibel.md` | ⭐ **das WARUM**: Designpfeiler, Welt, Ton, Gegner-Philosophie, Phasenplan P0–P11, Kennzahlen, Risiken. **Sie gewinnt inhaltlich über diese Datei.** | ja |
+> | `DefeatedByTitan_Design-Bibel.md` | ⭐ **das WARUM**: Designpfeiler, Welt, Ton, Gegner-Philosophie, Phasenplan P0–P11, Kennzahlen, Risiken. **Sie gewinnt inhaltlich über diese Datei.** | ja |
 > | **jede weitere `*.md` in `prompts/`** | Nachtrag, Präzisierung, Design-Notiz, Korrektur — vom User später hinzugefügt | **ja, alle** |
 >
 > **Es gibt keine optionale Datei in diesem Ordner.** Alles, was darin liegt, ist Teil des
@@ -116,7 +116,7 @@ wie der Ordner gedacht ist.
 
 | Datei | was darin steht | Rang |
 |---|---|---|
-| `prompts/DefeatedByTitans_Design-Bibel.md` | **das WARUM**: fünf Designpfeiler, Welt/Ton/Stil, Plattform, Mehrspieler-Grundregeln, Gegner-Philosophie, zehn Verbesserungen gegenüber der Referenz, **Phasenplan P0–P11**, Kennzahlen, Risiken, offene Entscheidungen | **inhaltlich über dieser Datei** |
+| `prompts/DefeatedByTitan_Design-Bibel.md` | **das WARUM**: fünf Designpfeiler, Welt/Ton/Stil, Plattform, Mehrspieler-Grundregeln, Gegner-Philosophie, zehn Verbesserungen gegenüber der Referenz, **Phasenplan P0–P11**, Kennzahlen, Risiken, offene Entscheidungen | **inhaltlich über dieser Datei** |
 | `gameplay/features.xlsx` | **das WAS**: 12 Blätter, ~790 Ticketzeilen — Spielfunktionen, 3D-Assets, Animationen, Texturen, VFX, Audio, UI-Screens, Maps, Tech-Backlog, **Namensschema**, Zusammenfassung | **die Arbeitsvorlage** |
 | `prompts/init.md` (hier) | **das WIE**: Engine, Ordnerstruktur, Beweispflicht, Normung, Werkzeuge, Ziellinie | Handwerk |
 
@@ -341,7 +341,7 @@ Systemen + Resources — und in diesem Projekt ist **ein Plugin genau eine Domä
 ```toml
 # Cargo.toml
 [package]
-name = "defeated_by_titans"
+name = "defeated_by_titan"
 version = "0.1.0"
 edition = "2024"
 
@@ -367,7 +367,7 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Defeated by Titans".into(),
+                title: "Defeated by Titan".into(),
                 ..default()
             }),
             ..default()
@@ -452,8 +452,8 @@ Damit klar ist, **wo was hingehört** — und damit nichts irgendwo daneben land
 Zombie-Dateien):
 
 ```
-defeated-by-titans/
-  Cargo.toml            das Paket heißt defeated_by_titans (§13)
+defeated-by-titan/
+  Cargo.toml            das Paket heißt defeated_by_titan (§13)
   CLAUDE.md             das Gedächtnis für die nächste Sitzung — INDEX, kein Archiv (§8)
   README.md             was das Spiel ist, wie man es startet, Tasten, Stand
   .gitignore            target/ saves/ *.blend1 *.log assets/extern/
@@ -1197,7 +1197,7 @@ mehr wert als jedes Bug-Formular.
 ```bash
 setsid nohup cargo run -- --sandbox > /tmp/dbt.log 2>&1 < /dev/null & disown
 sleep 20   # der erste Build dauert
-ID=$(niri msg --json windows | python3 -c "import sys,json;print([w['id'] for w in json.load(sys.stdin) if (w.get('title') or '')=='Defeated by Titans'][0])")
+ID=$(niri msg --json windows | python3 -c "import sys,json;print([w['id'] for w in json.load(sys.stdin) if (w.get('title') or '')=='Defeated by Titan'][0])")
 niri msg action focus-window --id $ID   # SONST drosselt der Compositor auf ~5 fps
 sleep 2
 niri msg action screenshot-window --id $ID
@@ -1278,15 +1278,15 @@ Der Ordner ist **nicht leer** (`prompts/`, `gameplay/` liegen drin), also legt `
 Unterverzeichnis an bzw. bricht ab. Richtig ist:
 
 ```bash
-cd ~/Documents/defeated-by-titans
-cargo init --name defeated_by_titans      # Paket im VORHANDENEN Ordner
+cd ~/Documents/defeated-by-titan
+cargo init --name defeated_by_titan      # Paket im VORHANDENEN Ordner
 cargo add bevy                            # schreibt die WIRKLICH aktuelle Version in Cargo.toml
 cargo add ron serde --features serde/derive
 git add -A && git commit -m "Projekt aufgesetzt (Initialprompt in prompts/)"
 ```
 
-Der Paketname ist **`defeated_by_titans`** (mit Unterstrichen — Rust mag keine Bindestriche im
-Crate-Namen), das Fenster heißt **„Defeated by Titans"**, das GitHub-Repo `defeated-by-titans`.
+Der Paketname ist **`defeated_by_titan`** (mit Unterstrichen — Rust mag keine Bindestriche im
+Crate-Namen), das Fenster heißt **„Defeated by Titan"**, das GitHub-Repo `defeated-by-titan`.
 Diese drei Schreibweisen bleiben so; jede steht an genau einer Stelle in der Doku.
 
 | Stufe | Fertig, wenn |
@@ -1380,7 +1380,7 @@ und beim Lesen einer alten Messung wissen, **wo** sie entstanden ist.
   und lässt dich einem roten Build nachjagen, der grün ist.
 - **`pkill` NIE an den Anfang einer Befehlskette.** Läuft kein Prozess, gibt es Exit 1 und der
   Rest der Kette wird verschluckt — und du glaubst, ein Rückbau sei passiert.
-  `pkill -f target/debug/defeated_by_titans` liefert auch mal Exit 144: normal.
+  `pkill -f target/debug/defeated_by_titan` liefert auch mal Exit 144: normal.
 - **Mehrere Agenten arbeiten evtl. parallel in diesem Repo.** Dateien ändern sich unter dir, der
   Build ist zwischendurch rot ohne dein Zutun. **Vor jedem Edit die Datei frisch lesen.**
   **NIEMALS `git stash` / `git checkout --` / `git clean -fdx`**, während jemand anders arbeitet.
@@ -1622,7 +1622,7 @@ git add -A && git commit -m "Aufsetzen abgeschlossen: Baum, Modellkette, Doku"
 git remote -v                       # gibt es 'origin'?
 git push -u origin main             # ja → nur pushen
 
-gh repo create defeated-by-titans --public --source=. --remote=origin --push \
+gh repo create defeated-by-titan --public --source=. --remote=origin --push \
    --description "3D-Titanenkampfspiel in Bevy (Rust) — Vector Gear, Cortex-Treffer, Koop-Einsätze"
                                     # nein → so anlegen
 ```
