@@ -2,6 +2,10 @@
 
 **Führe `prompts/init.md` aus.** Das ist der Auftrag; diese Datei ist nur der Startknopf.
 
+> 🔒 **Die Engine ist Bevy (Rust). NICHT Roblox.** Vom User bestätigt am 2026-08-09. Die
+> Design-Bibel enthält Roblox-Bezüge, weil die Referenz ein Roblox-Titel ist — sie werden
+> **übersetzt, nicht befolgt** (`prompts/init.md` §2).
+
 ```bash
 ls -la prompts/ gameplay/     # was liegt da?
 cat prompts/*.md              # ALLE lesen, nicht nur init.md

@@ -1,4 +1,13 @@
-# DEFEATED BY TITANS — Design-Bibel
+# DEFEATED BY TITAN — Design-Bibel
+
+> 🔒 **Nachgetragener Hinweis (2026-08-09), Inhalt unverändert:** Dieses Dokument ist in Teilen für
+> **Roblox** formuliert (Rojo und Service-Framework in P0, ProfileStore, „Places", Future Lighting,
+> Plattform-Moderation, Store). **Das Projekt wird in Bevy (Rust) gebaut, nicht in Roblox** — vom
+> User ausdrücklich bestätigt. Diese Stellen sind **zu übersetzen, nicht zu befolgen**; die
+> Übersetzungstabelle steht in [`init.md`](init.md) §2. **Alles andere hier gilt unverändert und
+> bindend:** die fünf Designpfeiler, Welt und Ton, der visuelle Stil, die Plattformvorgaben (PC,
+> Maus+Tastatur, 60 fps), die Mehrspieler-Grundregeln, die Gegner-Philosophie, der Phasenplan mit
+> dem Vector-Gear-Gate, die Kennzahlen und die Risiken.
 
 **Version 1.0 · Pre-Production**
 Begleitdokument zum Produktions-Backlog (`DefeatedByTitan_Produktions-Backlog.xlsx`)
