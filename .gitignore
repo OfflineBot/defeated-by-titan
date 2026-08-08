@@ -1,0 +1,5 @@
+target/
+saves/
+*.blend1
+*.blend2
+*.log
