@@ -1059,11 +1059,19 @@ Was einmal gepusht ist, ist indexierbar, auch nach dem Löschen. Der Check kommt
 Der User hat das hier vorab erlaubt — es ist Teil des Auftrags, keine Nachfrage nötig. Aber erst
 **nach** Schritt 1 und 2.
 
+**Erst nachsehen, ob es das Repo schon gibt** (das Gerüst wurde beim Anlegen des Auftrags schon
+einmal gepusht — dann wird nur noch gepusht, nicht neu angelegt):
+
 ```bash
-gh auth status     # nicht angemeldet? → den User bitten: `! gh auth login` in den Chat tippen
+gh auth status                      # nicht angemeldet? → den User bitten: `! gh auth login` tippen
 git add -A && git commit -m "Aufsetzen abgeschlossen: Baum, Modellkette, Doku"
+
+git remote -v                       # gibt es 'origin'?
+git push -u origin main             # ja → nur pushen
+
 gh repo create defeated-by-titans --public --source=. --remote=origin --push \
-   --description "3D-Titanenkampfspiel in Bevy (Rust) — ODM-Gear, Nackentreffer, Einsätze"
+   --description "3D-Titanenkampfspiel in Bevy (Rust) — ODM-Gear, Nackentreffer, Koop-Einsätze"
+                                    # nein → so anlegen
 ```
 
 Danach **die URL im Chat nennen** und einmal `gh repo view --web` erwähnen. Wenn `gh` fehlt oder
