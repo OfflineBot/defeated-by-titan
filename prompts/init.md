@@ -9,6 +9,21 @@ Diese Datei ist der **Initialprompt**: sie sagt, *was* gebaut wird, *wie* der Ba
 Bevy von dir braucht* und **wie du deinen Zustand dokumentierst, damit andere Agenten dir glauben
 können**. Lösch sie nicht — sie wird der erste Commit und geht erst am Ende (§18).
 
+> ## 🔒 ENTSCHIEDEN, nicht zu diskutieren: **die Engine ist Bevy (Rust). NICHT Roblox.**
+>
+> Vom User bestätigt am **2026-08-09**, ausdrücklich und auf Nachfrage. Es wird ein
+> **eigenständiges Spiel in Bevy/Rust** — kein Roblox-Erlebnis, kein Luau, kein Rojo, kein
+> Roblox-Studio, keine Roblox-Dienste.
+>
+> **Das ist die EINE Ausnahme von „die Design-Bibel gewinnt inhaltlich"** (§2): die Bibel ist an
+> sechs Stellen für Roblox geschrieben, weil die Referenz ein Roblox-Titel ist. **Diese sechs
+> Stellen werden übersetzt, nicht befolgt** — die Übersetzungstabelle steht in §2. Alles andere in
+> der Bibel (Designpfeiler, Welt, Ton, Stil, Gegner, Phasen, Kennzahlen, Risiken) gilt unverändert.
+>
+> Wenn du beim Arbeiten auf eine Roblox-Anweisung stößt, die in der Tabelle fehlt: **übersetze sie
+> in die Bevy-Welt und trag die Zeile in `docs/architektur.md` nach.** Nicht befolgen, nicht
+> ignorieren, nicht zurückfragen.
+
 > ## ⚠️ Zuerst: **lies ALLE Dateien in `prompts/`, bevor du eine Zeile Code schreibst**
 >
 > ```bash
@@ -124,13 +139,13 @@ wie der Ordner gedacht ist.
 Widerspruch gewinnen Bibel/Backlog; beim Handwerk (Struktur, Beleg, Normung) gewinnt diese Datei.
 Ein Konflikt, der sich nicht so auflösen lässt, geht nach `docs/FRAGEN.md`.
 
-### ⚠️ Der eine harte Widerspruch: **die Engine**
+### 🔒 Der eine harte Widerspruch: **die Engine — und er ist entschieden**
 
 Die Design-Bibel ist an sechs Stellen für **Roblox** geschrieben (Rojo, ProfileStore, „Places",
-Future Lighting, Plattform-Moderation, Store). **Dieses Projekt ist aber Bevy/Rust** — so vom User
-gesetzt, und das ist der Grund, warum diese Datei existiert. **Die Engine-Entscheidung steht:
-Bevy.** Alles andere in der Bibel bleibt gültig; die Roblox-Bezüge werden **übersetzt**, nicht
-befolgt:
+Future Lighting, Plattform-Moderation, Store), weil die Referenz ein Roblox-Titel ist.
+**Dieses Projekt ist Bevy/Rust — vom User bestätigt am 2026-08-09, ausdrücklich und auf Nachfrage.**
+Das ist die **einzige** Stelle, an der diese Datei über der Bibel steht. Alles andere in der Bibel
+bleibt gültig; die Roblox-Bezüge werden **übersetzt**, nicht befolgt:
 
 | Bibel (Roblox) | Hier (Bevy/Rust) |
 |---|---|
@@ -138,7 +153,7 @@ befolgt:
 | ProfileStore, Session-Lock, Transaktionsprotokoll | `save/` mit derselben **Anforderung** (kein Datenverlust, keine Duplikation) — die Umsetzung ist unsere |
 | „Places", Instanzen, Hub als Place | Bevy-`States` + Szenen; „Instanz" heißt hier Server-Sitzung (§6) |
 | Future Lighting, Farbatlas, Fernnebel | Bevy-PBR + `DirectionalLight` + Fog; **der Stil bleibt exakt** (Low Poly, weiche Normalen, flache Farbflächen) |
-| Roblox-Store, Robux, Saisonpass | **offene Frage** → `docs/FRAGEN.md`. Nichts davon wird gebaut, solange nicht geklärt ist, ob es außerhalb von Roblox überhaupt gilt. |
+| Roblox-Store, Robux, Saisonpass | **entfällt in dieser Form** — es gibt keine Roblox-Wirtschaft. Der *Grundsatz* der Bibel bleibt (P5: verkauft würde nur Aussehen); ob und wie das außerhalb von Roblox überhaupt stattfindet, ist eine Produktfrage → `docs/FRAGEN.md`. **Nichts davon wird gebaut.** |
 | Plattform-Moderation (kein Splatter) | bleibt als **Stilregel** (Titanen verdampfen, Dampf statt Blut) — sie war ohnehin doppelt begründet |
 
 **Und die Zahlen der Bibel, die technisch bindend sind, gelten unverändert:** PC-only, Tastatur und
