@@ -35,8 +35,9 @@ können**. Lösch sie nicht — sie wird der erste Commit und geht erst am Ende 
 >
 > | Datei | was sie ist | Pflicht? |
 > |---|---|---|
-> | `init.md` | **diese Datei** — der Rahmen: Spiel, Struktur, Regeln, Beweispflicht, Ziellinie | ja |
-> | **jede weitere `*.md` in `prompts/`** | Nachtrag, Präzisierung, Design-Notiz, Korrektur, Feature-Beschreibung — vom User später hinzugefügt | **ja, alle** |
+> | `init.md` | **diese Datei** — der Rahmen: Struktur, Regeln, Beweispflicht, Ziellinie | ja |
+> | `DefeatedByTitans_Design-Bibel.md` | ⭐ **das WARUM**: Designpfeiler, Welt, Ton, Gegner-Philosophie, Phasenplan P0–P11, Kennzahlen, Risiken. **Sie gewinnt inhaltlich über diese Datei.** | ja |
+> | **jede weitere `*.md` in `prompts/`** | Nachtrag, Präzisierung, Design-Notiz, Korrektur — vom User später hinzugefügt | **ja, alle** |
 >
 > **Es gibt keine optionale Datei in diesem Ordner.** Alles, was darin liegt, ist Teil des
 > Auftrags und wird gelesen, *bevor* gebaut wird — auch was hier nicht namentlich steht, weil es
@@ -47,7 +48,7 @@ können**. Lösch sie nicht — sie wird der erste Commit und geht erst am Ende 
 > ihnen steht. Wer nur sie liest, hat den Auftrag nicht gelesen.
 
 > **Das Wichtigste in einem Satz:** am Ende von Tag 1 hängt ein Mensch an einem Haken, schwingt
-> durch eine 3D-Szene und schneidet einem Titanen den Nacken auf — und in `docs/STATUS.md` steht
+> durch eine 3D-Szene und schneidet einem Titanen den Cortex auf — und in `docs/STATUS.md` steht
 > für jede einzelne Sache ehrlich, auf welcher der **vier Stufen** sie steht.
 
 ---
@@ -55,43 +56,48 @@ können**. Lösch sie nicht — sie wird der erste Commit und geht erst am Ende 
 ## 1. Was das Spiel ist
 
 Ein **3D-Lowpoly-Actionspiel über den Kampf gegen Titanen** (Attack on Titan). Du bist ein
-Aufklärer mit **ODM-Gear** (Omni-Directional Mobility): zwei Greifhaken, zwei Gastanks, zwei
+Vanguard-Bergungsmann mit **Vector Gear** (VG, deutsch: Vektorgeschirr): zwei Greifhaken, zwei Gastanks, zwei
 Klingen. Du hakst ein, schwingst, beschleunigst mit Gas und tötest einen Titanen **nur** durch
-einen schnellen Schnitt in den **Nacken**. Alles andere kostet ihn ein Bein und dich Zeit.
+einen schnellen Schnitt in den **Cortex**. Alles andere kostet ihn ein Bein und dich Zeit.
 
 **Vorbild:** [Attack on Titan Revolution](https://www.roblox.com/games/13379208636/Attack-on-Titan-Revolution)
 (Roblox). Was daran zu übernehmen ist:
 
 | Baustein | Was gemeint ist |
 |---|---|
-| **ODM als Kern** | Haken schießen, Seil einholen, Schwungenergie, Gas-Boost, Boost-Dash, Wandlauf. Das Spiel steht und fällt mit diesem Gefühl — nicht mit der Titanen-KI. |
-| **Nacken ist die einzige Wahrheit** | Ein Nackentreffer tötet, egal wie voll der Titan ist. Alles andere ist Vorbereitung: Beine ab = er fällt, Arme ab = er kann nicht greifen, Augen = er sieht dich nicht. |
+| **Vector Gear als Kern** | Haken schießen, Seil einholen, Schwungenergie, Gas-Boost, Boost-Dash, Wandlauf. Das Spiel steht und fällt mit diesem Gefühl — nicht mit der Titanen-KI. |
+| **Der Cortex ist die einzige Wahrheit** | Ein Cortex-Treffer tötet, egal wie voll der Titan ist. Alles andere ist Vorbereitung: Beine ab = er fällt, Arme ab = er kann nicht greifen, Augen = er sieht dich nicht. |
 | **Schaden kommt aus Geschwindigkeit** | Ein Schnitt aus dem Stand kratzt. Derselbe Schnitt aus 30 m/s tötet. Die Formel gehört in die RON, nicht in den Code. |
 | **Wirtschaft statt Cooldowns** | Gas ist endlich, Klingen werden stumpf und brechen. Nachladen an Versorgungspunkten / vom Pferd / an gefallenen Kameraden. |
-| **Titanen-Typen** | Normal (stumpf, direkt), Abnormal (rennt an dir vorbei aufs Ziel), Deviant (springt, greift nach Haken), Shifter/Boss (Phasen, gepanzerter Nacken). |
+| **Titanen-Typen** | acht Typen mit Namen aus Blatt 10: **Husk** (Grundlage), **Errant** (unberechenbar), **Scuttler** (schnell, Sprung), **Weaver** (Ausweichrolle mit I-Frames), **Warden** (schützt den Cortex mit der Hand), **Lurker** (Hinterhalt, Luftgriff), **Bellower** (ruft Verstärkung, reagiert auf Gas-Geräusch), **Chorus** (paarweise). Dazu vier Raid-Bosse. |
 | **Missionen / Raids** | Ein Einsatz hat Ziele und Phasen: Titanen räumen, einen Trupp eskortieren, ein Tor halten, ein Boss mit Phasenwechsel. |
-| **Progression in Daten** | XP, Gold, Gear-Stufen, Perks, Familien-Passive. **Alles Zahlen in RON-Dateien**, kein Balancing in Rust. |
+| **Progression in Daten** | XP, **Mark**/**Sigil**, Gear-Stufen, **Traits**, **Lineage**-Passive. **Alles Zahlen in RON-Dateien**, kein Balancing in Rust. |
 
 **Und es wird ein Mehrspieler-Spiel** (Koop-Einsätze, wie beim Vorbild). Der Netzcode wird nicht
 heute gebaut — **die Architektur wird aber von Anfang an dafür gebaut**, sonst ist Multiplayer
 später ein Umbau des ganzen Spiels statt ein Zubau. Wie genau: **§6**, und das ist keine Kür.
 
-**Später, nicht jetzt:** Titan-Shifting (selbst ein Titan werden), Pferde, Donnerspeere.
+**Später, nicht jetzt:** **Bonding**/**Vessel Forms** (selbst ein Titan werden), Pferde, **Lance Charge**.
 Schreib sie in `docs/ROADMAP.md`, bau sie nicht.
 
-⚠️ **Eigene Kunst, keine geklauten Assets.** Keine Rips aus Roblox, keine Anime-Frames, keine
-Modelle aus fremden Spielen. Lowpoly selbst gebaut (Blender → glTF/`.glb`, oder erstmal aus
-Bevys Primitiven zusammengesetzt). Der Titan ist ein Mensch mit falschen Proportionen — das ist
-mit Kapsel, Box und Zylinder erreichbar und sieht sofort richtig aus.
+**Assets in der Entwicklung: Platzhalter sind erlaubt, auch heruntergeladene.** Der User ersetzt
+am Ende **alle** Modelle, Texturen und Klänge selbst — bis dahin zählt, dass der Prototyp gut wird,
+nicht dass jedes Polygon von uns ist. Also: **fremde Assets dürfen als Platzhalter benutzt werden**
+(§7 sagt, wo sie liegen und wie sie später in einem Zug austauschbar bleiben). Was du selbst baust,
+ist trotzdem der Normalfall — ein Titan ist ein Mensch mit falschen Proportionen, und das sind drei
+Primitive. **Die Stilregeln der Bibel gelten für Platzhalter genauso** (Low Poly, flache Farben,
+die drei Signalfarben nur für Gameplay): ein Platzhalter, der stilistisch aus dem Rahmen fällt,
+verfälscht genau das Urteil, für das der Prototyp da ist.
 
 ---
 
 ## 2. ⭐ Die Gameplay-Quelle: der Ordner `gameplay/`
 
-**Im Ordner `gameplay/` liegt, WAS gebaut werden soll.** Das Herzstück ist eine **Excel-Datei mit
-allen Features** (`.xlsx`) — **sehr viele Zeilen**, dazu weitere gameplay-spezifische Dateien
-(Mechaniken, Zahlen, Titanen, Missionen, Skizzen). Der Ordner existiert schon;
-`gameplay/README.md` sagt, wie er gedacht ist.
+**Im Ordner `gameplay/` liegt, WAS gebaut werden soll.** Es liegt schon da:
+**`gameplay/features.xlsx`** — der Produktions-Backlog, **12 Blätter, ~790 Ticketzeilen**, jede
+Zeile ein Ticket mit ID, Beschreibung, Akzeptanzkriterium, Priorität (MoSCoW), Aufwand und
+Abhängigkeit. Dazu kommen weitere Dateien des Users (Skizzen, Notizen). `gameplay/README.md` sagt,
+wie der Ordner gedacht ist.
 
 > **Er ist die Autorität für den Inhalt. Diese Datei ist nur die Autorität für das Handwerk.**
 > Wenn `gameplay/` etwas anderes sagt als §1 oder als der Code: **`gameplay/` gewinnt.** Ein
@@ -105,6 +111,120 @@ allen Features** (`.xlsx`) — **sehr viele Zeilen**, dazu weitere gameplay-spez
 - **Keine Zeile darf verschwinden.** Was dir unnötig, widersprüchlich oder unmöglich erscheint,
   kommt als Frage nach `docs/FRAGEN.md` — nicht in den Müll und nicht in ein stilles „habe ich
   weggelassen".
+
+### Die zwei Dokumente, die es schon gibt — und wie sie zu dieser Datei stehen
+
+| Datei | was darin steht | Rang |
+|---|---|---|
+| `prompts/DefeatedByTitans_Design-Bibel.md` | **das WARUM**: fünf Designpfeiler, Welt/Ton/Stil, Plattform, Mehrspieler-Grundregeln, Gegner-Philosophie, zehn Verbesserungen gegenüber der Referenz, **Phasenplan P0–P11**, Kennzahlen, Risiken, offene Entscheidungen | **inhaltlich über dieser Datei** |
+| `gameplay/features.xlsx` | **das WAS**: 12 Blätter, ~790 Ticketzeilen — Spielfunktionen, 3D-Assets, Animationen, Texturen, VFX, Audio, UI-Screens, Maps, Tech-Backlog, **Namensschema**, Zusammenfassung | **die Arbeitsvorlage** |
+| `prompts/init.md` (hier) | **das WIE**: Engine, Ordnerstruktur, Beweispflicht, Normung, Werkzeuge, Ziellinie | Handwerk |
+
+**Regel:** Bibel und Backlog bestimmen *was und warum*, diese Datei *wie*. Bei inhaltlichem
+Widerspruch gewinnen Bibel/Backlog; beim Handwerk (Struktur, Beleg, Normung) gewinnt diese Datei.
+Ein Konflikt, der sich nicht so auflösen lässt, geht nach `docs/FRAGEN.md`.
+
+### ⚠️ Der eine harte Widerspruch: **die Engine**
+
+Die Design-Bibel ist an sechs Stellen für **Roblox** geschrieben (Rojo, ProfileStore, „Places",
+Future Lighting, Plattform-Moderation, Store). **Dieses Projekt ist aber Bevy/Rust** — so vom User
+gesetzt, und das ist der Grund, warum diese Datei existiert. **Die Engine-Entscheidung steht:
+Bevy.** Alles andere in der Bibel bleibt gültig; die Roblox-Bezüge werden **übersetzt**, nicht
+befolgt:
+
+| Bibel (Roblox) | Hier (Bevy/Rust) |
+|---|---|
+| Rojo, Studio-Konflikte, Service-Framework (P0) | `cargo`, Git, Domänen-Plugins (§5) — der P0-Gate-Satz gilt trotzdem: ein Entwickler muss bauen, testen und mergen können |
+| ProfileStore, Session-Lock, Transaktionsprotokoll | `save/` mit derselben **Anforderung** (kein Datenverlust, keine Duplikation) — die Umsetzung ist unsere |
+| „Places", Instanzen, Hub als Place | Bevy-`States` + Szenen; „Instanz" heißt hier Server-Sitzung (§6) |
+| Future Lighting, Farbatlas, Fernnebel | Bevy-PBR + `DirectionalLight` + Fog; **der Stil bleibt exakt** (Low Poly, weiche Normalen, flache Farbflächen) |
+| Roblox-Store, Robux, Saisonpass | **offene Frage** → `docs/FRAGEN.md`. Nichts davon wird gebaut, solange nicht geklärt ist, ob es außerhalb von Roblox überhaupt gilt. |
+| Plattform-Moderation (kein Splatter) | bleibt als **Stilregel** (Titanen verdampfen, Dampf statt Blut) — sie war ohnehin doppelt begründet |
+
+**Und die Zahlen der Bibel, die technisch bindend sind, gelten unverändert:** PC-only, Tastatur und
+Maus · 60 fps auf Mindest- **und** Vollprofil · 20 Spieler pro Einsatz, 10 pro Raid, 40 im Hub ·
+Ausholphase jedes Angriffs ≥ 0,4 s · Missionsbogen 5–7 min · Cortex aus 100 m erkennbar · die drei
+Signalfarben (Zyan/Bernstein/Karminrot) ausschließlich für Gameplay.
+
+### Blatt `10_Namensschema` ist **verbindlich** — für Code, Assets, UI und Doku
+
+Das Backlog übersetzt jeden Referenzbegriff in die eigene Welt, und diese Datei ist bereits darauf
+umgestellt. Die wichtigsten, damit nichts zurückrutscht:
+
+| statt | **hier** |
+|---|---|
+| ODM Gear / 3DMG | **Vector Gear** (VG) → Domäne `src/vector/` |
+| Nape / Nacken | **Cortex** → das Empty im Modell heißt `cortex` |
+| Scouts / Soldat | **The Vanguard** / Vanguard |
+| Thunder Spear | **Lance Charge** |
+| Titan Shifting / Shifter-Form | **Bonding** / **Vessel Form** |
+| Family · Perk · Artifact · Memory · Prestige | **Lineage** · **Trait** · **Relic** · **Echo** · **Ascension** |
+| Gold · Gems | **Mark** · **Sigil** |
+| Pure/Abnormal/Crawler/Ducker | **Husk** · **Errant** · **Scuttler** · **Weaver** |
+| (neu) | **Warden** · **Lurker** · **Bellower** · **Chorus** |
+| Maps | **Ashgate District** · **Brackwall** · **The Fallow** · **Titanwood** · **Hollowkeep** · **Saltpier** · **Highspire**, Hub: **The Rookery** |
+
+**Kein Referenzbegriff mehr im Code.** Ein `nape`-Feld oder ein `odm`-Modul ist ein Fehler, den ein
+`grep` finden muss — nimm ihn in `tools/normen.py` (§10) auf.
+
+### Die Status-Spalte des Backlogs ↔ die vier Stufen (§8)
+
+Das Backlog hat eigene Statuswerte. Sie werden **eindeutig** abgebildet, damit nicht zwei Systeme
+nebeneinander laufen:
+
+| Backlog | Stufe | wer setzt es |
+|---|---|---|
+| `Offen` | ⬜ nicht implementiert | — |
+| `In Arbeit` | 🟨 halb (gebaut, ungetestet/ungesehen) | Claude |
+| `Review` | 🟧 fast (Tests + gesehen, Beleg vorhanden) | Claude |
+| `Fertig` | ✅ fertig | **nur der User** |
+| `Zurückgestellt` / `Gestrichen` | bleibt ⬜, mit Vermerk | User |
+
+**Und die MoSCoW-Spalte ist die Reihenfolge:** `Must` vor `Should` vor `Could`. Bei Terminkonflikt
+fallen zuerst alle `Could` — so steht es in der Bibel, und es ist keine Empfehlung.
+
+### Die 12 Blätter → `docs/backlog/<blatt>.ron`
+
+Ein RON pro Blatt (nicht alles in eine Datei — die Blätter haben verschiedene Spalten), plus
+`docs/features.ron` als der Auszug, an dem gearbeitet wird. **Die Zeilenzahlen sind der Prüfwert
+(§9)** — stimmt die Zahl nicht, ist die Extraktion nicht fertig:
+
+| Blatt | Zeilen (inkl. Kopf) | wird zu |
+|---|---|---|
+| `01_Spielfunktionen` | 197 | `docs/backlog/funktionen.ron` → **Quelle von `docs/features.ron`** |
+| `02_3D-Assets` | 103 | `docs/backlog/modelle.ron` → speist `tools/blend/*` (§7) |
+| `03_Animationen` | 103 | `docs/backlog/animationen.ron` |
+| `04_Texturen` | 31 | `docs/backlog/texturen.ron` |
+| `05_VFX` | 41 | `docs/backlog/vfx.ron` |
+| `06_Audio` | 121 | `docs/backlog/audio.ron` |
+| `07_UI-Screens` | 47 | `docs/backlog/ui.ron` |
+| `08_Maps` | 15 | `docs/backlog/maps.ron` (**Ankerdichte** ist die wichtigste Zahl darin) |
+| `09_Tech-Backlog` | 53 | `docs/backlog/tech.ron` |
+| `10_Namensschema` | 43 | `docs/konventionen.md` (Begriffe, siehe oben) |
+| `11_Zusammenfassung` | 18 | **nicht** übertragen — sie ist berechnet; unsere Zahlen kommen aus `features.ron` |
+| `00_Anleitung` | 28 | `docs/backlog/README.md` (Prio-/Status-Bedeutung) |
+
+**Achtung, Formeln:** Blatt 11 besteht aus Formeln. Ohne `data_only=True` liest du `=COUNTIF(...)`
+statt einer Zahl — und ohne einmaliges Öffnen in Excel/LibreOffice kann der zwischengespeicherte
+Wert sogar fehlen. Dann **selbst nachzählen**, nicht schätzen.
+
+### Die Phasen der Bibel schlagen den Stufenplan (§13)
+
+Der Stufenplan in dieser Datei ist nur das **Aufsetzen**: bis das Spiel läuft, ein Modell drin ist
+und die Werkzeuge stehen. Ab da gilt der Phasenplan der Bibel — und vor allem **seine harte Regel:**
+
+> **Kein Meta-System vor bestandenem Vector-Gear-Gate.**
+> Fähigkeitsbaum, Wirtschaft, Lineages, Raids, Kosmetik werden **nicht angefangen**, solange sich
+> die Bewegung nicht überzeugend anfühlt (P1-Gate: Blindtest, mindestens gleichauf mit der
+> Referenz).
+
+| Bibel-Phase | entspricht hier |
+|---|---|
+| **P0 Setup** | Stufe 0a/0b + 1 + 1b (§13) — inkl. Namenskonventionen (§10) und Blender-Vorgaben (§7) |
+| **P1 Vector Gear** | Stufe 3 — **und hier wird nicht weitergegangen, bevor das Gate steht** |
+| **P2 Kampf-Kern** | Stufe 4 (ein Titan, voller Zyklus, Cortex, Klingenhaltbarkeit) |
+| **P3 Erste Map** | Stufe 2 wird zu *Ashgate District* als Graybox mit getunter Ankerdichte |
+| **P4+** | direkt aus dem Backlog, in MoSCoW-Reihenfolge |
 
 ### ⭐ Die Feature-Liste ist eine **Excel-Datei** — sie wird ausgelesen, nicht abgetippt
 
@@ -149,11 +269,11 @@ fehlen, statt es zu ahnen (§9).
 ```ron
 // docs/features.ron — die Feature-Liste als Daten. EINE Quelle, viele Ansichten.
 features: [
-    (id: "F-001", name: "Haken einschlagen", domain: "odm", stufe: Nicht,
+    (id: "F-001", name: "Haken einschlagen", domain: "vector", stufe: Nicht,
      beschreibung: "Linke Maustaste schießt den Haken; er hält an jeder Fläche mit Normale.",
-     abhaengt_von: [], quelle: "features.xlsx!ODM!Z12", prio: 1),
-    (id: "F-002", name: "Seil einholen", domain: "odm", stufe: Halb,
-     beschreibung: "…", abhaengt_von: ["F-001"], quelle: "features.xlsx!ODM!Z13", prio: 1),
+     abhaengt_von: [], quelle: "features.xlsx!01_Spielfunktionen!Z12", prio: 1),
+    (id: "F-002", name: "Seil einholen", domain: "vector", stufe: Halb,
+     beschreibung: "…", abhaengt_von: ["F-001"], quelle: "features.xlsx!01_Spielfunktionen!Z13", prio: 1),
 ]
 ```
 
@@ -187,7 +307,7 @@ in `docs/FRAGEN.md` aufgelistet.
 | Die **Excel-Feature-Liste** | per Skript → `docs/features.ron` (jede Zeile eine `F-ID`) → generiert `docs/TODO.md` + `docs/STATUS.md`. Datei bleibt erhalten. |
 | Ein **Feature / eine Mechanik** (aus Text/Excel) | `docs/gameplay/<thema>.md` (das Design: *warum so*, mit `F-ID`) **+ eine ⬜-Zeile in `docs/STATUS.md`** |
 | Eine **Zahl / Balance** | in die passende `assets/data/*.ron` — **niemals in den Rust-Code** (§4) |
-| Ein **Item / Titan / Perk / Einsatz** | ein Eintrag in `titans.ron` / `gear.ron` / `perks.ron` / `missions.ron` |
+| Ein **Item / Titan / Perk / Einsatz** | ein Eintrag in `titans.ron` / `gear.ron` / `traits.ron` / `missions.ron` |
 | Eine **Skizze / ein Bild** | bleibt in `gameplay/bilder/`, wird aus `docs/gameplay/` verlinkt |
 | Etwas **Unklares** | `docs/FRAGEN.md` — nicht raten, nicht drumherum bauen und hoffen |
 
@@ -307,10 +427,10 @@ Ein neuer Titan-Typ, eine Klingenstufe, ein Perk, eine Missionsvorlage, eine Gas
 
 ```
 assets/data/
-  game.ron       Tuning: ODM (Hakenreichweite, Seilzug, Gas, Boost), Kamera, Physik, Survival
-  titans.ron     die Titanen-Typen (Größe, Tempo, Regeneration, Nacken-Größe, KI-Profil)
+  game.ron       Tuning: Vector Gear (Hakenreichweite, Seilzug, Gas, Boost), Kamera, Physik
+  titans.ron     die Titanen-Typen (Größe, Tempo, Regeneration, Cortex-Größe, KI-Profil)
   gear.ron       Klingen, Tanks, Haken, Upgrade-Stufen und ihre Kosten
-  perks.ron      Perks + Familien-Passive
+  traits.ron      Perks + Familien-Passive
   missions.ron   Einsatzvorlagen: Ziele, Phasen, Spawn-Wellen, Belohnung
   art.ron        Modellpfade, Farben, Lowpoly-Teilelisten
 ```
@@ -338,9 +458,9 @@ src/
                               Kollision und der räumliche Index (§9)
   render/    RenderPlugin     Kamera, Licht, Himmel, Meshes bauen, Modelle laden
   player/    PlayerPlugin     der Körper: laufen, springen, Boden-Kollision, Zustandsmaschine
-  odm/       OdmPlugin        ⭐ DER KERN: Haken, Seil, Schwung, Gas, Boost, Wandlauf
+  vector/    VectorPlugin     ⭐ DER KERN (Vector Gear): Haken, Seil, Schwung, Gas, Boost, Wandlauf
   blades/    BladesPlugin     Klingen: Schwung, Abnutzung, Bruch, Wechsel, Nachschub
-  titan/     TitanPlugin      Titanen: Rig, Gliedmaßen, Nacken, KI (suchen/greifen/beißen)
+  titan/     TitanPlugin      Titanen: Rig, Gliedmaßen, Cortex, KI (suchen/greifen/beißen)
   combat/    CombatPlugin     Treffer: Raycast/Sweep, Schaden aus Geschwindigkeit, Amputation,
                               Dampf, Tod
   mission/   MissionPlugin    Einsatz: Ziele, Phasen, Spawn-Wellen, Sieg/Niederlage
@@ -368,7 +488,7 @@ src/
    zuletzt gelaufene — das ist kein Design, das ist ein Münzwurf mit 60 Hz. Schreib in die
    Doku der Domäne, **wer** ein geteiltes Feld schreibt; alle anderen lesen nur.
 5. **Die Reihenfolge in `main.rs` ist die Abhängigkeitsreihenfolge:**
-   `data → save → net → world → render → player → odm → blades → titan → combat → mission →
+   `data → save → net → world → render → player → vector → blades → titan → combat → mission →
    progress → squad → hud → sound → menu → debug`.
 6. **Diese Regel verfällt still** — nichts geht kaputt, wenn jemand doch quer greift. Also
    **schreib einen Test, der sie prüft**: `tests/domaenen.rs` liest die Dateien unter `src/`,
@@ -385,7 +505,7 @@ Eine Quelldatei = eine Doku-Datei. Neue Quelldatei = **neue Doku-Datei und eine 
 
 ## 6. ⭐ Es wird **Multiplayer** — und das entscheidet die Architektur ab Tag 1
 
-Koop-Einsätze: mehrere Aufklärer im selben Einsatz gegen dieselben Titanen. **Der Netzcode ist
+Koop-Einsätze: mehrere Vanguard im selben Einsatz gegen dieselben Titanen. **Der Netzcode ist
 nicht Teil dieses Auftrags** — kein Server, keine Prediction, keine Lag-Kompensation heute. **Aber
 jede Entscheidung, die Multiplayer später unmöglich oder teuer macht, wird heute vermieden.** Das
 kostet jetzt fast nichts und später alles: ein fertiges Einzelspieler-Spiel netzfähig zu machen
@@ -431,7 +551,7 @@ mitten durch fünf Domänen zu schneiden.
 
 **`docs/multiplayer.md`** hält den Plan, der noch nicht gebaut wird: Autoritätsmodell (dedizierter
 Server vs. Host), wer die Titanen simuliert (der Server), was der Client vorhersagen darf (die
-eigene ODM-Bewegung — sie muss sich sofort anfühlen) und was nie vorhergesagt wird (ein
+eigene Vector-Gear-Bewegung — sie muss sich sofort anfühlen) und was nie vorhergesagt wird (ein
 Titanen-Tod). Die offenen Punkte kommen nach `docs/FRAGEN.md`: **wie viele Spieler, Koop oder auch
 PvP, dedizierter Server oder Host** — Entscheidungen des Users, nicht deine.
 
@@ -443,12 +563,26 @@ man dann anfassen muss.
 
 ---
 
-## 7. Die 3D-Modelle: **Claude baut sie, du füllst sie aus, der Export läuft von selbst**
+## 7. Die **Assets**: Modelle, Texturen, Klänge, VFX — Claude baut sie, **RON entscheidet**, du tauschst sie aus
 
-**Alle 3D-Designs baust du selbst** — es gibt keine gekauften und keine geklauten Modelle. Und sie
-müssen **billig zu ersetzen** sein, denn der User modelliert später nach: er öffnet eine
-`.blend`, baut das Ding richtig, sagt in *einer* RON-Zeile „nimm dieses Modell", und das Spiel
-benutzt es beim nächsten Start. Ohne Rust-Änderung, ohne Handarbeit am Export.
+**Du entscheidest frei, wie ein Asset entsteht** — Modell aus Bevy-Primitiven oder aus Blender,
+Farbe über **Vertexfarben** oder einen **Atlas**, Klang synthetisiert, gerendert **oder
+heruntergeladen**. Das ist dein Handwerk, nicht deine Fessel.
+
+**Und es ist ein Prototyp: heruntergeladene Assets sind ausdrücklich erlaubt** (Modelle, Klänge,
+Musik-Platzhalter — §12e sagt, woher und wie). Der User ersetzt am Ende alles selbst. **Genau
+deshalb** ist die Trennung unten keine Formalität: sie entscheidet, ob dieses Ersetzen später eine
+Checkliste ist oder eine Suche.
+
+**Aber drei Dinge sind nicht verhandelbar:**
+
+1. **Alles liegt im vorgesehenen `assets/`-Ordner** (Struktur unten) — nichts irgendwo daneben,
+   nichts im Code eingebettet.
+2. **Was benutzt wird, entscheidet die RON** — `assets/data/assets.ron` ist die Registratur. Ein
+   Asset austauschen heißt: **eine Zeile ändern**, nicht Rust anfassen.
+3. **Jedes Asset ist einzeln austauschbar** und hat einen **Platzhalter-Weg**, der weiter
+   funktioniert. Der User öffnet eine `.blend`, baut das Ding richtig, setzt `nutzen: true` — und
+   das Spiel benutzt es beim nächsten Start.
 
 ### Die Kette
 
@@ -467,7 +601,7 @@ assets/
       scout.blend             der Spielerkörper
       titan_normal.blend      Titan 5 m
       titan_gross.blend       Titan 15 m
-      odm_gear.blend          Gurt, Tanks, Klingengriffe
+      vector_gear.blend       Gurt, Tanks, Klingengriffe
       blade.blend
       haus_klein.blend        Stadtbausteine: Haus, Dach, Mauerstück, Tor
       baum_riese.blend
@@ -487,6 +621,114 @@ Ein Skript ist ein Diff, ist reproduzierbar, und ist der Ort, an dem *dein* Plat
 ```bash
 blender --background --factory-startup --python tools/blend/titan_normal.py
 ```
+
+### Die Registratur: `assets/data/assets.ron` — **eine Zeile pro Asset, eine Zeile zum Tauschen**
+
+Jedes Asset hat einen **logischen Namen**, den der Code kennt, und eine **Quelle**, die die RON
+bestimmt. Der Code fragt nie nach einer Datei, immer nach einem Namen.
+
+```ron
+assets: {
+    // --- Modelle: Quelle ist eine .blend (exportiert, §7) ODER prozedurale Primitive ---
+    "titan_husk":  (modell: Blend("titan_husk"), farbe: VertexFarben,        nutzen: true,  scale: 1.0),
+    "vanguard":    (modell: Blend("vanguard"),   farbe: VertexFarben,        nutzen: true,  scale: 1.0),
+    "haus_klein":  (modell: Blend("haus_klein"), farbe: Atlas("umwelt"),     nutzen: true,  scale: 1.0),
+    "kiste":       (modell: Primitive([Box((1.0,0.8,0.6), "#6b5a3e")]),      nutzen: true),
+
+    // --- Klänge: Datei ODER Rezept; das Rezept liegt im Repo und ist reproduzierbar ---
+    "sfx_hook_hit":(klang: Datei("audio/sfx/hook_hit.ogg"), lautstaerke: 0.8, nutzen: true),
+    "sfx_gas":     (klang: Rezept("gas_zischen"), lautstaerke: 0.5, schleife: true, nutzen: true),
+
+    // --- Platzhalter aus dem Netz: IMMER mit `herkunft` markiert (siehe unten) ---
+    "titan_gross": (modell: Extern("extern/3d/titan_big.glb"), nutzen: true, scale: 1.0,
+                    herkunft: "https://… · 2026-08-09 · CC0 · ERSATZ NÖTIG"),
+
+    // --- Effekte ---
+    "vfx_dampf":   (vfx: Rezept("dampf"), nutzen: true),
+}
+```
+
+- **`nutzen: false`** ⇒ der **Platzhalter-Weg** (Primitive, stiller Klang, kein Effekt). Beide Wege
+  müssen jederzeit laufen und dieselbe Größe/dasselbe Timing haben — sonst ist das Umschalten kein
+  Schalter, sondern ein Umbau.
+- **Kein Dateiname im Rust-Code.** Ein `asset_server.load("titan.glb")` mitten in einem System ist
+  ein Fehler; es gibt **eine** Stelle, die die Registratur liest (`data/`), und alle anderen fragen
+  nach dem logischen Namen. Nimm die Regel in `tools/normen.py` (§10) auf.
+- **Ein fehlendes Asset kracht beim Laden**, mit Name und Zeile (§4: kein `serde(default)` für
+  Spielwerte) — nicht still ein weißer Würfel mitten im Spiel.
+
+### Eigen und **Extern** bleiben getrennt — damit das Ersetzen später eine Checkliste ist
+
+Der Plan des Users ist: **am Ende ersetzt er alles selbst, Stück für Stück.** Dieser Plan
+funktioniert genau dann, wenn zu jedem Zeitpunkt in **einem Befehl** beantwortbar ist: *was ist noch
+fremd, wo liegt es, und was soll es werden?* Also:
+
+1. **Fremdes liegt ausschließlich unter `assets/extern/`.** Nie in `3d/blend`, `3d/glb`, `audio/sfx`
+   — dort liegt Eigenes. Diese eine Trennung ist der ganze Trick.
+2. **`assets/extern/HERKUNFT.md` listet jede Datei**: Dateiname · URL · Datum · Lizenz, falls
+   bekannt · **welches Eigen-Asset sie später wird**. Ohne Eintrag darf keine Datei dort liegen
+   (das ist die Zombie-Regel aus §10, hier mit Zähnen).
+3. **In der Registratur trägt jedes fremde Asset `herkunft:`.** Damit ist die Ersetzungsliste ein
+   `grep`, und ein Bericht (`cargo test --test assets -- --ignored --nocapture`) druckt: *Asset ·
+   eigen/extern · Quelle · ersetzt durch*. **Diesen Bericht will der User sehen**, wenn er anfängt
+   zu ersetzen.
+4. **Der Ersatz ist eine Zeile.** Weil der Code nur den logischen Namen kennt, wird aus
+   `Extern("extern/3d/titan_big.glb")` irgendwann `Blend("titan_gross")` — und nichts anderes ändert
+   sich. Genau dafür ist die Registratur da.
+5. **Das öffentliche Repo bekommt die Fremddateien nicht.** `assets/extern/` steht im `.gitignore`;
+   was mitkommt, ist `HERKUNFT.md` **und ein Holskript** `tools/hole_extern.sh`, das alles
+   wiederbeschafft. Damit läuft der Prototyp auf jeder Maschine, das Repo bleibt sauber, und du
+   verteilst nichts weiter, was dir nicht gehört. *(Ein öffentliches Repo ist Weitergabe, nicht
+   Entwicklung — das ist der einzige Punkt, an dem die Prototyp-Freiheit eine Grenze hat.)*
+6. **Stilbruch ist ein Bug, auch bei einem Platzhalter.** Ein hochdetailliertes Fremdmodell neben
+   Low-Poly-Eigenbau verfälscht das Urteil über Bewegung und Lesbarkeit — also entweder
+   vereinfachen (Decimate im Blender-Skript) oder ein anderes nehmen.
+
+### Der `assets/`-Ordner — die vorgesehene Struktur
+
+```
+assets/
+  data/                 alle RON: game.ron, titans.ron, gear.ron, traits.ron, missions.ron,
+                        assets.ron  ← die Registratur (oben)
+  3d/
+    blend/              ⭐ QUELLE, von Hand editierbar (§7)
+    glb/                GENERIERT — nie von Hand anfassen, wird mitcommittet
+  textures/
+    atlas/              GENERIERT: der EINE Umgebungs-Farbatlas (Bibel: garantierte
+                        Farbkonsistenz + minimale Drawcalls) — aus tools/atlas/
+    hand/               handgemachte PNGs — der Generator fasst sie nie an
+  audio/
+    sfx/                GENERIERT oder handgemacht: .ogg/.wav
+    music/              Musikschichten — ausschliesslich original oder lizenziert
+  vfx/                  Effekt-Definitionen (Daten, kein Code)
+  extern/               ⭐ HERUNTERGELADENE PLATZHALTER — streng getrennt vom Eigenen
+    3d/  audio/  textures/
+    HERKUNFT.md         eine Zeile pro Datei: URL · Datum · Lizenz (falls bekannt) · was sie ersetzt
+tools/
+  blend/<name>.py       Modell-Skripte (§7)
+  atlas/<name>.py       baut den Farbatlas + schreibt die UV-Zuordnung als RON
+  sound/<name>.py       Klang-Rezepte: Skript -> .ogg/.wav, reproduzierbar
+```
+
+**Die Regel dahinter ist immer dieselbe Kette:** `Skript (Quelle im Repo) → generiertes Asset →
+RON-Schalter → Spiel`. Sie gilt für ein Modell genauso wie für einen Klang oder einen Atlas. Wer
+ein neues Asset-*Art* anfängt, baut die Kette mit — nicht „diesmal von Hand".
+
+### Farbe: **Vertexfarben oder Atlas — du entscheidest, aber schreib es hin**
+
+Beides ist erlaubt, und die Bibel gibt die Richtung: **die Umgebung läuft über EINEN Farbatlas**
+(Farbkonsistenz, wenige Drawcalls), **Figuren und Titanen dürfen Vertexfarben** benutzen (überlebt
+jedes Nachmodellieren, keine UV-Arbeit). Was für welches Asset gilt, steht in der Registratur
+(`farbe:`) und **nicht** im Code. Und die drei Signalfarben (Zyan/Bernstein/Karminrot) sind für
+Gameplay reserviert — sie dürfen im Atlas **nicht** als Deko vorkommen (Bibel, unverhandelbar).
+
+### Klang: selbst erzeugt, als **Rezept**, und **gemessen statt gehört**
+
+Du hast keine Ohren in dieser Umgebung — also ist ein Klang genau dann fertig, wenn er **messbar**
+ist: Länge, Grundfrequenz, Hüllkurve, Spitzenpegel, ob er schleift (Anfang == Ende). Ein Rezept
+(`tools/sound/<name>.py`) ist die Quelle, die `.ogg` das Ergebnis, `assets.ron` der Schalter — genau
+wie beim Modell. **Nur originale oder lizenzierte Musik** (Bibel-Risiko: fremde Soundtracks sind
+nicht nutzbar); Referenzen darfst du anhören lassen und beschreiben, aber nichts übernehmen (§12e).
 
 ### ⚠️ Die wichtigste Regel dieses Abschnitts: **eine `.blend`, die der User angefasst hat, ist heilig**
 
@@ -538,8 +780,8 @@ Schreib sie nach `docs/konventionen.md` **und** als Kommentarkopf in jedes `tool
 - **Blick nach −Z**, aufrecht. In Blender wird Z-oben modelliert, der Exporter dreht auf Y-oben
   (`export_yup=True`) — **nicht selbst rotieren**, sonst dreht es zweimal.
 - **Anker sind Empties mit festen Namen**, und der Modellierer entscheidet damit *wo*, die RON
-  *wie stark*: `nape` (die Todeszone!), `hit.min` / `hit.max` (die Hitbox), `hook.l` / `hook.r`,
-  `hand.r` / `hand.l`, `eye`. **Fehlt ein Empty, ist die Zone ein Punkt** — und ein Nacken, der
+  *wie stark*: `cortex` (die Todeszone!), `hit.min` / `hit.max` (die Hitbox), `hook.l` / `hook.r`,
+  `hand.r` / `hand.l`, `eye`. **Fehlt ein Empty, ist die Zone ein Punkt** — und ein Cortex, der
   ein Punkt ist, fühlt sich wie ein kaputtes Spiel an.
 - **Farbe per Vertex-Farben**, nicht per Textur. Lowpoly braucht keine UV-Map, und Vertex-Farben
   überleben jedes Nachmodellieren.
@@ -622,9 +864,9 @@ Stufen: ⬜ nicht implementiert · 🟨 halb (gebaut, ungetestet) ·
 | Sache | Domäne | Stufe | Beleg (Test / Screenshot / Zahl) | Stand |
 |---|---|---|---|---|
 | Fenster + 3D-Kamera | render | 🟧 | `tests/kamera.rs`, `docs/bilder/kamera.png` | 2026-08-08 |
-| Haken einschlagen | odm | 🟧 | `tests/haken.rs` (7 Fälle), `docs/bilder/haken.png`, Reichweite 78 m gemessen | 2026-08-08 |
-| Seilzug / Schwung | odm | 🟨 | kompiliert, **kein Test, kein Bild** | 2026-08-08 |
-| Nacken-Trefferzone | titan | ⬜ | — | — |
+| Haken einschlagen | vector | 🟧 | `tests/haken.rs` (7 Fälle), `docs/bilder/haken.png`, Reichweite 78 m gemessen | 2026-08-08 |
+| Seilzug / Schwung | vector | 🟨 | kompiliert, **kein Test, kein Bild** | 2026-08-08 |
+| Cortex-Trefferzone | titan | ⬜ | — | — |
 ```
 
 **Regeln für die Tabelle:**
@@ -695,7 +937,7 @@ Die Reihenfolge ist **nicht verhandelbar**:
 4. **In `docs/BUGS.md` eintragen:** Ursache, Fix, Testname. Und wenn es eine Falle war, aus der
    man lernen kann: eine Zeile in `docs/lessons/`.
 
-Bei einem Bug, den nur das Auge sieht (ODM-Gefühl, Kameraruckeln, ein Haken, der ins Nichts
+Bei einem Bug, den nur das Auge sieht (Bewegungsgefühl, Kameraruckeln, ein Haken, der ins Nichts
 zeigt), ist der Beleg ein **`--script`-Lauf mit `assert`** plus **Screenshot vorher/nachher**. Das
 ist genau der Grund, warum der Fahrer in Stufe 1 gebaut wird.
 
@@ -715,7 +957,7 @@ prüfen konnte.**
 - **`unwrap()` / `expect()` nur mit Begründung im Kommentar** — und **nie** auf Daten aus einer
   Datei oder aus Eingaben. Beim **Laden** der RON ist ein sofortiger, lauter Abbruch mit
   Dateiname und Zeile das *richtige* Verhalten (fail fast beim Start), mitten im Spiel ist er es nie.
-- **Physik braucht Wachen.** ODM-Seilkräfte, Normalisierungen und Divisionen erzeugen NaN/∞,
+- **Physik braucht Wachen.** Seilkräfte des Vector Gear, Normalisierungen und Divisionen erzeugen NaN/∞,
   sobald ein Vektor Länge 0 hat oder ein Frame mal 0,5 s dauert. NaN im `Transform` ist der Bug,
   der aussieht wie „der Spieler ist verschwunden": Länge prüfen bevor normalisiert wird, `dt`
   clampen, und in `debug/` ein System, das **einmal warnt**, wenn eine Position nicht endlich ist.
@@ -759,7 +1001,7 @@ Beleg: tests/gas.rs::f014_boost_verbraucht_gas · docs/bilder/f014-boost.png · 
 Grund: eine Zeile, WARUM — nur wenn es nicht offensichtlich ist
 ```
 
-- **Präfix ist die `F-ID`**, wenn es zu einem Feature aus der Liste gehört (§2): `F-014 odm: …`.
+- **Präfix ist die `F-ID`**, wenn es zu einem Feature aus der Liste gehört (§2): `F-014 vector: …`.
   Gibt es keine, ist es einer von **fünf** Bereichen — und nur diese fünf:
   `docs:` · `test:` · `tool:` · `fix:` · `chore:`.
 - **Ein Commit = eine Sache.** „Diverse Fixes" ist kein Commit, das ist ein Karton.
@@ -772,17 +1014,43 @@ Grund: eine Zeile, WARUM — nur wenn es nicht offensichtlich ist
 |---|---|---|
 | **Branch** | `<f-id>-<kurz>` bzw. `<bereich>/<kurz>` | `f014-gas-boost`, `fix/haken-kante` |
 | **Test-Name** | `<f_id>_<die Aussage, die gilt>` — nicht „test_gas" | `f014_boost_verbraucht_gas` |
-| **Test-Datei** | `tests/<domäne>.rs` | `tests/odm.rs` |
+| **Test-Datei** | `tests/<domäne>.rs` | `tests/vector.rs` |
 | **Screenshot** | `docs/bilder/<f-id>-<kurz>[-vorher|-nachher].png` | `docs/bilder/f014-boost-nachher.png` |
 | **Skript** | `scripts/<f-id>-<kurz>.txt`, darin `mark <f-id>-<stichwort>` | `scripts/f014-boost.txt` |
-| **STATUS-Zeile** | `\| Sache \| Domäne \| Stufe \| Beleg \| Datum [maschine] \|`, Datum **ISO** | `… \| 🟧 \| tests/odm.rs … \| 2026-08-09 [cachy] \|` |
+| **STATUS-Zeile** | `\| Sache \| Domäne \| Stufe \| Beleg \| Datum [maschine] \|`, Datum **ISO** | `… \| 🟧 \| tests/vector.rs … \| 2026-08-09 [cachy] \|` |
 | **Bug** | `B-007 <Titel>` + die vier Felder aus §9 | `B-007 Haken hält an einer Kante nicht` |
 | **Frage** | `Q-003 <Frage>` + Kontext + `ANNAHME:` (womit du bis zur Antwort weiterarbeitest) | |
 | **Fremdfund** | `FUND-005 <Symptom>` + Messung | |
 | **Doku-Kopf** | `# <name> — <ein Satz>` und darunter `Stand: <ISO> · Stufe: <marke>` | |
 | **RON-Schlüssel** | `snake_case`, **eine** Sprache pro Datei (welche, steht in `docs/konventionen.md`) | |
-| **Rust** | `snake_case` Dateien/Funktionen, `CamelCase` Typen, Domänenordner immer Einzahl | `src/odm/hook.rs` |
+| **Rust** | `snake_case` Dateien/Funktionen, `CamelCase` Typen, Domänenordner immer Einzahl | `src/vector/hook.rs` |
 | **Subagenten-Bericht** (§17) | fest: `Aufgabe · Getan · Beleg · Stufe · Offen · Funde` | ein Freitext-Bericht ist nicht integrierbar |
+
+### Keine **Zombie-Dateien** — und Links werden **mitgezogen**
+
+> **Jede Datei im Repo ist entweder von irgendwo verlinkt/benutzt — oder sie ist gelöscht.**
+> Dazwischen gibt es nichts. Eine Datei, die niemand kennt, ist schlimmer als keine: sie sieht wie
+> Wahrheit aus, wird nie gepflegt und schickt den Nächsten in die Irre.
+
+- **Jede `docs/*.md` steht in `docs/README.md`.** Jede Quelldatei hat ihre Doku-Datei (§8). Jedes
+  Asset steht in der Registratur (§7). Jedes Skript in `tools/` ist in einer Doku erwähnt. Wer eine
+  Datei anlegt, verlinkt sie **im selben Commit**.
+- **Wer Daten in ihre endgültige Struktur bringt, zieht alle Verweise mit.** Eine Umbenennung oder
+  ein Umzug ist **erst dann fertig**, wenn `grep -rn "<alter pfad>" . --exclude-dir=target
+  --exclude-dir=.git` **leer** ist. Das gilt für Pfade in Markdown, in RON, in Rust, in Skripten und
+  in Commit-Vorlagen. **Ein Link, der nach dem Umzug ins Leere zeigt, ist ein Bug** — dieselbe Klasse
+  wie eine falsche Doku (§8).
+- **Prüfen, nicht hoffen:** `tools/normen.py` bekommt zwei Prüfungen dazu — (1) **jeder
+  Markdown-Link auf eine Repo-Datei existiert**, (2) **jede Datei unter `docs/`, `assets/`, `tools/`
+  ist mindestens einmal referenziert**. Was durchfällt, wird verlinkt oder gelöscht; „lass ich
+  liegen" ist keine Option.
+- **Nichts wird „zur Sicherheit" behalten.** Kein `*_alt.rs`, kein `backup_*.ron`, kein
+  `titan_v2.blend` neben `titan.blend`. **Git ist das Backup** — was gebraucht wurde, steht in der
+  Historie, und die kann man wiederholen. Zwei Varianten derselben Sache im Baum heißen: die falsche
+  wird benutzt (und zwar an dem Tag, an dem niemand hinsieht).
+- **Beim Auflösen des Gerüsts (§18)** ist genau das die Hauptarbeit: die Verweise auf
+  `prompts/…` und `gameplay/…` zeigen danach auf `docs/…` — **alle**, in derselben Änderung, mit
+  einem `grep` als Beleg.
 
 ### Die Rituale — auch ein Ablauf, der sich wiederholt, ist genormt
 
@@ -863,7 +1131,7 @@ mark eingehakt                # eine Zeile ins Log, an der man einen Screenshot 
 assert speed > 25             # ⭐ das Skript darf selbst urteilen: fällt es um, ist es ein Test
 ```
 `assert` ist der Grund, warum das mehr ist als eine Demo: damit wird eine **Fahrt** zu einem
-Test, und ODM-Gefühl ist genau die Sorte Sache, die kein Unit-Test greift.
+Test, und Bewegungsgefühl ist genau die Sorte Sache, die kein Unit-Test greift.
 
 **c) Ein Debug-Overlay (F3), das jede Meldung nachstellbar macht.** Position, Blickrichtung,
 Geschwindigkeit, Gas, Hakenzustand, Bildzeit — **im Bild**. Dazu ein `warp x y z` + `look` im
@@ -888,6 +1156,39 @@ Landet in `~/Pictures/Screenshots/`. **Kopier die Bilder nach `docs/bilder/`** u
 - **Manchmal gibt es gar keine Grafiksitzung** (kein `WAYLAND_DISPLAY`/`DISPLAY`) → `cargo run`
   panikt sofort. Dann gibt es **kein Bild**, dann bleibt die Sache **🟨** und du bittest den User
   draufzuschauen. Nicht aufrunden.
+
+---
+
+**e) Recherche und Inspiration — du darfst ins Internet, und du sollst es nutzen:**
+
+Ausdrücklich erlaubt: **YouTube** (Bewegungs- und Level-Design ansehen: wie eine Stadt für
+Schwingen gebaut wird, Ankerdichte, Dachhöhen, Gassenbreiten), **Google/Bilder-Suche** für
+Referenzbilder, Fachartikel zu Seilphysik/Netcode/Audio-Synthese, und die **Doku der installierten
+Bevy-Version** (die wichtigste Quelle von allen, §3). Nimm Skripte, wenn es schneller geht
+(`yt-dlp` für Untertitel/Beschreibungen, `curl`, ein kleines Parse-Skript).
+
+**Assets herunterladen ist erlaubt — es ist ein Prototyp.** Modelle, Klänge, Musik-Platzhalter:
+hol sie, wenn es das Spiel schneller spielbar macht. `yt-dlp` für Ton aus einem Video, `curl` für
+ein Modellarchiv, ein Skript für den Rest — alles zulässig. Der User ersetzt später **alles** selbst
+(§7), und bis dahin ist ein guter Prototyp wichtiger als eigene Polygone.
+
+**Wo es sich lohnt, zuerst zu suchen** (freie Lizenzen, kein Nachdenken, gute Low-Poly-Passung):
+Kenney, Poly Pizza, OpenGameArt, Quaternius, Sketchfab (CC-Filter), Freesound (CC0), Pixabay.
+Nicht als Vorschrift — nur weil es dort schneller geht als beim Freistellen einer Tonspur.
+
+**Die Regeln, die auch für Platzhalter gelten:**
+
+- **Alles Fremde nach `assets/extern/` + Zeile in `HERKUNFT.md` + `herkunft:` in der Registratur**
+  (§7). Ohne diese drei ist es ein Zombie (§10) — und der User kann es später nicht finden, um es
+  zu ersetzen.
+- **Nicht ins öffentliche Repo.** `assets/extern/` ist ignoriert; `tools/hole_extern.sh` beschafft
+  es wieder (§7).
+- **Was du übernimmst, ist am wertvollsten als ZAHL oder ERKENNTNIS** — „Gassen sind 8–12 m breit,
+  damit ein Haken beide Seiten erreicht" — mit **Quelle** nach `docs/gameplay/referenzen.md`. Eine
+  Zahl ohne Herkunft ist eine Behauptung (§9).
+- **Referenzbilder** nach `gameplay/bilder/` bzw. `docs/gameplay/referenzen/`, mit URL und Datum.
+- **Erst messen, dann glauben:** ein Blogpost über Bevy-Versionen ist keine Quelle, die installierte
+  Doku ist eine. Bei Widerspruch gewinnt die Wirklichkeit.
 
 ---
 
@@ -939,8 +1240,8 @@ Diese drei Schreibweisen bleiben so; jede steht an genau einer Stelle in der Dok
 | **1** | 3D-Szene: Boden, Sonne, ein Würfel. **FPS-Kamera** dreht mit der Maus, WASD läuft, Schwerkraft und Boden-Kollision — die Bewegung liest **`Intent`**, nicht die Tastatur (§6). **Plus: `--sandbox`, `--script`, F3-Overlay, ein Screenshot, `src/net/` als `LocalOnly`-Stub, `tests/mehrspieler.rs` mit zwei Spielern und `--headless` (§14), damit alles auch ohne Bildschirm prüfbar ist.** |
 | **1b** | ⭐ **Die Modellkette steht mit EINEM Modell** (§7): `tools/blend/scout.py` → `scout.blend` → Auto-Export → `.glb` → `nutzen: true` in `art.ron` → im Spiel gesehen. Der Platzhalter-Weg (`nutzen: false`) läuft daneben weiter. **Vor Stufe 2** — jedes weitere Modell ist danach eine Kopie dieser Kette, und der User kann ab hier jederzeit selbst modellieren. |
 | **2** | Die **Stadt** steht: Mauer, Häuser, Dächer, Bäume — hakbare Flächen (erst Platzhalter, dann `.blend`). Kollision gegen alles davon, über den räumlichen Index. |
-| **3** | ⭐ **ODM: Haken raus, einhaken, Seil einholen, schwingen, Gas verbrauchen, Boost.** Ich fliege durch die Stadt und es fühlt sich gut an. ← **die Marke für Tag 1** |
-| **4** | Ein **Titan** steht in der Stadt: Rig, Gliedmaßen, Nacken als eigene Trefferzone. Klinge schneidet, Nackentreffer tötet, Bein ab = er fällt. Schaden aus Geschwindigkeit. |
+| **3** | ⭐ **Vector Gear: Haken raus, einhaken, Seil einholen, schwingen, Gas verbrauchen, Boost.** Ich fliege durch die Stadt und es fühlt sich gut an. ← **die Marke für Tag 1** |
+| **4** | Ein **Titan** steht in der Stadt: Rig, Gliedmaßen, Cortex als eigene Trefferzone. Klinge schneidet, Cortex-Treffer tötet, Bein ab = er fällt. Schaden aus Geschwindigkeit. |
 | **5** | Der Titan **wehrt sich**: sucht, geht, greift, packt dich, wirft dich. Dampf, Regeneration, Tod. Klingen werden stumpf und brechen, Gas geht aus, Nachschub. |
 | **6** | Ein **Einsatz** mit Zielen und Phasen (`missions.ron`), Spawn-Wellen, Sieg/Niederlage, ein Trupp NPC-Kameraden. |
 | **7** | **Progression**: XP, Gold, Gear-Upgrades, Perks, Familien — komplett aus RON. Hauptmenü, Speichern/Laden. |
@@ -978,12 +1279,12 @@ uname -r; nproc; echo "WAYLAND=$WAYLAND_DISPLAY DISPLAY=$DISPLAY"
 
 **Kein Fenster ist kein Grund, nicht weiterzubauen.** Was dort vollständig geht:
 
-- **`cargo test`** — alles, was Logik ist: ODM-Mathematik, Trefferzonen, Schadenskurven,
+- **`cargo test`** — alles, was Logik ist: Vector-Gear-Mathematik, Trefferzonen, Schadenskurven,
   RON-Validierung, Weltgenerierung als Zahlen, der Domänen-Test (§5), `tests/mehrspieler.rs` (§6).
 - **`--script` mit `assert`** (§12) — **aber nur, wenn das Spiel einen `--headless`-Modus hat.**
   Deshalb ist der **Teil von Stufe 1**: kein Fenster (`primary_window: None`), fester Tick, läuft N
   Ticks und **beendet sich mit einem Exit-Code**, der sagt, ob alle `assert` gehalten haben. Damit
-  ist eine ODM-Fahrt auf **jeder** Maschine prüfbar — und in einem CI eines Tages auch.
+  ist eine Fahrt auf **jeder** Maschine prüfbar — und in einem CI eines Tages auch.
 - **Die Modellkette (§7)** — `blender --background` braucht **keinen** Bildschirm. `.py` → `.blend`
   → `.glb` und der Struktur-Test (Empties, Vertexfarben, `metallicFactor`) laufen dort einwandfrei.
 - **Doku, Extraktion der Excel-Liste (§2), Aufräumen, Refactoring.**
@@ -1049,7 +1350,7 @@ Am Ende der Sitzung will ich sehen:
    weil das der User setzt.
 4. **`docs/ABNAHME.md`** mit der Liste dessen, worauf der User schauen soll.
 5. **Die Modell-Tabelle** aus `cargo test --test modelle -- --ignored --nocapture`, und mindestens
-   eine **`.blend`, die ich öffnen kann** — mit den Ankern (`nape`, `hit.min`/`hit.max`, …) schon
+   eine **`.blend`, die ich öffnen kann** — mit den Ankern (`cortex`, `hit.min`/`hit.max`, …) schon
    an ihrem Platz, sodass Nachmodellieren heißt: Geometrie austauschen, speichern, starten.
    Dazu die Liste, welches Modell noch Platzhalter ist (⬜/🟨) und welches echt (🟧).
 6. Einen ehrlichen Absatz: **was gebaut, aber nicht gesehen ist.** Eine grüne Metrik ist keine
@@ -1086,7 +1387,7 @@ werden vor der Parallelisierung fixiert** — erst der Vertrag (Components, Mess
 dann das Fan-out. Wer parallelisiert, bevor die Naht steht, integriert hinterher fünf Entwürfe
 derselben Datei.
 
-**Für jeden aus dem Projekt abgeleiteten Fachbereich wird ein Senior-Experte angelegt** (ODM-Physik,
+**Für jeden aus dem Projekt abgeleiteten Fachbereich wird ein Senior-Experte angelegt** (Vector-Gear-Physik,
 Titanen-Verhalten, Rendering/3D-Pipeline, Daten/RON, Tooling & Test, Doku & Status …): er
 **entscheidet eigenverantwortlich in seiner Domäne**, hält **alle** Projektrichtlinien ein und
 **benennt Abweichungen explizit, statt sie zu umgehen** (eine benannte Abweichung ist eine
@@ -1110,7 +1411,7 @@ Stufe N das **Ergebnis** von N−1 wirklich braucht. Alles andere läuft gleichz
 **Wie zerschnitten wird — in dieser Vorzugsordnung:**
 
 1. **Nach Domäne** — der natürliche Schnitt, weil Dateibesitz und Domäne dasselbe sind (§5).
-   `odm/`, `titan/`, `world/`, `hud/` gleichzeitig, sobald die Schnittstellen stehen.
+   `vector/`, `titan/`, `world/`, `hud/` gleichzeitig, sobald die Schnittstellen stehen.
 2. **Nach `F-ID`** — unabhängige Features aus der Liste (§2) laufen parallel; `abhaengt_von`
    sagt dir, was **nicht** gleichzeitig geht. Genau dafür steht das Feld in `features.ron`.
 3. **Nach Prüf-Dimension** — dasselbe Stück Code von mehreren Seiten gleichzeitig: Korrektheit,
@@ -1178,7 +1479,7 @@ Datei geschrieben, zwei Agenten mergen nicht):
 | `assets/data/*.ron` | RON wird als ganze Datei geschrieben — verlorene Zeilen sieht niemand |
 | `docs/STATUS.md`, `docs/TODO.md` | **der Hauptkopf trägt ein**, Subagenten *melden* nur |
 
-**Das geht gut parallel:** ein Agent pro **Domäne** (`odm/`, `titan/`, `world/`, `hud/` …), sobald
+**Das geht gut parallel:** ein Agent pro **Domäne** (`vector/`, `titan/`, `world/`, `hud/` …), sobald
 das Skelett steht · ein Agent pro `tools/blend/*.py` · ein Agent pro Doku-Datei · ein Agent, der in
 der **installierten** Bevy-Doku nachsieht, wie eine API dieser Version wirklich heißt (§3).
 
@@ -1240,11 +1541,12 @@ wie das Projekt tickt und wo die Fallen liegen?* Wenn nein, ist der Schritt nich
 
 Was einmal gepusht ist, ist indexierbar, auch nach dem Löschen. Der Check kommt **vor** dem Push:
 
-- `.gitignore`: `target/`, `saves/`, `*.blend1`, `*.blend2`, temporäre Skripte, Logs.
+- `.gitignore`: `target/`, `saves/`, `*.blend1`, `*.blend2`, temporäre Skripte, Logs, **`assets/extern/`**.
   **`assets/3d/glb/` NICHT ignorieren** (§7 — das Spiel muss ohne Blender laufen).
 - **Keine Zugangsdaten, Tokens, Keys, Pfade mit Klarnamen** — im Arbeitsbaum *und* in der
   Historie (`git log -p | grep -niE "token|secret|api[_-]?key|password"`).
-- **Keine fremden Assets.** Jedes Modell, jede Textur, jeder Klang ist selbst gebaut (§1, §7).
+- **`assets/extern/` ist im `.gitignore`**, `HERKUNFT.md` ist vollständig (jede Datei eine Zeile) und
+  `tools/hole_extern.sh` beschafft alles wieder (§7). Der Ersetzungsbericht liegt dem User vor.
 - `cargo test` grün, `cargo build --release` grün, `grep -rn "TEMP" src/` leer.
 - `README.md` liest sich für einen Fremden: was ist das, wie starte ich es, was ist fertig
   (mit der Stufen-Legende), welche Tasten. Dazu eine `LICENSE` — welche, fragst du in
@@ -1266,7 +1568,7 @@ git remote -v                       # gibt es 'origin'?
 git push -u origin main             # ja → nur pushen
 
 gh repo create defeated-by-titans --public --source=. --remote=origin --push \
-   --description "3D-Titanenkampfspiel in Bevy (Rust) — ODM-Gear, Nackentreffer, Koop-Einsätze"
+   --description "3D-Titanenkampfspiel in Bevy (Rust) — Vector Gear, Cortex-Treffer, Koop-Einsätze"
                                     # nein → so anlegen
 ```
 
@@ -1294,6 +1596,17 @@ git rm init.md                    # der Starter im Wurzelverzeichnis, zuletzt
 git commit -m "Bootstrap-Gerüst entfernt — ab hier fuehren README, CLAUDE.md und docs/"
 git push
 ```
+
+**Vor jedem `git rm`: die Verweise umschreiben, nicht danach.** Ein Umzug ist erst fertig, wenn
+
+```bash
+grep -rn -e 'prompts/' -e 'gameplay/' . --exclude-dir=target --exclude-dir=.git
+```
+
+nur noch Treffer zeigt, die **absichtlich** von der Historie sprechen. Jeder Link in `README.md`,
+`CLAUDE.md`, `docs/**`, in den RON-Dateien und in den `tools/`-Skripten zeigt danach auf den neuen
+Ort. Zusätzlich läuft `tools/normen.py` (§10): **kein toter Markdown-Link, keine unreferenzierte
+Datei.** Beides ist Teil dieses Schritts, nicht „Aufräumen später".
 
 **Und dem User sagen, wo seine Wünsche ab jetzt hingehen:** der Eingangskorb ist nach der Auflösung
 `docs/gameplay/` (Design, eine Datei pro Thema) plus `docs/TODO.md` (die offene Arbeit). Schreib
