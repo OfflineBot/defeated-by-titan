@@ -27,5 +27,5 @@ du arbeitest daran vorbei weiter.
 `prompts/`, `gameplay/` und **diese Datei** sind Bootstrap-Gerüst, kein Teil des fertigen Projekts.
 Wenn ihr Inhalt in die echte Struktur übertragen ist (`CLAUDE.md`, `README.md`, `docs/`,
 `assets/data/*.ron`), wird das Gerüst abgebaut, ein öffentliches GitHub-Repo angelegt und diese
-Datei zuletzt gelöscht. Der genaue Ablauf steht in `prompts/init.md` §16 — **erst übertragen,
+Datei zuletzt gelöscht. Der genaue Ablauf steht in `prompts/init.md` §18 — **erst übertragen,
 dann löschen**, jeder Schritt ein eigener Commit.
