@@ -10,13 +10,17 @@ ls -R gameplay/               # dann der Gameplay-Korb
 
 ## Die Reihenfolge, in der gelesen wird
 
-1. **`prompts/init.md`** — der Rahmen: was für ein Spiel, welche Ordnerstruktur, welche Regeln,
-   welche Beweispflicht, wie es endet.
-2. **Jede weitere `*.md` in `prompts/`** — Nachträge und Präzisierungen des Users. **Es gibt darin
-   keine optionale Datei.** `init.md` weiß nicht, was in ihnen steht; wer nur sie liest, hat den
-   Auftrag nicht gelesen.
-3. **`gameplay/`** — was inhaltlich gebaut werden soll (TODO-Liste, Mechaniken, Zahlen, Skizzen).
-   Bei Widerspruch: `gameplay/` bestimmt den **Inhalt**, `prompts/` das **Handwerk**.
+1. **`prompts/init.md`** — der Rahmen: Engine, Ordnerstruktur, Regeln, Beweispflicht, Normung,
+   Werkzeuge, wie es endet. 18 Abschnitte.
+2. **`prompts/DefeatedByTitans_Design-Bibel.md`** — das *Warum*: Designpfeiler, Welt und Ton,
+   visueller Stil, Plattform, Mehrspieler-Grundregeln, Gegner-Philosophie, Phasenplan P0–P11,
+   Kennzahlen, Risiken. **Inhaltlich gewinnt sie über `init.md`.**
+3. **Jede weitere `*.md` in `prompts/`** — Nachträge und Präzisierungen des Users. **Es gibt darin
+   keine optionale Datei.**
+4. **`gameplay/features.xlsx`** — der Produktions-Backlog: 12 Blätter, ~790 Tickets, inklusive
+   Blatt `10_Namensschema` (verbindliche Begriffe) und der MoSCoW-Priorität. **Die Arbeitsvorlage.**
+5. **Der Rest von `gameplay/`** — Skizzen und Notizen. Bei Widerspruch: `gameplay/` und die Bibel
+   bestimmen den **Inhalt**, `prompts/init.md` das **Handwerk**.
 
 Danach wird **aufgesetzt und gebaut** — nicht geplant und zurückgefragt. Alles, was du wissen
 musst, steht in den Dateien oben; was wirklich nicht darin steht, kommt nach `docs/FRAGEN.md`, und

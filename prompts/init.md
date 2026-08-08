@@ -307,7 +307,7 @@ in `docs/FRAGEN.md` aufgelistet.
 | Die **Excel-Feature-Liste** | per Skript → `docs/features.ron` (jede Zeile eine `F-ID`) → generiert `docs/TODO.md` + `docs/STATUS.md`. Datei bleibt erhalten. |
 | Ein **Feature / eine Mechanik** (aus Text/Excel) | `docs/gameplay/<thema>.md` (das Design: *warum so*, mit `F-ID`) **+ eine ⬜-Zeile in `docs/STATUS.md`** |
 | Eine **Zahl / Balance** | in die passende `assets/data/*.ron` — **niemals in den Rust-Code** (§4) |
-| Ein **Item / Titan / Perk / Einsatz** | ein Eintrag in `titans.ron` / `gear.ron` / `traits.ron` / `missions.ron` |
+| Ein **Item / Titan / Trait / Einsatz** | ein Eintrag in `titans.ron` / `gear.ron` / `traits.ron` / `missions.ron` |
 | Eine **Skizze / ein Bild** | bleibt in `gameplay/bilder/`, wird aus `docs/gameplay/` verlinkt |
 | Etwas **Unklares** | `docs/FRAGEN.md` — nicht raten, nicht drumherum bauen und hoffen |
 
@@ -329,7 +329,7 @@ etwas Großes, das in keiner der beiden Listen steht — trag es zuerst ein.
 im klassischen Sinn. Es gibt drei Dinge, und alles ist eines davon:
 
 - **Entity** — eine ID. Ein Titan, eine Klinge, die Kamera, ein Haken.
-- **Component** — Daten an einer Entity (`Transform`, `Gas`, `Nape`, `Hooked`).
+- **Component** — Daten an einer Entity (`Transform`, `Gas`, `Cortex`, `Hooked`).
 - **System** — eine Funktion, die pro Frame läuft und über Components abfragt (`Query`).
 
 Dazu **Resources** (globaler Zustand: die geladene RON, die Uhr), **Messages** (Nachrichten
@@ -422,7 +422,7 @@ fn main() {
 
 ## 4. Die Datenregel: **Zahlen gehören in RON, nicht in Rust**
 
-Ein neuer Titan-Typ, eine Klingenstufe, ein Perk, eine Missionsvorlage, eine Gas-Kostenzahl:
+Ein neuer Titan-Typ, eine Klingenstufe, ein Trait, eine Missionsvorlage, eine Gas-Kostenzahl:
 **Datei-Arbeit, kein Rust.** Im Code stehen nur *Einheiten* und *Mechanik*.
 
 ```
@@ -430,7 +430,7 @@ assets/data/
   game.ron       Tuning: Vector Gear (Hakenreichweite, Seilzug, Gas, Boost), Kamera, Physik
   titans.ron     die Titanen-Typen (Größe, Tempo, Regeneration, Cortex-Größe, KI-Profil)
   gear.ron       Klingen, Tanks, Haken, Upgrade-Stufen und ihre Kosten
-  traits.ron      Perks + Familien-Passive
+  traits.ron      Traits + Lineage-Passive (Relics, Echos)
   missions.ron   Einsatzvorlagen: Ziele, Phasen, Spawn-Wellen, Belohnung
   art.ron        Modellpfade, Farben, Lowpoly-Teilelisten
 ```
@@ -446,6 +446,39 @@ still eine Null einsetzen — sonst suchst du den Bug im Code, während er in de
 
 ## 5. Die Ordnerstruktur: **eine Domäne = ein Ordner = ein Plugin = standalone**
 
+### Der ganze Baum auf einen Blick
+
+Damit klar ist, **wo was hingehört** — und damit nichts irgendwo daneben landet (§10: keine
+Zombie-Dateien):
+
+```
+defeated-by-titans/
+  Cargo.toml            das Paket heißt defeated_by_titans (§13)
+  CLAUDE.md             das Gedächtnis für die nächste Sitzung — INDEX, kein Archiv (§8)
+  README.md             was das Spiel ist, wie man es startet, Tasten, Stand
+  .gitignore            target/ saves/ *.blend1 *.log assets/extern/
+  src/                  eine Domäne = ein Ordner = ein Plugin (unten)
+  tests/                tests/<domäne>.rs — plus domaenen.rs, mehrspieler.rs, modelle.rs, assets.rs
+  assets/               data/ 3d/ textures/ audio/ vfx/ extern/    → §7
+  tools/                blend/ atlas/ sound/ + normen.py, features.py, hole_extern.sh
+  scripts/              --script-Fahrten: <f-id>-<kurz>.txt        → §12
+  docs/                 der Spiegel von src/ + alles, was gepflegt wird:
+    README.md             Index: eine Zeile pro Doku-Datei
+    STATUS.md  TODO.md    Fortschritt (vier Stufen) und offene Arbeit — GENERIERT aus features.ron
+    features.ron          die Feature-Liste als Daten (F-IDs)       → §2
+    backlog/*.ron         ein RON pro Excel-Blatt                    → §2
+    gameplay/             das Design pro Thema (+ referenzen.md, bilder/)
+    lessons/              Fallgeschichten: was Zeit gekostet hat
+    architektur.md  konventionen.md  modelle.md  multiplayer.md  umgebung.md
+    BUGS.md  FRAGEN.md  FUNDE.md  ABNAHME.md  ROADMAP.md
+    bilder/               Screenshots als Beleg: <f-id>-<kurz>.png
+  prompts/  gameplay/   ⚠️ Bootstrap-Gerüst — wird am Ende aufgelöst (§18)
+```
+
+**Die drei Trennungen, die man nicht verwischen darf:** `tools/` baut Dinge (Blender, Atlas, Klang,
+Prüfer) — `scripts/` *spielt* das Spiel (`--script`-Fahrten) — `assets/` enthält das Ergebnis, und
+`assets/extern/` allein enthält Fremdes.
+
 ```
 src/
   main.rs                     nur: App bauen, Plugins in Abhängigkeitsreihenfolge, Flags lesen
@@ -453,9 +486,10 @@ src/
 
   shared/    (kein Plugin)    Typen, die niemandem gehören: Health, Meter, Achsen-Helfer
   data/      DataPlugin       RON laden → GameData + Handles. Läuft VOR allem anderen.
-  save/      SavePlugin       Spielstand: Profil, Gear-Stufen, Perks, Fortschritt
-  world/     WorldPlugin      das Gelände: Distrikt, Mauern, Häuser, Wald der Riesenbäume;
-                              Kollision und der räumliche Index (§9)
+  save/      SavePlugin       Spielstand: Profil, Gear-Budget, Traits, Lineage, Fortschritt
+                              (Anforderung der Bibel: kein Verlust, keine Duplikation — §2)
+  world/     WorldPlugin      die Maps (Ashgate District …), Bastionsringe, Häuser, Titanwood;
+                              Ankerpunkte, Kollision, räumlicher Index (§9)
   render/    RenderPlugin     Kamera, Licht, Himmel, Meshes bauen, Modelle laden
   player/    PlayerPlugin     der Körper: laufen, springen, Boden-Kollision, Zustandsmaschine
   vector/    VectorPlugin     ⭐ DER KERN (Vector Gear): Haken, Seil, Schwung, Gas, Boost, Wandlauf
@@ -464,8 +498,9 @@ src/
   combat/    CombatPlugin     Treffer: Raycast/Sweep, Schaden aus Geschwindigkeit, Amputation,
                               Dampf, Tod
   mission/   MissionPlugin    Einsatz: Ziele, Phasen, Spawn-Wellen, Sieg/Niederlage
-  progress/  ProgressPlugin   XP, Gold, Stats, Perks, Familien, Gear-Upgrades
-  squad/     SquadPlugin      NPC-Kameraden: folgen, angeboten, sterben
+  progress/  ProgressPlugin   XP, Mark/Sigil, Gear-Budget, Traits, Lineage, Ascension, Relics
+  squad/     SquadPlugin      Mitspieler und Eskorte: Kampfunfähigkeit, Wiederbeleben,
+                              Markieren, geteilte Ziele (Bibel: kein PvP-Schaden, keine Kollision)
   hud/       HudPlugin        Gas, Klingenzustand, Ziel-Marker, Fadenkreuz
   menu/      MenuPlugin       Hauptmenü, Pause, Optionen
   sound/     SoundPlugin      Gas-Zischen, Hakeneinschlag, Klingenschnitt, Titanenschritt
@@ -548,6 +583,18 @@ heißt normalerweise, die Simulation neu zu schreiben.
 Transport `LocalOnly` bereitstellen, der die Intents des lokalen Spielers in die Simulation schiebt.
 Damit ist der Ort, an dem später Client und Server stehen, **vorhanden und leer**, statt später
 mitten durch fünf Domänen zu schneiden.
+
+### Was die Bibel dazu schon entschieden hat — das ist keine offene Frage mehr
+
+| Vorgabe | Konsequenz für den Code |
+|---|---|
+| **Eigene Bewegung beim Client**, alles andere beim Server (Titanen, Ziele, Schaden, Beute) | die Trennung aus Regel 1 ist damit **vorgegeben**, nicht gewählt: Bewegung darf lokal sofort reagieren, ein Cortex-Treffer nie |
+| **20 Spieler pro Einsatz, 10 pro Raid, 40 im Hub** | nichts skaliert mit „einem Spieler". Zwanzig Spieler mit je **zwei Seilen** plus sechzig Titanen sind die eigentliche Belastungsprobe — nicht die Grafik |
+| **Kein Schaden, keine Kollision zwischen Spielern** | zwei Spieler müssen sich in voller Fahrt durchdringen können; Knockback bleibt |
+| **Getrennte Beute pro Spieler** | Beute ist nie ein globaler Zustand |
+| **Kampfunfähigkeit statt Sofort-Tod**, Wiederbeleben durch Mitspieler | „tot" ist ein Zustand mit Timer, kein Entfernen der Entity → gehört zu `squad/` |
+| **Verbindungsabbruch reserviert den Platz 120 s** | die Sitzung überlebt den Spieler; sein Zustand hängt an einer `PlayerId`, nicht an einer Verbindung (Regel 7) |
+| **T-019: jedes Bewegungsfeature wird bei 200 ms simulierter Latenz getestet** | **ein Verzögerungs-Schalter gehört ins Werkzeug** (§12), nicht in ein späteres Ticket: „fühlt sich lokal gut an" ist keine Abnahme |
 
 **`docs/multiplayer.md`** hält den Plan, der noch nicht gebaut wird: Autoritätsmodell (dedizierter
 Server vs. Host), wer die Titanen simuliert (der Server), was der Client vorhersagen darf (die
@@ -1114,6 +1161,8 @@ Prüfinfrastruktur vor den Features** — sie ist Teil von Stufe 1, nicht ein �
 cargo run -- --mission tutorial   # direkt in einen Einsatz, kein Menü
 cargo run -- --sandbox            # leeres Feld, ein Titan, unendlich Gas — zum Anschauen
 cargo run -- --novsync            # zum Messen
+cargo run -- --lag 200            # 200 ms simulierte Latenz (Bibel T-019) — jedes
+                                  # Bewegungsfeature wird AUCH so geprüft, nicht nur lokal
 cargo run -- --script <datei>     # das Spiel spielen, ohne zu tippen
 ```
 
@@ -1244,7 +1293,7 @@ Diese drei Schreibweisen bleiben so; jede steht an genau einer Stelle in der Dok
 | **4** | Ein **Titan** steht in der Stadt: Rig, Gliedmaßen, Cortex als eigene Trefferzone. Klinge schneidet, Cortex-Treffer tötet, Bein ab = er fällt. Schaden aus Geschwindigkeit. |
 | **5** | Der Titan **wehrt sich**: sucht, geht, greift, packt dich, wirft dich. Dampf, Regeneration, Tod. Klingen werden stumpf und brechen, Gas geht aus, Nachschub. |
 | **6** | Ein **Einsatz** mit Zielen und Phasen (`missions.ron`), Spawn-Wellen, Sieg/Niederlage, ein Trupp NPC-Kameraden. |
-| **7** | **Progression**: XP, Gold, Gear-Upgrades, Perks, Familien — komplett aus RON. Hauptmenü, Speichern/Laden. |
+| **7** | **Progression**: XP, Mark/Sigil, Gear-Budget, Traits, Lineages, Ascension — komplett aus RON. Hauptmenü, Speichern/Laden. **Achtung: erst nach dem Vector-Gear-Gate** (§2). |
 | **8** | **Politur und Zahlen**: mehr Titanen-Typen, ein Boss mit Phasen, Sound, Performance mit vielen Titanen gemessen, `docs/` durchgesehen und wahr, `docs/ABNAHME.md` gefüllt. |
 
 **Stufe 3 ist die Marke für Tag 1.** Steht sie mittags, zieh weiter. Steht sie abends nicht, ist
