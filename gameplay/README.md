@@ -42,7 +42,7 @@ gameplay/
 | `features.xlsx` | **per Skript** ausgelesen (alle Blätter, `data_only=True`, Farben beachten) → `docs/features.ron` mit einer `F-ID` pro Zeile → daraus generiert: `docs/TODO.md` + `docs/STATUS.md`. Die Datei selbst wird **nie** verändert oder gelöscht. |
 | Ein Feature / eine Mechanik | `docs/gameplay/<thema>.md` (das Design) + eine ⬜-Zeile in `docs/STATUS.md` |
 | Eine Zahl / Balance | in die passende `assets/data/*.ron` — **niemals in den Rust-Code** |
-| Ein Item / Titan / Trait / Einsatz | ein Eintrag in `titans.ron` / `gear.ron` / `traits.ron` / `missions.ron` |
+| Ein Item / Titan / Trait / Einsatz | ein Eintrag in `titan.ron` / `gear.ron` / `traits.ron` / `missions.ron` |
 | Eine Skizze / ein Bild | bleibt hier, wird aus `docs/gameplay/` verlinkt |
 | Etwas Unklares | `docs/FRAGEN.md` — nicht raten |
 
