@@ -1054,6 +1054,12 @@ Grund: eine Zeile, WARUM — nur wenn es nicht offensichtlich ist
 - **Ein Commit = eine Sache.** „Diverse Fixes" ist kein Commit, das ist ein Karton.
 - **Eine Sprache**: Deutsch, durchgehend. Nicht heute `add gas drain`, morgen `Gas-Verbrauch`.
 - **Kein Punkt am Ende, keine Emoji im Betreff** (die Stufen-Marken stehen im Rumpf).
+- ⚠️ **Keine Werkzeug- oder Autorenspuren in der Message.** Kein `Co-Authored-By:`, keine
+  Signatur, kein „generated with", kein Modellname, kein Hinweis darauf, *wer oder was* den Commit
+  geschrieben hat. Eine Commit-Message beschreibt **die Änderung**, nicht ihren Urheber — der steht
+  im Git-Autor-Feld und nirgends sonst. Das gilt auch für PR-Beschreibungen und Tags.
+  Nimm es in `tools/normen.py` auf: eine Message mit `Co-Authored-By`, `Generated`, `Claude`,
+  `AI` oder `🤖` fällt durch.
 
 ### Der Rest, was ebenfalls jedes Mal gleich aussieht
 
