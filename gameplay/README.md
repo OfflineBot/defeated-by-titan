@@ -49,7 +49,7 @@ gameplay/
 ## Design — die Bibel ist verbindlich
 
 **Halte dich an ALLE Richtlinien der Design-Bibel:
-[`../prompts/DefeatedByTitans_Design-Bibel.md`](../prompts/DefeatedByTitans_Design-Bibel.md).**
+[`../prompts/DefeatedByTitan_Design-Bibel.md`](../prompts/DefeatedByTitan_Design-Bibel.md).**
 
 Sie ist die Autorität für *warum*, *in welcher Reihenfolge* und *woran man merkt, dass es
 funktioniert*: die fünf Designpfeiler, Welt und Ton, der visuelle Stil (Low Poly, ein Farbatlas,

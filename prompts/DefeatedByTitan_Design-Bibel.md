@@ -1,7 +1,7 @@
 # DEFEATED BY TITANS — Design-Bibel
 
 **Version 1.0 · Pre-Production**
-Begleitdokument zum Produktions-Backlog (`DefeatedByTitans_Produktions-Backlog.xlsx`)
+Begleitdokument zum Produktions-Backlog (`DefeatedByTitan_Produktions-Backlog.xlsx`)
 
 Das Backlog beantwortet *was gebaut wird*. Dieses Dokument beantwortet *warum*, *in welcher Reihenfolge* und *woran wir merken, dass es funktioniert*.
 

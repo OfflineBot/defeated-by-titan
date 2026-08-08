@@ -12,7 +12,7 @@ ls -R gameplay/               # dann der Gameplay-Korb
 
 1. **`prompts/init.md`** — der Rahmen: Engine, Ordnerstruktur, Regeln, Beweispflicht, Normung,
    Werkzeuge, wie es endet. 18 Abschnitte.
-2. **`prompts/DefeatedByTitans_Design-Bibel.md`** — das *Warum*: Designpfeiler, Welt und Ton,
+2. **`prompts/DefeatedByTitan_Design-Bibel.md`** — das *Warum*: Designpfeiler, Welt und Ton,
    visueller Stil, Plattform, Mehrspieler-Grundregeln, Gegner-Philosophie, Phasenplan P0–P11,
    Kennzahlen, Risiken. **Inhaltlich gewinnt sie über `init.md`.**
 3. **Jede weitere `*.md` in `prompts/`** — Nachträge und Präzisierungen des Users. **Es gibt darin
