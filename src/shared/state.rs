@@ -1,8 +1,10 @@
-//! State on the player — **components, never a `Resource`.**
+//! State on a body — **components, never a `Resource`.**
 //!
 //! Gas, blades and movement state hang on *one* player. As a `Resource` they would be
 //! global, and with that the game would be a single-player game you only notice as one when
-//! multiplayer comes around (`prompts/init.md` §6 rule 3).
+//! multiplayer comes around (`prompts/init.md` §6 rule 3). The same sentence holds for
+//! [`Health`], [`HitStop`] and [`TitanState`]: twenty players and sixty titans, each with
+//! their own number, and not one of them global.
 //!
 //! They live in `shared/` although `vector` and `blades` write them, because `hud` and
 //! `sound` have to **read** them — and opening an edge between domains for that would be the
@@ -127,6 +129,133 @@ pub enum MovementState {
     Downed,
 }
 
+/// What a body can take before it is out of the fight. Players **and** titans.
+///
+/// ⚠️ **This type has no `F-ID` anywhere in the backlog.** It is not a forgotten feature row,
+/// it is a hole: `MovementState::Downed` above already describes what happens when this
+/// number reaches zero, `titan.ron` is getting a `health` field per kind, and the damage
+/// curve is supposed to come out of speed — and none of those three has a component to write
+/// to. It is a **seam type**, so do not go looking for the row that owns it, and do not set a
+/// stage against it.
+///
+/// **The numbers stand in RON** (`titan.ron: health`, the player's in `game.ron`), never
+/// here (§4). What stands here is the arithmetic: it saturates at 0 and it never exceeds
+/// `max`. A negative health is not a smaller number, it is a second death condition nobody
+/// tests for.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Health {
+    pub current: f32,
+    pub max: f32,
+}
+
+impl Health {
+    pub fn full(max: f32) -> Self {
+        Health { current: max, max }
+    }
+
+    pub fn fraction(&self) -> f32 {
+        if self.max > 0.0 { (self.current / self.max).clamp(0.0, 1.0) } else { 0.0 }
+    }
+
+    /// Takes `amount` off. **Saturates at 0** and returns what is left.
+    ///
+    /// A nonsensical amount (negative, `NaN`) changes nothing — a negative hit would be a
+    /// heal, and that is the kind of thing a damage formula produces at 3 a.m.
+    pub fn damage(&mut self, amount: f32) -> f32 {
+        if amount.is_finite() && amount > 0.0 {
+            self.current = (self.current - amount).max(0.0);
+        }
+        self.current
+    }
+
+    /// Heals by `amount`, **capped at [`max`](Self::max)**. Does not revive on its own: who is
+    /// allowed to leave `MovementState::Downed` is `squad`'s decision, not this type's.
+    pub fn heal(&mut self, amount: f32) {
+        if amount.is_finite() && amount > 0.0 {
+            self.current = (self.current + amount).min(self.max);
+        }
+    }
+
+    /// Zero — "out of the fight", not "delete the entity" (see [`MovementState::Downed`]).
+    pub fn is_empty(&self) -> bool {
+        self.current <= 0.0
+    }
+}
+
+/// The impact freeze after a hit, counted in **simulation ticks** (`F-034`).
+///
+/// **A tick counter, never a clock — and that is the whole type.** The obvious
+/// implementation is one line, `Time<Virtual>::set_relative_speed(0.05)`, it looks perfect on
+/// screen, and it is wrong for a reason that no screenshot shows:
+/// `run_fixed_main_schedule` accumulates `Time<Fixed>`'s overstep out of
+/// `Time<Virtual>::delta()` (`bevy_time-0.19.0/src/fixed.rs:243-247`), so slowing virtual
+/// time slows **the tick rate itself**. And the tick is not a display quantity here:
+/// [`Tick`](super::schedule::Tick) is what [`Rng`](super::rng::Rng) seeds from and what every
+/// [`Intent`](super::intent::Intent) is stamped with (`docs/multiplayer.md` rules 2 and 5).
+/// Freezing it means the random numbers stall and the input stamps drift — per client, which
+/// over a wire is a divergence nobody can reproduce.
+///
+/// So: the clock keeps running, the tick keeps counting, and a body carrying a `HitStop` with
+/// `ticks_left > 0` simply does not advance this tick. The number of ticks comes from RON
+/// (`gear.ron: feel.hit_stop_cortex_s` × 60), not from here.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HitStop {
+    pub ticks_left: u32,
+}
+
+impl HitStop {
+    pub fn new(ticks: u32) -> Self {
+        HitStop { ticks_left: ticks }
+    }
+
+    /// Is this body frozen **this** tick?
+    pub fn is_frozen(&self) -> bool {
+        self.ticks_left > 0
+    }
+
+    /// One tick down. **Stops at 0** instead of wrapping — a `u32` that wraps once is a body
+    /// frozen for 4.29 billion ticks, and it happens the first time two hits land on the same
+    /// entity in the same tick.
+    pub fn tick(&mut self) -> u32 {
+        self.ticks_left = self.ticks_left.saturating_sub(1);
+        self.ticks_left
+    }
+}
+
+/// What a titan is doing. The FSM of `F-050`, as a component.
+///
+/// **It lives in `shared/` and not in `titan/` on purpose.** `titan` writes it, `combat`
+/// gates on it, and the F3 overlay in `debug` prints it (`husk#1 Windup 21/36`). A
+/// `titan`-private enum would force an entry in the allow list of `docs/architecture.md`
+/// purely so that a debug overlay can print one word — and an allow list that grows for
+/// reasons like that stops being a rule.
+///
+/// ⚠️ **Two arms are missing on purpose, do not "complete" the enum.** `Alerted` belongs to
+/// `F-051` and `Stagger` to `F-032`, neither of which is being built this session. Adding a
+/// variant with nothing that enters or leaves it produces an FSM that is decoration — a state
+/// that is set correctly while nothing gates on it, which is exactly what `F-050`'s
+/// tick-count test exists to catch.
+///
+/// **How long each state lasts stands in `titan.ron`** (`windup_s`, `strike_s`, `recover_s`,
+/// `death_s`), in ticks, never in `Time::delta_secs()` — the pose is a pure function of
+/// `(TitanState, ticks_in_state)` so that an `--offscreen` run is bit-identical.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TitanState {
+    /// Standing around. Nobody in range, nothing to do.
+    #[default]
+    Idle,
+    /// Walking towards a target.
+    Pursue,
+    /// The telegraph (`F-053`): the attack is committed and readable, and has not landed yet.
+    Windup,
+    /// The blow itself.
+    Strike,
+    /// **The punish window.** The reason an attack is worth baiting.
+    Recover,
+    /// Cortex cut. Dissolving over `death_s`, collider already gone.
+    Death,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +313,74 @@ mod tests {
         assert!(k.swap_pair());
         assert!(!k.swap_pair(), "an empty harness yields no more pairs");
         assert_eq!(k.pairs_left, 0);
+    }
+
+    #[test]
+    fn health_saturates_at_zero_and_never_goes_negative() {
+        let mut h = Health::full(100.0);
+        assert!((h.damage(30.0) - 70.0).abs() < 1e-6);
+        // Overkill is the normal case, not the edge case: damage comes out of speed.
+        assert_eq!(h.damage(9999.0), 0.0);
+        assert!(h.current >= 0.0, "health went negative — that is a second death condition");
+        assert!(h.is_empty());
+        assert_eq!(h.damage(1.0), 0.0, "a corpse does not get more negative");
+        assert_eq!(h.fraction(), 0.0);
+    }
+
+    #[test]
+    fn health_heals_no_further_than_max() {
+        let mut h = Health::full(50.0);
+        h.damage(40.0);
+        h.heal(5.0);
+        assert!((h.current - 15.0).abs() < 1e-6);
+        h.heal(999.0);
+        assert!((h.current - 50.0).abs() < 1e-6, "healing past max invents hit points");
+        assert!((h.fraction() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn health_rejects_nonsensical_amounts() {
+        let mut h = Health::full(10.0);
+        h.damage(-5.0);
+        assert!((h.current - 10.0).abs() < 1e-6, "negative damage would be a heal");
+        h.damage(f32::NAN);
+        assert!((h.current - 10.0).abs() < 1e-6, "NaN damage must not poison the number");
+        h.damage(4.0);
+        h.heal(f32::NAN);
+        assert!((h.current - 6.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn hit_stop_counts_down_to_zero_and_stops_there() {
+        let mut s = HitStop::new(3);
+        assert!(s.is_frozen());
+        assert_eq!(s.tick(), 2);
+        assert_eq!(s.tick(), 1);
+        assert_eq!(s.tick(), 0);
+        assert!(!s.is_frozen(), "0 ticks left means the body moves again");
+        // The one that matters: a wrapping u32 freezes the body for 4.29 billion ticks.
+        assert_eq!(s.tick(), 0);
+        assert_eq!(s.ticks_left, 0);
+        assert!(!s.is_frozen());
+    }
+
+    #[test]
+    fn hit_stop_survives_a_snapshot() {
+        // It hangs on a body, so it has to go into a save and one day down a wire
+        // (docs/multiplayer.md rule 8). `Copy` so that reading it costs nothing.
+        let s = HitStop::new(7);
+        let copied = s;
+        assert_eq!(copied.ticks_left, 7);
+        assert_eq!(s.ticks_left, 7, "HitStop must be Copy, not moved");
+
+        let text = ron::to_string(&s).expect("HitStop must serialize");
+        let back: HitStop = ron::de::from_str(&text).expect("HitStop must deserialize");
+        assert_eq!(back, s);
+    }
+
+    #[test]
+    fn titan_state_starts_idle() {
+        // `Default` is what a freshly spawned titan gets before its FSM has run once.
+        assert_eq!(TitanState::default(), TitanState::Idle);
     }
 }
