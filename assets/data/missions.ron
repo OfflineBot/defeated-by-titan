@@ -9,6 +9,10 @@
             name: "First Ride",
             map: "ashgate",
             target_duration_s: 330.0,
+            // F-071 counts to a number, and the number belongs in the file. Three:
+            // the waves below spawn four titans, so the mission is winnable without
+            // hunting the last straggler across 400 m of city. ⚠️ UNTUNED.
+            kill_target: 3,
             waves: [
                 (at_s:   0.0, kind: "husk",     count: 1),
                 (at_s:  90.0, kind: "husk",     count: 2),

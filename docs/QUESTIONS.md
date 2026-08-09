@@ -675,6 +675,64 @@ design decisions — the first playtest will move all of them.
 
 **What would have to be rolled back:** only numbers in `titan.ron`. Nothing structural.
 
+## Q-028 — May a titan bigger than 14 m spawn this session? I capped it at 14 m without you.
+
+**Context:** Q-025 records that your two numbers do not fit together — a 28 m titan in a 7.0 m
+street. Until 2026-08-09 that was theoretical, because nothing said how wide a titan is. Now
+`scale.ron: titan.width_fraction` exists (0.25, invented by me), so the arithmetic can be done,
+and it comes out like this:
+
+| class | height | width at 0.25 | clearance per side in a 7.0 m street |
+|---|---|---|---|
+| `small` | 4.2 m | 1.05 m | 2.98 m |
+| `medium` | 10.0 m | 2.50 m | 2.25 m |
+| `large` | 14.0 m | 3.50 m | **1.75 m** |
+| `huge` | 21.0 m | 5.25 m | 0.88 m |
+| `boss` | 28.0 m | **7.00 m** | **0.00 m** |
+
+A `boss` does not squeeze through the alley; he **is** the alley. He would stand in the mouth of
+it as a silent wall, and the failure would read as a pathfinding bug, not as a size decision —
+which is the expensive kind of wrong.
+
+**The decision is yours** (it is your 28 m and your 7 m), and I made it anyway rather than stop:
+
+**ASSUMPTION:** `scale.ron: titan.max_spawnable_class: "large"`. Nothing above 14 m spawns this
+session. `huge` and `boss` stay in `classes` — they are recorded, not struck — and the bellower
+(`huge`) therefore cannot be spawned, which costs nothing today because only the husk is built.
+
+**What would have to be rolled back:** **one line** in `assets/data/scale.ron`
+(`max_spawnable_class`), plus whatever `F-052` navigation then has to learn about a body wider
+than the street. No code, no structure. This is deliberately the cheapest reversal in the file.
+
+**The alternative you might actually want** is the other direction: widen the streets. That is
+`maps.ron: layout.street_m`, also one line — but it is a number you gave (6–8 m, "keep them
+tight"), and widening it changes every hook distance in the city. That is why I did not.
+
+## Q-029 — Twenty-six numbers in `titan.ron`, `gear.ron` and `scale.ron` are now mine, not yours
+
+**Context:** to build the titan and the cut at all, the values listed in Q-027 had to exist.
+On 2026-08-09 I wrote them: nine per-kind combat numbers in `titan.ron` (turn rate, acceleration,
+strike, recovery, attack range, cooldown, aggro radius, death time, health), six blade numbers
+and four hit-stop numbers in `gear.ron`, six rig fractions and three pose angles in `scale.ron`,
+one `kill_target` in `missions.ron`, three signal colours in `maps.ron`.
+
+**Every one is marked `⚠️ UNTUNED` in the file**, next to the reasoning that produced it. They
+are not measurements and they are not design — they are the smallest values that let the thing
+run, so that the first person who plays it has something to say "too slow" about.
+
+Two of them are worth your eye specifically, because they are not arbitrary:
+
+- **`turn_deg_per_s: 50.0` for the husk.** This is the number that decides whether the husk
+  teaches anything. Too high and he always faces you and the approach angle stops mattering;
+  too low and he is a statue. 50°/s means a half turn takes 3.6 s.
+- **`hit_stop_cortex_s: 0.12`.** Forced by arithmetic, not taste: a husk cortex is crossed in
+  36.7 ms at 30 m/s — **2.2 frames** — so without a stop the kill is invisible and the player
+  sees only a counter change.
+
+**ASSUMPTION:** these numbers stand until somebody plays it. **What would have to be rolled
+back:** only file values. No code depends on any particular one of them; the code holds units
+and mechanics, which is rule 2.
+
 ---
 
 ## Answered

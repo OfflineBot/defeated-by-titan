@@ -9,6 +9,44 @@
         // here, not in Rust.
         damage_per_m_s: 1.4,
         min_speed_m_s: 8.0,
+
+        // The blade's geometry and its swing. ⚠️ UNTUNED, all six invented by the
+        // main head on 2026-08-09.
+        //
+        // **`reach_m` decides whether a cut lands at all** and did not exist until
+        // today. 1.6 m against a 1.8 m player: the blade is an arm's length, not a
+        // lance — F-035 is the lance and it is not built.
+        reach_m: 1.6,
+        // The swept capsule's radius. Not zero: a zero-radius sweep is a ray, and a
+        // ray between two ticks at 75 m/s threads a 0.46 m cortex.
+        thickness_m: 0.12,
+        // The whole swing. `active_from_s`..`active_to_s` is the part that cuts —
+        // without them the blade cuts during its own wind-up, which is the shortcut
+        // that makes a slash feel like a hitbox.
+        swing_s: 0.35,
+        active_from_s: 0.08,
+        active_to_s: 0.22,
+        // Without a cooldown the slash is autofire.
+        cooldown_s: 0.30,
+    ),
+
+    // F-034 hit stop and the camera kick. ⚠️ UNTUNED — and note that F-034 had NO
+    // numbers at all anywhere in the repository before this line.
+    //
+    // The number that forces this block to exist: a husk cortex is 1.10 m across and
+    // a player crosses it at 30 m/s in **36.7 ms = 2.2 frames**. Without a stop the
+    // kill happens and the player sees a counter change, not a kill. 0.12 s makes it
+    // about 9.4 frames.
+    //
+    // Seconds in the file, TICKS in the code: the hit stop is counted in fixed ticks
+    // and never in wall-clock time (shared::HitStop). The conversion is
+    // `round(s * simulation_hz)` and it happens once, at the boundary.
+    feel: (
+        hit_stop_cortex_s: 0.12,
+        // A non-lethal hit stops much less, or every scratch reads like a kill.
+        hit_stop_normal_s: 0.04,
+        camera_kick_deg: 3.5,
+        camera_kick_s: 0.18,
     ),
     resupply: (
         gas_per_s: 40.0,

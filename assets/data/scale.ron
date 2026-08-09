@@ -144,6 +144,61 @@
             "boss":         (height_m: 28.0, cortex_height_m: 24.9),
         },
 
+        // ------------------------------------------------------------------
+        // The box rig (F-050, F-056). ⚠️ UNTUNED — invented by the main head on
+        // 2026-08-09 against no measurement, unlike everything above it, which the
+        // user laid down. Whoever changes one of these six changes a guess, not a
+        // decision. They are fractions of the body height so that one number per
+        // class stays the only source of scale.
+        // ------------------------------------------------------------------
+
+        // **The biggest single hole in the repository until today: nothing said how
+        // wide a titan is.** No collider, no rig, and no answer to the alley
+        // question could be given without it. 0.25 makes a `large` titan 3.5 m
+        // wide in a 7.0 m street (maps.ron: layout.street_m) — 1.75 m clearance per
+        // side. At `boss` (28 m) it is exactly 7.0 m and the alley is blocked by a
+        // silent wall; that is why `max_spawnable_class` stands below.
+        width_fraction: 0.25,
+
+        // The four parts of the rig, stacked. They are chosen to ADD UP against the
+        // numbers that are already laid down, and that is the whole reason they are
+        // not round: legs 0.48 + torso 0.41 = 0.89 = `cortex_fraction`, so the
+        // cortex sits exactly on the seam between torso and head, which is what a
+        // nape is. The head then occupies 0.89..1.00 = 0.11, inside the user's
+        // window of min_head_fraction..max_head_fraction (0.1 .. 0.1112).
+        // A test in tests/data.rs holds that arithmetic — if somebody moves one of
+        // them, the cortex ends up in the belly and nobody notices in a screenshot.
+        leg_fraction: 0.48,
+        torso_fraction: 0.41,
+        // Shoulders sit BELOW the cortex, not level with it: an arm that hinges at
+        // the nape cannot swing in front of the body. 0.82 of 10 m = 8.2 m.
+        shoulder_height_fraction: 0.82,
+        // Arm length from the shoulder. 0.44 of a 10 m husk = 4.4 m, so the hand
+        // hangs at 3.8 m and the wind-up carries it about 8.8 m — that travel is
+        // what F-053's telegraph has to be visible from 40 m.
+        arm_fraction: 0.44,
+
+        // The three pose angles of the wind-up and the strike (F-053). ⚠️ UNTUNED.
+        // They stand HERE and not per kind in titan.ron on purpose: they are
+        // properties of the rig, and the rig is one rig. Per kind they would be
+        // twenty-seven invented numbers instead of three, and nobody would ever
+        // tune twenty-seven. A kind that needs its own telegraph later gets an
+        // override then — that is a smaller change than un-inventing 27 numbers.
+        //
+        // "Raise the arm 140 degrees" must never live in Rust (rule 2): an angle in
+        // code is an angle nobody tunes after the first person plays it.
+        windup_arm_deg: 140.0,
+        windup_lean_deg: 12.0,
+        // Negative: the strike swings the arm back DOWN past the rest pose.
+        strike_arm_deg: -30.0,
+
+        // **The class cap for this session, and it is a user decision I made in his
+        // absence** — docs/QUESTIONS.md Q-028, with the assumption and the place to
+        // take it back. A `huge` titan is 5.25 m wide in a 7.0 m street and a `boss`
+        // is 7.00 m in a 7.00 m street. The second is not tight, it is a wall.
+        // Taking it back is this one line.
+        max_spawnable_class: "large",
+
         // The 150 m boss. Stands DELIBERATELY outside `classes`: he is no enemy type you
         // scale, but a structure with a face. The user's check: 150 − 120 = **30 m above
         // the wall**. tests/data.rs pins the 30 down.

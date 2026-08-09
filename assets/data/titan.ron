@@ -30,12 +30,22 @@
         // practices the first slash — hence the medium class (10 m) and not the small one.
         // 5.0 m -> 10.0 m (class `medium`)
         "husk":     (size_class: "medium",       speed_m_s:  3.0, cortex_radius_m: 0.55,
-                     regen_per_s: 0.8, windup_s: 0.60, model: "titan_husk"),
+                     regen_per_s: 0.8, windup_s: 0.60, 
+                     turn_deg_per_s: 50.0, accel_m_s2: 3.0,
+                     strike_s: 0.2, recover_s: 0.4,
+                     attack_range_m: 6.0, attack_cooldown_s: 1.5,
+                     aggro_radius_m: 45.0, death_s: 1.0, health: 100.0,
+                     model: "titan_husk"),
         // Unpredictable changes of direction -> leading your shots. Stays husk-sized:
         // the surprise lies in the movement, not in the bulk.
         // 5.0 m -> 10.0 m (class `medium`)
         "errant":   (size_class: "medium",       speed_m_s:  6.5, cortex_radius_m: 0.50,
-                     regen_per_s: 0.8, windup_s: 0.45, model: "titan_husk"),
+                     regen_per_s: 0.8, windup_s: 0.45, 
+                     turn_deg_per_s: 100.0, accel_m_s2: 6.0,
+                     strike_s: 0.18, recover_s: 0.37,
+                     attack_range_m: 6.0, attack_cooldown_s: 1.2,
+                     aggro_radius_m: 50.0, death_s: 1.0, health: 100.0,
+                     model: "titan_husk"),
         // Very fast, jump attack -> vertical evasion. **The fast small one.**
         // The smallest class is his role: small enough to fit between houses.
         // 3.5 m -> 4.2 m (class `small`)
@@ -47,7 +57,12 @@
         // size table (3.5 m body, 0.80 m cortex), it has only become measurable now,
         // because the head rule stands as a number in the RON. Upper bound: 0.47/2 = 0.233 m.
         "scuttler": (size_class: "small",        speed_m_s: 11.0, cortex_radius_m: 0.20,
-                     regen_per_s: 1.1, windup_s: 0.40, model: "titan_husk"),
+                     regen_per_s: 1.1, windup_s: 0.40, 
+                     turn_deg_per_s: 150.0, accel_m_s2: 12.0,
+                     strike_s: 0.2, recover_s: 0.4,
+                     attack_range_m: 2.5, attack_cooldown_s: 0.9,
+                     aggro_radius_m: 60.0, death_s: 0.8, health: 60.0,
+                     model: "titan_husk"),
         // Evasive roll with i-frames -> timing instead of spam. A roll needs a short
         // body; 4.5 m sat between `small` (4.2) and `medium` (10) — decided for
         // `small`, because 10 m no longer roll away credibly.
@@ -56,29 +71,54 @@
         // upper bound (0.233 m) instead of below it — the weaver is the timing opponent,
         // his window is the i-frame roll, not a smaller target.
         "weaver":   (size_class: "small",        speed_m_s:  7.0, cortex_radius_m: 0.23,
-                     regen_per_s: 1.0, windup_s: 0.50, model: "titan_husk"),
+                     regen_per_s: 1.0, windup_s: 0.50, 
+                     turn_deg_per_s: 120.0, accel_m_s2: 8.0,
+                     strike_s: 0.18, recover_s: 0.37,
+                     attack_range_m: 2.5, attack_cooldown_s: 1.1,
+                     aggro_radius_m: 50.0, death_s: 0.8, health: 70.0,
+                     model: "titan_husk"),
         // Shields the cortex with his hand -> arms first, then cortex. The cover only works
         // when the hand really does hide the cortex: for that he needs arm length.
         // 8.0 m -> 14.0 m (class `large`)
         "warden":   (size_class: "large", speed_m_s:  3.5, cortex_radius_m: 0.60,
-                     regen_per_s: 0.6, windup_s: 0.70, model: "titan_large"),
+                     regen_per_s: 0.6, windup_s: 0.70, 
+                     turn_deg_per_s: 40.0, accel_m_s2: 3.0,
+                     strike_s: 0.22, recover_s: 0.48,
+                     attack_range_m: 8.0, attack_cooldown_s: 2.0,
+                     aggro_radius_m: 40.0, death_s: 1.4, health: 220.0,
+                     model: "titan_large"),
         // Motionless ambush, grab out of the air -> changes of height, attention.
         // "Out of the air" is a question of reach: at 10 m he grabs below the roof, at
         // 14 m above the roof — only then does he force a change of height.
         // 5.0 m -> 14.0 m (class `large`), model titan_husk -> titan_large
         "lurker":   (size_class: "large", speed_m_s:  2.0, cortex_radius_m: 0.50,
-                     regen_per_s: 0.7, windup_s: 0.40, model: "titan_large"),
+                     regen_per_s: 0.7, windup_s: 0.40, 
+                     turn_deg_per_s: 45.0, accel_m_s2: 2.0,
+                     strike_s: 0.2, recover_s: 0.45,
+                     attack_range_m: 8.0, attack_cooldown_s: 1.8,
+                     aggro_radius_m: 25.0, death_s: 1.4, health: 200.0,
+                     model: "titan_large"),
         // Reacts to the sound of gas, calls in reinforcements -> resource discipline.
         // **The big loud one.** He was the largest kind so far and stays it: the largest
         // class that occurs in a normal mission.
         // 10.0 m -> 21.0 m (class `huge`)
         "bellower": (size_class: "huge",        speed_m_s:  2.5, cortex_radius_m: 0.70,
-                     regen_per_s: 0.5, windup_s: 0.80, model: "titan_large"),
+                     regen_per_s: 0.5, windup_s: 0.80, 
+                     turn_deg_per_s: 30.0, accel_m_s2: 2.0,
+                     strike_s: 0.25, recover_s: 0.55,
+                     attack_range_m: 12.0, attack_cooldown_s: 2.5,
+                     aggro_radius_m: 70.0, death_s: 1.6, health: 320.0,
+                     model: "titan_large"),
         // Pairs cover each other -> target prioritization, separation. Two equally large
         // standard titans; the task is the pair, not the single body.
         // 5.0 m -> 10.0 m (class `medium`)
         "chorus":   (size_class: "medium",       speed_m_s:  5.0, cortex_radius_m: 0.50,
-                     regen_per_s: 0.9, windup_s: 0.55, model: "titan_husk"),
+                     regen_per_s: 0.9, windup_s: 0.55, 
+                     turn_deg_per_s: 55.0, accel_m_s2: 4.0,
+                     strike_s: 0.2, recover_s: 0.4,
+                     attack_range_m: 6.0, attack_cooldown_s: 1.4,
+                     aggro_radius_m: 45.0, death_s: 1.0, health: 100.0,
+                     model: "titan_husk"),
 
         // The class `boss` (28 m) is deliberately unused: its first representative is a
         // raid opponent, and raids stand behind the Vector Gear gate (docs/ROADMAP.md).

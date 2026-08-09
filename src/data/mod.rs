@@ -287,6 +287,16 @@ pub struct Maps {
     /// The one palette, linear RGB. No RGB triple per block — or sooner or later a signal
     /// color slips in (`docs/conventions.md`).
     pub palette: BTreeMap<String, (f32, f32, f32)>,
+    /// The three signal colors — cyan, amber, crimson — linear RGB.
+    ///
+    /// **Their own map, apart from [`Self::palette`], and that is the point.** The rule from
+    /// `docs/conventions.md` §3 is that these three appear nowhere else: no cyan set dressing,
+    /// no amber lanterns, no red roofs. Split in two, that rule becomes a test — no map block
+    /// may name a key from here. In one map it would be a sentence in a document again.
+    ///
+    /// Until 2026-08-09 they existed as prose and as a number nowhere, so there was nothing to
+    /// paint the cortex with.
+    pub signals: BTreeMap<String, (f32, f32, f32)>,
     pub maps: BTreeMap<String, Map>,
 }
 
@@ -352,6 +362,25 @@ pub struct MapBlock {
 pub struct Gear {
     pub blades: BladeTuning,
     pub resupply: ResupplyTuning,
+    pub feel: FeelTuning,
+}
+
+/// `F-034` hit stop and camera kick. **⚠️ UNTUNED — `F-034` had no numbers at all anywhere in
+/// the repository before 2026-08-09.**
+///
+/// **Seconds in the file, ticks in the code.** The hit stop is counted in fixed ticks and never
+/// against a clock ([`crate::shared::HitStop`]): `Time<Virtual>::set_relative_speed` would slow
+/// the tick rate itself, and the tick carries the rng seed. The conversion
+/// `round(s * simulation_hz)` happens once, at the boundary.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeelTuning {
+    /// The lethal hit. A husk cortex is crossed in 36.7 ms at 30 m/s — 2.2 frames — so
+    /// without this the player never sees the kill that the whole game is built around.
+    pub hit_stop_cortex_s: f32,
+    pub hit_stop_normal_s: f32,
+    pub camera_kick_deg: f32,
+    pub camera_kick_s: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -361,6 +390,19 @@ pub struct BladeTuning {
     pub wear_per_hit: f32,
     pub damage_per_m_s: f32,
     pub min_speed_m_s: f32,
+    /// **Decides whether a cut lands at all**, and did not exist before 2026-08-09.
+    /// **⚠️ UNTUNED**, like the five below it.
+    pub reach_m: f32,
+    /// Radius of the swept capsule. **Never zero** — a zero-radius sweep is a ray, and a ray
+    /// between two ticks at 75 m/s threads a 0.46 m cortex.
+    pub thickness_m: f32,
+    pub swing_s: f32,
+    /// The window inside the swing during which the blade actually cuts. Without it the blade
+    /// cuts during its own wind-up, which is the shortcut that turns a slash into a hitbox.
+    pub active_from_s: f32,
+    pub active_to_s: f32,
+    /// Without it the slash is autofire.
+    pub cooldown_s: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -396,6 +438,37 @@ pub struct TitanKind {
     /// Windup of every attack. **At least 0.4 s** — Bible, pillar P4 (readability before
     /// realism). `tests/data.rs` falls over when a kind drops below it.
     pub windup_s: f32,
+    /// How fast the kind may turn, in degrees per second. **⚠️ UNTUNED, and the most
+    /// important feel number in this file.**
+    ///
+    /// Without it a titan snaps to face the player, and the husk's entire lesson — "the
+    /// fundamentals of the approach angle", Bible §4 — ceases to exist: there is no angle to
+    /// approach from if he is always facing you.
+    pub turn_deg_per_s: f32,
+    /// Ground acceleration toward the target, m/s². `speed_m_s` is the ceiling, this is how
+    /// fast he reaches it.
+    pub accel_m_s2: f32,
+    /// The second and third third of an attack. `windup_s` existed; these did not.
+    ///
+    /// **`recover_s` IS the punish window** — it is the whole reason a telegraphed attack is
+    /// an opportunity and not just a warning.
+    pub strike_s: f32,
+    pub recover_s: f32,
+    /// How close the target has to be before `Pursue → Windup` fires. Roughly arm reach:
+    /// `arm_fraction × height + width/2`.
+    pub attack_range_m: f32,
+    pub attack_cooldown_s: f32,
+    /// How close the target has to be before `Idle → Pursue` fires. Stands in for the whole
+    /// perception model `F-051`, which is not built.
+    pub aggro_radius_m: f32,
+    /// How long `Death` lasts: the body scales to zero over this time. The collider is
+    /// dropped on tick one regardless, so a corpse is never a wall.
+    pub death_s: f32,
+    /// **⚠️ UNTUNED, and until 2026-08-09 there was no titan health anywhere in the
+    /// repository** — while `regen_per_s` was already regenerating it. Not needed for the
+    /// cortex kill, which is a rule and not a threshold; needed the moment anything else
+    /// does damage.
+    pub health: f32,
     pub model: String,
 }
 
@@ -469,6 +542,37 @@ pub struct TitanScale {
     /// Head height as a fraction of the body height: 1/10 to 1/9.
     pub min_head_fraction: f32,
     pub max_head_fraction: f32,
+    /// Body width as a fraction of the body height. **⚠️ UNTUNED** — invented, not laid
+    /// down, unlike the fields above it. Until 2026-08-09 nothing in the repository said how
+    /// wide a titan is, so there was no collider and no answer to "does he fit through the
+    /// alley".
+    pub width_fraction: f32,
+    /// The box rig, stacked as fractions of the body height. **⚠️ UNTUNED.**
+    /// `leg_fraction + torso_fraction` has to equal [`Self::cortex_fraction`] — the cortex is
+    /// the seam between torso and head. `tests/data.rs` holds that.
+    pub leg_fraction: f32,
+    pub torso_fraction: f32,
+    /// Shoulder height as a fraction of the body height — **below** the cortex, or the arm
+    /// hinges at the nape and cannot swing in front of the body.
+    pub shoulder_height_fraction: f32,
+    /// Arm length from the shoulder, as a fraction of the body height. Decides how far the
+    /// hand travels in a wind-up, which is what `F-053`'s telegraph is measured on.
+    pub arm_fraction: f32,
+    /// Wind-up and strike pose angles in degrees (`F-053`). **⚠️ UNTUNED.**
+    ///
+    /// Properties of the **rig**, not of a kind — one rig, three numbers, instead of
+    /// twenty-seven per-kind numbers nobody would ever tune. Degrees in the file, radians in
+    /// the code; the conversion happens at the boundary (`docs/conventions.md`).
+    pub windup_arm_deg: f32,
+    pub windup_lean_deg: f32,
+    /// Negative: the strike carries the arm back down past the rest pose.
+    pub strike_arm_deg: f32,
+    /// The largest class that may spawn this session. A key in [`Self::classes`].
+    ///
+    /// **A user decision made in his absence** (`docs/QUESTIONS.md` Q-028): `huge` is 5.25 m
+    /// wide in a 7.0 m street and `boss` is exactly 7.00 m, which is not a tight alley but a
+    /// silent wall. Taking the decision back is this one line in `scale.ron`.
+    pub max_spawnable_class: String,
     /// The five size classes (`F-064`). `titan.ron` points here with `size_class`.
     pub classes: BTreeMap<String, SizeClass>,
     /// The 150 m boss. **Outside the classes**: not a scaled enemy kind but a structure with a
@@ -570,6 +674,9 @@ pub struct MissionTemplate {
     pub map: String,
     /// The mission arc runs 5–7 min (Bible 5, change 10).
     pub target_duration_s: f32,
+    /// How many titans have to die for `F-071` to flip the mission to `Won`. **⚠️ UNTUNED.**
+    /// A number the mission counts to belongs in the file, not in Rust.
+    pub kill_target: u32,
     pub waves: Vec<Wave>,
 }
 
