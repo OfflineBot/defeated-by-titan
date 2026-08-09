@@ -4,3 +4,4 @@ saves/
 *.blend2
 *.log
 assets/extern/
+__pycache__/
