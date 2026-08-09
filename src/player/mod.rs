@@ -16,6 +16,10 @@
 //! | `Position`, `Rotation`, `Transform` | **avian** (integrator and writeback) |
 //! | `LinearVelocity` | **avian**, plus [`locomotion::ground_locomotion`] before every avian system |
 //! | `Velocity`, `MovementState` | [`integrator::readback`], after `PhysicsSystems::Writeback` |
+//! | `RopeLength` | [`rope::sync_rope_length`], after `PhysicsSystems::Writeback` |
+//!
+//! The rope itself (`F-004`, `F-005`) is an avian `DistanceJoint` and lives in [`rope`] —
+//! `vector::reel` only says how fast it should get shorter.
 //!
 //! ## The three traps that are already paid for here
 //!
@@ -35,6 +39,7 @@
 
 pub mod integrator;
 pub mod locomotion;
+pub mod rope;
 
 use avian3d::prelude::{
     CoefficientCombine, Collider, Friction, LinearVelocity, LockedAxes, MaxLinearSpeed,
@@ -53,21 +58,38 @@ pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_local_player).add_systems(
-            FixedUpdate,
-            (
-                // Before EVERY avian system, not just before `Prepare`: what is written here
-                // is the input to the step, and `PhysicsSystems::First` already carries
-                // avian's own `assert_components_finite` in a debug build.
-                (apply_warps, locomotion::ground_locomotion)
-                    .chain()
-                    .before(PhysicsSystems::First),
-                // After the writeback, so that what is read back is this step's result and
-                // not the one before it.
-                integrator::readback.after(PhysicsSystems::Writeback),
+        app.add_systems(Startup, spawn_local_player)
+            .add_systems(
+                FixedUpdate,
+                (
+                    // Before EVERY avian system, not just before `Prepare`: what is written
+                    // here is the input to the step, and `PhysicsSystems::First` already
+                    // carries avian's own `assert_components_finite` in a debug build.
+                    (apply_warps, locomotion::ground_locomotion)
+                        .chain()
+                        .before(PhysicsSystems::First),
+                    // After the writeback, so that what is read back is this step's result
+                    // and not the one before it.
+                    (integrator::readback, rope::sync_rope_length)
+                        .after(PhysicsSystems::Writeback),
+                )
+                    .in_set(SimulationSystems::Integrate),
             )
-                .in_set(SimulationSystems::Integrate),
-        );
+            // `F-004`. In `Drive` and not in `Integrate`: `HookAnchored` and `HookReleased`
+            // are written one stage earlier in `Intent`, and the chain over the six stages
+            // (`src/lib.rs`) puts a command sync point between `Drive` and `Integrate` — so
+            // the joint really exists before avian's first system of this same tick looks for
+            // it. `.chain()` because a release and a fresh anchor on one side in one tick
+            // must not depend on which of the two Bevy runs first.
+            .add_systems(
+                FixedUpdate,
+                (rope::detach_ropes, rope::attach_ropes)
+                    .chain()
+                    .in_set(SimulationSystems::Drive),
+            );
+        // The per-substep reel-in. Its own function because it hangs in avian's
+        // `SubstepSchedule` and not in `FixedUpdate` — see `rope.rs`, decision 1.
+        rope::register(app);
     }
 }
 
