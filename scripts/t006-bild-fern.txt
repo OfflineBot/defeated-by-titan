@@ -1,0 +1,35 @@
+# t006-bild-fern — der Blick von aussen auf die Welt, fuer den Beleg von docs/ABNAHME.md.
+#
+#   cargo run --features wayland,klang -- \
+#       --script scripts/t006-bild-fern.txt --ticks 110 --bild docs/bilder/t006-welt-fern.png
+#
+# ⚠️ Die 110 gehoeren zu DIESER Datei. `wait 1.5` sind 90 Ticks bei 60 Hz, `wait 0.3`
+# weitere 18 — das Bild entsteht also rund 20 Ticks nach dem `warp`. Wer die Tickzahl
+# aendert, aendert das Bild.
+#
+# ⚠️ Der Spieler faellt: es gibt keinen Schwebemodus, und `warp` setzt nur Ort und Tempo
+# (src/player/mod.rs::warpen_ausfuehren). In den 0,33 s bis zum Bild sind das rund 1,1 m
+# bei schwerkraft_m_s2 = -20. Die beiden `assert` unten klammern genau das ein: sie sind
+# der Grund, dass die Bildhoehe eine gemessene Zahl ist und keine behauptete.
+#
+# ⚠️ `look` ist heute WIRKUNGSLOS fuer das Bild: src/render/kamera.rs::kamera_drehen ist
+# ein leerer Stub (er hat einen Rumpf aus zwei Zeilen und tut nichts), die Kamera blickt
+# also immer nach -Z. Die Zeile steht trotzdem hier, weil sie den Achsen-Vertrag
+# ausspricht — und weil dieses Skript falsch wird, sobald der Stub gefuellt ist und
+# niemand es gelesen hat.
+
+wait 1.5                # Welt, Kamera, Meshes und die Renderpipelines aufbauen lassen
+look 0 0                # Blick nach -Z, der Achsen-Vertrag (docs/konventionen.md)
+
+# Augenhoehe rund 20 m. Weil die Kamera nicht nach unten schauen kann, liegt der Horizont
+# immer in der Bildmitte — auf dieser Hoehe steht die ganze Welt darunter im Bild, und der
+# hoechste Klotz (18 m Firsthoehe, 85 m entfernt) liegt knapp unter der Mittellinie.
+warp 6 20 45
+
+wait 0.3                # der warp wirkt einen Tick spaeter als er geschrieben wird
+assert hoehe > 18       # der warp hat wirklich gewirkt
+assert hoehe < 21       # und der Spieler ist noch nicht weit gefallen
+assert titanen == 0     # die Welt ist am Anfang leer
+mark fern
+
+wait 5                  # die Fahrt offen halten: endet sie, endet der Prozess vor dem Bild

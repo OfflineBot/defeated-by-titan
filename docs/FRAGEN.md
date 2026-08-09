@@ -117,7 +117,7 @@ vorbehalten), bis der User waehlt.
 heute, und nichts im Code entscheidet, ob der spaetere Server dediziert ist oder ein Host.
 Details in [`docs/multiplayer.md`](multiplayer.md).
 
-## Q-009 — Liefert Offscreen-Rendering auf Maschine A wirklich ein Bild?
+## Q-009 — Liefert Offscreen-Rendering auf Maschine A wirklich ein Bild? *(halb beantwortet, siehe Nachtrag)*
 
 **Kontext:** `prompts/init.md` §14 laesst als Ausnahme zu, dass ein Bild aus einem
 Render-Target statt aus einem Fenster kommt — **aber erst, wenn bewiesen ist, dass es auf dem
@@ -127,6 +127,28 @@ Obergrenze auf Maschine A **🟨**, und dieses Projekt hat bisher **kein einzige
 **ANNAHME:** Es geht nicht, bis es gemessen ist. Alles, was auf A gebaut wird, bleibt 🟨 mit
 dem Vermerk *„Logik getestet, Pixel ungesehen — Maschine A"*. Steht als Aufgabe in
 `docs/TODO.md`.
+
+### Nachtrag 2026-08-09 — die Haelfte ist gemessen, und es ist die entscheidende Haelfte
+
+Gemessen auf `[cachy]` mit dem neuen `--offscreen` (`src/debug/bild.rs`), nicht erklaert:
+
+| Frage | Ergebnis |
+|---|---|
+| Liefert ein Render-Target-Bild **ohne Fenster** ein PNG? | **Ja.** 1280x720, volle Szene, Exit 0 |
+| Auch **ohne Grafiksitzung**? | **Ja.** `env -u WAYLAND_DISPLAY -u DISPLAY` aendert nichts am Ergebnis — winit ist abgeschaltet, `ScheduleRunnerPlugin` treibt die App |
+| Ist es reproduzierbar? | **Ja, bitgleich.** Zwei Laeufe, `sha256 = eb212dfe…` beide Male |
+| Warum ging es bisher nicht? | Weil `--headless` **`backends: None`** setzte und damit gar keinen Adapter suchte. „Kein Fenster" und „keine GPU" waren dieselbe Entscheidung — das war der eigentliche Grund, nicht eine Grenze von Bevy. `bevy_render-0.19.0/src/lib.rs:501-506` zeigt: das Fenster ist beim Aufbau des Renderers ein `Option` |
+
+**Was damit NICHT bewiesen ist:** dass der **N100 unter debian** einen wgpu-Adapter findet.
+`[cachy]` hat eine RTX 3080 mit Vulkan-Treiber; die Messung zeigt, dass **kein Fenster und
+kein Compositor** noetig sind, nicht dass jede GPU mitspielt.
+
+**Die Frage schrumpft damit** von „geht Offscreen-Rendering ueberhaupt?" auf **„findet
+Maschine A einen wgpu-Adapter?"** — und das ist keine Entwurfsfrage mehr, sondern eine
+einzige Messung auf A: `cargo run -- --offscreen --script scripts/t006-bild-nah.txt
+--ticks 110 --bild docs/bilder/t006-spieler-sicht.png`. Faellt sie gut aus, steigt die
+Obergrenze auf A von 🟨 auf 🟧. Bis dahin bleibt die Annahme fuer **A** stehen; fuer **B**
+ist sie erledigt.
 
 ## Q-010 — Die Ankerdichte braucht eine Zahl
 

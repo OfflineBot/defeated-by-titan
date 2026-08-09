@@ -1,4 +1,4 @@
-//! debug — der `--script`-Fahrer, das F3-Overlay und die NaN-Wache.
+//! debug — der `--script`-Fahrer, `--bild`, das F3-Overlay und die NaN-Wache.
 //!
 //! **Die Werkzeuge kommen vor den Features** (`prompts/init.md` §12). Ohne sie ist alles
 //! gebaut und nichts gesehen, weil jedes Feature hinter Maus und Tastatur liegt und niemand
@@ -9,6 +9,7 @@
 //! garantiert [`EingabeSet`](crate::shared::EingabeSet) — nicht der Zufall der
 //! Systemreihenfolge.
 
+pub mod bild;
 pub mod gizmo;
 pub mod skript;
 
@@ -53,6 +54,9 @@ impl Plugin for DebugPlugin {
             info!("Fahrt {}: {} Anweisungen", pfad.display(), plan.len());
             app.insert_resource(Fahrt { plan, ..default() });
         }
+
+        // `--bild`: ohne das Flag haengt hier gar nichts ein (`debug::bild`).
+        bild::einhaengen(app, &start);
     }
 }
 

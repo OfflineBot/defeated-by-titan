@@ -54,8 +54,9 @@ pub fn app(start: Start) -> App {
         // Laut, nicht still: ein vertipptes Flag, das ignoriert wird, kostet eine Stunde
         // Fehlersuche am falschen Ende.
         eprintln!(
-            "Unbekannte Startargumente: {}\nBekannt sind: --headless --sandbox --novsync \
-             --reexport --no-export --mission <name> --script <datei> --lag <ms> --ticks <n>",
+            "Unbekannte Startargumente: {}\nBekannt sind: --headless --offscreen --sandbox \
+             --novsync --reexport --no-export --mission <name> --script <datei> --lag <ms> \
+             --ticks <n> --bild <datei>",
             start.unbekannt.join(", ")
         );
     }
@@ -136,7 +137,11 @@ pub fn app(start: Start) -> App {
         ),
     ));
 
-    if start.ticks > 0 {
+    // Mit `--bild` gehoert das Ende `debug::bild`: `nach_ticks_beenden` wuerde bei
+    // `tick >= ticks` sofort `AppExit` schreiben — also genau in dem Moment, in dem der
+    // Screenshot ausgeloest wird und BEVOR ihn jemand von der GPU zurueckgelesen hat. Der
+    // Lauf endete gruen und ohne Datei.
+    if start.ticks > 0 && start.bild.is_none() {
         app.add_systems(Last, nach_ticks_beenden);
     }
 
@@ -165,16 +170,11 @@ fn basis_plugins(start: &Start) -> bevy::app::PluginGroupBuilder {
         ..default()
     });
 
-    if start.headless {
-        // `backends: None` heisst: wgpu sucht gar keinen Adapter. Ohne das faellt der Start
-        // auf einer Maschine ohne GPU-Treiber tief in wgpu um.
-        gruppe = gruppe.set(RenderPlugin {
-            render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
-                backends: None,
-                ..default()
-            })),
-            ..default()
-        });
+    // **Zwei getrennte Fragen, und genau das ist der Unterschied zwischen `--headless` und
+    // `--offscreen`:** „gibt es ein Fenster?" und „gibt es eine GPU?". Bis heute waren sie
+    // dieselbe Frage — und damit war ein Bild ohne Fenster grundsaetzlich unmoeglich, weil
+    // `backends: None` gar keinen Adapter sucht (`docs/FRAGEN.md` Q-009).
+    if !start.will_fenster() {
         // Ohne Fenster gibt es keine Ereignisschleife, die die App antreibt.
         gruppe = gruppe.add(ScheduleRunnerPlugin::run_loop(
             core::time::Duration::from_secs_f64(1.0 / 240.0),
@@ -184,6 +184,22 @@ fn basis_plugins(start: &Start) -> bevy::app::PluginGroupBuilder {
             // WinitPlugin baut beim Start eine Ereignisschleife und panikt ohne Display.
             gruppe = gruppe.disable::<bevy::winit::WinitPlugin>();
         }
+    }
+
+    if !start.hat_gpu() {
+        // `backends: None` heisst: wgpu sucht gar keinen Adapter. Ohne das faellt der Start
+        // auf einer Maschine ohne GPU-Treiber tief in wgpu um.
+        //
+        // Kein Fenster ist dagegen KEIN Grund, den Adapter abzuschalten: das Fenster ist
+        // beim Aufbau des Renderers ein `Option` und fehlt einfach
+        // (`bevy_render-0.19.0/src/lib.rs:501-506`, `compatible_surface: None`).
+        gruppe = gruppe.set(RenderPlugin {
+            render_creation: RenderCreation::Automatic(Box::new(WgpuSettings {
+                backends: None,
+                ..default()
+            })),
+            ..default()
+        });
     }
 
     gruppe

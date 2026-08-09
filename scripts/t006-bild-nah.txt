@@ -1,0 +1,27 @@
+# t006-bild-nah — dasselbe Bild aus Spielerperspektive: was ein 1,8-m-Mensch hier sieht.
+#
+#   cargo run --features wayland,klang -- \
+#       --script scripts/t006-bild-nah.txt --ticks 110 --bild docs/bilder/t006-spieler-sicht.png
+#
+# Der eigentliche Zweck: **Massstab.** Die Klotzhoehen in assets/data/maps.ron sind aus
+# massstab.ron abgeleitet und bis heute nie gesehen worden. Ein Bild aus Augenhoehe ist die
+# einzige Pruefung, die „4,5 m ist ein kleines Haus" bestaetigen oder widerlegen kann.
+#
+# ⚠️ Wie in t006-bild-fern.txt gilt: `look` ist wirkungslos, solange
+# src/render/kamera.rs::kamera_drehen ein leerer Stub ist — die Kamera blickt nach -Z.
+# Was auf diesem Bild zu sehen ist, ist deshalb allein eine Frage von `warp`.
+
+wait 1.5                # Welt, Kamera, Meshes und die Renderpipelines aufbauen lassen
+look 0 0                # Blick nach -Z, der Achsen-Vertrag (docs/konventionen.md)
+
+# Auf dem Boden, vier Meter vor dem Ursprung. In Blickrichtung stehen der 4-m-Wuerfel bei
+# z = -12, dahinter links der 8-m-Klotz und rechts die beiden hohen — vier Groessen in
+# einem Bild, gegen eine Augenhoehe von 1,6 m gehalten.
+warp 0 0 4
+
+wait 0.3                # der warp wirkt einen Tick spaeter als er geschrieben wird
+assert hoehe < 0.5      # steht auf dem Boden und nicht darin
+assert hoehe > -1       # und nicht durch den Boden gefallen
+mark nah
+
+wait 5                  # die Fahrt offen halten: endet sie, endet der Prozess vor dem Bild

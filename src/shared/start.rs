@@ -33,6 +33,15 @@ pub struct Start {
     pub lag_ms: u32,
     /// Obergrenze fuer `--headless`. 0 heisst: bis zum Ende des Skripts.
     pub ticks: u64,
+    /// Wohin ein PNG geschrieben wird. **Der einzige Weg zu einem Beleg fuer 🟧**
+    /// (`docs/ABNAHME.md`: „Ohne Bild kein 🟧, ohne Ausnahme"). Zusammen mit
+    /// [`Start::ticks`] ist ein Screenshot damit reproduzierbar und scriptbar statt
+    /// von Hand getimt — siehe [`crate::debug::bild`].
+    pub bild: Option<PathBuf>,
+    /// **GPU an, aber kein Fenster.** Der dritte Modus neben Fenster und `--headless`:
+    /// `--headless` schaltet `backends: None` (`crate::basis_plugins`), und ohne Adapter
+    /// gibt es kein Bild. `--offscreen` laesst wgpu arbeiten und rendert in ein `Image`.
+    pub offscreen: bool,
     /// Alle Modelle neu exportieren (§7).
     pub reexport: bool,
     /// Den Export ueberspringen, Startzeit sparen.
@@ -66,12 +75,14 @@ impl Start {
             };
             match a.as_str() {
                 "--headless" => s.headless = true,
+                "--offscreen" => s.offscreen = true,
                 "--sandbox" => s.sandbox = true,
                 "--novsync" => s.novsync = true,
                 "--reexport" => s.reexport = true,
                 "--no-export" => s.no_export = true,
                 "--mission" => s.mission = wert(&mut s, "--mission"),
                 "--script" => s.script = wert(&mut s, "--script").map(PathBuf::from),
+                "--bild" => s.bild = wert(&mut s, "--bild").map(PathBuf::from),
                 "--lag" => {
                     if let Some(v) = wert(&mut s, "--lag") {
                         match v.parse() {
@@ -93,7 +104,11 @@ impl Start {
         }
         // Eine Fahrt ohne Fenster braucht kein Flag mehr als noetig: wer ein Skript faehrt
         // und keine Grafiksitzung hat, meint --headless.
-        if s.script.is_some() && !grafiksitzung_vorhanden() {
+        //
+        // **Ausser er hat `--offscreen` gesagt.** `--headless` schaltet den wgpu-Adapter ab;
+        // diese Zeile wuerde also genau den Modus abwuergen, den man fuer ein Bild ohne
+        // Fenster gewaehlt hat — und zwar still.
+        if skript_erzwingt_headless(s.script.is_some(), s.offscreen, grafiksitzung_vorhanden()) {
             s.headless = true;
         }
         s
@@ -101,8 +116,26 @@ impl Start {
 
     /// Ob ueberhaupt ein Fenster geoeffnet werden soll.
     pub fn will_fenster(&self) -> bool {
+        !self.headless && !self.offscreen
+    }
+
+    /// Ob es eine GPU gibt, also ob ueberhaupt etwas gerendert wird.
+    ///
+    /// Nur `--headless` schaltet sie ab (`backends: None`). `--offscreen` hat keine
+    /// Fenster**flaeche**, aber sehr wohl einen Adapter — das ist der ganze Unterschied
+    /// zwischen den beiden (`docs/FRAGEN.md` Q-009).
+    pub fn hat_gpu(&self) -> bool {
         !self.headless
     }
+}
+
+/// Ob eine Skriptfahrt still auf `--headless` umgestellt wird.
+///
+/// Als eigene Funktion, damit die Regel **ohne Umgebungsvariablen** pruefbar ist: ein Test,
+/// der `WAYLAND_DISPLAY` umsetzt, prueft die Maschine und nicht die Regel — und stoert
+/// nebenbei jeden parallel laufenden Test.
+fn skript_erzwingt_headless(hat_skript: bool, offscreen: bool, sitzung: bool) -> bool {
+    hat_skript && !offscreen && !sitzung
 }
 
 /// Ob es eine Grafiksitzung gibt.
@@ -161,5 +194,44 @@ mod tests {
     #[test]
     fn leere_argumente_ergeben_die_vorgabe() {
         assert_eq!(start(&[]), Start::default());
+    }
+
+    #[test]
+    fn bild_und_ticks_ergeben_einen_reproduzierbaren_screenshot_auftrag() {
+        // Ohne Dateiendung, weil `tools/normen.py` Asset-Pfade im Code verbietet (§7).
+        // Geprueft wird ohnehin das Flag und nicht der Dateiname.
+        let pfad = "docs/bilder/t006-welt-fern";
+        let s = start(&["--bild", pfad, "--ticks", "110"]);
+        assert_eq!(s.bild, Some(PathBuf::from(pfad)));
+        assert_eq!(s.ticks, 110);
+        assert!(s.unbekannt.is_empty(), "unerwartet: {:?}", s.unbekannt);
+    }
+
+    #[test]
+    fn offscreen_ist_kein_fenster_aber_eine_gpu() {
+        // Der ganze Sinn des dritten Modus: --headless nimmt die GPU weg und damit jede
+        // Chance auf ein Bild; --offscreen nimmt nur das Fenster weg.
+        let o = start(&["--offscreen"]);
+        assert!(!o.will_fenster());
+        assert!(o.hat_gpu());
+
+        let h = start(&["--headless"]);
+        assert!(!h.will_fenster());
+        assert!(!h.hat_gpu());
+
+        let f = start(&[]);
+        assert!(f.will_fenster());
+        assert!(f.hat_gpu());
+    }
+
+    #[test]
+    fn offscreen_wird_von_einer_skriptfahrt_nicht_still_zu_headless_gemacht() {
+        // Ohne diese Ausnahme wuerde auf einer Maschine ohne Grafiksitzung genau der
+        // Modus abgeschaltet, den man fuer ein Bild ohne Fenster gewaehlt hat.
+        // Reihenfolge: (hat_skript, offscreen, sitzung)
+        assert!(skript_erzwingt_headless(true, false, false), "Skript ohne Sitzung: headless");
+        assert!(!skript_erzwingt_headless(true, true, false), "--offscreen bleibt --offscreen");
+        assert!(!skript_erzwingt_headless(true, false, true), "mit Sitzung bleibt das Fenster");
+        assert!(!skript_erzwingt_headless(false, false, false), "ohne Skript aendert sich nichts");
     }
 }
