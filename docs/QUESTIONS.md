@@ -606,6 +606,75 @@ belongs to the user rather than to me:
 
 **To roll back:** still exactly one commit — the migration commit itself.
 
+## Q-025 — A 28 m titan does not fit through a 7 m alley. Both numbers are yours.
+
+**Context:** Two of your specifications meet and the result had not been computed. The size
+table gives `boss` a height of 28 m; `maps.ron` gives the city an alley width of 7.0 m (you
+set it from "Strassenbreite 6-8 m"). Nothing in the whole repository says how **wide** a titan
+is — there is no body width in `titan.ron`, no collider, no footprint. On the common estimate
+of 0.25 x height, a 28 m titan is exactly **7.0 m wide**: he fills the alley from wall to wall.
+What happens then is not "it looks tight", it is a physics failure — two opposing contact
+normals cancel each other, the titan stops dead at the alley mouth, and if he starts out
+overlapping at all, avian's `penetration_rejection_threshold` (default 0.5, and that is in
+**metres**) discards the contacts and he stands inside the house.
+
+It never happens today: `boss` has no representative and the largest spawnable class is
+`large` at 21 m — still 5.25 m wide on the same estimate, which fits an alley but not a
+doorway. The question becomes load-bearing the moment a big titan spawns in the city.
+
+**ASSUMPTION:** Big titans do not spawn inside the block grid. The `husk` (10 m, ~2.5 m wide)
+is the only kind the first mission uses, and it fits everywhere. The alley stays at 7.0 m
+because you set it; the size classes stay because you set them.
+
+**What would have to be rolled back:** nothing yet — no code depends on it. The moment a
+titan wider than an alley exists, one of three has to give, and **which one is yours to
+choose**: the alley gets wider, the big classes stay out of the city (they fight on the wall
+or in the open), or the city grows a main street that the grid keeps clear.
+
+## Q-026 — Is the cortex readable from 100 metres or from 100 studs?
+
+**Context:** Two sources disagree by a factor of 3.6, and this decides how big the only lethal
+hit zone in the game has to be. `docs/features.ron` F-030 says the cortex must be recognisable
+from **100 studs** — at the project factor of 0.28 m/stud that is 28.0 m. The design bible
+(`Design-Bibel.md:45`) says **100 metres**.
+
+The number is not cosmetic. At 60 degrees vertical field of view on 1080 px, a 1.10 m cortex
+is **10.3 px** across at 100 m — a smudge. At 28 m it is 37 px, which is a target you can aim
+at. Everything about the combat design hangs on which one is meant: the cortex radius, whether
+the approach has to be a diving pass or can be a considered swing, and whether the hit zone
+needs a colour marker to be findable at all.
+
+**ASSUMPTION:** 100 **metres**, from the bible — it is the design document and the more
+demanding of the two. That does **not** mean the cortex has to be 10 px of grey: the marker
+carries the readability, not the geometry. `vfx.ron` VFX-011 already specifies an amber,
+unlit, emissive marker as a Must — that is the thing you see from 100 m, and the geometry
+underneath stays honest at its real size.
+
+**What would have to be rolled back:** `cortex_radius_m` in `titan.ron` (already disputed as
+Q-019) and the marker size. No structure, no code — the numbers live in RON.
+
+## Q-027 — A titan has no health, and no width, and cannot turn
+
+**Context:** Not a decision so much as three holes found while planning the titan round, all
+in the same place: `assets/data/titan.ron` describes eight kinds with height, speed, cortex
+radius, regeneration and wind-up — and nothing else. Concretely missing, all **blocking** for
+a titan that can actually fight:
+
+- **health** — there is no such value anywhere in the repository. `regen_per_s` regenerates a
+  quantity that does not exist. A cortex hit kills outright (that is the design), but every
+  other hit zone (F-032) needs something to reduce.
+- **body width** — see Q-025. Without it there is no collider and no answer to the alley.
+- **`turn_deg_per_s`** — without a turn rate the husk's entire purpose ("learning the approach
+  angle") does not exist, because he can always face you instantly.
+- **`strike_s` and `recover_s`** — the wind-up is guarded (`>= 0.4 s`, `tests/data.rs`), but
+  the recovery **is** the punish window, and it is unspecified.
+
+**ASSUMPTION:** I invent starting values, mark them `UNTUNED` in the file the way `game.ron`
+does, and guard each one in `tests/data.rs`. They are placeholders for your judgement, not
+design decisions — the first playtest will move all of them.
+
+**What would have to be rolled back:** only numbers in `titan.ron`. Nothing structural.
+
 ---
 
 ## Answered
