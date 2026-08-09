@@ -56,6 +56,42 @@ ungesehen blieb.**
    Entities, um eine Frage ueber die zehn Meter vor der Nase zu beantworten.
    → [`docs/lessons/performance.md`](docs/lessons/performance.md)
 
+## Wie gearbeitet wird: **ein Supervisor im `/loop`, der selbst nichts schreibt**
+
+Dieses Projekt wird **nicht von einem Kopf seriell** abgearbeitet, sondern mit Workflows und
+Subagenten — **breit parallel und wissenschaftlich**. Das ist verbindlich, nicht empfohlen
+(`prompts/init.md` §17, ausformuliert in [`docs/lessons/arbeitsweise.md`](docs/lessons/arbeitsweise.md)).
+
+- **Der Supervisor laeuft dauerhaft im `/loop`** und triggert Workflows und Subagenten. Er
+  **plant, delegiert, prueft und integriert — er schreibt selbst nichts.** Wer anfaengt,
+  selbst Code zu schreiben, ist kein Supervisor mehr.
+- **Eine Iteration:** Ist-Zustand → Hypothese + Abnahmekriterium **vorab** → parallele
+  Delegation → Ergebnisse sammeln → gegen die Kriterien pruefen → integrieren und ueber die
+  naechste Runde entscheiden.
+- **Abbruch** bei erfuellter DoD, bei erreichtem Limit, oder wenn **zweimal dieselbe Hypothese
+  gescheitert** ist — dann ist nicht die Ausfuehrung falsch, sondern die Annahme
+  → `docs/FRAGEN.md`.
+- **Parallel ist die Voreinstellung.** Die Frage ist nie „kann man das parallel machen?",
+  sondern „warum nicht?". Geschnitten wird nach **Domaene**, nach **`F-ID`**
+  (`abhaengt_von` sagt, was *nicht* gleichzeitig geht), nach **Pruef-Dimension** und bei
+  Massenarbeit nach **Datei**.
+- **Vorher muss stehen:** die Schnittstelle (Components, Messages, Signaturen), der
+  **Dateibesitz** (ein Schreiber pro Datei) und das **Abnahmekriterium**. Sonst produziert
+  das Fan-out Integrationsarbeit statt Fortschritt.
+- **Die Breite kommt von `nproc`, nicht vom Wunsch** — und der Compiler ist auch ein
+  Verbraucher. Auf Maschine A heisst das **2–3 gleichzeitig**.
+- **Nach jedem Fan-out:** `cargo check 2>&1 | grep '^error'` und `cargo test`. Fuenf einzeln
+  gruene Agenten sind zusammen nicht automatisch gruen.
+- **Jede Findungsstufe bekommt eine unabhaengige Stufe, die sie zu widerlegen versucht.**
+  Eine Behauptung, die niemand angegriffen hat, ist 🟨.
+- **Diese Dateien fasst nur der Hauptkopf an:** `Cargo.toml`, `src/main.rs`, `src/lib.rs`,
+  `assets/data/*.ron`, `docs/STATUS.md`, `docs/TODO.md`. Subagenten **melden** nur.
+- **Jeder Subagenten-Auftrag nennt:** welche Dateien ihm gehoeren, welche Abschnitte er lesen
+  soll (nicht „lies alles"), die Belegpflicht, und dass Fremdgebiet nach `docs/FUNDE.md` geht
+  statt still mitgefixt zu werden. Sein Bericht hat das feste Format:
+  **`Aufgabe · Getan · Beleg · Stufe · Offen · Funde`** — ein Freitext-Bericht ist nicht
+  integrierbar.
+
 ## Wo was steht
 
 | Frage | Datei |
@@ -68,6 +104,7 @@ ungesehen blieb.**
 | Modelle austauschen (fuer den User geschrieben) | [`docs/modelle.md`](docs/modelle.md) |
 | Was mir nicht gehoert zu entscheiden | [`docs/FRAGEN.md`](docs/FRAGEN.md) |
 | Was bewusst spaeter kommt | [`docs/ROADMAP.md`](docs/ROADMAP.md) |
+| Wie parallel gearbeitet wird | [`docs/lessons/arbeitsweise.md`](docs/lessons/arbeitsweise.md) |
 | Alle Doku auf einen Blick | [`docs/README.md`](docs/README.md) |
 
 ## Die Werkzeuge
