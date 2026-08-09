@@ -14,12 +14,12 @@ before `Could` is the order, not a recommendation (prompts/init.md §2).
 
 | Stage | ID | Item | Prio | Depends on | Why here |
 |---|---|---|---|---|---|
-| ⬜ | F-030 | Nape-Trefferzone (Cortex) | 1 | — | Must, no prerequisite |
+| 🟧 | F-030 | Nape-Trefferzone (Cortex) | 1 | — | Must, no prerequisite |
 | ⬜ | F-044 | Nahkampf am Boden | 3 | — | Could |
 | ⬜ | F-031 | Geschwindigkeitsabhaengige Schadensformel | 1 | F-030 | needs F-030 |
 | ⬜ | F-032 | Sekundaere Trefferzonen | 1 | F-030 | needs F-030 |
 | ⬜ | F-033 | Klingenhaltbarkeit | 1 | F-030 | needs F-030 |
-| ⬜ | F-034 | Hit-Stop und Impact-Frames | 1 | F-030 | needs F-030 |
+| 🟧 | F-034 | Hit-Stop und Impact-Frames | 1 | F-030 | needs F-030 |
 | ⬜ | F-040 | Gerichteter Griff-Escape | 1 | F-030 | needs F-030 |
 | ⬜ | F-035 | Lance Charges (Fernwaffe) | 2 | F-030 | needs F-030 |
 | ⬜ | F-037 | Kein Friendly Fire | 1 | F-035 | needs F-035 |
@@ -49,14 +49,14 @@ before `Could` is the order, not a recommendation (prompts/init.md §2).
 | ⬜ | F-175 | Menuestruktur | 1 | F-170 | needs F-170 |
 | ⬜ | F-177 | Grafikeinstellungen | 1 | F-170 | needs F-170 |
 | ⬜ | F-176 | Barrierefreiheit | 2 | F-170 | needs F-170 |
-| ⬜ | F-171 | Dynamisches Fadenkreuz | 1 | F-002 | needs F-002 |
+| 🟧 | F-171 | Dynamisches Fadenkreuz | 1 | F-002 | needs F-002 |
 | ⬜ | F-178 | Ladebildschirme mit Tipps | 3 | F-175 | needs F-175 |
 
 ## mission (37 open)
 
 | Stage | ID | Item | Prio | Depends on | Why here |
 |---|---|---|---|---|---|
-| ⬜ | F-070 | Missions-Zustandsmaschine | 1 | — | Must, no prerequisite |
+| 🟧 | F-070 | Missions-Zustandsmaschine | 1 | — | Must, no prerequisite |
 | ⬜ | F-071 | Modus: Skirmish | 1 | F-070 | needs F-070 |
 | ⬜ | F-072 | Modus: Breach (Verteidigung) | 1 | F-070 | needs F-070 |
 | ⬜ | F-073 | Modus: Escort | 1 | F-070 | needs F-070 |
@@ -231,11 +231,11 @@ before `Could` is the order, not a recommendation (prompts/init.md §2).
 
 | Stage | ID | Item | Prio | Depends on | Why here |
 |---|---|---|---|---|---|
-| ⬜ | F-050 | Zustandsmaschine | 1 | — | Must, no prerequisite |
+| 🟨 | F-050 | Zustandsmaschine | 1 | — | Must, no prerequisite |
 | ⬜ | F-052 | Pathfinding mit Groessenlogik | 1 | F-050 | needs F-050 |
-| ⬜ | F-053 | Telegraphierte Angriffe | 1 | F-050 | needs F-050 |
+| 🟧 | F-053 | Telegraphierte Angriffe | 1 | F-050 | needs F-050 |
 | ⬜ | F-054 | KI-Level-of-Detail | 1 | F-050 | needs F-050 |
-| ⬜ | F-056 | Gegnertyp: Husk (Standard) | 1 | F-050 | needs F-050 |
+| 🟨 | F-056 | Gegnertyp: Husk (Standard) | 1 | F-050 | needs F-050 |
 | ⬜ | F-058 | Gegnertyp: Scuttler (Crawler) | 1 | F-050 | needs F-050 |
 | ⬜ | F-059 | Gegnertyp: Weaver (Ducker) | 1 | F-050 | needs F-050 |
 | ⬜ | F-064 | Groessenklassen | 1 | F-050 | needs F-050 |

@@ -11,17 +11,17 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 
 **🟧 needs three pieces of evidence:** a picture (screenshot path), a number (measured, with the machine `[debian]`/`[cachy]`) and code (a test that goes red when it breaks). If one is missing it is 🟨 — doubt moves the stage down, not up (prompts/init.md §8, §9).
 
-**Tally:** 232 ⬜ · 12 🟨 · 1 🟧 · 0 ✅ of 245 rows.
+**Tally:** 225 ⬜ · 14 🟨 · 6 🟧 · 0 ✅ of 245 rows.
 
 ## combat
 
 | Item | ID | Stage | Evidence (test / screenshot / number) | Note |
 |---|---|---|---|---|
-| Nape-Trefferzone (Cortex) | F-030 | ⬜ | — | — |
+| Nape-Trefferzone (Cortex) | F-030 | 🟧 | hits at 8 / 30 / 75 m/s = 3 of 3; at 75 m/s the closest approach at any tick boundary is 0.150 m, so a position sample had nothing to find · 9.0 us per cast over 1000 casts · red-checked three ways: swept cast replaced by a position sample (8 of 8 red), cortex cast placed last (9 of 14 red), one mask for both layers (torso test red) · against a REAL solid husk at 30 m/s: cut on tick 10, 0.484 m of air, 0.00 m/s across the flight line · docs/images/f030-cortex.png sha256 951aff7b twice [debian] | 2026-08-09 [debian] — one swept cast_shape per active blade per tick, two filtered casts with the cortex layer first. Risk 2 was measured and does NOT fire: default_speculative_margin is Scalar::MAX, so update_aabb sweeps the full vel*dt. The readability half of the acceptance ('recognisable from 100 studs') is still unanswerable until Q-026 |
+| Hit-Stop und Impact-Frames | F-034 | 🟧 | Tick advances 20 over 20 steps while Position is bit-identical for exactly 7 ticks = round(0.12 * 60), and differs on the next · ticks inside the husk cortex at 30 m/s: 3 without the stop, 10 with it · red-checked by dropping RigidBodyDisabled: bit-identical for 1 tick instead of 7 · titan side: 0.1000 m of drift in 2 free ticks against 0.0000 m in 2 frozen ticks · docs/images/f034-hitstop.png, tick 161 of the same run as f030-cortex.png at 155, both showing pos 15.8 7.8 0.8 identical to the digit [debian] | 2026-08-09 [debian] — a tick-counted component, never Time<Virtual>. THE BLIND TEST WITH HUMAN TESTERS HAS NOT BEEN RUN — the row's own acceptance is not satisfiable by an agent, and this stage rests on the substitute criteria |
 | Geschwindigkeitsabhaengige Schadensformel | F-031 | ⬜ | — | — |
 | Sekundaere Trefferzonen | F-032 | ⬜ | — | — |
 | Klingenhaltbarkeit | F-033 | ⬜ | — | — |
-| Hit-Stop und Impact-Frames | F-034 | ⬜ | — | — |
 | Kein Friendly Fire | F-037 | ⬜ | — | — |
 | Gerichteter Griff-Escape | F-040 | ⬜ | — | — |
 | Lance Charges (Fernwaffe) | F-035 | ⬜ | — | — |
@@ -47,8 +47,8 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 
 | Item | ID | Stage | Evidence (test / screenshot / number) | Note |
 |---|---|---|---|---|
+| Dynamisches Fadenkreuz | F-171 | 🟧 | three states as (nodes, w, h): (4, 302x178), (4, 326x202), (8, 356x212), and the PNG's bounding boxes agree exactly · red-checked with all BackgroundColors forced to white: Free and Anchor collapse to the same shape · signal pixels 80 / 264 cyan / 840 amber · docs/images/f171-crosshair.png, three crops, each source shot bit-identical twice [debian] | 2026-08-09 [debian] — the three states differ in geometry, not only in colour; forcing the colours equal in the test is what makes the colour-blindness clause falsifiable at all |
 | HUD-Grundlayout | F-170 | ⬜ | — | — |
-| Dynamisches Fadenkreuz | F-171 | ⬜ | — | — |
 | Vollstaendige Tastenbelegung | F-172 | ⬜ | — | — |
 | Menuestruktur | F-175 | ⬜ | — | — |
 | Grafikeinstellungen | F-177 | ⬜ | — | — |
@@ -59,7 +59,7 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 
 | Item | ID | Stage | Evidence (test / screenshot / number) | Note |
 |---|---|---|---|---|
-| Missions-Zustandsmaschine | F-070 | ⬜ | — | — |
+| Missions-Zustandsmaschine | F-070 | 🟧 | Lost decided at tick 19800 exactly, red-checked against a Time::delta_secs() accumulator which lands on 19804 - four ticks late from f32 drift alone, in a harness fed exactly one fixed step per frame · red-checked again with the duration as a Rust literal: left 19800, right 600 · docs/images/f070-lost.png sha256 68aa8dc1 over three runs of one binary [debian] | 2026-08-09 [debian] — the timer counts fixed ticks and never a clock. The second loss path (every player down) is live as of P5 and fires at tick 220 in its own test |
 | Modus: Skirmish | F-071 | ⬜ | — | — |
 | Modus: Breach (Verteidigung) | F-072 | ⬜ | — | — |
 | Modus: Escort | F-073 | ⬜ | — | — |
@@ -234,11 +234,11 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 
 | Item | ID | Stage | Evidence (test / screenshot / number) | Note |
 |---|---|---|---|---|
-| Zustandsmaschine | F-050 | ⬜ | — | — |
+| Telegraphierte Angriffe | F-053 | 🟧 | hand travel 8.221 m over 36 ticks = 384 px at 20 m, 192 px at 40 m, 77 px at 100 m, against a criterion of 150 px at 40 m and predictions of 412/206/82 (6.1-6.8 % below, inside the 10 % window) · red-checked with the pose angles set to zero: 0.0000 m, 0.0 px · docs/images/f053-windup.png, two panels at t=420 and t=447, one camera, bit-identical over two runs [debian] | 2026-08-09 [debian] — a single screenshot cannot catch a missing telegraph: a still frame of a titan with its arm down is indistinguishable from one with no telegraph. Only the two-sample pixel delta catches it, which is why the picture is two panels |
+| Zustandsmaschine | F-050 | 🟨 | ticks per state for a husk at 25 m: Idle 1, Pursue 410, Windup 36, Strike 12, Recover 24, Pursue 18; the 36 is round(windup_s 0.60 * 60) computed from GameData · red-checked with a Pursue->Strike edge: Windup vanishes from the sequence · pose proven bitwise independent of the clock · docs/images/f050-states.png sha256 8c20c551 twice [debian] | 2026-08-09 [debian] — 🟨 and not 🟧 only because the picture criterion asks for an overlay reading 'husk#1 Windup 21/36' and the overlay can print 'titan#1 Windup': ticks_in_state lives in titan/ and the kind name only in Name. The exact five lines needed are recorded in the round report |
+| Gegnertyp: Husk (Standard) | F-056 | 🟨 | nine entities, cortex at 8.900 m against GameData 8.900 and scale.ron 8.9, with its parent asserted to be the head · red-checked by re-parenting the cortex to the pelvis · collider gone on tick one after a cortex hit, TitanId 1 -> 0 after death_s · CustomPositionIntegration measured: 3.000 m in 60 ticks with the marker, 6.000 m without, exactly twice · docs/images/f056-husk.png sha256 ade7a6b7 twice [debian] | 2026-08-09 [debian] — 🟨 and not 🟧 because two parts of the picture clause are missing: no PhysicsDebugPlugin wireframe (the plugin is registered nowhere) and no 1.8 m player capsule in frame for scale, which a first-person camera cannot produce |
 | Pathfinding mit Groessenlogik | F-052 | ⬜ | — | — |
-| Telegraphierte Angriffe | F-053 | ⬜ | — | — |
 | KI-Level-of-Detail | F-054 | ⬜ | — | — |
-| Gegnertyp: Husk (Standard) | F-056 | ⬜ | — | — |
 | Gegnertyp: Errant (Abnormal) | F-057 | ⬜ | — | — |
 | Gegnertyp: Scuttler (Crawler) | F-058 | ⬜ | — | — |
 | Gegnertyp: Weaver (Ducker) | F-059 | ⬜ | — | — |
