@@ -1,0 +1,227 @@
+// scale.ron — the ONE truth about sizes. Given by the user, 2026-08-09.
+//
+// All lengths in METERS (1 Bevy unit = 1 meter, docs/conventions.md).
+//
+// ⚠️ These numbers are **NOT untuned** — and that is the difference from game.ron:7,
+// maps.ron:15 and titan.ron:7. There stand starting values that anyone may change. **Here
+// stand given values.** Whoever changes them changes no assumption but a DECISION OF THE
+// USER — and has to ask him, not measure.
+//
+// The precedence rule that goes with it: **a direct figure in meters from the user beats
+// any derivation.** Wherever the backlog conversion was used so far (0.28 m/stud,
+// docs/QUESTIONS.md Q-002) and the result contradicts this file, this file holds. The
+// conversion stays for everything the user has said nothing about.
+//
+// This file is the SOURCE, game.ron / maps.ron / titan.ron are the CONSUMERS: they fetch
+// their sizes from here, and tests/data.rs falls over the moment one of the three drifts
+// away from it. A size stands exactly once — otherwise two truths drift apart, and nobody
+// notices until a titan sticks out through a roof.
+(
+    // ------------------------------------------------------------------------
+    // The three scales — the world is DELIBERATELY not scaled uniformly.
+    // ------------------------------------------------------------------------
+    //
+    // Architecture stands at 1.0: a house is as big as a house is. Titans are exaggerated
+    // by 1.4, walls by 2.4. A titan thus looks bigger than he would "realistically" be, a
+    // wall monumental — and that is exactly the visual language of the reference work: the
+    // human is small, the threat out of all proportion, the wall a horizon.
+    //
+    // **That is a design decision, not an inaccuracy.** Whoever "corrects" the three
+    // factors later because some number strikes him as unrealistic destroys the visual
+    // language and notices it only when the game looks arbitrary. The factors stand here
+    // as numbers so that you SEE that they differ — not so that you level them out.
+    // (Given by the user, 2026-08-09.)
+    architecture_factor: 1.0,
+    titan_factor: 1.4,
+    wall_factor: 2.4,
+
+    // ------------------------------------------------------------------------
+    // Reference — what the eye measures everything else against
+    // ------------------------------------------------------------------------
+    reference: (
+        // "Check the capsule exactly!" — the user, explicitly. The player capsule in
+        // game.ron:player.height_m MUST be this number, not roughly. Every size comparison
+        // in the game hangs on it. (Given by the user, 2026-08-09.)
+        human_height_m: 1.8,
+        // A door is the second scale that every viewer reads without noticing.
+        door_height_m: 2.1,
+        // "Keep them narrow" — the user. Narrow streets are no detail, they are the reason
+        // why speed in the Vector Gear feels like speed. maps.ron:layout.street_m lies in
+        // this window, tests/data.rs checks it. (Given by the user, 2026-08-09.)
+        min_street_m: 6.0,
+        max_street_m: 8.0,
+        // A human head is about 1/7.5 of the body height. The value stands here because it
+        // is the COMPARISON: the titan head is relatively SMALLER (see titan.*_head_fraction),
+        // and that is how the eye reads "the thing is huge" instead of "the thing is near".
+        human_head_fraction: 0.1333,
+    ),
+
+    // ------------------------------------------------------------------------
+    // Architecture (factor 1.0)
+    // ------------------------------------------------------------------------
+    //
+    // ⚠️ The residential stock is FLAT: 4.5 to 11.5 m. That is intended.
+    // The vertical of this game comes from the wall (120 m), the church (35 m), the
+    // watchtower and the trees — **not** from the residential houses. A city of 30 m blocks
+    // would be no reference look but a skyline, and the wall would lose its effect.
+    //
+    // ⚠️ And that is exactly why church, watchtower and tree are NO decoration here: they
+    // are the only anchors above 11.5 m. From an 11.5 m roof and a 3.0 m minimum rope
+    // follows an anchor ceiling of 14.5 m — above that no rope holds on a residential
+    // house. The cortex of `large` sits at 12.5 m, of `huge` at 18.7 m, of `boss` at 24.9 m.
+    // A city without landmarks therefore leaves three of five classes attackable only
+    // ballistically (docs/QUESTIONS.md Q-022). tests/data.rs pins down that for every class
+    // a structure above its cortex height exists — and that the current map has really
+    // placed at least one of them.
+    architecture: (
+        heights_m: {
+            "house_small":  4.5,   // 1 story
+            "house_town":  8.0,   // 2 stories
+            "house_large": 11.5,   // 3 stories — the upper limit of normal building
+            "tree":       12.0,   // foreground layering: gives depth a ladder
+            "watchtower":   12.0,   // standing on the wall
+            "church":     35.0,   // bell tower. LANDMARK, not a grid house
+        },
+        // Eaves = top edge of the outer wall, where the roof starts. The difference to the
+        // total height is the roof — and the roof is the surface you land on.
+        // Entered only where the user has named a number; whoever needs another one asks
+        // him instead of inventing it. (Given by the user, 2026-08-09.)
+        eaves_m: {
+            "house_small": 3.0,
+            "house_town": 6.0,
+        },
+    ),
+
+    // ------------------------------------------------------------------------
+    // Titans (factor 1.4)
+    // ------------------------------------------------------------------------
+    titan: (
+        // **The cortex sits at about 89 % of the body height.** That is the only lethal
+        // weak point (F-030) — and until 2026-08-09 this number stood NOWHERE.
+        //
+        // ⚠️ This fraction is a **CHECK RULE, not a source.** Until 2026-08-09 the five
+        // cortex heights were computed from it — that broke our own precedence rule: the
+        // user names five **figures in meters** (3.7 · 8.9 · 12.5 · 18.7 · 24.9), and a
+        // direct figure in meters beats any derivation. Computed from 0.89, the small class
+        // came out 4 cm off (4.2 × 0.89 = 3.738 instead of 3.7 — +1.03 %).
+        // Now the user's five numbers stand in `classes`, and this fraction is what the
+        // user wrote next to them (his words: "~89 %"): the guard that notices when one of
+        // the five drifts away (tests/data.rs holds 0.88..0.90).
+        //
+        // It is still used as a SOURCE only where the user has named no cortex height —
+        // today exactly one case: the Ashwalker (150 m ⇒ 133.5 m).
+        // (Given by the user, 2026-08-09.)
+        cortex_fraction: 0.89,
+
+        // The titan head is 1/9 to 1/10 of the height — RELATIVELY SMALLER than on a human
+        // (1/7.5, see reference.human_head_fraction). That is the trick that makes a model
+        // look big: too large a head makes every titan look like a doll, no matter how many
+        // meters the data sheet says. (Given by the user, 2026-08-09.)
+        //
+        // The upper bound is ROUNDED UP: 1/9 = 0.111111…, and with 0.1111 a model that
+        // takes the user exactly at his word falls just outside our own window. 0.1112 is
+        // the smallest number that still includes 1/9.
+        min_head_fraction: 0.1,      // 1/10
+        max_head_fraction: 0.1112,   // 1/9 = 0.111111…, rounded up
+
+        // The five size classes (F-064). titan.ron names ONLY the class per kind; height
+        // and cortex height come from here — otherwise there are sixteen numbers nobody
+        // checks against each other.
+        //
+        // **Both columns are figures in meters from the user**, neither is computed. That
+        // is the more expensive but correct way: the guard above checks their ratio instead
+        // of producing it — that makes it stronger, not weaker. (2026-08-09.)
+        classes: {
+            "small":        (height_m:  4.2, cortex_height_m:  3.7),
+            "medium":       (height_m: 10.0, cortex_height_m:  8.9),
+            "large": (height_m: 14.0, cortex_height_m: 12.5),
+            "huge":        (height_m: 21.0, cortex_height_m: 18.7),
+            // The user names the class "Abnormal / Boss". Whether he means the size class
+            // by that or the titan kind that the project vocabulary calls "Errant" is
+            // open — docs/QUESTIONS.md Q-020. It is deliberately still used by NO kind in
+            // titan.ron: the first representative is a raid opponent, and raids are
+            // behind the Vector Gear gate (docs/ROADMAP.md).
+            "boss":         (height_m: 28.0, cortex_height_m: 24.9),
+        },
+
+        // The 150 m boss. Stands DELIBERATELY outside `classes`: he is no enemy type you
+        // scale, but a structure with a face. The user's check: 150 − 120 = **30 m above
+        // the wall**. tests/data.rs pins the 30 down.
+        // Name after docs/conventions.md §2. (Given by the user, 2026-08-09.)
+        ashwalker_height_m: 150.0,
+    ),
+
+    // ------------------------------------------------------------------------
+    // Walls (factor 2.4)
+    // ------------------------------------------------------------------------
+    wall: (
+        height_m: 120.0,
+        // Narrower at the top than at the bottom: the wall is battered. The difference
+        // (45 − 28 = 17 m over 120 m of height) is the slope a hook holds on.
+        top_thickness_m: 28.0,
+        base_thickness_m: 45.0,
+        // Stopover at half height: with 90 m of anchor range the wall crown is NOT
+        // reachable from below in one move (120 > 90). The platform at 60 m turns an
+        // impossible wall into two possible moves. tests/data.rs checks that both legs
+        // stay within range. (Given by the user, 2026-08-09.)
+        //
+        // Recomputed with the slope ((45 − 28)/2 = 8.5 m of inset over 120 m, 4.05 degrees):
+        // ground -> platform 60.15 m ✓ · platform -> crown 60.15 m ✓ · ground -> crown
+        // directly 120.30 m ✗. The arithmetic confirms the number — but it is NOT the
+        // reason for the platform: the highest point of the flank that lies within 90 m of
+        // the wall foot is y = 89.78 m, so the crown would be reachable in two free moves
+        // (90 + 30) as well. The platform only carries weight once the FLANK is not
+        // anchorable and only platform and crown are anchors — and that is decided nowhere:
+        // docs/QUESTIONS.md Q-023.
+        platform_height_m: 60.0,
+
+        // ---- The scale ladder -------------------------------------------------
+        // A 120 m wall without structure is a gray surface: the eye has nothing to read
+        // size off, and the wall looks like a 12 m wall seen from close up. The visible
+        // joints of a 0.6 m stone course and a band every 15 m are NO decoration — they
+        // are the reason why the wall looks big.
+        // (Given by the user, 2026-08-09.)
+        stone_course_m: 0.6,
+        band_spacing_m: 15.0,
+    ),
+
+    // ------------------------------------------------------------------------
+    // Camera and Vector Gear
+    // ------------------------------------------------------------------------
+    camera: (
+        // Eye height. The user names 1.60 m — that beats any derivation from the body
+        // height. game.ron:player.eye_height_m MUST be this number.
+        // (Given by the user, 2026-08-09.)
+        height_m: 1.6,
+        // "FOV ground combat 55-65 degrees — biggest lever". The user says GROUND COMBAT
+        // explicitly: that is the base, not the upper limit. When flying fast the field of
+        // view widens (F-017 „Geschwindigkeits-Feedback"), and the upper value for that
+        // stands in game.ron:camera.fov_max_speed_deg. game.ron:camera.fov_deg has to fall
+        // into this window, tests/data.rs checks it. (Given by the user, 2026-08-09.)
+        //
+        // ⚠️ **Read VERTICALLY** — and nobody decided that, it follows from Bevy:
+        // src/render/mod.rs puts the value into `PerspectiveProjection.fov`, and Bevy
+        // documents the field as "The vertical field of view (FOV) in radians"
+        // (bevy_camera-0.19.0/src/projection.rs:284-287). On 16:9, 60 degrees vertical
+        // = 91.5 degrees horizontal. Were the user's figure meant HORIZONTALLY — the
+        // usual reading of an "FOV" number — 32.6..39.4 would have to stand here. The
+        // factor between the two readings is 1.7, and the user calls exactly this value
+        // his "biggest lever": docs/QUESTIONS.md Q-021.
+        min_ground_fov_deg: 55.0,
+        max_ground_fov_deg: 65.0,
+    ),
+
+    vector: (
+        // **90 m, straight from the user** — not 112 m out of the backlog conversion. The
+        // precedence rule: a direct figure in meters beats any derivation
+        // (docs/QUESTIONS.md Q-002). game.ron:vector.hook_range_m MUST be this number.
+        // (Given by the user, 2026-08-09.)
+        anchor_range_m: 90.0,
+        // "Vector Gear speed x1.5 vs. standard" — the factor is given, but the REFERENCE
+        // is missing: x1.5 of what? Running (6 m/s) would be 9 m/s and thus absurdly slow
+        // for a Vector Gear; the speed limit (75 m/s) would be 112.5 m/s. The number stands
+        // here so that it does not get lost — it is NOT computed with until the user
+        // answers (docs/QUESTIONS.md Q-018). (Given by the user, 2026-08-09.)
+        speed_factor: 1.5,
+    ),
+)

@@ -1,153 +1,153 @@
-//! `Intent` — **Eingabe ist ein Datum, kein Tastendruck.**
+//! `Intent` — **input is a datum, not a key press.**
 //!
-//! Es gibt genau ein Struct, und die Simulation liest **nur** das. Wer es fuellt, ist ihr
-//! egal: die lokale Tastatur, der `--script`-Fahrer oder spaeter das Netz. Genau dieser
-//! Kanal ist der, den Multiplayer braucht — und er wird ohnehin gebaut, weil in dieser
-//! Umgebung niemand klicken kann. **Ein Aufwand, zwei Probleme geloest**
-//! (`prompts/init.md` §6 Regel 2, §12).
+//! There is exactly one struct, and the simulation reads **only** that. Who fills it is none
+//! of its business: the local keyboard, the `--script` driver, or later the network. That
+//! channel is precisely the one multiplayer needs — and it gets built anyway, because in
+//! this environment nobody can click. **One effort, two problems solved**
+//! (`prompts/init.md` §6 rule 2, §12).
 //!
-//! Bewusst **keine `Vec2`/`Vec3`-Felder**: dieser Typ geht eines Tages ueber eine Leitung
-//! und wird gespeichert. Nackte `f32` sind das, was `serde` ohne Zusatzfeature kann, und
-//! sie sagen genau, wie viele Bytes es sind (§6 Regel 8).
+//! Deliberately **no `Vec2`/`Vec3` fields**: this type goes over a wire one day and gets
+//! saved. Bare `f32` are what `serde` can do without an extra feature, and they say exactly
+//! how many bytes it is (§6 rule 8).
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Was ein Spieler in **einem** Simulationstick will.
+/// What a player wants in **one** simulation tick.
 ///
-/// Haengt als Component am Spieler — nicht als `Resource`, denn es gibt keinen „den
-/// Spieler" (§6 Regel 3).
+/// Hangs as a component on the player — not as a `Resource`, because there is no such thing
+/// as "the player" (§6 rule 3).
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Intent {
-    /// Bewegung in der Ebene, spielerlokal: `x` nach rechts, `y` nach vorn, je -1..1.
-    pub bewegen_x: f32,
-    pub bewegen_y: f32,
-    /// Blickrichtung in **Radiant**. `yaw = 0` heisst Blick nach −Z
-    /// (`docs/konventionen.md`).
+    /// Movement in the plane, player-local: `x` to the right, `y` forward, each -1..1.
+    pub move_x: f32,
+    pub move_y: f32,
+    /// Look direction in **radians**. `yaw = 0` means looking towards −Z
+    /// (`docs/conventions.md`).
     pub yaw: f32,
-    /// Nach oben positiv, geklemmt auf ±89°.
+    /// Positive is up, clamped to ±89°.
     pub pitch: f32,
-    /// Gedrueckte Tasten als Bitmuster.
-    pub tasten: Tasten,
-    /// Welcher Simulationstick. Der Server verwirft spaeter alles, was zu alt ist.
+    /// Pressed buttons as a bit pattern.
+    pub buttons: Buttons,
+    /// Which simulation tick. The server will later discard anything too old.
     pub tick: u64,
 }
 
 impl Intent {
-    pub fn bewegen(&self) -> Vec2 {
-        Vec2::new(self.bewegen_x, self.bewegen_y)
+    pub fn movement(&self) -> Vec2 {
+        Vec2::new(self.move_x, self.move_y)
     }
 
-    /// Blickrichtung als Einheitsvektor. `yaw = 0, pitch = 0` ergibt −Z.
-    pub fn blick(&self) -> Vec3 {
+    /// Look direction as a unit vector. `yaw = 0, pitch = 0` yields −Z.
+    pub fn look_dir(&self) -> Vec3 {
         let (sy, cy) = self.yaw.sin_cos();
         let (sp, cp) = self.pitch.sin_cos();
         Vec3::new(-sy * cp, sp, -cy * cp)
     }
 
-    pub fn haelt(&self, taste: Tasten) -> bool {
-        self.tasten.haelt(taste)
+    pub fn pressed(&self, button: Buttons) -> bool {
+        self.buttons.contains(button)
     }
 }
 
-/// Die Tasten als Bitmuster — ein `u32` statt eines `HashSet`, damit ein `Intent` eine
-/// feste Groesse hat und ueber eine Leitung passt.
+/// The buttons as a bit pattern — a `u32` instead of a `HashSet`, so that an `Intent` has a
+/// fixed size and fits over a wire.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Tasten(pub u32);
+pub struct Buttons(pub u32);
 
-impl Tasten {
-    pub const KEINE: Tasten = Tasten(0);
-    pub const SPRINGEN: Tasten = Tasten(1 << 0);
-    /// Haken links / rechts — zwei **unabhaengig** steuerbare Haken (`F-001`).
-    pub const HAKEN_LINKS: Tasten = Tasten(1 << 1);
-    pub const HAKEN_RECHTS: Tasten = Tasten(1 << 2);
-    /// Seil einholen (Reel-In, `F-005`) — verbraucht Gas.
-    pub const EINHOLEN: Tasten = Tasten(1 << 3);
-    /// Gas-Boost. Gas verbrauchen ist laut — der Bellower reagiert darauf (Bibel 4).
-    pub const BOOST: Tasten = Tasten(1 << 4);
-    pub const SCHNITT_LINKS: Tasten = Tasten(1 << 5);
-    pub const SCHNITT_RECHTS: Tasten = Tasten(1 << 6);
-    pub const AUSWEICHEN: Tasten = Tasten(1 << 7);
-    pub const MARKIEREN: Tasten = Tasten(1 << 8);
+impl Buttons {
+    pub const NONE: Buttons = Buttons(0);
+    pub const JUMP: Buttons = Buttons(1 << 0);
+    /// Hook left / right — two **independently** steerable hooks (`F-001`).
+    pub const HOOK_LEFT: Buttons = Buttons(1 << 1);
+    pub const HOOK_RIGHT: Buttons = Buttons(1 << 2);
+    /// Reel the rope in (`F-005`) — costs gas.
+    pub const REEL_IN: Buttons = Buttons(1 << 3);
+    /// Gas boost. Spending gas is loud — the Bellower reacts to it (bible 4).
+    pub const BOOST: Buttons = Buttons(1 << 4);
+    pub const SLASH_LEFT: Buttons = Buttons(1 << 5);
+    pub const SLASH_RIGHT: Buttons = Buttons(1 << 6);
+    pub const DODGE: Buttons = Buttons(1 << 7);
+    pub const MARK: Buttons = Buttons(1 << 8);
 
-    pub fn haelt(self, andere: Tasten) -> bool {
-        self.0 & andere.0 == andere.0 && andere.0 != 0
+    pub fn contains(self, other: Buttons) -> bool {
+        self.0 & other.0 == other.0 && other.0 != 0
     }
 
-    pub fn setzen(&mut self, andere: Tasten, gedrueckt: bool) {
-        if gedrueckt {
-            self.0 |= andere.0;
+    pub fn set(&mut self, other: Buttons, pressed: bool) {
+        if pressed {
+            self.0 |= other.0;
         } else {
-            self.0 &= !andere.0;
+            self.0 &= !other.0;
         }
     }
 
-    /// Welche Tasten in `self` gedrueckt sind, die in `vorher` noch nicht gedrueckt waren.
-    /// Der Unterschied zwischen „haelt" und „hat gerade gedrueckt" ist der Unterschied
-    /// zwischen Dauerfeuer und einem Schuss.
-    pub fn frisch(self, vorher: Tasten) -> Tasten {
-        Tasten(self.0 & !vorher.0)
+    /// Which buttons are pressed in `self` that were not yet pressed in `prev`. The
+    /// difference between "is holding" and "has just pressed" is the difference between
+    /// autofire and a single shot.
+    pub fn just_pressed(self, prev: Buttons) -> Buttons {
+        Buttons(self.0 & !prev.0)
     }
 }
 
-/// Ein absoluter Blickwinkel, den jemand von aussen vorgibt (`look 0 -10` im Skript).
+/// An absolute look angle dictated from outside (`look 0 -10` in a script).
 ///
-/// Wird beim Lesen **entnommen**, nicht kopiert: eine Vorgabe gilt einmal und laesst danach
-/// wieder die Maus ans Ruder. Ohne das koennte ein Skript den Blick versehentlich
-/// festnageln, und niemand saehe, warum sich die Kamera nicht mehr bewegt.
+/// **Taken out** on read, not copied: an override applies once and then hands the wheel back
+/// to the mouse. Without that, a script could nail the view down by accident, and nobody
+/// would see why the camera stopped moving.
 #[derive(Resource, Debug, Default)]
-pub struct BlickVorgabe(pub Option<(f32, f32)>);
+pub struct LookOverride(pub Option<(f32, f32)>);
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn tasten_halten_und_loesen() {
-        let mut t = Tasten::KEINE;
-        assert!(!t.haelt(Tasten::BOOST));
-        t.setzen(Tasten::BOOST, true);
-        t.setzen(Tasten::HAKEN_LINKS, true);
-        assert!(t.haelt(Tasten::BOOST));
-        assert!(t.haelt(Tasten::HAKEN_LINKS));
-        assert!(!t.haelt(Tasten::HAKEN_RECHTS));
-        t.setzen(Tasten::BOOST, false);
-        assert!(!t.haelt(Tasten::BOOST));
-        assert!(t.haelt(Tasten::HAKEN_LINKS));
+    fn buttons_press_and_release() {
+        let mut t = Buttons::NONE;
+        assert!(!t.contains(Buttons::BOOST));
+        t.set(Buttons::BOOST, true);
+        t.set(Buttons::HOOK_LEFT, true);
+        assert!(t.contains(Buttons::BOOST));
+        assert!(t.contains(Buttons::HOOK_LEFT));
+        assert!(!t.contains(Buttons::HOOK_RIGHT));
+        t.set(Buttons::BOOST, false);
+        assert!(!t.contains(Buttons::BOOST));
+        assert!(t.contains(Buttons::HOOK_LEFT));
     }
 
     #[test]
-    fn keine_taste_haelt_niemals() {
-        // Sonst waere `haelt(KEINE)` immer wahr und jede Abfrage nach „nichts gedrueckt"
-        // wuerde stillschweigend jeden Frame ausloesen.
-        assert!(!Tasten::KEINE.haelt(Tasten::KEINE));
-        assert!(!Tasten(0xffff_ffff).haelt(Tasten::KEINE));
+    fn the_empty_button_set_is_never_pressed() {
+        // Otherwise `contains(NONE)` would always be true and every query for "nothing
+        // pressed" would quietly fire every frame.
+        assert!(!Buttons::NONE.contains(Buttons::NONE));
+        assert!(!Buttons(0xffff_ffff).contains(Buttons::NONE));
     }
 
     #[test]
-    fn frisch_meldet_nur_den_uebergang() {
-        let vorher = Tasten::BOOST;
-        let jetzt = Tasten(Tasten::BOOST.0 | Tasten::SPRINGEN.0);
-        assert!(jetzt.frisch(vorher).haelt(Tasten::SPRINGEN));
-        assert!(!jetzt.frisch(vorher).haelt(Tasten::BOOST));
+    fn just_pressed_reports_only_the_transition() {
+        let prev = Buttons::BOOST;
+        let current = Buttons(Buttons::BOOST.0 | Buttons::JUMP.0);
+        assert!(current.just_pressed(prev).contains(Buttons::JUMP));
+        assert!(!current.just_pressed(prev).contains(Buttons::BOOST));
     }
 
     #[test]
-    fn blick_null_zeigt_nach_minus_z() {
-        // Der Achsen-Vertrag aus docs/konventionen.md. Faellt er, steht jedes Modell
-        // falsch herum und niemand weiss, warum.
+    fn look_zero_points_at_minus_z() {
+        // The axis contract from docs/conventions.md. If it falls, every model stands the
+        // wrong way round and nobody knows why.
         let i = Intent::default();
-        let b = i.blick();
-        assert!((b - Vec3::NEG_Z).length() < 1e-6, "blick war {b:?}");
+        let b = i.look_dir();
+        assert!((b - Vec3::NEG_Z).length() < 1e-6, "look_dir was {b:?}");
     }
 
     #[test]
-    fn blick_ist_immer_eine_einheit() {
+    fn look_is_always_a_unit_vector() {
         for yaw in [-3.0_f32, -1.0, 0.0, 0.7, 2.9] {
             for pitch in [-1.5_f32, -0.3, 0.0, 0.3, 1.5] {
                 let i = Intent { yaw, pitch, ..default() };
-                let l = i.blick().length();
-                assert!((l - 1.0).abs() < 1e-5, "yaw {yaw} pitch {pitch} ergab Laenge {l}");
+                let l = i.look_dir().length();
+                assert!((l - 1.0).abs() < 1e-5, "yaw {yaw} pitch {pitch} gave length {l}");
             }
         }
     }

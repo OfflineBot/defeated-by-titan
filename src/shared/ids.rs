@@ -1,65 +1,63 @@
-//! Stabile Ids — **nie** Bevys `Entity` fuer etwas, das gespeichert oder verschickt wird.
+//! Stable ids — **never** Bevy's `Entity` for anything that gets saved or sent.
 //!
-//! `Entity` ist ein lokaler Index mit Generation. Auf einem anderen Rechner bedeutet
-//! dieselbe Zahl etwas anderes, und nach einem Neustart ebenfalls. Eigene Ids kosten heute
-//! eine Zeile und retten spaeter den Netzcode **und** den Spielstand
-//! (`prompts/init.md` §6 Regel 7).
+//! `Entity` is a local index with a generation. On another machine the same number means
+//! something else, and after a restart it does too. Ids of our own cost one line today and
+//! later save the netcode **and** the save game (`prompts/init.md` §6 rule 7).
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Wer ein Spieler ist — ueber Sitzungen, Verbindungsabbrueche und Rechner hinweg.
+/// Who a player is — across sessions, dropped connections and machines.
 ///
-/// Ein Verbindungsabbruch reserviert den Platz 120 s (Bibel 3.6): der Zustand haengt an
-/// dieser Id, nicht an einer Verbindung und nicht an einer `Entity`.
+/// A dropped connection reserves the seat for 120 s (bible 3.6): the state hangs on this id,
+/// not on a connection and not on an `Entity`.
 #[derive(Component, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 pub struct PlayerId(pub u32);
 
-/// Wer ein Titan ist. Gleiche Begruendung wie [`PlayerId`].
+/// Who a titan is. Same reasoning as [`PlayerId`].
 #[derive(Component, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 pub struct TitanId(pub u32);
 
-/// Wer ein **Koerper** in der Welt ist — Haus, Dach, Boden, spaeter eine Titanenschulter.
+/// Who a **body** in the world is — house, roof, ground, later a titan's shoulder.
 ///
-/// Ein Haken merkt sich diese Id und **nicht** die Position und **nicht** die `Entity`:
-/// Positionen bewegen sich (`F-029`), `Entity` bedeutet auf einem anderen Rechner etwas
-/// anderes. Verschwindet der Traeger — Titanentod, entladener Bereich (`T-020`) —, meldet
-/// der raeumliche Index das ueber `KoerperWeg` und der Haken loest mit
-/// `Loesegrund::TraegerWeg`.
+/// A hook remembers this id and **not** the position and **not** the `Entity`: positions
+/// move (`F-029`), and `Entity` means something else on another machine. When the carrier
+/// disappears — a titan dies, an area is unloaded (`T-020`) — the spatial index reports that
+/// through `BodyGone` and the hook releases with `ReleaseReason::BodyGone`.
 #[derive(Component, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
-pub struct KoerperId(pub u32);
+pub struct BodyId(pub u32);
 
-/// **Die einzige Stelle im Code, die weiss, welcher Spieler „ich" bin.**
+/// **The only place in the code that knows which player is "me".**
 ///
-/// Daran haengt die Kamera, daran haengt das HUD — und sonst nichts. Jedes System, das
-/// stattdessen `.single()` auf eine Spieler-Query schreibt, macht aus dem Spiel ein
-/// Einzelspieler-Spiel, und das merkt niemand, bis Multiplayer drankommt
-/// (`prompts/init.md` §6 Regel 3, geprueft von `tests/mehrspieler.rs`).
+/// The camera hangs on it, the HUD hangs on it — and nothing else. Every system that writes
+/// `.single()` on a player query instead turns the game into a single-player game, and
+/// nobody notices until multiplayer comes around (`prompts/init.md` §6 rule 3, checked by
+/// `tests/multiplayer.rs`).
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct LocalPlayer;
 
-/// Vergibt fortlaufende Ids. Teil des Zustands, damit zwei Rechner dieselbe Reihenfolge
-/// bekommen — deshalb eine Resource mit Zaehler und kein Zufall.
+/// Hands out consecutive ids. Part of the state, so that two machines get the same order —
+/// hence a resource with a counter and not randomness.
 #[derive(Resource, Clone, Copy, Debug, Default, Serialize, Deserialize)]
-pub struct IdZaehler {
-    pub spieler: u32,
+pub struct IdCounter {
+    pub player: u32,
     pub titan: u32,
-    pub koerper: u32,
+    pub body: u32,
 }
 
-impl IdZaehler {
-    pub fn naechster_spieler(&mut self) -> PlayerId {
-        self.spieler += 1;
-        PlayerId(self.spieler)
+impl IdCounter {
+    pub fn next_player(&mut self) -> PlayerId {
+        self.player += 1;
+        PlayerId(self.player)
     }
 
-    pub fn naechster_titan(&mut self) -> TitanId {
+    pub fn next_titan(&mut self) -> TitanId {
         self.titan += 1;
         TitanId(self.titan)
     }
 
-    pub fn naechster_koerper(&mut self) -> KoerperId {
-        self.koerper += 1;
-        KoerperId(self.koerper)
+    pub fn next_body(&mut self) -> BodyId {
+        self.body += 1;
+        BodyId(self.body)
     }
 }

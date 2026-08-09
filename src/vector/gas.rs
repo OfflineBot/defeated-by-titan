@@ -1,28 +1,28 @@
-//! `F-018` Das Gaskonto — **die einzige Stelle, die `Gas` abbucht.**
+//! `F-018` The gas budget — **the only place that debits `Gas`.**
 //!
-//! Ohne diesen Umweg riefen `F-007` (Boost) und `F-005` (Reel-In) beide
-//! `Gas::verbrauchen`. Die Methode ist bewusst atomar und ohne Teilverbrauch
-//! (`shared::zustand`), also entschiede bei knappem Tank die **Systemreihenfolge**, wer
-//! zahlt — der Muenzwurf mit 60 Hz, den `docs/architektur.md` verbietet, und im Netz ein
-//! Desync, den niemand reproduziert.
+//! Without this detour `F-007` (boost) and `F-005` (reel-in) would both call
+//! `Gas::try_spend`. That method is deliberately atomic and without partial spending
+//! (`shared::state`), so on a tight tank the **system order** would decide who pays — the
+//! coin toss at 60 Hz that `docs/architecture.md` forbids, and on the network a desync
+//! nobody reproduces.
 //!
-//! Hier wird **einmal pro Tick** gebucht und das Ergebnis als [`Gasfreigabe`]
-//! veroeffentlicht. Wer dort `false` liest, traegt null in seinen Antrieb ein.
+//! Here it is booked **once per tick** and the result published as [`GasGrant`]. Whoever
+//! reads `false` there writes zero into his drive.
 //!
-//! Die **Rangfolge** bei knappem Tank steht in `assets/data/game.ron`
-//! (`vector.gas_rangfolge`), nicht als `if` hier: „was geht zuerst aus?" ist eine
-//! Spielwertentscheidung (`docs/FRAGEN.md` Q-017).
+//! The **priority** on a tight tank lives in `assets/data/game.ron`
+//! (`vector.gas_priority`), not as an `if` here: "what runs out first?" is a balancing
+//! decision (`docs/QUESTIONS.md` Q-017).
 
 use bevy::prelude::*;
 
 use crate::data::GameData;
-use crate::shared::{Gas, Gasfreigabe, Haken, Intent};
+use crate::shared::{Gas, GasGrant, Hook, Intent};
 
-/// Bucht das Gas dieses Ticks ab und schreibt [`Gasfreigabe`].
-// gefuellt von Auftrag G — F-018
-pub fn gaskonto(
+/// Debits this tick's gas and writes [`GasGrant`].
+// filled in by job G — F-018
+pub fn gas_budget(
     _zeit: Res<Time<Fixed>>,
     _daten: Res<GameData>,
-    mut _spieler: Query<(&Intent, &Haken, &mut Gas, &mut Gasfreigabe)>,
+    mut _spieler: Query<(&Intent, &Hook, &mut Gas, &mut GasGrant)>,
 ) {
 }

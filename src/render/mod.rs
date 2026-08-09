@@ -1,55 +1,55 @@
-//! render — Kamera, Licht, Meshes bauen.
+//! render — camera, light, building meshes.
 //!
-//! **Liest nur.** Rendering ist Darstellung, nicht Simulation — ein System, das aus einem
-//! Mausklick direkt ein Mesh spawnt, ist der Anfang vom Ende, denn genau dieser Klick muss
-//! spaeter vom Server bestaetigt werden (`prompts/init.md` §6 Regel 1).
+//! **Reads only.** Rendering is presentation, not simulation — a system that spawns a mesh
+//! straight out of a mouse click is the beginning of the end, because that very click has to
+//! be confirmed by the server later (`prompts/init.md` §6 rule 1).
 //!
-//! Der Stil ist vorgegeben: Low Poly, weiche Normalen, flache Farbflaechen, aggressiver
-//! Fernnebel (er arbeitet doppelt: Atmosphaere und Culling). Die drei Signalfarben
-//! ausschliesslich fuer Gameplay (`docs/konventionen.md`).
+//! The style is fixed: low poly, soft normals, flat color surfaces, aggressive distance fog
+//! (it does double duty: atmosphere and culling). The three signal colors are for gameplay
+//! and nothing else (`docs/conventions.md`).
 //!
-//! ⚠️ Nichts davon ist je **gesehen** worden — auf Maschine A gibt es kein Fenster
-//! (`docs/umgebung.md`). Alles hier bleibt 🟨, bis jemand auf Maschine B draufschaut.
+//! ⚠️ None of this has ever been **seen** — machine A has no window
+//! (`docs/environment.md`). Everything here stays 🟨 until somebody on machine B looks at it.
 
-//! **Stand der Naht:** [`kamera::kamera_drehen`] ist seit 2026-08-09 gefuellt — Bild und
-//! Zielstrahl zeigen in dieselbe Richtung, festgenagelt in `tests/render.rs` und gesehen in
-//! `docs/bilder/f002-blick.png` / `docs/bilder/f002-blick-gedreht.png`.
-//! [`seil::seile_zeichnen`] ist weiter registriert und leer.
+//! **Where the seam stands:** [`camera::rotate_camera`] has been filled since 2026-08-09 —
+//! image and aim ray point the same way, nailed down in `tests/render.rs` and seen in
+//! `docs/images/f002-look.png` / `docs/images/f002-look-turned.png`.
+//! [`rope::draw_ropes`] is still registered and still empty.
 
-pub mod kamera;
-pub mod seil;
+pub mod camera;
+pub mod rope;
 
 use bevy::prelude::*;
 
 use crate::data::GameData;
-use crate::shared::{Bauklotz, LocalPlayer};
+use crate::shared::{Block, LocalPlayer};
 
 pub struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, licht_aufbauen).add_systems(
+        app.add_systems(Startup, setup_light).add_systems(
             Update,
-            (kamera_anhaengen, kloetze_bauen, kamera::kamera_drehen, seil::seile_zeichnen),
+            (attach_camera, build_block_meshes, camera::rotate_camera, rope::draw_ropes),
         );
     }
 }
 
-/// Sonne und Grundhelligkeit.
+/// Sun and ambient brightness.
 ///
-/// ⚠️ Schatten sind **aus**. Sie sind der teuerste Schalter im Spiel — erst am Ende, und dann
-/// mit einer Zahl daneben (`docs/lessons/performance.md`).
-fn licht_aufbauen(mut commands: Commands) {
+/// ⚠️ Shadows are **off**. They are the most expensive switch in the game — last of all, and
+/// then with a number beside it (`docs/lessons/performance.md`).
+fn setup_light(mut commands: Commands) {
     commands.spawn((
-        Name::new("sonne"),
+        Name::new("sun"),
         DirectionalLight {
             illuminance: 10_000.0,
-            // Schatten sind der teuerste Schalter im Spiel — erst am Ende, mit Zahl.
-            // `shadow_maps_enabled` ist der Schalter, der wirklich etwas kostet.
-            // (`contact_shadows_enabled` steht hier bewusst NICHT: es wirkt allein gar
-            // nicht — Kontaktschatten brauchen zusaetzlich eine `ContactShadows`-Komponente
-            // an der Kamera. Ein Feld, das man fuer einen Schalter haelt, obwohl es keiner
-            // ist, ist schlimmer als kein Feld.)
+            // Shadows are the most expensive switch in the game — last of all, with a
+            // number. `shadow_maps_enabled` is the switch that really costs something.
+            // (`contact_shadows_enabled` is deliberately NOT here: on its own it does
+            // nothing at all — contact shadows additionally need a `ContactShadows`
+            // component on the camera. A field you take for a switch when it is none is
+            // worse than no field.)
             shadow_maps_enabled: false,
             ..default()
         },
@@ -57,60 +57,60 @@ fn licht_aufbauen(mut commands: Commands) {
     ));
 }
 
-/// Haengt die Kamera an den lokalen Spieler.
+/// Hangs the camera on the local player.
 ///
-/// **Das ist die einzige Stelle, an der „ich" eine Kamera bekommt.** Jeder andere Spieler ist
-/// einer von vielen und hat keine (§6 Regel 3).
+/// **This is the only place where "I" get a camera.** Every other player is one of many and
+/// has none (§6 rule 3).
 ///
-/// `AmbientLight` haengt in Bevy 0.19 an der **Kamera**, nicht an der Welt — es ist ein
-/// Component mit `#[require(Camera)]` und kein `Resource` mehr (`docs/lessons/bevy.md`).
-fn kamera_anhaengen(
+/// In Bevy 0.19 `AmbientLight` hangs on the **camera**, not on the world — it is a component
+/// with `#[require(Camera)]` and no longer a `Resource` (`docs/lessons/bevy.md`).
+fn attach_camera(
     mut commands: Commands,
-    daten: Res<GameData>,
-    neu: Query<Entity, (With<LocalPlayer>, Without<Children>)>,
-    schon_da: Query<(), With<Camera3d>>,
+    data: Res<GameData>,
+    new_players: Query<Entity, (With<LocalPlayer>, Without<Children>)>,
+    existing: Query<(), With<Camera3d>>,
 ) {
-    if !schon_da.is_empty() {
+    if !existing.is_empty() {
         return;
     }
-    let Some(spieler) = neu.iter().next() else {
+    let Some(player) = new_players.iter().next() else {
         return;
     };
-    let k = &daten.spiel.kamera;
-    let kamera = commands
+    let k = &data.game.camera;
+    let camera = commands
         .spawn((
-            Name::new("kamera"),
+            Name::new("camera"),
             Camera3d::default(),
             Projection::Perspective(PerspectiveProjection {
-                fov: k.sicht_grad.to_radians(),
+                fov: k.fov_deg.to_radians(),
                 ..default()
             }),
             AmbientLight { brightness: 220.0, ..default() },
-            // Augenhoehe ueber dem Ursprung des Spielers — der liegt zwischen den Fuessen
-            // (docs/konventionen.md).
-            Transform::from_xyz(0.0, daten.spiel.spieler.augenhoehe_m, 0.0),
+            // Eye height above the player's origin — which lies between the feet
+            // (docs/conventions.md).
+            Transform::from_xyz(0.0, data.game.player.eye_height_m, 0.0),
         ))
         .id();
-    commands.entity(spieler).add_child(kamera);
+    commands.entity(player).add_child(camera);
 }
 
-/// Macht aus [`Bauklotz`]-Daten Dreiecke — **einmal je Entity**.
+/// Turns [`Block`] data into triangles — **once per entity**.
 ///
-/// `render` kennt `world` dafuer nicht: es fragt nach einem Component, nicht nach einer
-/// Funktion (`docs/architektur.md`).
-fn kloetze_bauen(
+/// `render` does not know `world` for that: it asks for a component, not for a function
+/// (`docs/architecture.md`).
+fn build_block_meshes(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materialien: ResMut<Assets<StandardMaterial>>,
-    ohne_mesh: Query<(Entity, &Bauklotz), Without<Mesh3d>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    without_mesh: Query<(Entity, &Block), Without<Mesh3d>>,
 ) {
-    for (e, klotz) in &ohne_mesh {
-        let mesh = meshes.add(Cuboid::new(klotz.groesse.x, klotz.groesse.y, klotz.groesse.z));
-        let material = materialien.add(StandardMaterial {
-            base_color: Color::linear_rgb(klotz.farbe[0], klotz.farbe[1], klotz.farbe[2]),
-            // Fehlender metallicFactor bedeutet 1.0, also voll metallisch — ein
-            // Diffuse-Material ohne den Wert sieht im Spiel wie Chrom aus
-            // (docs/modelle.md, glTF-Falle 2). Hier gilt dasselbe.
+    for (e, block) in &without_mesh {
+        let mesh = meshes.add(Cuboid::new(block.size.x, block.size.y, block.size.z));
+        let material = materials.add(StandardMaterial {
+            base_color: Color::linear_rgb(block.color[0], block.color[1], block.color[2]),
+            // A missing metallicFactor means 1.0, i.e. fully metallic — a diffuse material
+            // without the value looks like chrome in the game (docs/models.md, glTF trap 2).
+            // The same holds here.
             metallic: 0.0,
             perceptual_roughness: 0.95,
             ..default()

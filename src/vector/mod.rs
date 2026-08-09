@@ -1,62 +1,62 @@
-//! vector — DER KERN: Haken, Seil, Schwung, Gas, Boost, Wandlauf
+//! vector — THE CORE: hooks, rope, momentum, gas, boost, wallrun
 //!
-//! **Das Spiel steht und faellt mit diesem Gefuehl — nicht mit der Titanen-KI.**
-//! Ein Spieler, der elegant durch die Stadt fliegt, ohne einen einzigen Titanen zu toeten,
-//! muss Spass haben. Wenn das nicht funktioniert, funktioniert nichts (Bibel 2, Pfeiler P1).
+//! **The game lives and dies by this feel — not by the Titan AI.**
+//! A player who flies elegantly through the city without killing a single Titan has to be
+//! having fun. If that does not work, nothing works (bible 2, pillar P1).
 //!
-//! Deshalb das harte Gate: **kein Meta-System, bevor die Bewegung ueberzeugt.** Und deshalb
-//! ist hier jede Zahl in `assets/data/game.ron` und keine im Code.
+//! Hence the hard gate: **no meta system before the movement convinces.** And hence every
+//! number here lives in `assets/data/game.ron` and none in the code.
 //!
-//! Zwei **unabhaengig** steuerbare Haken (`F-001`), Pendelphysik bei zwei gesetzten Haken
-//! (`F-004`), Reel-In (`F-005`), Swerve (`F-006`). Seilkraefte brauchen Wachen: eine
-//! Normalisierung auf Laenge 0 erzeugt NaN, und NaN im `Transform` sieht aus wie
-//! „der Spieler ist verschwunden" (§9d).
+//! Two **independently** steerable hooks (`F-001`), pendulum physics with two hooks set
+//! (`F-004`), reel-in (`F-005`), swerve (`F-006`). Rope forces need guards: normalizing a
+//! zero-length vector produces NaN, and NaN in the `Transform` looks like
+//! "the player has vanished" (§9d).
 //!
-//! **Stand:** die Naht steht, die Rechnungen fehlen. Fuenf Module, fuenf Dateien, fuenf
-//! Auftraege — **die Registrierung hier ist bereits vollstaendig**, damit spaeter kein
-//! Agent diese Datei anfassen muss und zwei Auftraege sich nicht um sie streiten
-//! (`docs/schnittstelle.md`, Dateibesitz).
+//! **Status:** the seam is in place, the math is missing. Five modules, five files, five
+//! jobs — **the registration here is already complete**, so that no agent has to touch this
+//! file later and no two jobs end up fighting over it
+//! (`docs/interface.md`, file ownership).
 //!
-//! | Datei | F-ID | schreibt |
+//! | File | F-ID | writes |
 //! |---|---|---|
-//! | `zielen.rs` | `F-002`, `F-003` | `Zielpunkt` |
-//! | `gas.rs` | `F-018` | `Gas`, `Gasfreigabe` |
-//! | `haken.rs` | `F-001` | `Haken`, `VorigeTasten` |
-//! | `schub.rs` | `F-007` | `AntriebSchub` |
-//! | `einholen.rs` | `F-005` | `AntriebEinholen` |
+//! | `aim.rs` | `F-002`, `F-003` | `AimPoint` |
+//! | `gas.rs` | `F-018` | `Gas`, `GasGrant` |
+//! | `hook.rs` | `F-001` | `Hook`, `PrevButtons` |
+//! | `boost.rs` | `F-007` | `BoostAccel` |
+//! | `reel.rs` | `F-005` | `ReelSpeed` |
 //!
-//! Was hier **nicht** steht: `Tempo`, `Transform`, `Seillaenge`. Die schreibt der Integrator
-//! in `player::koerper` — einer, nicht zwei.
+//! What is **not** here: `Velocity`, `Transform`, `RopeLength`. Those are written by the
+//! integrator in `player::integrator` — one writer, not two.
 
-pub mod einholen;
+pub mod reel;
 pub mod gas;
-pub mod haken;
-pub mod schub;
-pub mod zielen;
+pub mod hook;
+pub mod boost;
+pub mod aim;
 
 use bevy::prelude::*;
 
-use crate::shared::SchrittSet;
+use crate::shared::SimulationSystems;
 
 pub struct VectorPlugin;
 
 impl Plugin for VectorPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(FixedUpdate, zielen::zielen.in_set(SchrittSet::Welt))
-            // `.chain()`: das Gaskonto bucht, BEVOR der Haken schaltet — sonst haengt es an
-            // der Systemreihenfolge, ob ein frisch gesetzter Haken im selben Tick schon Gas
-            // kostet.
+        app.add_systems(FixedUpdate, aim::aim.in_set(SimulationSystems::World))
+            // `.chain()`: the gas budget is booked BEFORE the hook switches — otherwise it
+            // hangs on system order whether a freshly set hook already costs gas in the same
+            // tick.
             .add_systems(
                 FixedUpdate,
-                (gas::gaskonto, haken::haken_schalten).chain().in_set(SchrittSet::Absicht),
+                (gas::gas_budget, hook::update_hooks).chain().in_set(SimulationSystems::Intent),
             )
-            // **Bewusst ohne `.chain()`**: beide schreiben ihr eigenes Component mit
-            // Zuweisung, die `&mut`-Mengen sind disjunkt, also ist die Reihenfolge
-            // beweisbar egal — und Bevy laesst sie echt parallel laufen.
-            .add_systems(FixedUpdate, (schub::schub, einholen::einholen).in_set(SchrittSet::Antrieb))
+            // **Deliberately without `.chain()`**: both write their own component by
+            // assignment, the `&mut` sets are disjoint, so the order is provably
+            // irrelevant — and Bevy really does run them in parallel.
+            .add_systems(FixedUpdate, (boost::gas_boost, reel::reel_in).in_set(SimulationSystems::Drive))
             .add_systems(
                 FixedUpdate,
-                haken::vorige_tasten_sichern.in_set(SchrittSet::Nachlauf),
+                hook::store_prev_buttons.in_set(SimulationSystems::PostStep),
             );
     }
 }

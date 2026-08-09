@@ -1,166 +1,166 @@
-# workflow — du kannst nicht klicken, also baust du dir Start-Flags, einen Skript-Fahrer und ein Overlay, bevor du ein Feature baust
+# workflow — you cannot click, so you build launch flags, a script driver and an overlay before you build a feature
 
-Stand: 2026-08-09 · Stufe: 🟨 (aus `prompts/init.md` §12 aufgeschrieben — keins der
-beschriebenen Werkzeuge ist in diesem Repo bisher gebaut, also nichts davon gelaufen)
+Updated: 2026-08-09 · Stage: 🟨 (written down from `prompts/init.md` §12 — not one of the tools
+described here has been built in this repo so far, so none of it has run)
 
-## Der Fall
+## The problem
 
-Alles ist gebaut, nichts ist gesehen. Jedes Feature liegt hinter Maus und Tastatur, und am
-Keyboard sitzt niemand. Ein Hauptmenü ist für einen Agenten eine Wand ohne Tür: der Build
-läuft, das Fenster steht da, und es passiert nie irgendwas.
+Everything is built, nothing is seen. Every feature sits behind mouse and keyboard, and nobody
+is sitting at the keyboard. To an agent a main menu is a wall without a door: the build runs,
+the window stands there, and nothing ever happens.
 
-Die Quelle nennt das den Punkt, an dem solche Projekte scheitern. Die Folgerung ist
-unbequem: **die Prüfinfrastruktur ist Teil von Stufe 1**, nicht ein „wenn Zeit ist".
-`prompts/init.md` §13 listet für Stufe 1 ausdrücklich `--sandbox`, `--script`, F3-Overlay,
-einen Screenshot und `--headless` neben der Kamera und der Schwerkraft — im selben Kasten,
-nicht dahinter.
+The source calls this the point where projects like this one fail. The conclusion is
+uncomfortable: **the checking infrastructure is part of stage 1**, not a "when there is time".
+For stage 1, `prompts/init.md` §13 explicitly lists `--sandbox`, `--script`, the F3 overlay, a
+screenshot and `--headless` right next to the camera and gravity — in the same box, not behind
+it.
 
-## a) Start-Flags, die am Menü vorbeigehen
+## a) Launch flags that walk past the menu
 
-| Flag | wofür | was es kostet, wenn es fehlt |
+| Flag | what for | what it costs when it is missing |
 |---|---|---|
-| `--mission tutorial` | direkt in einen Einsatz, kein Menü | jeder Lauf endet im Hauptmenü |
-| `--sandbox` | leeres Feld, ein Titan, unendlich Gas — zum Anschauen | kein Ort, an dem man etwas isoliert sieht |
-| `--novsync` | zum Messen | unter Vsync misst du sechsmal 16,6 ms Deckel (§11) |
-| `--lag 200` | 200 ms simulierte Latenz (Bibel T-019) | jedes Bewegungsfeature wird nur lokal geprüft |
-| `--script <datei>` | das Spiel spielen, ohne zu tippen | siehe oben: niemand tippt |
-| `--headless` | kein Fenster, fester Tick, N Ticks, Exit-Code | auf Maschine A ist gar nichts prüfbar |
+| `--mission tutorial` | straight into a mission, no menu | every run ends in the main menu |
+| `--sandbox` | empty field, one titan, unlimited gas — for looking at things | nowhere to see anything in isolation |
+| `--novsync` | for measuring | under vsync you measure the 16.6 ms ceiling six times (§11) |
+| `--lag 200` | 200 ms of simulated latency (bible T-019) | every movement feature only ever gets checked locally |
+| `--script <file>` | playing the game without typing | see above: nobody types |
+| `--headless` | no window, fixed tick, N ticks, exit code | on machine A nothing at all is checkable |
 
 ```bash
 cargo run -- --mission tutorial
 cargo run -- --sandbox
 cargo run -- --novsync
 cargo run -- --lag 200
-cargo run -- --script <datei>
+cargo run -- --script <file>
 ```
 
-`--headless` steht nicht in §12, sondern in §13/§14: `primary_window: None`, fester Tick,
-läuft N Ticks und **beendet sich mit einem Exit-Code**, der sagt, ob alle `assert` gehalten
-haben. Ohne dieses Flag ist `--script` auf einer Maschine ohne Grafiksitzung wertlos.
+`--headless` is not in §12 but in §13/§14: `primary_window: None`, a fixed tick, runs N ticks
+and **ends with an exit code** that says whether every `assert` held. Without this flag
+`--script` is worthless on a machine with no graphics session.
 
-## b) `--script` — der Fahrer
+## b) `--script` — the driver
 
-Eine Textdatei, **eine Anweisung pro Zeile**. Sie schreibt in **dieselben Eingaben, die ein
-Mensch auslöst** (`ButtonInput<KeyCode>`, `ButtonInput<MouseButton>`, dazu ein
-„so-tun-als"-Blickvektor). **Kein zweiter, falscher Weg zu spielen** — jedes System dahinter
-ist das echte. Wer einen Nebeneingang baut, testet den Nebeneingang.
+A text file, **one instruction per line**. It writes into **the same input a human triggers**
+(`ButtonInput<KeyCode>`, `ButtonInput<MouseButton>`, plus a "pretend" look vector). **No second,
+false way to play** — every system behind it is the real one. Build a side entrance and you test
+the side entrance.
 
 ```text
-spawn titan normal 20 0 -40   # Typ und Ort in Metern
-look 0 -10                    # Blickrichtung in Grad (yaw, pitch)
-key Space 0.3                 # Taste 0,3 s halten
-hook left                     # Haken raus
-wait 1.2                      # Commands sind verzoegert — sonst fotografierst du ein leeres Feld
-mark eingehakt                # eine Zeile ins Log, an der man einen Screenshot ausrichtet
-assert speed > 25             # das Skript darf selbst urteilen
+spawn titan normal 20 0 -40   # kind and position in meters
+look 0 -10                    # look direction in degrees (yaw, pitch)
+key Space 0.3                 # hold the key for 0.3 s
+hook left                     # hook out
+wait 1.2                      # commands are delayed — otherwise you photograph an empty field
+mark anchored                 # a line in the log to line a screenshot up with
+assert speed > 25             # the script is allowed to judge for itself
 ```
 
-| Anweisung | Einheit / Bedeutung | die Falle dahinter |
+| Instruction | Unit / meaning | the trap behind it |
 |---|---|---|
-| `spawn` | Ort in **Metern** | — |
-| `look` | yaw, pitch in **Grad** | — |
-| `key` | Haltedauer in **Sekunden** (`0.3`) | — |
-| `wait` | Sekunden | **Commands sind verzögert** — ohne `wait` fotografierst du ein leeres Feld |
-| `mark` | Logzeile als Anker | ohne Anker weiss niemand, wann der Screenshot fiel |
-| `assert` | Bedingung, die halten muss | ohne `assert` ist es eine Demo, kein Test |
-| `warp` | Koordinate anspringen (§12c) | — |
+| `spawn` | position in **meters** | — |
+| `look` | yaw, pitch in **degrees** | — |
+| `key` | hold time in **seconds** (`0.3`) | — |
+| `wait` | seconds | **commands are delayed** — without `wait` you photograph an empty field |
+| `mark` | a log line as an anchor | without an anchor nobody knows when the screenshot was taken |
+| `assert` | a condition that has to hold | without `assert` it is a demo, not a test |
+| `warp` | jump to a coordinate (§12c) | — |
 
-**Warum `assert` der ganze Trick ist:** damit wird aus einer Fahrt ein Test. Bewegungsgefühl
-ist genau die Sorte Sache, die kein Unit-Test greift — „hakt ein und ist danach schneller
-als 25" lässt sich nicht als reine Funktion prüfen, als Skriptlauf schon. Fällt der `assert`
-um, fällt der Exit-Code um, und das gilt auf jeder Maschine und eines Tages in einem CI.
+**Why `assert` is the whole trick:** it turns a run into a test. The feel of movement is exactly
+the kind of thing no unit test gets hold of — "anchors, and is faster than 25 afterwards" cannot
+be checked as a pure function, but it can as a script run. If the `assert` falls over, the exit
+code falls over, and that holds on every machine and one day in a CI.
 
-## c) F3-Overlay — jede Meldung nachstellbar
+## c) F3 overlay — every report reproducible
 
-Ins Bild gehören laut Quelle: Position, Blickrichtung, Geschwindigkeit, Gas, Hakenzustand,
-Bildzeit. Dazu `warp x y z` + `look` im Skript. Damit schickt der User eine Koordinate und
-du stehst genau dort. Die Quelle bewertet das als **mehr wert als jedes Bug-Formular**.
+According to the source these belong on screen: position, look direction, speed, gas, hook
+state, frame time. Together with `warp x y z` + `look` in the script. With that the user sends a
+coordinate and you stand exactly there. The source rates this as **worth more than any bug
+report form**.
 
-## d) Screenshots — **nur Maschine B**, hier nicht
+## d) Screenshots — **machine B only**, not here
 
-⚠️ **Auf dieser Maschine (`debian`, Maschine A) gibt es keine Grafiksitzung und kein
-`niri`.** Gemessen in [`docs/umgebung.md`](../umgebung.md): `WAYLAND_DISPLAY` und `DISPLAY`
-beide leer, `command -v niri` leer. Der folgende Abschnitt ist **nicht** ausführbar hier; er
-gilt für `offlinebot` (Maschine B, niri/Wayland).
+⚠️ **On this machine (`debian`, machine A) there is no graphics session and no `niri`.**
+Measured in [`docs/environment.md`](../environment.md): `WAYLAND_DISPLAY` and `DISPLAY` both
+empty, `command -v niri` empty. The section that follows is **not** executable here; it applies
+to `offlinebot` (machine B, niri/Wayland).
 
 ```bash
 setsid nohup cargo run -- --sandbox > /tmp/dbt.log 2>&1 < /dev/null & disown
-sleep 20   # der erste Build dauert
+sleep 20   # the first build takes a while
 ID=$(niri msg --json windows | python3 -c "import sys,json;print([w['id'] for w in json.load(sys.stdin) if (w.get('title') or '')=='Defeated by Titan'][0])")
-niri msg action focus-window --id $ID   # SONST drosselt der Compositor auf ~5 fps
+niri msg action focus-window --id $ID   # OTHERWISE the compositor throttles to ~5 fps
 sleep 2
 niri msg action screenshot-window --id $ID
 ```
 
-Die Bilder landen in `~/Pictures/Screenshots/`. **Kopieren nach `docs/bilder/` und in
-`STATUS.md` verlinken** — ein Screenshot, den niemand mehr findet, ist kein Beleg.
+The images land in `~/Pictures/Screenshots/`. **Copy them to `docs/images/` and link them in
+`STATUS.md`** — a screenshot nobody can find again is not evidence.
 
-| Falle | woran man sie erkennt | was man stattdessen tut |
+| Trap | how you recognize it | what you do instead |
 |---|---|---|
-| unfokussiertes Fenster | ~5 fps, sieht **exakt** wie eine Regression aus | vor **jeder** fps-Messung `focus-window`, dann messen |
-| mehrere Instanzen | — | prüfen, dass nur **eine** Instanz läuft — sonst fotografierst du alten Code |
-| zu früh geschossen | leeres Feld, obwohl `spawn` im Skript steht | `sleep 20` nach dem Start, `wait` im Skript, `mark` als Anker |
+| an unfocused window | ~5 fps, looks **exactly** like a regression | `focus-window` before **every** fps measurement, then measure |
+| several instances | — | check that only **one** instance is running — otherwise you photograph old code |
+| shot too early | an empty field although `spawn` is in the script | `sleep 20` after the start, `wait` in the script, `mark` as the anchor |
 
-## Der Fall „gar keine Grafiksitzung"
+## The case of "no graphics session at all"
 
-Kein `WAYLAND_DISPLAY`, kein `DISPLAY` → `cargo run` **panikt sofort**. Dann gibt es **kein
-Bild**. Dann:
+No `WAYLAND_DISPLAY`, no `DISPLAY` → `cargo run` **panics immediately**. Then there is **no
+image**. Then:
 
-- Die Sache bleibt **🟨**, mit dem Vermerk *„Logik getestet, Pixel ungesehen — Maschine A"* (§14).
-- Du bittest den User draufzuschauen.
-- **Nicht aufrunden.** Kein „sieht sicher richtig aus". 🟧 setzt nur, wer etwas gesehen hat;
-  ✅ setzt nur der User.
+- The item stays **🟨**, with the note *"logic tested, pixels unseen — machine A"* (§14).
+- You ask the user to take a look.
+- **Do not round up.** No "it surely looks right". Only somebody who has seen something sets
+  🟧; only the user sets ✅.
 
-Das ist keine Blockade: `cargo test`, `--headless`-Skriptläufe mit `assert`,
-`blender --background` und Doku laufen hier vollständig (§14). Nur der Beweis per Pixel
-fehlt — und der wird dann eben ausgewiesen und nicht behauptet.
+That is not a blockade: `cargo test`, `--headless` script runs with `assert`,
+`blender --background` and the docs all run here in full (§14). Only the proof in pixels is
+missing — and then it is declared as missing instead of claimed.
 
-**Lücke:** §14 lässt Offscreen-Rendering in eine PNG als Ausnahme zu, aber **erst wenn
-bewiesen ist**, dass es auf dieser Maschine wirklich ein Bild liefert. Bisher nicht bewiesen
-(siehe [`docs/FRAGEN.md`](../FRAGEN.md) Q-009).
+**Gap:** §14 allows offscreen rendering into a PNG as an exception, but **only once it is
+proven** that it really delivers an image on this machine. Not proven so far (see
+[`docs/QUESTIONS.md`](../QUESTIONS.md) Q-009).
 
-## e) Recherche und Assets — erlaubt, mit drei Bedingungen
+## e) Research and assets — allowed, on three conditions
 
-Ausdrücklich erlaubt und erwünscht: YouTube (Bewegungs- und Level-Design ansehen —
-Ankerdichte, Dachhöhen, Gassenbreiten), Google/Bilder-Suche für Referenzen, Fachartikel zu
-Seilphysik/Netcode/Audio-Synthese, und die **Doku der installierten Bevy-Version** (laut §3
-die wichtigste Quelle von allen). Skripte sind zulässig: `yt-dlp` für Untertitel und
-Beschreibungen, `curl`, ein kleines Parse-Skript.
+Explicitly allowed and wanted: YouTube (watching movement and level design — anchor density,
+roof heights, street widths), Google / image search for references, technical articles on rope
+physics, netcode and audio synthesis, and the **docs of the installed Bevy version** (per §3 the
+most important source of all). Scripts are permitted: `yt-dlp` for subtitles and descriptions,
+`curl`, a small parsing script.
 
-**Assets herunterladen ist erlaubt — es ist ein Prototyp.** Modelle, Klänge,
-Musik-Platzhalter. Der User ersetzt später ohnehin alles selbst (§7); bis dahin ist ein
-guter Prototyp mehr wert als eigene Polygone. Als Startpunkte nennt die Quelle (nicht als
-Vorschrift): Kenney, Poly Pizza, OpenGameArt, Quaternius, Sketchfab mit CC-Filter, Freesound
-(CC0), Pixabay.
+**Downloading assets is allowed — this is a prototype.** Models, sounds, placeholder music. The
+user replaces all of it himself later anyway (§7); until then a good prototype is worth more
+than polygons of our own. As starting points the source names (not as a prescription): Kenney,
+Poly Pizza, OpenGameArt, Quaternius, Sketchfab with the CC filter, Freesound (CC0), Pixabay.
 
-| Regel | Warum, und was sonst passiert |
+| Rule | Why, and what happens otherwise |
 |---|---|
-| Alles Fremde nach `assets/extern/` + Zeile in `HERKUNFT.md` + `herkunft:` in der Registratur (§7) | ohne diese drei ist es ein **Zombie** (§10) — der User findet es später nicht, um es zu ersetzen |
-| `assets/extern/` **nicht** ins öffentliche Repo | es ist ignoriert; `tools/hole_extern.sh` beschafft es wieder (§7) |
-| Zahlen und Erkenntnisse mit Quelle nach `docs/gameplay/referenzen.md` | *„Gassen sind 8–12 m breit, damit ein Haken beide Seiten erreicht"* — **eine Zahl ohne Herkunft ist eine Behauptung** (§9) |
-| Referenzbilder nach `gameplay/bilder/` bzw. `docs/gameplay/referenzen/`, mit URL und Datum | sonst ist das Bild in einer Woche ein anonymes JPG |
-| Bei Widerspruch gewinnt die Wirklichkeit | ein Blogpost über Bevy-Versionen ist keine Quelle, die installierte Doku ist eine |
+| Everything third-party into `assets/extern/` + a line in `ATTRIBUTION.md` + `attribution:` in the registry (§7) | without those three it is a **zombie** (§10) — the user will not find it later to replace it |
+| `assets/extern/` does **not** go into the public repo | it is ignored; `tools/fetch_extern.sh` obtains it again (§7) |
+| Numbers and findings with their source into `docs/gameplay/references.md` | *"streets are 8–12 m wide so that one hook reaches both sides"* — **a number without an attribution is a claim** (§9) |
+| Reference images into `gameplay/bilder/` or `docs/gameplay/references/`, with URL and date | otherwise the image is an anonymous JPG in a week |
+| Where they contradict each other, reality wins | a blog post about Bevy versions is not a source, the installed docs are one |
 
-Das Wertvollste an einer Recherche ist selten die Datei, sondern die **Zahl** — und die ist
-nur so viel wert wie die Herkunftszeile daneben.
+The most valuable thing about a piece of research is rarely the file, it is the **number** — and
+that is worth exactly as much as the attribution line next to it.
 
-## Was das für die Reihenfolge heisst
+## What that means for the order of work
 
-| zuerst | dann |
+| first | then |
 |---|---|
-| `--sandbox`, `--script`, `--headless`, F3-Overlay | das erste Feature, das man damit anschauen will |
-| `mark` + `assert` in jedem Skript | ein Screenshot, der zu einer Logzeile passt |
-| `hostname` (§14) | die Entscheidung, ob heute überhaupt ein Bild möglich ist |
+| `--sandbox`, `--script`, `--headless`, the F3 overlay | the first feature you want to look at with them |
+| `mark` + `assert` in every script | a screenshot that matches a log line |
+| `hostname` (§14) | the decision whether an image is possible today at all |
 
-**Lücke:** In diesem Repo ist bisher **keines** dieser Werkzeuge gebaut — keine Flags, kein
-Skriptformat, kein Overlay. `src/` gibt es, aber `src/main.rs` ist ein Platzhalter
-(`MinimalPlugins`). Diese Datei ist die Vorgabe, nicht der Befund. Sobald das erste
-Skript wirklich mit Exit-Code 0 durchläuft, gehört die Zahl hierher.
+**Gap:** in this repo **none** of these tools has been built so far — no flags, no script
+format, no overlay. `src/` exists, but `src/main.rs` is a placeholder (`MinimalPlugins`). This
+file is the requirement, not the finding. As soon as the first script really runs through with
+exit code 0, the number belongs here.
 
-Verwandt: [`docs/umgebung.md`](../umgebung.md) · [`docs/lessons/umgebung.md`](umgebung.md) ·
-[`docs/lessons/arbeitsweise.md`](arbeitsweise.md) ·
+Related: [`docs/environment.md`](../environment.md) · [`docs/lessons/environment.md`](environment.md) ·
+[`docs/lessons/supervision.md`](supervision.md) ·
 [`docs/lessons/performance.md`](performance.md) · [`docs/STATUS.md`](../STATUS.md) ·
 [`docs/TODO.md`](../TODO.md) · [`docs/BUGS.md`](../BUGS.md) ·
-[`docs/FRAGEN.md`](../FRAGEN.md) · [`docs/ROADMAP.md`](../ROADMAP.md) ·
-[`docs/konventionen.md`](../konventionen.md) — Quelle: `prompts/init.md` §12 (Z. 1176–1264),
-`--headless` aus §13/§14.
+[`docs/QUESTIONS.md`](../QUESTIONS.md) · [`docs/ROADMAP.md`](../ROADMAP.md) ·
+[`docs/conventions.md`](../conventions.md) — source: `prompts/init.md` §12 (lines 1176–1264),
+`--headless` from §13/§14.

@@ -1,104 +1,102 @@
-//! Der Waechter ueber den Achsen-Vertrag der Kamera.
+//! The guard over the camera's axis contract.
 //!
-//! **Bild und Zielstrahl muessen in dieselbe Richtung zeigen.** Bis 2026-08-09 taten sie das
-//! nicht: `render::kamera::kamera_drehen` war ein leerer Rumpf, die Kamera blickte immer nach
-//! −Z, und `intent.blick()` ging dorthin, wohin der Spieler zielt. Ein Fehler dieser Sorte
-//! macht **jedes Bildkriterium des Projekts wertlos**, ohne dass er auffaellt: das Bild sieht
-//! plausibel aus, es zeigt nur etwas anderes als das, was gemessen wird.
+//! **Image and aim ray have to point the same way.** Until 2026-08-09 they did not:
+//! `render::camera::rotate_camera` was an empty body, the camera always looked at −Z, and
+//! `intent.look_dir()` went where the player aims. A bug of this kind makes **every image
+//! criterion in the project worthless** without ever drawing attention to itself: the image
+//! looks plausible, it just shows something other than what is being measured.
 //!
-//! Diese Datei nagelt die Gleichheit fest. Sie faellt um, wenn jemand ein Vorzeichen dreht,
-//! die Drehreihenfolge tauscht, die Pitch-Klemmung entfernt — oder `kamera_drehen` wieder
-//! leert.
+//! This file nails that equality down. It falls over when somebody flips a sign, swaps the
+//! rotation order, removes the pitch clamp — or empties `rotate_camera` again.
 //!
-//! **Warum die Tests nur `Update` fahren und nicht `app.update()`:** `app.update()` laeuft
-//! ueber `First`, wo `Time<Virtual>` aus der **Echtzeit** gefuellt wird. Je nach Laune der
-//! Maschine kaeme dabei ein fester Schritt zustande, und `net::lokal::tastatur_lesen` wuerde
-//! das gerade gesetzte `Intent` mit dem Blick der (nicht vorhandenen) Maus ueberschreiben.
-//! Ein Test, dessen Ergebnis von der Tageslaune der Maschine abhaengt, misst die Maschine.
+//! **Why the tests run only `Update` and not `app.update()`:** `app.update()` goes through
+//! `First`, where `Time<Virtual>` is filled from **wall clock time**. Depending on the
+//! machine's mood a fixed step would happen, and `net::local::read_input` would overwrite the
+//! `Intent` just set with the look direction of the (nonexistent) mouse. A test whose result
+//! depends on the machine's mood that day measures the machine.
 
 use bevy::prelude::*;
 use defeated_by_titan::data::GameData;
-use defeated_by_titan::shared::{Intent, LocalPlayer, Start};
+use defeated_by_titan::shared::{Intent, LocalPlayer, Cli};
 
-/// Baut die **echte** App, headless — nicht eine zweite, aehnliche.
+/// Builds the **real** app, headless — not a second, similar one.
 ///
-/// Zwei Durchlaeufe: `Commands` wirken erst am Ende ihres Laufs, der Spieler entsteht in
-/// `Startup` und `render::kamera_anhaengen` haengt die Kamera erst danach an ihn.
+/// Two passes: `Commands` only take effect at the end of their run, the player comes into
+/// being in `Startup`, and `render::attach_camera` only hangs the camera on him afterwards.
 fn app() -> App {
-    let mut app = defeated_by_titan::app(Start { headless: true, ..default() });
+    let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
     app.update();
     app.update();
     app
 }
 
-/// Setzt den Blickwunsch am lokalen Spieler (in **Grad**, wie in Skript und RON) und gibt
-/// zurueck, wohin die Kamera danach schaut.
-fn blicken(app: &mut App, yaw_grad: f32, pitch_grad: f32) -> Vec3 {
-    let spieler = lokaler_spieler(app);
+/// Sets the desired look direction on the local player (in **degrees**, as in the script
+/// language and in RON) and returns where the camera looks afterwards.
+fn look(app: &mut App, yaw_deg: f32, pitch_deg: f32) -> Vec3 {
+    let player = local_player(app);
     {
         let mut intent = app
             .world_mut()
-            .get_mut::<Intent>(spieler)
-            .expect("der lokale Spieler hat ein Intent");
-        intent.yaw = yaw_grad.to_radians();
-        intent.pitch = pitch_grad.to_radians();
+            .get_mut::<Intent>(player)
+            .expect("the local player has an intent");
+        intent.yaw = yaw_deg.to_radians();
+        intent.pitch = pitch_deg.to_radians();
     }
     app.world_mut().run_schedule(Update);
-    kamera_vorwaerts(app)
+    camera_forward(app)
 }
 
-fn lokaler_spieler(app: &mut App) -> Entity {
+fn local_player(app: &mut App) -> Entity {
     let mut q = app.world_mut().query_filtered::<Entity, With<LocalPlayer>>();
     q.iter(app.world())
         .next()
-        .expect("es muss einen lokalen Spieler geben")
+        .expect("there must be a local player")
 }
 
-/// Der Vorwaertsvektor der Kamera.
+/// The camera's forward vector.
 ///
-/// Der `Transform` der Kamera ist **lokal** — sie haengt als Kind am Spieler. Dass das
-/// zugleich der Vektor in der Welt ist, haengt daran, dass der Spieler sich nie dreht; genau
-/// das prueft [`f002_gedreht_wird_die_kamera_und_nicht_der_spieler`]. Auf `GlobalTransform`
-/// auszuweichen ginge nicht, ohne `PostUpdate` mitzufahren — und damit die halbe
-/// Render-Vorbereitung.
-fn kamera_vorwaerts(app: &mut App) -> Vec3 {
+/// The camera's `Transform` is **local** — it hangs off the player as a child. That this is
+/// also the vector in world space rests on the player never rotating; that is exactly what
+/// [`f002_the_camera_rotates_not_the_player`] checks. Falling back on `GlobalTransform` would
+/// not work without running `PostUpdate` too — and with it half of the render preparation.
+fn camera_forward(app: &mut App) -> Vec3 {
     let mut q = app.world_mut().query_filtered::<&Transform, With<Camera3d>>();
     let t = q
         .iter(app.world())
         .next()
-        .expect("es muss eine 3D-Kamera geben");
+        .expect("there must be a 3D camera");
     // `Dir3::as_vec3` — bevy_math-0.19.0/src/direction.rs:614.
     t.forward().as_vec3()
 }
 
-fn pitch_grenze_grad(app: &App) -> f32 {
-    // Die Zahl steht in assets/data/game.ron, nicht im Test (Regel 2). Ein Test, der sie
-    // abschreibt, ist am Tag der ersten Aenderung eine Luege.
-    app.world().resource::<GameData>().spiel.kamera.pitch_grenze_grad
+fn pitch_limit_deg(app: &App) -> f32 {
+    // The number lives in assets/data/game.ron, not in the test (rule 2). A test that copies
+    // it out is a lie on the day of the first change.
+    app.world().resource::<GameData>().game.camera.pitch_limit_deg
 }
 
 #[test]
-fn f002_blick_null_zeigt_die_kamera_nach_minus_z() {
-    // Der Achsen-Vertrag aus docs/konventionen.md: `yaw = 0, pitch = 0` ist −Z. Faellt er,
-    // steht jedes Modell falsch herum und niemand weiss, warum.
+fn f002_look_zero_points_the_camera_at_minus_z() {
+    // The axis contract from docs/conventions.md: `yaw = 0, pitch = 0` is −Z. Break it and
+    // every model faces the wrong way, and nobody knows why.
     let mut app = app();
-    let vorwaerts = blicken(&mut app, 0.0, 0.0);
+    let forward = look(&mut app, 0.0, 0.0);
     assert!(
-        (vorwaerts - Vec3::NEG_Z).length() < 1e-5,
-        "yaw = 0, pitch = 0 muss −Z sein, war aber {vorwaerts:?}"
+        (forward - Vec3::NEG_Z).length() < 1e-5,
+        "yaw = 0, pitch = 0 must be −Z, but was {forward:?}"
     );
 }
 
 #[test]
-fn f002_bild_und_strahl_zeigen_in_dieselbe_richtung() {
-    // **Das eigentliche Kriterium.** Der Zielstrahl geht nach `intent.blick()`, das Bild
-    // dorthin, wohin die Kamera schaut. Sind das zwei verschiedene Richtungen, misst jedes
-    // Bild etwas anderes als der Strahl — und man sieht es dem Bild nicht an.
+fn f002_image_and_ray_point_the_same_way() {
+    // **The criterion that actually matters.** The aim ray follows `intent.look_dir()`, the
+    // image follows where the camera looks. If those are two different directions, every
+    // image measures something other than the ray — and you cannot tell by looking at it.
     let mut app = app();
 
-    // Negative Winkel und Werte jenseits von 90 Grad sind ausdruecklich dabei: ein
-    // vertauschtes Vorzeichen oder ein `abs()` faellt genau dort auf und sonst nirgends.
-    let paare = [
+    // Negative angles and values beyond 90 degrees are deliberately in the list: a swapped
+    // sign or a stray `abs()` shows up exactly there and nowhere else.
+    let pairs = [
         (0.0_f32, 0.0_f32),
         (30.0, -10.0),
         (-45.0, 20.0),
@@ -108,89 +106,89 @@ fn f002_bild_und_strahl_zeigen_in_dieselbe_richtung() {
         (89.9, -89.0),
     ];
 
-    for (yaw_grad, pitch_grad) in paare {
-        let vorwaerts = blicken(&mut app, yaw_grad, pitch_grad);
-        let strahl = Intent {
-            yaw: yaw_grad.to_radians(),
-            pitch: pitch_grad.to_radians(),
+    for (yaw_deg, pitch_deg) in pairs {
+        let forward = look(&mut app, yaw_deg, pitch_deg);
+        let ray = Intent {
+            yaw: yaw_deg.to_radians(),
+            pitch: pitch_deg.to_radians(),
             ..default()
         }
-        .blick();
+        .look_dir();
         assert!(
-            (vorwaerts - strahl).length() < 1e-5,
-            "look {yaw_grad} {pitch_grad}: die Kamera zeigt nach {vorwaerts:?}, \
-             der Zielstrahl nach {strahl:?} — Bild und Messung laufen auseinander"
+            (forward - ray).length() < 1e-5,
+            "look {yaw_deg} {pitch_deg}: the camera points at {forward:?}, \
+             the aim ray at {ray:?} — image and measurement drift apart"
         );
     }
 }
 
 #[test]
-fn f002_pitch_bleibt_in_der_grenze_aus_game_ron() {
-    // Ohne Klemmung kippt die Kamera ueber den Scheitel und das Bild steht auf dem Kopf.
-    // `net::lokal` klemmt nur den MAUS-Pfad; ein Intent aus Skript oder Netz kommt
-    // ungeklemmt an, und deshalb klemmt die Kamera selbst.
+fn f002_pitch_stays_within_the_limit_from_game_ron() {
+    // Without a clamp the camera tips over the zenith and the image stands on its head.
+    // `net::local` clamps the MOUSE path only; an intent from a script or from the network
+    // arrives unclamped, and that is why the camera clamps for itself.
     let mut app = app();
-    let grenze = pitch_grenze_grad(&app);
+    let limit = pitch_limit_deg(&app);
 
-    for (gewuenscht, erwartet) in [
-        (120.0_f32, grenze),
-        (-120.0, -grenze),
-        (grenze + 1.0, grenze),
+    for (desired, expected) in [
+        (120.0_f32, limit),
+        (-120.0, -limit),
+        (limit + 1.0, limit),
         (45.0, 45.0),
         (-45.0, -45.0),
     ] {
-        let vorwaerts = blicken(&mut app, 0.0, gewuenscht);
-        // `blick().y` ist `sin(pitch)` — der Pitch laesst sich aus der Richtung zurueckrechnen.
-        let ist = vorwaerts.y.asin().to_degrees();
+        let forward = look(&mut app, 0.0, desired);
+        // `look_dir().y` is `sin(pitch)` — the pitch can be recovered from the direction.
+        let actual = forward.y.asin().to_degrees();
         assert!(
-            (ist - erwartet).abs() < 1e-3,
-            "look 0 {gewuenscht} haette {erwartet} Grad ergeben muessen, ergab aber {ist} — \
-             die Grenze aus assets/data/game.ron (kamera.pitch_grenze_grad = {grenze}) \
-             wird nicht eingehalten"
+            (actual - expected).abs() < 1e-3,
+            "look 0 {desired} should have given {expected} degrees, but gave {actual} — \
+             the limit from assets/data/game.ron (camera.pitch_limit_deg = {limit}) \
+             is not respected"
         );
     }
 }
 
 #[test]
-fn f002_gedreht_wird_die_kamera_und_nicht_der_spieler() {
-    // Am Spieler haengt der Kollisionskasten. Dreht der mit, ist die achsenparallele Huelle
-    // keine achsenparallele mehr — und die Kollision wird auf eine Weise falsch, die man
-    // erst bemerkt, wenn jemand schraeg an einer Wand haengen bleibt.
+fn f002_the_camera_rotates_not_the_player() {
+    // The collision box hangs on the player. If it turns along, the axis-aligned hull is no
+    // longer axis-aligned — and collision goes wrong in a way you only notice once somebody
+    // gets stuck at an angle against a wall.
     let mut app = app();
     for (yaw, pitch) in [(0.0_f32, 0.0_f32), (137.0, -42.0), (-91.0, 63.0)] {
-        blicken(&mut app, yaw, pitch);
-        let spieler = lokaler_spieler(&mut app);
-        let drehung = app
+        look(&mut app, yaw, pitch);
+        let player = local_player(&mut app);
+        let rotation = app
             .world()
-            .get::<Transform>(spieler)
-            .expect("der Spieler hat einen Transform")
+            .get::<Transform>(player)
+            .expect("the player has a transform")
             .rotation;
         assert!(
-            drehung.angle_between(Quat::IDENTITY) < 1e-6,
-            "nach look {yaw} {pitch} ist der Spieler um {} Grad gedreht — gedreht wird die \
-             KAMERA, nicht der Spieler (src/render/kamera.rs)",
-            drehung.angle_between(Quat::IDENTITY).to_degrees()
+            rotation.angle_between(Quat::IDENTITY) < 1e-6,
+            "after look {yaw} {pitch} the player is rotated by {} degrees — the CAMERA \
+             rotates, not the player (src/render/camera.rs)",
+            rotation.angle_between(Quat::IDENTITY).to_degrees()
         );
     }
 }
 
 #[test]
-fn f002_drehen_verschiebt_die_augenhoehe_nicht() {
-    // `kamera_drehen` schreibt genau ein Feld. Wer versehentlich den ganzen `Transform`
-    // ersetzt, setzt die Kamera zwischen die Fuesse — und das Bild sieht nur „etwas tief" aus.
+fn f002_rotating_does_not_move_the_eye_height() {
+    // `rotate_camera` writes exactly one field. Replace the whole `Transform` by accident and
+    // the camera ends up between the feet — and the image merely looks "a bit low".
     let mut app = app();
-    let augenhoehe = app.world().resource::<GameData>().spiel.spieler.augenhoehe_m;
+    let eye_height = app.world().resource::<GameData>().game.player.eye_height_m;
 
-    blicken(&mut app, 77.0, -33.0);
+    look(&mut app, 77.0, -33.0);
 
     let mut q = app.world_mut().query_filtered::<&Transform, With<Camera3d>>();
-    let ort = q
+    let position = q
         .iter(app.world())
         .next()
-        .expect("es muss eine 3D-Kamera geben")
+        .expect("there must be a 3D camera")
         .translation;
     assert!(
-        (ort - Vec3::new(0.0, augenhoehe, 0.0)).length() < 1e-6,
-        "die Kamera sitzt bei {ort:?} statt auf {augenhoehe} m Augenhoehe ueber dem Spieler"
+        (position - Vec3::new(0.0, eye_height, 0.0)).length() < 1e-6,
+        "the camera sits at {position:?} instead of {eye_height} m eye height above the player"
     );
 }

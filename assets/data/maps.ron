@@ -1,152 +1,152 @@
-// maps.ron — die Stadt als DATEN, nicht als 200 handgeschriebene Zeilen Rust.
+// maps.ron — the city as DATA, not as 200 hand-written lines of Rust.
 //
-// Alle Laengen in METERN (1 Bevy-Einheit = 1 Meter, docs/konventionen.md). Das Backlog
-// rechnet in studs; umgerechnet wird bei der Uebernahme HIERHER, mit 0,28 m
-// (docs/FRAGEN.md Q-002) — im Code gibt es keine studs.
+// All lengths in METERS (1 Bevy unit = 1 meter, docs/conventions.md). The backlog counts
+// in studs; the conversion happens on adoption INTO THIS FILE, at 0.28 m
+// (docs/QUESTIONS.md Q-002) — there are no studs in the code.
 //
-// Eine Karte hat zwei Quellen: `raster` erzeugt Bloecke deterministisch aus `seed` ueber
-// shared::Wuerfel, `kloetze` setzt einzelne Quader ausdruecklich. Ausdruecklich Gesetztes
-// gewinnt: das Erzeugte laesst um jeden gesetzten Klotz und um `frei_radius_m` Platz.
+// A map has two sources: `layout` generates blocks deterministically out of `seed` via
+// shared::Rng, `blocks` places single boxes explicitly. What is placed explicitly wins:
+// the generated part leaves room around every placed block and for `clear_radius_m`.
 //
-// Kein Klotz wird GEDREHT. Ein achsenparalleler Quader ist exakt seine AABB; eine gedrehte
-// Cuboid liefert die umschliessende, zu grosse Huelle, und der Haken faengt in der Luft
+// No block is ROTATED. An axis-aligned box is exactly its AABB; a rotated Cuboid yields
+// the enclosing, too-large AABB, and the hook catches in mid-air
 // (bevy_math-0.19.0/src/bounding/bounded3d/primitive_impls.rs:100-115).
 //
-// ⚠️ UNGETUNT. Diese Zahlen sind Startwerte, kein Leveldesign. Die Ankerdichte ist das Gate
-// von P3 und wird beim Bau von Ashgate an gemessenen Traversal-Zeiten geeicht
-// (docs/FRAGEN.md Q-010) — bis dahin ist hier nichts fertig.
+// ⚠️ UNTUNED. These numbers are starting values, not level design. Anchor density is the
+// gate of P3 and gets calibrated against measured traversal times when Ashgate is built
+// (docs/QUESTIONS.md Q-010) — until then nothing here is finished.
 //
-// ⚠️ AUSNAHME: `gasse_m`, `hoehe_min_m` und `hoehe_max_m` sind NICHT ungetunt. Sie kommen
-// aus assets/data/massstab.ron und damit vom User (2026-08-09); tests/data.rs faellt um,
-// sobald sie das dortige Fenster verlassen. Dasselbe Fenster gilt seit 2026-08-09 auch fuer
-// jeden `kloetze`-Eintrag mit `sonderbau: false` — vorher galt es nur fuer das Raster, und
-// die ausdruecklich gesetzten Quader standen mit 12, 14 und 18 m Firsthoehe darueber.
+// ⚠️ EXCEPTION: `street_m`, `min_height_m` and `max_height_m` are NOT untuned. They come
+// out of assets/data/scale.ron and thus from the user (2026-08-09); tests/data.rs falls
+// over the moment they leave the window there. Since 2026-08-09 the same window holds for
+// every `blocks` entry with `landmark: false` — before, it held only for the layout, and
+// the explicitly placed boxes stood above it with 12, 14 and 18 m of ridge height.
 (
-    // Welche Karte beim Start gebaut wird. Muss in `karten` stehen (tests/data.rs).
-    aktuell: "graubox",
+    // Which map gets built at startup. Has to appear in `maps` (tests/data.rs).
+    current: "graybox",
 
-    // Der eine Farbatlas fuer die gesamte Umgebung (Bibel 3.4: minimale Drawcalls).
-    // Lineares RGB. **Keine der drei Signalfarben** (Zyan, Bernstein, Karminrot) — die sind
-    // ausschliesslich fuer Gameplay reserviert, auch fuer Platzhalter
-    // (docs/konventionen.md).
+    // The one color atlas for the entire environment (bible 3.4: minimal draw calls).
+    // Linear RGB. **None of the three signal colors** (cyan, amber, crimson) — those are
+    // reserved exclusively for gameplay, placeholders included
+    // (docs/conventions.md).
     palette: {
-        "steingrau": (0.42, 0.43, 0.40),
-        "ziegelrot": (0.45, 0.26, 0.20),
-        "olivgruen": (0.29, 0.33, 0.20),
-        "sandbraun": (0.55, 0.47, 0.33),
+        "stone_gray": (0.42, 0.43, 0.40),
+        "brick_red": (0.45, 0.26, 0.20),
+        "olive_green": (0.29, 0.33, 0.20),
+        "sand_brown": (0.55, 0.47, 0.33),
     },
 
-    karten: {
-        // Stufe 2, Bibel 6.2 P1: „Nur Bewegung. Weisse Boxen, keine Assets, keine Gegner."
-        "graubox": (
-            name: "Graubox",
-            groesse_m: (400.0, 400.0),
-            // Fester Seed: dieselbe Stadt auf jedem Rechner, in jedem Rollback, in jedem
-            // Testlauf. Ein `rand::random()` waere hier ein Desync (docs/multiplayer.md).
+    maps: {
+        // Stage 2, bible 6.2 P1: „Nur Bewegung. Weisse Boxen, keine Assets, keine Gegner."
+        "graybox": (
+            name: "Graybox",
+            size_m: (400.0, 400.0),
+            // Fixed seed: the same city on every machine, in every rollback, in every test
+            // run. A `rand::random()` here would be a desync (docs/multiplayer.md).
             seed: 3735928559,
 
-            raster: (
-                // Blockkante und Gassenbreite. Der Haken reicht 90 m weit — eine Gasse
-                // muss schmal genug sein, dass beide Seiten gleichzeitig erreichbar sind.
-                block_m: 28.0,
-                // 9.0 -> 7.0: der User gibt die Strassenbreite mit 6-8 m an und schreibt
-                // ausdruecklich „eng halten" (massstab.ron:referenz.strasse_breite_min_m/
-                // -max_m). 7,0 ist die Mitte des Fensters. Enge Gassen sind kein Detail:
-                // sie sind der Grund, warum sich Tempo nach Tempo anfuehlt.
-                gasse_m: 7.0,
-                // 8.0 -> 4.5 und 34.0 -> 11.5. Die erzeugte Stadt war VIEL zu hoch: 34 m
-                // ist die Groesse einer Kirche (35 m), nicht die eines Wohnhauses. Nach der
-                // Vorgabe des Users liegt normale Bebauung zwischen kleinem Haus (4,5 m)
-                // und grossem Haus (11,5 m) — massstab.ron:architektur.hoehen_m.
+            layout: (
+                // Lot edge and street width. The hook reaches 90 m — a street has to be
+                // narrow enough that both sides are reachable at the same time.
+                lot_m: 28.0,
+                // 9.0 -> 7.0: the user gives the street width as 6-8 m and writes
+                // explicitly "keep them narrow" (scale.ron:reference.min_street_m/
+                // -max_street_m). 7.0 is the middle of the window. Narrow streets are no
+                // detail: they are the reason why speed feels like speed.
+                street_m: 7.0,
+                // 8.0 -> 4.5 and 34.0 -> 11.5. The generated city was FAR too tall: 34 m
+                // is the size of a church (35 m), not that of a residential house. Under
+                // the user's specification, normal building lies between the small house
+                // (4.5 m) and the large house (11.5 m) — scale.ron:architecture.heights_m.
                 //
-                // ⚠️ **Die Stadt wird dadurch FLACH. Das ist beabsichtigt.**
-                // Die Vertikale dieses Spiels kommt aus der Mauer (120 m), der Kirche
-                // (35 m), dem Wachturm (12 m) und den Baeumen (12 m) — **nicht aus der
-                // Wohnbebauung**. Genau das ist der Look des Referenzwerks: ein flaches
-                // Ziegeldach-Meer, aus dem einzelne Bauwerke herausragen. Wer die
-                // Rasterhaeuser wieder hochzieht, „repariert" nichts, sondern macht aus der
-                // Stadt eine Skyline und aus der Mauer eine Wand unter vielen.
-                // Kirche, Wachturm und Baum stehen unten als `kloetze` mit
-                // `sonderbau: true`; die Mauer fehlt noch (docs/FRAGEN.md Q-022, Q-023).
+                // ⚠️ **This makes the city FLAT. That is intended.**
+                // The vertical of this game comes from the wall (120 m), the church
+                // (35 m), the watchtower (12 m) and the trees (12 m) — **not from the
+                // residential stock**. That is exactly the look of the reference work: a
+                // flat sea of tiled roofs out of which single structures rise. Whoever
+                // pulls the grid houses back up "repairs" nothing, but turns the city into
+                // a skyline and the wall into one wall among many.
+                // Church, watchtower and tree stand below as `blocks` with
+                // `landmark: true`; the wall is still missing (docs/QUESTIONS.md Q-022, Q-023).
                 //
-                // Was diese beiden Zahlen fuer die Bewegung bedeuten, ist gerechnet und
-                // gehoert hierher, weil es sonst niemand nachrechnet: ein sauberer Bogen
-                // braucht Seillaenge <= Ankerhoehe, also <= 11,5 m — **87 % der 90-m-
-                // Hakenreichweite erzeugen an einem Rasterhaus kein Schwingen, sondern
-                // einen Fall an der Leine.** Reines Pendeln von 11,5 m gibt hoechstens
-                // sqrt(2 * 20 * 11,5) = 21,4 m/s; die Viertelperiode eines 11,5-m-Seils ist
-                // mit 1,19-1,41 s laenger als der freie Fall aus derselben Hoehe (1,07 s).
-                // Brauchbar bleiben Seile von 3 bis 7 m — eine Gassenbreite.
-                // Das ist eine Folge der Vorgabe, kein Fehler in ihr: docs/FRAGEN.md Q-022.
-                hoehe_min_m: 4.5,
-                hoehe_max_m: 11.5,
-                // Anteil der Rasterplaetze, die wirklich bebaut werden (0..1).
-                dichte: 0.72,
-                // Anteil der erzeugten Gebaeude, die hakbar sind (0..1). **Nicht alles ist
-                // hakbar** — erst damit ist „Kein Haken auf ungetaggten Parts moeglich"
-                // (F-003) ueberhaupt pruefbar.
-                hakbar_anteil: 0.8,
-                // Radius um den Ursprung, der frei bleibt: dort steht der Spieler beim
-                // Start, und scripts/t007-erste-fahrt.txt laeuft 6 m nach -Z.
-                frei_radius_m: 24.0,
-                farben: ["steingrau", "ziegelrot", "sandbraun"],
+                // What these two numbers mean for movement is computed and belongs here,
+                // because otherwise nobody does the arithmetic: a clean arc needs rope
+                // length <= anchor height, so <= 11.5 m — **87 % of the 90 m hook range
+                // produce no swinging on a grid house, but a fall on the leash.** Pure
+                // pendulum motion from 11.5 m gives at most sqrt(2 * 20 * 11.5) =
+                // 21.4 m/s; the quarter period of an 11.5 m rope, at 1.19-1.41 s, is longer
+                // than free fall from the same height (1.07 s). What stays usable are ropes
+                // of 3 to 7 m — one street width.
+                // That is a consequence of the specification, not an error in it: Q-022.
+                min_height_m: 4.5,
+                max_height_m: 11.5,
+                // Fraction of the grid lots that really get built on (0..1).
+                density: 0.72,
+                // Fraction of the generated buildings that are anchorable (0..1). **Not
+                // everything is anchorable** — only that makes „Kein Haken auf ungetaggten
+                // Parts moeglich" (F-003) checkable at all.
+                anchorable_fraction: 0.8,
+                // Radius around the origin that stays clear: that is where the player
+                // stands at startup, and scripts/t007-first-run.txt runs 6 m along -Z.
+                clear_radius_m: 24.0,
+                colors: ["stone_gray", "brick_red", "sand_brown"],
             ),
 
-            // Ausdruecklich gesetzt. Die Kloetze waren bis 2026-08-09 1:1 die aus
-            // src/world/mod.rs — damit der Umbau verhaltensgleich nachweisbar ist.
+            // Explicitly placed. Until 2026-08-09 the blocks were 1:1 the ones out of
+            // src/world/mod.rs — so that the rewrite is provably behavior-equal.
             //
-            // ⚠️ Drei von ihnen ragten mit 12,0 / 18,0 / 14,0 m Firsthoehe ueber die
-            // Wohnbebauung (11,5 m) hinaus, die dieselbe Datei drei Zeilen weiter oben dem
-            // RASTER verbietet. Der Waechter t005_die_rasterstadt_bleibt_wohnbebauung sah
-            // sie nicht, weil er nur `raster` las — die halbe Stadt stand ausserhalb der
-            // Regel, die sie flach halten soll. Aufgeloest ueber ein neues Feld:
+            // ⚠️ Three of them stuck out over the residential stock (11.5 m) with 12.0 /
+            // 18.0 / 14.0 m of ridge height — the limit the same file forbids the LAYOUT
+            // three lines further up. The guard t005_the_generated_city_stays_residential
+            // did not see them, because it read only `layout` — half the city stood
+            // outside the rule that is supposed to keep it flat. Resolved via a new field:
             //
-            //   `sonderbau: false` — Wohnbebauung. Muss unter architektur.hoehen_m
-            //                        `haus_gross` (11,5 m) bleiben.
-            //   `sonderbau: true`  — Kirche, Wachturm, Baum, Mauer. **Sie tragen die
-            //                        Vertikale** und duerfen darueber.
+            //   `landmark: false` — residential. Has to stay under architecture.heights_m
+            //                       `house_large` (11.5 m).
+            //   `landmark: true`  — church, watchtower, tree, wall. **They carry the
+            //                       vertical** and are allowed above it.
             //
-            // Damit ist „die Vertikale kommt aus Sonderbauten" kein Vorsatz mehr, sondern
-            // eine Eigenschaft der Datei, die tests/data.rs pruefen kann.
-            kloetze: [
-                // Der Boden. Nicht hakbar: sonst haekt man in den Bodenplatten.
-                (mitte_m: (0.0, -0.1, 0.0), groesse_m: (400.0, 0.2, 400.0), farbe: "olivgruen", hakbar: false, fest: true, sonderbau: false),
-                (mitte_m: (-12.0, 4.0, -20.0), groesse_m: (8.0, 8.0, 8.0), farbe: "ziegelrot", hakbar: true, fest: true, sonderbau: false),
-                // First 12,0 -> 11,5 m: das ist `haus_gross`, die Obergrenze der
-                // Wohnbebauung. Ein halber Meter, damit der Klotz das ist, wonach er
-                // aussieht — ein grosses Haus.
-                (mitte_m: (10.0, 5.75, -28.0), groesse_m: (10.0, 11.5, 10.0), farbe: "steingrau", hakbar: true, fest: true, sonderbau: false),
-                (mitte_m: (0.0, 2.0, -12.0), groesse_m: (4.0, 4.0, 4.0), farbe: "sandbraun", hakbar: true, fest: true, sonderbau: false),
-                // First 18,0 -> 12,0 m und `sonderbau: true`: 18 m ist weder Wohnhaus
-                // (<= 11,5) noch eine Groesse, die der User nennt. Als **Wachturm** (12 m,
-                // massstab.ron: architektur.hoehen_m) ist er beides eindeutig — und er war
-                // ohnehin schon der Turm dieser Graubox.
-                (mitte_m: (24.0, 6.0, -40.0), groesse_m: (12.0, 12.0, 12.0), farbe: "steingrau", hakbar: true, fest: true, sonderbau: true),
-                // Eine ungetaggte Wand VOR einem hakbaren Dach — der Testfall aus F-023
-                // („Sichtlinienpruefung verhindert Haken durch Waende"). Ohne ein Paar
-                // dieser Art im Level ist das Kriterium nicht fahrbar.
-                (mitte_m: (-30.0, 5.0, -34.0), groesse_m: (14.0, 10.0, 1.0), farbe: "steingrau", hakbar: false, fest: true, sonderbau: false),
-                // First 14,0 -> 11,5 m, aus demselben Grund wie oben.
-                (mitte_m: (-30.0, 5.75, -46.0), groesse_m: (14.0, 11.5, 10.0), farbe: "ziegelrot", hakbar: true, fest: true, sonderbau: false),
+            // With that, "the vertical comes out of landmarks" is no longer an intention
+            // but a property of the file that tests/data.rs can check.
+            blocks: [
+                // The ground. Not anchorable: otherwise you hook into the ground slabs.
+                (center_m: (0.0, -0.1, 0.0), size_m: (400.0, 0.2, 400.0), color: "olive_green", anchorable: false, solid: true, landmark: false),
+                (center_m: (-12.0, 4.0, -20.0), size_m: (8.0, 8.0, 8.0), color: "brick_red", anchorable: true, solid: true, landmark: false),
+                // Ridge 12.0 -> 11.5 m: that is `house_large`, the upper limit of the
+                // residential stock. Half a meter, so that the block is what it looks
+                // like — a large house.
+                (center_m: (10.0, 5.75, -28.0), size_m: (10.0, 11.5, 10.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                (center_m: (0.0, 2.0, -12.0), size_m: (4.0, 4.0, 4.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                // Ridge 18.0 -> 12.0 m and `landmark: true`: 18 m is neither a residential
+                // house (<= 11.5) nor a size the user names. As a **watchtower** (12 m,
+                // scale.ron: architecture.heights_m) it is unambiguously both — and it was
+                // already the tower of this graybox anyway.
+                (center_m: (24.0, 6.0, -40.0), size_m: (12.0, 12.0, 12.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                // An untagged wall IN FRONT OF an anchorable roof — the test case out of
+                // F-023 („Sichtlinienpruefung verhindert Haken durch Waende"). Without a
+                // pair of this kind in the level the criterion cannot be driven.
+                (center_m: (-30.0, 5.0, -34.0), size_m: (14.0, 10.0, 1.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                // Ridge 14.0 -> 11.5 m, for the same reason as above.
+                (center_m: (-30.0, 5.75, -46.0), size_m: (14.0, 11.5, 10.0), color: "brick_red", anchorable: true, solid: true, landmark: false),
 
-                // ---- Die Vertikale ---------------------------------------------------
-                // Diese Datei versprach sich oben selbst „Kirche, Wachturm und Mauer werden
-                // als `kloetze` gesetzt" — bis 2026-08-09 stand davon **nichts** in einer
-                // Karte, und damit war die Aussage „die Vertikale kommt aus Sonderbauten"
-                // eine Absicht statt eines Zustands. Die Folge war messbar: hoechster Anker
-                // 11,5 m + seil_min_m 3,0 m = **Ankerdecke 14,5 m**, waehrend der Cortex
-                // eines `mittel_gross` auf 12,5 m, eines `gross` auf 18,7 m und eines
-                // `boss` auf 24,9 m sitzt. Drei von fuenf Groessenklassen waeren nur noch
-                // ballistisch angreifbar gewesen (docs/FRAGEN.md Q-022).
+                // ---- The vertical ----------------------------------------------------
+                // Further up, this file promised itself that "church, watchtower and wall
+                // get placed as `blocks`" — until 2026-08-09 **none** of that stood in a
+                // map, and so the statement "the vertical comes out of landmarks" was an
+                // intention instead of a state. The consequence was measurable: highest
+                // anchor 11.5 m + min_rope_m 3.0 m = **anchor ceiling 14.5 m**, while the
+                // cortex of a `large` sits at 12.5 m, of a `huge` at 18.7 m and of a
+                // `boss` at 24.9 m. Three of five size classes would have been attackable
+                // only ballistically (docs/QUESTIONS.md Q-022).
                 //
-                // Die Kirche hebt die Decke auf 38 m und deckt damit alle fuenf Klassen.
-                // Hoehen aus massstab.ron: architektur.hoehen_m, Grundflaechen sind
-                // Graubox-Schaetzung und ausdruecklich ungetunt.
-                (mitte_m: (60.0, 17.5, -60.0), groesse_m: (14.0, 35.0, 14.0), farbe: "steingrau", hakbar: true, fest: true, sonderbau: true),
-                // Ein Baum als Vordergrund-Staffelung: schmal, hoch, hakbar. Er ist der
-                // billigste Anker ueber der Traufe und der einzige, der mitten in einer
-                // Gasse stehen darf.
-                (mitte_m: (-20.0, 6.0, -58.0), groesse_m: (2.5, 12.0, 2.5), farbe: "olivgruen", hakbar: true, fest: true, sonderbau: true),
+                // The church raises the ceiling to 38 m and thus covers all five classes.
+                // Heights out of scale.ron: architecture.heights_m, footprints are a
+                // graybox estimate and explicitly untuned.
+                (center_m: (60.0, 17.5, -60.0), size_m: (14.0, 35.0, 14.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                // A tree as foreground layering: narrow, tall, anchorable. It is the
+                // cheapest anchor above the eaves and the only one that may stand in the
+                // middle of a street.
+                (center_m: (-20.0, 6.0, -58.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
             ],
         ),
     },

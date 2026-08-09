@@ -1,131 +1,129 @@
-# bevy — was die installierte Version 0.19.0 wirklich heisst, und was sie kostet
+# bevy — what the installed version 0.19.0 is really called, and what it costs
 
-Stand: 2026-08-09 · Stufe: 🟨 (jede Zeile hier ist in der installierten Quelle nachgesehen;
-gelaufen ist davon noch nichts)
+Updated: 2026-08-09 · Stage: 🟨 (every line here was looked up in the installed source; none of
+it has been run)
 
-> ⚠️ **Bevys API dreht sich zwischen Minor-Versionen hart.** In der Doku der **installierten**
-> Version nachsehen (`cargo doc --open -p bevy`, oder direkt in
-> `~/.cargo/registry/src/*/bevy_*-0.19.0/src/`), nicht aus dem Gedaechtnis und nicht aus
-> Blogposts von vor zwei Versionen. **Prüfen, nicht annehmen** (`prompts/init.md` §3).
+> ⚠️ **Bevy's API turns hard between minor versions.** Look it up in the docs of the
+> **installed** version (`cargo doc --open -p bevy`, or straight in
+> `~/.cargo/registry/src/*/bevy_*-0.19.0/src/`), not from memory and not from blog posts two
+> versions old. **Check, do not assume** (`prompts/init.md` §3).
 
-Alles hier ist gegen `~/.cargo/registry/src/index.crates.io-*/bevy_*-0.19.0/` geprueft, mit
-Datei und Zeile. Was nicht belegt ist, steht nicht drin.
+Everything here is checked against `~/.cargo/registry/src/index.crates.io-*/bevy_*-0.19.0/`,
+with file and line. What carries no evidence is not in here.
 
-## Namen, die zuletzt gewandert sind
+## Names that have moved recently
 
-| Sache | in 0.19.0 | Beleg |
+| Item | in 0.19.0 | Evidence |
 |---|---|---|
-| Gepufferte Nachrichten | **`Message`**, nicht `Event` | `bevy_ecs/src/message/mod.rs:100` (`pub trait Message`) |
-| Registrieren | **`App::add_message::<M>()`** | `bevy_app/src/app.rs:435` |
-| Schreiben / Lesen | **`MessageWriter<M>` / `MessageReader<M>`** | `bevy_ecs/src/message/message_writer.rs:62`, `message_reader.rs:34` |
-| Delta in Sekunden | **`time.delta_secs()`** | `bevy_time/src/time.rs:283` |
-| Feste Schrittweite | **`Time::<Fixed>::from_hz(f64)`** | `bevy_time/src/fixed.rs:105` |
-| Feste Schedules | `FixedPreUpdate`, `FixedUpdate`, `FixedPostUpdate` | `bevy_app/src/main_schedule.rs:118/133/141` |
-| Sichtbares | **`Mesh3d(pub Handle<Mesh>)`** und **`MeshMaterial3d<M>(pub Handle<M>)`** — einzelne Komponenten, keine Bundles | `bevy_mesh/src/components.rs:102`, `bevy_pbr/src/mesh_material.rs:41` |
-| Kamera | **`Camera3d`** mit `#[require(Camera, Projection)]` | `bevy_camera/src/components.rs:25` |
-| Text | **`Text(pub String)`**, dazu `TextFont`, `TextColor(pub Color)` | `bevy_ui/src/widget/text.rs:111`, `bevy_text/src/text.rs:376/1066` |
-| Rueckgabe von `App::run()` | **`AppExit`** (`Success` \| `Error(NonZero<u8>)`) | `bevy_app/src/app.rs:192`, `1568` |
+| Buffered messages | **`Message`**, not `Event` | `bevy_ecs/src/message/mod.rs:100` (`pub trait Message`) |
+| Registering | **`App::add_message::<M>()`** | `bevy_app/src/app.rs:435` |
+| Writing / reading | **`MessageWriter<M>` / `MessageReader<M>`** | `bevy_ecs/src/message/message_writer.rs:62`, `message_reader.rs:34` |
+| Delta in seconds | **`time.delta_secs()`** | `bevy_time/src/time.rs:283` |
+| Fixed step size | **`Time::<Fixed>::from_hz(f64)`** | `bevy_time/src/fixed.rs:105` |
+| Fixed schedules | `FixedPreUpdate`, `FixedUpdate`, `FixedPostUpdate` | `bevy_app/src/main_schedule.rs:118/133/141` |
+| Anything visible | **`Mesh3d(pub Handle<Mesh>)`** and **`MeshMaterial3d<M>(pub Handle<M>)`** — single components, no bundles | `bevy_mesh/src/components.rs:102`, `bevy_pbr/src/mesh_material.rs:41` |
+| Camera | **`Camera3d`** with `#[require(Camera, Projection)]` | `bevy_camera/src/components.rs:25` |
+| Text | **`Text(pub String)`**, plus `TextFont`, `TextColor(pub Color)` | `bevy_ui/src/widget/text.rs:111`, `bevy_text/src/text.rs:376/1066` |
+| Return value of `App::run()` | **`AppExit`** (`Success` \| `Error(NonZero<u8>)`) | `bevy_app/src/app.rs:192`, `1568` |
 
-## Die Falle, die uns wirklich getroffen haette: `AmbientLight` ist ein **Component**
+## The trap that would really have caught us: `AmbientLight` is a **component**
 
-In 0.19 ist `AmbientLight` **kein `Resource` mehr**, sondern ein Component mit
-`#[require(Camera)]` — es gehoert an die **Kamera** und ueberschreibt dort die Vorgabe
-`GlobalAmbientLight` (`bevy_light/src/ambient_light.rs:9-12`). Wer `insert_resource` schreibt,
-bekommt keinen Compilerfehler an der erwarteten Stelle und eine Szene, die einfach dunkler ist
-als gedacht.
+In 0.19 `AmbientLight` is **no longer a `Resource`** but a component with `#[require(Camera)]` —
+it belongs on the **camera** and overrides the default `GlobalAmbientLight` there
+(`bevy_light/src/ambient_light.rs:9-12`). Write `insert_resource` and you get no compiler error
+where you expect one, and a scene that is simply darker than intended.
 
-`DirectionalLight` verlangt seinerseits `Transform` und `Visibility` per `#[require(..)]`
-(`bevy_light/src/directional_light.rs:67-73`) — sie muessen nicht mehr von Hand mitgegeben
-werden.
+`DirectionalLight` for its part demands `Transform` and `Visibility` via `#[require(..)]`
+(`bevy_light/src/directional_light.rs:67-73`) — they no longer have to be handed in by hand.
 
-## Ohne Grafiksitzung starten
+## Starting without a graphics session
 
-Beides zusammen, sonst sucht wgpu trotzdem einen Adapter:
+Both parts together, otherwise wgpu goes looking for an adapter anyway:
 
-| Teil | exakt |
+| Part | exactly |
 |---|---|
-| kein Fenster | `WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, .. }` — `bevy_window/src/lib.rs:74`, `158-175` |
-| kein Renderer | `RenderPlugin { render_creation: RenderCreation::Automatic(Box::new(WgpuSettings { backends: None, ..default() })), .. }` — `bevy_render/src/settings.rs:41`, `223-228` |
-| die Schleife | `ScheduleRunnerPlugin::run_loop(Duration)` bzw. `::run_once()` — `bevy_app/src/schedule_runner.rs:57`, `64` |
+| no window | `WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, .. }` — `bevy_window/src/lib.rs:74`, `158-175` |
+| no renderer | `RenderPlugin { render_creation: RenderCreation::Automatic(Box::new(WgpuSettings { backends: None, ..default() })), .. }` — `bevy_render/src/settings.rs:41`, `223-228` |
+| the loop | `ScheduleRunnerPlugin::run_loop(Duration)` or `::run_once()` — `bevy_app/src/schedule_runner.rs:57`, `64` |
 
-⚠️ **`RenderCreation::Automatic` nimmt eine `Box<WgpuSettings>`**, nicht `WgpuSettings`
-(`settings.rs:227`). Das ist genau die Sorte Detail, die man aus dem Gedaechtnis falsch
-schreibt.
+⚠️ **`RenderCreation::Automatic` takes a `Box<WgpuSettings>`**, not `WgpuSettings`
+(`settings.rs:227`). That is exactly the kind of detail you write down wrong from memory.
 
-`ExitCondition::DontExit` ist noetig, **weil ohne Fenster sonst sofort beendet wird**: die
-Vorgabe `OnAllClosed` sieht null Fenster und faehrt herunter (`bevy_window/src/lib.rs:72-74`).
+`ExitCondition::DontExit` is needed **because without a window the app otherwise shuts down
+immediately**: the default `OnAllClosed` sees zero windows and goes down
+(`bevy_window/src/lib.rs:72-74`).
 
-### Drei Fallen genau an dieser Stelle
+### Three traps at exactly this spot
 
-1. **`primary_window: None` allein reicht nicht.** `WinitPlugin::build` baut den Event-Loop
-   **unbedingt** und mit `.expect("Failed to build event loop")`
-   (`bevy_winit/src/lib.rs:90-128`); winit liefert unter Linux ohne `WAYLAND_DISPLAY` und ohne
-   `DISPLAY` einen Fehler (`winit-0.30.13/src/platform_impl/linux/mod.rs:754-766`). Es panikt
-   also, **bevor ein einziges System laeuft**. Einziger Ausweg: `disable::<WinitPlugin>()`.
-2. **`ScheduleRunnerPlugin` ist NICHT in `DefaultPlugins`**, solange das Feature `bevy_window`
-   an ist (`bevy_internal/src/default_plugins.rs:19-20`). Nach `disable::<WinitPlugin>()`
-   treibt sonst **niemand** die App an: `App::run()` faellt auf `run_once` zurueck und macht
-   genau **ein** Update (`bevy_app/src/app.rs:159`, `1539-1550`). Also `.add(...)` — und
-   **nicht** `.set(...)`, denn `set` und `disable` **paniken**, wenn der Plugin gar nicht in
-   der Gruppe ist (`bevy_app/src/plugin_group.rs:312-319`, `496-508`).
-3. **`disable::<WinitPlugin>()` selbst braucht einen `cfg`-Riegel.** Baut jemand mit
-   `--no-default-features`, gibt es weder den Modulpfad `bevy::winit` noch den Eintrag in der
-   Gruppe — der Aufruf waere ein Compilerfehler bzw. eine Panik. Deshalb steht er in
-   `src/lib.rs` hinter `#[cfg(any(feature = "x11", feature = "wayland"))]`.
+1. **`primary_window: None` alone is not enough.** `WinitPlugin::build` builds the event loop
+   **unconditionally** and with `.expect("Failed to build event loop")`
+   (`bevy_winit/src/lib.rs:90-128`); on Linux, with no `WAYLAND_DISPLAY` and no `DISPLAY`, winit
+   returns an error (`winit-0.30.13/src/platform_impl/linux/mod.rs:754-766`). So it panics
+   **before a single system runs**. The only way out: `disable::<WinitPlugin>()`.
+2. **`ScheduleRunnerPlugin` is NOT in `DefaultPlugins`** as long as the feature `bevy_window` is
+   on (`bevy_internal/src/default_plugins.rs:19-20`). After `disable::<WinitPlugin>()`
+   **nobody** drives the app otherwise: `App::run()` falls back to `run_once` and does exactly
+   **one** update (`bevy_app/src/app.rs:159`, `1539-1550`). So `.add(...)` — and **not**
+   `.set(...)`, because `set` and `disable` **panic** when the plugin is not in the group at all
+   (`bevy_app/src/plugin_group.rs:312-319`, `496-508`).
+3. **`disable::<WinitPlugin>()` itself needs a `cfg` guard.** Build with
+   `--no-default-features` and there is neither the module path `bevy::winit` nor the entry in
+   the group — the call would be a compiler error or a panic. That is why it sits in
+   `src/lib.rs` behind `#[cfg(any(feature = "x11", feature = "wayland"))]`.
 
-### Und ein Feld, das nur wie ein Schalter aussieht
+### And a field that only looks like a switch
 
-`DirectionalLight::contact_shadows_enabled` bewirkt **allein nichts**. Kontaktschatten sind ein
-Screenspace-Verfahren und brauchen zusaetzlich eine `ContactShadows`-Komponente an der Kamera.
-Der Schalter, der wirklich Rechenzeit kostet, heisst `shadow_maps_enabled`.
+`DirectionalLight::contact_shadows_enabled` **on its own does nothing**. Contact shadows are a
+screen-space technique and additionally need a `ContactShadows` component on the camera. The
+switch that really costs compute time is called `shadow_maps_enabled`.
 
-## Der Skript-Fahrer schreibt in **echte** Eingaben
+## The script driver writes into **real** input
 
-`ButtonInput::press` und `::release` sind **oeffentlich**
-(`bevy_input/src/button_input.rs:149`, `172`). Damit kann eine `--script`-Fahrt in dieselben
-Eingaben schreiben, die ein Mensch ausloest — **kein zweiter, falscher Weg zu spielen**
-(`prompts/init.md` §12b). Fuer die Maus gibt es `AccumulatedMouseMotion { delta: Vec2 }`
-(`bevy_input/src/mouse.rs:218-221`), das die Bewegung zwischen zwei Bildern aufsummiert.
+`ButtonInput::press` and `::release` are **public** (`bevy_input/src/button_input.rs:149`,
+`172`). That lets a `--script` run write into the same input a human triggers — **no second,
+false way to play** (`prompts/init.md` §12b). For the mouse there is
+`AccumulatedMouseMotion { delta: Vec2 }` (`bevy_input/src/mouse.rs:218-221`), which sums up the
+motion between two frames.
 
-## Was der Bau auf dieser Maschine gekostet hat
+## What the build cost on this machine
 
-`bevy = "0.19.0"` mit `default`-Features baut auf Maschine A **nicht**. Die Sammelfeatures
-`2d`, `3d` und `ui` ziehen alle `default_platform` nach, und darin stecken `x11`, `wayland`
-und `bevy_gilrs` fest verdrahtet (`bevy-0.19.0/Cargo.toml:2736`, `2756-2768`).
+`bevy = "0.19.0"` with the `default` features does **not** build on machine A. The umbrella
+features `2d`, `3d` and `ui` all pull in `default_platform`, and `x11`, `wayland` and
+`bevy_gilrs` are hard-wired inside it (`bevy-0.19.0/Cargo.toml:2736`, `2756-2768`).
 
-| Versuch | Ergebnis | Zeit `[debian]` |
+| Attempt | Result | Time `[debian]` |
 |---|---|---|
-| `bevy = "0.19.0"` (default) | Abbruch in `wayland-sys`: `wayland-client.pc` fehlt | 9m22s |
-| Featureliste von Hand, aber mit `audio` | Abbruch in `alsa-sys`: `alsa.pc` fehlt | 13m40s |
+| `bevy = "0.19.0"` (default) | aborts in `wayland-sys`: `wayland-client.pc` missing | 9m22s |
+| feature list by hand, but with `audio` | aborts in `alsa-sys`: `alsa.pc` missing | 13m40s |
 
-Auf dieser Maschine gibt es genau drei `.pc`-Dateien (`openssl`, `libuv`, `libcrypt`) und kein
-passwortloses `sudo`. Die Loesung steht in `Cargo.toml`: `default-features = false`, eine
-Basisliste **ohne alles, was eine Systembibliothek zur Bauzeit braucht**, und darueber eigene
-Features — `x11` (Vorgabe), `wayland`, `klang`. `cargo build --no-default-features` braucht gar
-nichts.
+On this machine there are exactly three `.pc` files (`openssl`, `libuv`, `libcrypt`) and no
+passwordless `sudo`. The solution stands in `Cargo.toml`: `default-features = false`, a base
+list **without anything that needs a system library at build time**, and our own features on top
+of it — `x11` (the default), `wayland`, `audio`. `cargo build --no-default-features` needs
+nothing at all.
 
-**Merksatz:** Bei Bevy ist die Frage nie „welches Feature will ich?", sondern „was zieht dieses
-Feature nach?". `cargo tree -e features` beantwortet sie, ein Blogpost nicht.
+**Remember:** with Bevy the question is never "which feature do I want?" but "what does this
+feature pull in?". `cargo tree -e features` answers it, a blog post does not.
 
-## Die Fallen aus `prompts/init.md` §3, unveraendert gueltig
+## The traps from `prompts/init.md` §3, still valid unchanged
 
-- **`add_plugins((..))` nimmt maximal ~15 Elemente pro Tupel**, ein System maximal ~16
-  Parameter. Beides schlaegt als unlesbarer Trait-Fehler zu. Loesung: verschachteln
-  (`((A, B), C, …)`) bzw. Parameter in ein `SystemParam`-Struct buendeln.
-- **Commands sind verzoegert.** Was man diesen Frame spawnt, existiert erst am Ende des
-  Frames. Ein Test oder Skript, das spawnt und im selben Atemzug prueft, prueft ins Leere —
-  deshalb steht im Fahrer `wait` hinter jedem `spawn`.
-- **`cargo run`, NIE `./target/debug/<name>`.** Das nackte Binary sucht `assets/` relativ zum
-  Arbeitsverzeichnis und findet nichts: leere Welt, keine Fehlermeldung, sieht exakt wie ein
-  Render-Bug aus. (`src/data/mod.rs` faengt genau das ab und sagt es laut.)
-- **Audio:** Bevys Default-Decoder ist Vorbis allein. Wer `.wav` benutzt, braucht das Feature
-  `wav` — sonst laedt jeder Klang fehlerfrei und spielt **Stille**.
-- **RON kennt kein `include`.** Wird eine Datendatei zu gross, splittet man sie **in Rust**
-  (mehrere Dateien lesen und zusammenfuegen), nicht in RON.
-- **Ohne `[profile.dev.package."*"] opt-level = 3` ist ein Debug-Build unspielbar.** Bevy
-  selbst macht Batching, Transform-Propagation und Rendern; der eigene Crate bleibt auf
-  `opt-level = 1` billig zu uebersetzen.
+- **`add_plugins((..))` takes at most ~15 elements per tuple**, a system at most ~16 parameters.
+  Both hit you as an unreadable trait error. Solution: nest them (`((A, B), C, …)`), or bundle
+  the parameters into a `SystemParam` struct.
+- **Commands are delayed.** What you spawn this frame exists only at the end of the frame. A
+  test or a script that spawns and checks in the same breath checks into the void — which is why
+  in the driver a `wait` follows every `spawn`.
+- **`cargo run`, NEVER `./target/debug/<name>`.** The bare binary looks for `assets/` relative to
+  the working directory and finds nothing: empty world, no error message, looks exactly like a
+  render bug. (`src/data/mod.rs` catches precisely this and says so out loud.)
+- **Audio:** Bevy's default decoder is Vorbis and nothing else. Use `.wav` and you need the
+  feature `wav` — otherwise every sound loads without an error and plays **silence**.
+- **RON has no `include`.** When a data file gets too large you split it **in Rust** (read
+  several files and join them), not in RON.
+- **Without `[profile.dev.package."*"] opt-level = 3` a debug build is unplayable.** Bevy itself
+  does batching, transform propagation and rendering; our own crate stays at `opt-level = 1` and
+  cheap to compile.
 
-Verwandt: [`umgebung.md`](umgebung.md) · [`performance.md`](performance.md) ·
-[`workflow.md`](workflow.md) · [`../architektur.md`](../architektur.md) ·
-[`../konventionen.md`](../konventionen.md)
+Related: [`environment.md`](environment.md) · [`performance.md`](performance.md) ·
+[`workflow.md`](workflow.md) · [`../architecture.md`](../architecture.md) ·
+[`../conventions.md`](../conventions.md)

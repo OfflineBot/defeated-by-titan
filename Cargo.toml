@@ -56,7 +56,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 # enhanced-determinism ist NICHT an. Es schaltet libm ein (dep:libm, bevy_math/libm,
 # bevy_heavy/libm, parry3d/enhanced-determinism) und ersetzt damit die
 # Hardware-Transzendenten durch Softwareimplementierungen — plattformgleich, aber
-# langsamer. Ueber `--features determinismus` einschaltbar, siehe unten.
+# langsamer. Ueber `--features determinism` einschaltbar, siehe unten.
 avian3d = { version = "0.7.0", default-features = false, features = [
     "3d",
     "f32",
@@ -70,20 +70,20 @@ avian3d = { version = "0.7.0", default-features = false, features = [
 # Was die MASCHINE kann, entscheidet die Maschine — nicht der Code (docs/umgebung.md).
 #   Maschine A (debian, headless)  : `cargo build`                  — Vorgabe
 #   Maschine A ganz ohne Fenster   : `cargo build --no-default-features`  — braucht NICHTS
-#   Maschine B (offlinebot, niri)  : `cargo spiel`  = --features wayland,klang
+#   Maschine B (offlinebot, niri)  : `cargo play`   = --features wayland,audio
 #
 # x11 ist die Vorgabe, weil winit dafuer `x11rb`/`x11-dl` benutzt und zur Laufzeit dlopen't:
 # es braucht keine Systembibliothek zur Bauzeit. wayland braucht `wayland-client.pc`,
-# klang braucht `alsa.pc` — beides gibt es auf A nicht.
+# audio braucht `alsa.pc` — beides gibt es auf A nicht.
 default = ["x11"]
 x11 = ["bevy/bevy_winit", "bevy/x11"]
 wayland = ["bevy/bevy_winit", "bevy/wayland"]
 # Ohne `wav` laedt jede .wav fehlerfrei und spielt Stille (prompts/init.md §3).
-klang = ["bevy/audio", "bevy/wav"]
+audio = ["bevy/audio", "bevy/wav"]
 # Plattformgleiche Transzendente (sin/cos/atan2 ueber libm statt ueber die FPU). Kandidat
 # fuer Rollback-Netcode; bis gemessen ist, was es kostet, ist es ein Schalter und keine
 # Vorgabe.
-determinismus = ["avian3d/enhanced-determinism"]
+determinism = ["avian3d/enhanced-determinism"]
 
 # Ohne das ist ein Debug-Build UNSPIELBAR: Bevy selbst macht das Batching, die
 # Transform-Propagation und das Rendern. Der eigene Crate bleibt billig zu uebersetzen,

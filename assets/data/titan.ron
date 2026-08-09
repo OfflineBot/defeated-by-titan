@@ -1,86 +1,86 @@
-// titan.ron — die Titanen-Typen. Benannt nach dem Gattungsbegriff **Titan**
-// (Blatt 10_Namensschema: „Titan bleibt"), ohne Plural-s, wie der Projektname.
+// titan.ron — the titan kinds. Named after the generic term **Titan**
+// (sheet 10_Namensschema: „Gattungsbegriff, bleibt"), no plural s, like the project name.
 //
-// Mindestens die HAELFTE aller Typen hat eine Anti-Autopilot-Eigenschaft (Bibel 4) —
-// sonst verkommt der Kampf zu Mausklicken auf Zielscheiben.
-// ausholphase_s ist ueberall >= 0,4 (Bibel, Pfeiler P4). tests/data.rs prueft das.
-// ⚠️ UNGETUNT, siehe game.ron.
+// At least HALF of all kinds carry an anti-autopilot property (bible 4) —
+// otherwise combat degenerates into clicking the mouse on targets.
+// windup_s is >= 0.4 everywhere (bible, pillar P4). tests/data.rs checks that.
+// ⚠️ UNTUNED, see game.ron.
 //
-// **Keine Hoehe steht in dieser Datei.** Jede Art nennt nur ihre `groessenklasse` — eine der
-// fuenf Klassen aus assets/data/massstab.ron (F-064, vom User vorgegeben 2026-08-09).
-// Grund: die Hoehe und die Cortexhoehe gehoeren zusammen. Stuenden sie je Art hier, waeren es
-// sechzehn Zahlen, die niemand gegeneinander prueft — und die erste, die jemand vergisst
-// nachzuziehen, laesst den Cortex im Bauch sitzen.
-// tests/data.rs faellt um, wenn eine Art eine Klasse nennt, die es nicht gibt.
+// **No height stands in this file.** Every kind names only its `size_class` — one of the
+// five classes out of assets/data/scale.ron (F-064, given by the user 2026-08-09).
+// Reason: the height and the cortex height belong together. Standing here per kind, they
+// would be sixteen numbers nobody checks against each other — and the first one somebody
+// forgets to update leaves the cortex sitting in the belly.
+// tests/data.rs falls over when a kind names a class that does not exist.
 //
-// Das Feld hiess bis 2026-08-09 `groesse`. Umbenannt, weil ein Name auf „-groesse" nach einer
-// LAENGE klingt (docs/konventionen.md §5: Feldnamen tragen ihre Einheit) — hier steht aber
-// ein Schluessel, kein Meterwert.
+// Until 2026-08-09 the field was called `size`. Renamed, because a name ending in "-size"
+// sounds like a LENGTH (docs/conventions.md §5: field names carry their unit) — but what
+// stands here is a key, not a value in meters.
 //
-// ⚠️ `cortex_radius_m` ist der einzige Wert dieser Datei, der die Groessentabelle NICHT
-// mitgemacht hat: die Koerper sind bis auf das Doppelte gewachsen, die Trefferzone nicht.
-// Relativ zur Koerperhoehe hat sich das Ziel quer durch alle Arten halbiert (bellower:
-// 14,0 % -> 6,7 %). Das ist ein Balancing-Riss und keine Formfrage; er steht als
-// docs/FRAGEN.md Q-019 mit Annahme und Ruecknahmestelle. Korrigiert sind unten nur die zwei
-// GEOMETRISCH unmoeglichen Faelle (Cortex groesser als der ganze Kopf) — nicht das
-// Verhaeltnis insgesamt.
+// ⚠️ `cortex_radius_m` is the only value in this file that did NOT follow the size table:
+// the bodies have grown by up to a factor of two, the hit zone has not.
+// Relative to body height the target halved right across all kinds (bellower:
+// 14.0 % -> 6.7 %). That is a balancing crack and not a question of form; it stands as
+// docs/QUESTIONS.md Q-019 with an assumption and a place to take it back. Corrected below
+// are only the two GEOMETRICALLY impossible cases (cortex larger than the whole head) —
+// not the ratio as a whole.
 (
-    arten: {
-        // Grundlage: Anflugwinkel lernen. Der Standardtitan, an dem der Spieler den ersten
-        // Schnitt uebt — deshalb die mittlere Klasse (10 m) und nicht die kleine.
-        // 5.0 m -> 10.0 m (Klasse `mittel`)
-        "husk":     (groessenklasse: "mittel",       tempo_m_s:  3.0, cortex_radius_m: 0.55,
-                     regeneration_pro_s: 0.8, ausholphase_s: 0.60, modell: "titan_husk"),
-        // Unvorhersehbare Richtungswechsel -> Fuehrungsschuesse. Bleibt der Husk-Groesse:
-        // die Ueberraschung liegt in der Bewegung, nicht im Umfang.
-        // 5.0 m -> 10.0 m (Klasse `mittel`)
-        "errant":   (groessenklasse: "mittel",       tempo_m_s:  6.5, cortex_radius_m: 0.50,
-                     regeneration_pro_s: 0.8, ausholphase_s: 0.45, modell: "titan_husk"),
-        // Sehr schnell, Sprungangriff -> vertikales Ausweichen. **Der schnelle kleine.**
-        // Die kleinste Klasse ist seine Rolle: klein genug, um zwischen Haeusern zu passen.
-        // 3.5 m -> 4.2 m (Klasse `klein`)
-        // cortex_radius_m 0.40 -> 0.20: 0,40 m Radius sind 0,80 m Durchmesser, und der
-        // GANZE Kopf eines 4,2-m-Titanen ist nach der Kopfregel des Users nur 0,42..0,47 m
-        // hoch (massstab.ron: titan.kopf_anteil_min/-max). Der Cortex war damit fast doppelt
-        // so gross wie der Kopf — geometrisch unmoeglich, und im Bild traegt der kleine
-        // Titan eine Zielscheibe statt eines Halses. Der Fehler ist aelter als die
-        // Groessentabelle (3,5 m Koerper, 0,80 m Cortex), er ist nur jetzt erst messbar,
-        // weil die Kopfregel als Zahl in der RON steht. Obergrenze: 0,47/2 = 0,233 m.
-        "scuttler": (groessenklasse: "klein",        tempo_m_s: 11.0, cortex_radius_m: 0.20,
-                     regeneration_pro_s: 1.1, ausholphase_s: 0.40, modell: "titan_husk"),
-        // Ausweichrolle mit I-Frames -> Timing statt Spam. Eine Rolle braucht einen kurzen
-        // Koerper; 4,5 m lagen zwischen `klein` (4,2) und `mittel` (10) — entschieden fuer
-        // `klein`, weil 10 m sich nicht mehr glaubhaft wegrollen.
-        // 4.5 m -> 4.2 m (Klasse `klein`)
-        // cortex_radius_m 0.45 -> 0.23: dieselbe Rechnung wie beim scuttler, an der
-        // Obergrenze (0,233 m) statt darunter — der weaver ist der Timing-Gegner, sein
-        // Fenster ist die I-Frame-Rolle, nicht ein kleineres Ziel.
-        "weaver":   (groessenklasse: "klein",        tempo_m_s:  7.0, cortex_radius_m: 0.23,
-                     regeneration_pro_s: 1.0, ausholphase_s: 0.50, modell: "titan_husk"),
-        // Schuetzt den Cortex mit der Hand -> erst Arme, dann Cortex. Die Deckung wirkt nur,
-        // wenn die Hand den Cortex wirklich verdeckt: dafuer braucht er Armlaenge.
-        // 8.0 m -> 14.0 m (Klasse `mittel_gross`)
-        "warden":   (groessenklasse: "mittel_gross", tempo_m_s:  3.5, cortex_radius_m: 0.60,
-                     regeneration_pro_s: 0.6, ausholphase_s: 0.70, modell: "titan_gross"),
-        // Regloser Hinterhalt, Griff aus der Luft -> Hoehenwechsel, Aufmerksamkeit.
-        // „Aus der Luft" ist eine Reichweitenfrage: mit 10 m greift er unter dem Dach, mit
-        // 14 m ueber dem Dach — erst dann zwingt er zum Hoehenwechsel.
-        // 5.0 m -> 14.0 m (Klasse `mittel_gross`), Modell titan_husk -> titan_gross
-        "lurker":   (groessenklasse: "mittel_gross", tempo_m_s:  2.0, cortex_radius_m: 0.50,
-                     regeneration_pro_s: 0.7, ausholphase_s: 0.40, modell: "titan_gross"),
-        // Reagiert auf Gas-Geraeusch, ruft Verstaerkung -> Ressourcendisziplin.
-        // **Der grosse laute.** Er war bisher der groesste Typ und bleibt es: die groesste
-        // Klasse, die im normalen Einsatz vorkommt.
-        // 10.0 m -> 21.0 m (Klasse `gross`)
-        "bellower": (groessenklasse: "gross",        tempo_m_s:  2.5, cortex_radius_m: 0.70,
-                     regeneration_pro_s: 0.5, ausholphase_s: 0.80, modell: "titan_gross"),
-        // Paare decken sich gegenseitig -> Zielpriorisierung, Trennung. Zwei gleich grosse
-        // Standardtitanen; die Aufgabe ist das Paar, nicht der einzelne Koerper.
-        // 5.0 m -> 10.0 m (Klasse `mittel`)
-        "chorus":   (groessenklasse: "mittel",       tempo_m_s:  5.0, cortex_radius_m: 0.50,
-                     regeneration_pro_s: 0.9, ausholphase_s: 0.55, modell: "titan_husk"),
+    kinds: {
+        // Basis: learning the approach angle. The standard titan on which the player
+        // practices the first slash — hence the medium class (10 m) and not the small one.
+        // 5.0 m -> 10.0 m (class `medium`)
+        "husk":     (size_class: "medium",       speed_m_s:  3.0, cortex_radius_m: 0.55,
+                     regen_per_s: 0.8, windup_s: 0.60, model: "titan_husk"),
+        // Unpredictable changes of direction -> leading your shots. Stays husk-sized:
+        // the surprise lies in the movement, not in the bulk.
+        // 5.0 m -> 10.0 m (class `medium`)
+        "errant":   (size_class: "medium",       speed_m_s:  6.5, cortex_radius_m: 0.50,
+                     regen_per_s: 0.8, windup_s: 0.45, model: "titan_husk"),
+        // Very fast, jump attack -> vertical evasion. **The fast small one.**
+        // The smallest class is his role: small enough to fit between houses.
+        // 3.5 m -> 4.2 m (class `small`)
+        // cortex_radius_m 0.40 -> 0.20: 0.40 m of radius is 0.80 m of diameter, and the
+        // WHOLE head of a 4.2 m titan is only 0.42..0.47 m tall under the user's head rule
+        // (scale.ron: titan.min_head_fraction/-max_head_fraction). The cortex was thus
+        // almost twice the size of the head — geometrically impossible, and in the image
+        // the small titan wears a bullseye instead of a neck. The error is older than the
+        // size table (3.5 m body, 0.80 m cortex), it has only become measurable now,
+        // because the head rule stands as a number in the RON. Upper bound: 0.47/2 = 0.233 m.
+        "scuttler": (size_class: "small",        speed_m_s: 11.0, cortex_radius_m: 0.20,
+                     regen_per_s: 1.1, windup_s: 0.40, model: "titan_husk"),
+        // Evasive roll with i-frames -> timing instead of spam. A roll needs a short
+        // body; 4.5 m sat between `small` (4.2) and `medium` (10) — decided for
+        // `small`, because 10 m no longer roll away credibly.
+        // 4.5 m -> 4.2 m (class `small`)
+        // cortex_radius_m 0.45 -> 0.23: the same arithmetic as for the scuttler, at the
+        // upper bound (0.233 m) instead of below it — the weaver is the timing opponent,
+        // his window is the i-frame roll, not a smaller target.
+        "weaver":   (size_class: "small",        speed_m_s:  7.0, cortex_radius_m: 0.23,
+                     regen_per_s: 1.0, windup_s: 0.50, model: "titan_husk"),
+        // Shields the cortex with his hand -> arms first, then cortex. The cover only works
+        // when the hand really does hide the cortex: for that he needs arm length.
+        // 8.0 m -> 14.0 m (class `large`)
+        "warden":   (size_class: "large", speed_m_s:  3.5, cortex_radius_m: 0.60,
+                     regen_per_s: 0.6, windup_s: 0.70, model: "titan_large"),
+        // Motionless ambush, grab out of the air -> changes of height, attention.
+        // "Out of the air" is a question of reach: at 10 m he grabs below the roof, at
+        // 14 m above the roof — only then does he force a change of height.
+        // 5.0 m -> 14.0 m (class `large`), model titan_husk -> titan_large
+        "lurker":   (size_class: "large", speed_m_s:  2.0, cortex_radius_m: 0.50,
+                     regen_per_s: 0.7, windup_s: 0.40, model: "titan_large"),
+        // Reacts to the sound of gas, calls in reinforcements -> resource discipline.
+        // **The big loud one.** He was the largest kind so far and stays it: the largest
+        // class that occurs in a normal mission.
+        // 10.0 m -> 21.0 m (class `huge`)
+        "bellower": (size_class: "huge",        speed_m_s:  2.5, cortex_radius_m: 0.70,
+                     regen_per_s: 0.5, windup_s: 0.80, model: "titan_large"),
+        // Pairs cover each other -> target prioritization, separation. Two equally large
+        // standard titans; the task is the pair, not the single body.
+        // 5.0 m -> 10.0 m (class `medium`)
+        "chorus":   (size_class: "medium",       speed_m_s:  5.0, cortex_radius_m: 0.50,
+                     regen_per_s: 0.9, windup_s: 0.55, model: "titan_husk"),
 
-        // Die Klasse `boss` (28 m) ist bewusst unbelegt: ihr erster Vertreter ist ein
-        // Raid-Gegner, und Raids stehen hinter dem Vector-Gear-Gate (docs/ROADMAP.md).
+        // The class `boss` (28 m) is deliberately unused: its first representative is a
+        // raid opponent, and raids stand behind the Vector Gear gate (docs/ROADMAP.md).
     },
 )

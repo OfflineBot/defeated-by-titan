@@ -1,19 +1,19 @@
-//! sound — Gas-Zischen, Hakeneinschlag, Klingenschnitt, Titanenschritt
+//! sound — gas hiss, hook impact, blade cut, titan footstep
 //!
-//! **Jede Trefferart hat einen eigenen Klang** (Bibel 2, Pfeiler P4). Und Gas verbrauchen ist
-//! laut: der Bellower reagiert darauf, das koppelt die Ressource an das Risiko.
+//! **Every kind of hit has a sound of its own** (Bible 2, pillar P4). And spending gas is
+//! loud: the Bellower reacts to it, which couples the resource to the risk.
 //!
-//! ⚠️ Bevys Audio haengt an ALSA und ist deshalb hinter dem Feature `klang` versteckt — auf
-//! Maschine A gibt es kein `alsa.pc` (`docs/umgebung.md`). Ohne das Feature laedt diese
-//! Domaene nichts und spielt nichts; sie meldet es beim Start **einmal**, statt still zu
-//! schweigen.
+//! ⚠️ Bevy's audio hangs on ALSA and is therefore hidden behind the `audio` feature — on
+//! machine A there is no `alsa.pc` (`docs/environment.md`). Without the feature this domain
+//! loads nothing and plays nothing; it says so **once** at startup instead of silently
+//! staying silent.
 //!
-//! Klaenge werden **gemessen statt gehoert**: Laenge, Grundfrequenz, Huellkurve,
-//! Spitzenpegel, ob er schleift. Nur originale oder lizenzierte Musik (Bibel 6.4).
+//! Sounds are **measured instead of listened to**: length, fundamental frequency, envelope,
+//! peak level, whether it loops. Only original or licensed music (Bible 6.4).
 //!
-//! **Noch leer.** Das Plugin steht im Baum, damit die Reihenfolge in `lib.rs` von Anfang an
-//! stimmt und ein Fan-out auf Domaenen moeglich ist, ohne dass fuenf Agenten denselben
-//! Ordner anlegen (`prompts/init.md` §17).
+//! **Still empty.** The plugin stands in the tree so that the order in `lib.rs` is right from
+//! the start and a fan-out across domains is possible without five agents creating the same
+//! folder (`prompts/init.md` §17).
 
 use bevy::prelude::*;
 

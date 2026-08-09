@@ -1,15 +1,15 @@
-//! save — Spielstand: Profil, Gear-Budget, Traits, Lineage, Fortschritt
+//! save — the save game: profile, gear budget, Traits, Lineage, progress
 //!
-//! Die Anforderung der Bibel gilt unveraendert, auch wenn ProfileStore hier nichts bedeutet:
-//! **kein Datenverlust, keine Duplikation.** Nachruesten ist praktisch unmoeglich (Bibel 6.4)
-//! — deshalb steht die Domaene ab Tag 1 im Baum, auch leer.
+//! The Bible's requirement holds unchanged, even though ProfileStore means nothing here:
+//! **no data loss, no duplication.** Retrofitting it is practically impossible (Bible 6.4) —
+//! which is why the domain stands in the tree from day 1, empty as it is.
 //!
-//! Ein Spielstand haengt an einer [`PlayerId`](crate::shared::PlayerId), nicht an einer
-//! `Entity` und nicht an einer Verbindung.
+//! A save game hangs on a [`PlayerId`](crate::shared::PlayerId), not on an `Entity` and not on
+//! a connection.
 //!
-//! **Noch leer.** Das Plugin steht im Baum, damit die Reihenfolge in `lib.rs` von Anfang an
-//! stimmt und ein Fan-out auf Domaenen moeglich ist, ohne dass fuenf Agenten denselben
-//! Ordner anlegen (`prompts/init.md` §17).
+//! **Still empty.** The plugin stands in the tree so that the order in `lib.rs` is right from
+//! the start and a fan-out across domains is possible without five agents creating the same
+//! folder (`prompts/init.md` §17).
 
 use bevy::prelude::*;
 

@@ -1,0 +1,17 @@
+# t019-latency — the same run at 200 ms of simulated latency.
+# Bible T-019: every movement feature is checked THIS WAY TOO, not only locally.
+# "Feels good locally" is not an acceptance.
+#
+#   cargo run -- --headless --lag 200 --script scripts/t019-latency.txt --ticks 900
+
+mark start
+assert height > -1
+
+look 0 0
+key W 1.0
+wait 1.5                       # 12 ticks more than without lag — so wait longer
+mark walked
+assert height > -1
+assert height < 3
+
+mark end

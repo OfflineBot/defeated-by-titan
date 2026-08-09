@@ -1,169 +1,169 @@
-//! player — der Koerper: laufen, springen, Schwerkraft, Boden.
+//! player — the body: running, jumping, gravity, ground.
 //!
-//! Liest [`Intent`], **nie die Tastatur**. Wer den Intent gefuellt hat — Mensch, Skript oder
-//! eines Tages das Netz — ist dieser Domaene egal, und genau das ist der Punkt
-//! (`prompts/init.md` §6 Regel 2).
+//! Reads [`Intent`], **never the keyboard**. Who filled that intent — a human, a script or
+//! one day the network — is none of this domain's business, and that is exactly the point
+//! (`prompts/init.md` §6 rule 2).
 //!
-//! **Der `Transform` des Spielers hat genau einen Schreiber**, und der wird
-//! [`koerper::schritt`] heissen. Die alte Teilung „`player` am Boden, `vector` am Seil,
-//! getrennt ueber `Bewegungszustand`" haelt nicht: ein Gas-Boost wirkt in der Luft **und**
-//! am Seil gleichzeitig, es gibt also keinen Zustand, der die beiden Schreiber trennt
-//! (`docs/architektur.md`, Autoritaetstabelle).
+//! **The player's `Transform` has exactly one writer**, and it will be called
+//! [`integrator::step`]. The old split "`player` on the ground, `vector` on the rope, kept
+//! apart by `MovementState`" does not hold: a gas boost acts in the air **and** on the rope
+//! at the same time, so there is no state that separates the two writers
+//! (`docs/architecture.md`, authority table).
 //!
-//! **Stand:** die Naht steht. [`koerper::schritt`] ist als Stub in `SchrittSet::Vollzug`
-//! registriert und tut nichts; die heutige Bewegung laeuft weiter in [`bewegen`] — WASD,
-//! Schwerkraft, Bodenebene bei y = 0, keine echte Kollision. **[`bewegen`] und das harte
-//! `boden_y = 0.0` sterben in dem Commit, der `koerper::schritt` fuellt**, zusammen mit
-//! `shared::Boden`. Vorher nicht: sonst faellt der Spieler 600 Ticks lang und
-//! `scripts/t007-erste-fahrt.txt` mit ihm.
+//! **Status:** the seam is in place. [`integrator::step`] is registered as a stub in
+//! `SimulationSystems::Integrate` and does nothing; today's movement still runs in
+//! [`move_players`] — WASD, gravity, a ground plane at y = 0, no real collision.
+//! **[`move_players`] and the hardcoded `ground_y = 0.0` die in the commit that fills
+//! `integrator::step`**, together with `shared::Ground`. Not before: otherwise the player
+//! falls for 600 ticks and takes `scripts/t007-first-run.txt` down with him.
 
-pub mod koerper;
-pub mod lauf;
+pub mod integrator;
+pub mod locomotion;
 
 use bevy::prelude::*;
 
 use crate::data::GameData;
 use crate::shared::{
-    AntriebEinholen, AntriebLauf, AntriebSchub, Bewegungszustand, Gas, Gasfreigabe, Haken,
-    IdZaehler, Intent, Klingen, LocalPlayer, PlayerId, SchrittSet, Seillaenge, SpielerWarpen,
-    Start, Tempo, VorigeTasten, Zielpunkt,
+    ReelSpeed, RunAccel, BoostAccel, MovementState, Gas, GasGrant, Hook,
+    IdCounter, Intent, Blades, LocalPlayer, PlayerId, SimulationSystems, RopeLength, WarpPlayer,
+    Cli, Velocity, PrevButtons, AimPoint,
 };
 
 pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, lokalen_spieler_spawnen)
-            .add_systems(FixedUpdate, lauf::lauf.in_set(SchrittSet::Antrieb))
+        app.add_systems(Startup, spawn_local_player)
+            .add_systems(FixedUpdate, locomotion::ground_run.in_set(SimulationSystems::Drive))
             .add_systems(
                 FixedUpdate,
-                (warpen_ausfuehren, bewegen, koerper::schritt)
+                (apply_warps, move_players, integrator::step)
                     .chain()
-                    .in_set(SchrittSet::Vollzug),
+                    .in_set(SimulationSystems::Integrate),
             );
     }
 }
 
-/// Spawnt **einen** Spieler und markiert ihn als den lokalen.
+/// Spawns **one** player and marks him as the local one.
 ///
-/// Bewusst getrennt: `PlayerId` hat jeder, `LocalPlayer` genau einer. Ein zweiter Spieler
-/// (Test, spaeter Netz) bekommt dieselben Components ohne den Marker —
-/// `tests/mehrspieler.rs` tut genau das.
-pub fn spieler_spawnen(
+/// Deliberately separate: everyone has a `PlayerId`, exactly one has `LocalPlayer`. A second
+/// player (a test, later the network) gets the same components without the marker —
+/// `tests/multiplayer.rs` does exactly that.
+pub fn spawn_player(
     commands: &mut Commands,
-    zaehler: &mut IdZaehler,
-    daten: &GameData,
+    ids: &mut IdCounter,
+    data: &GameData,
     pos: Vec3,
-    lokal: bool,
+    local: bool,
 ) -> Entity {
-    let id = zaehler.naechster_spieler();
-    // Verschachtelt, weil ein Tupel in `spawn` nur begrenzt viele Elemente nimmt und
-    // darueber als unlesbarer Trait-Fehler zuschlaegt (`docs/lessons/bevy.md`).
+    let id = ids.next_player();
+    // Nested, because a tuple in `spawn` takes only so many elements and beyond that
+    // hits you as an unreadable trait error (`docs/lessons/bevy.md`).
     let mut e = commands.spawn((
-        Name::new(format!("spieler_{}", id.0)),
+        Name::new(format!("player_{}", id.0)),
         id,
         Intent::default(),
-        Tempo::default(),
-        Bewegungszustand::default(),
-        Gas::voll(daten.spiel.vector.gas_tank),
-        Klingen::frisch(daten.gear.klingen.paare_start),
+        Velocity::default(),
+        MovementState::default(),
+        Gas::full(data.game.vector.gas_tank),
+        Blades::fresh(data.gear.blades.start_pairs),
         Transform::from_translation(pos),
-        // Das Vector Gear haengt am Spieler, nicht an der Welt: jeder Spieler hat sein
-        // eigenes (`docs/multiplayer.md` Regel 3). Alle acht sind ab Tick 1 vorhanden, damit
-        // kein System auf ein fehlendes Component filtert und den Spieler still auslaesst.
+        // The Vector Gear hangs on the player, not on the world: every player has his own
+        // (`docs/multiplayer.md` rule 3). All eight are present from tick 1 on, so that no
+        // system filters on a missing component and silently skips the player.
         (
-            Haken::default(),
-            Seillaenge::default(),
-            Zielpunkt::default(),
-            Gasfreigabe::default(),
-            AntriebLauf::default(),
-            AntriebSchub::default(),
-            AntriebEinholen::default(),
-            VorigeTasten::default(),
+            Hook::default(),
+            RopeLength::default(),
+            AimPoint::default(),
+            GasGrant::default(),
+            RunAccel::default(),
+            BoostAccel::default(),
+            ReelSpeed::default(),
+            PrevButtons::default(),
         ),
     ));
-    if lokal {
+    if local {
         e.insert(LocalPlayer);
     }
     e.id()
 }
 
-fn lokalen_spieler_spawnen(
+fn spawn_local_player(
     mut commands: Commands,
-    mut zaehler: ResMut<IdZaehler>,
-    daten: Res<GameData>,
-    start: Res<Start>,
+    mut ids: ResMut<IdCounter>,
+    data: Res<GameData>,
+    start: Res<Cli>,
 ) {
-    let e = spieler_spawnen(&mut commands, &mut zaehler, &daten, Vec3::new(0.0, 2.0, 0.0), true);
+    let e = spawn_player(&mut commands, &mut ids, &data, Vec3::new(0.0, 2.0, 0.0), true);
     if start.sandbox {
-        // `--sandbox`: leeres Feld, unendlich Gas — zum Anschauen (§12a).
+        // `--sandbox`: an empty field, unlimited gas — just to look at it (§12a).
         commands.entity(e).insert(Gas {
-            unbegrenzt: true,
-            ..Gas::voll(daten.spiel.vector.gas_tank)
+            unlimited: true,
+            ..Gas::full(data.game.vector.gas_tank)
         });
     }
 }
 
-fn warpen_ausfuehren(
-    mut nachrichten: MessageReader<SpielerWarpen>,
-    mut spieler: Query<(&PlayerId, &mut Transform, &mut Tempo)>,
+fn apply_warps(
+    mut messages: MessageReader<WarpPlayer>,
+    mut players: Query<(&PlayerId, &mut Transform, &mut Velocity)>,
 ) {
-    for w in nachrichten.read() {
-        for (id, mut transform, mut tempo) in &mut spieler {
-            if *id == w.spieler {
+    for w in messages.read() {
+        for (id, mut transform, mut tempo) in &mut players {
+            if *id == w.player {
                 transform.translation = Vec3::new(w.pos_x, w.pos_y, w.pos_z);
-                // Ohne das nimmt der Spieler seine alte Geschwindigkeit mit und faellt
-                // am Zielort sofort weiter — ein `warp`, der nicht anhaelt, ist als
-                // Fehlersuche-Werkzeug wertlos (§12c).
+                // Without this the player carries his old velocity along and keeps
+                // falling the moment he arrives — a `warp` that does not stop is
+                // worthless as a debugging tool (§12c).
                 tempo.0 = Vec3::ZERO;
             }
         }
     }
 }
 
-/// Laufen und Fallen. **Alles pro Sekunde**, nichts pro Frame (§11).
-fn bewegen(
-    zeit: Res<Time<Fixed>>,
-    daten: Res<GameData>,
-    mut spieler: Query<(&Intent, &mut Transform, &mut Tempo, &mut Bewegungszustand)>,
+/// Running and falling. **Everything per second**, nothing per frame (§11).
+fn move_players(
+    time: Res<Time<Fixed>>,
+    data: Res<GameData>,
+    mut players: Query<(&Intent, &mut Transform, &mut Velocity, &mut MovementState)>,
 ) {
-    let dt = crate::shared::mathe::dt_gezaehmt(zeit.delta_secs());
-    let s = &daten.spiel.spieler;
-    let boden_y = 0.0;
+    let dt = crate::shared::math::clamped_dt_s(time.delta_secs());
+    let s = &data.game.player;
+    let ground_y = 0.0;
 
-    for (intent, mut transform, mut tempo, mut zustand) in &mut spieler {
-        if *zustand == Bewegungszustand::AmSeil {
-            // Am Seil gehoert der Transform `vector`. Diese Domaene fasst ihn nicht an.
+    for (intent, mut transform, mut tempo, mut state) in &mut players {
+        if *state == MovementState::Tethered {
+            // On the rope the transform belongs to `vector`. This domain does not touch it.
             continue;
         }
 
-        // Bewegung ist spielerlokal: erst in Weltkoordinaten drehen, dann anwenden.
+        // Movement is player-local: rotate into world coordinates first, then apply.
         let (sin, cos) = intent.yaw.sin_cos();
-        let vorwaerts = Vec3::new(-sin, 0.0, -cos);
-        let rechts = Vec3::new(cos, 0.0, -sin);
-        let wunsch = (vorwaerts * intent.bewegen_y + rechts * intent.bewegen_x)
+        let forward = Vec3::new(-sin, 0.0, -cos);
+        let right = Vec3::new(cos, 0.0, -sin);
+        let desired = (forward * intent.move_y + right * intent.move_x)
             .clamp_length_max(1.0)
-            * s.laufen_m_s;
+            * s.run_speed_m_s;
 
-        let am_boden = transform.translation.y <= boden_y + 1e-3;
-        if am_boden {
-            tempo.0.x = wunsch.x;
-            tempo.0.z = wunsch.z;
-            if intent.haelt(crate::shared::Tasten::SPRINGEN) {
-                tempo.0.y = s.sprung_m_s;
-                *zustand = Bewegungszustand::InDerLuft;
+        let grounded = transform.translation.y <= ground_y + 1e-3;
+        if grounded {
+            tempo.0.x = desired.x;
+            tempo.0.z = desired.z;
+            if intent.pressed(crate::shared::Buttons::JUMP) {
+                tempo.0.y = s.jump_speed_m_s;
+                *state = MovementState::Airborne;
             } else {
                 tempo.0.y = 0.0;
-                *zustand = Bewegungszustand::AmBoden;
+                *state = MovementState::Grounded;
             }
         } else {
-            tempo.0.y += daten.spiel.schwerkraft_m_s2 * dt;
-            *zustand = Bewegungszustand::InDerLuft;
+            tempo.0.y += data.game.gravity_m_s2 * dt;
+            *state = MovementState::Airborne;
         }
 
         transform.translation += tempo.0 * dt;
-        if transform.translation.y < boden_y {
-            transform.translation.y = boden_y;
+        if transform.translation.y < ground_y {
+            transform.translation.y = ground_y;
             tempo.0.y = 0.0;
         }
     }

@@ -1,0 +1,29 @@
+# t007-first-run — the smoke test: does the game run at all, and does nobody fall through
+# the ground? (T-007 „Automatisierte Smoke-Tests", docs/backlog/tech.ron)
+#
+#   cargo run -- --headless --script scripts/t007-first-run.txt --ticks 600
+#
+# If an `assert` fails, the process ends with a non-zero exit code. That is exactly what
+# turns a run into a test (prompts/init.md §12b).
+
+mark start
+assert height > -1              # has not fallen through the ground
+assert titans == 0            # the world starts out empty
+
+look 0 0                       # look along -Z, the axis contract (docs/conventions.md)
+key W 1.0                      # walk forward for one second
+wait 1.2                       # commands are delayed: wait first, then measure
+mark walked
+assert height > -1
+assert height < 3               # no taking off without Vector Gear
+
+key Space 0.1                  # jump
+wait 0.2
+mark jumped
+assert height > 0.05            # the jump really did produce height
+
+wait 1.5                       # land again
+mark landed
+assert height < 0.5
+
+mark end

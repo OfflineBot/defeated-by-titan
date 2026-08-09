@@ -1,19 +1,19 @@
-//! titan — Titanen: Rig, Gliedmassen, Cortex, KI
+//! titan — the titans: rig, limbs, cortex, AI
 //!
-//! **Mindestens die Haelfte aller Gegnertypen hat eine Anti-Autopilot-Eigenschaft**
-//! (Bibel 4) — sonst verkommt der Kampf zu Mausklicken auf Zielscheiben. Husk, Errant,
-//! Scuttler, Weaver, Warden, Lurker, Bellower, Chorus, dazu vier Raid-Bosse.
+//! **At least half of all enemy kinds carry an anti-autopilot property** (Bible 4) —
+//! otherwise the fight degenerates into clicking on targets. Husk, Errant, Scuttler, Weaver,
+//! Warden, Lurker, Bellower, Chorus, plus four raid bosses.
 //!
-//! **Jeder Angriff hat eine Ausholphase von mindestens 0,4 s** und der Cortex ist aus 100 m
-//! erkennbar (Bibel 2, Pfeiler P4: Lesbarkeit vor Realismus). Der Spieler soll nie fragen,
-//! warum er gestorben ist.
+//! **Every attack has a windup of at least 0.4 s** and the cortex is readable from 100 m
+//! (Bible 2, pillar P4: readability before realism). The player should never have to ask why
+//! he died.
 //!
-//! Liest [`TitanGetroffen`](crate::shared::TitanGetroffen) und entscheidet selbst, was ein
-//! Treffer fuer seinen Koerper heisst — `combat` weiss nicht, wie ein Titan gebaut ist.
+//! Reads [`TitanHit`](crate::shared::TitanHit) and decides for itself what a hit means for its
+//! body — `combat` does not know how a titan is built.
 //!
-//! **Noch leer.** Das Plugin steht im Baum, damit die Reihenfolge in `lib.rs` von Anfang an
-//! stimmt und ein Fan-out auf Domaenen moeglich ist, ohne dass fuenf Agenten denselben
-//! Ordner anlegen (`prompts/init.md` §17).
+//! **Still empty.** The plugin stands in the tree so that the order in `lib.rs` is right from
+//! the start and a fan-out across domains is possible without five agents creating the same
+//! folder (`prompts/init.md` §17).
 
 use bevy::prelude::*;
 

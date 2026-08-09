@@ -1,0 +1,38 @@
+# f003-city — the city out of assets/data/maps.ron, from above and from a distance.
+#
+#   cargo run -- --offscreen \
+#       --script scripts/f003-city.txt --ticks 110 --screenshot docs/images/f003-city.png
+#
+# The evidence for F-003 "the map comes out of the file": until 2026-08-09 the image showed
+# the four hard-wired placeholder blocks out of src/world/mod.rs. What has to be visible
+# here is something else — a layout of blocks and streets, the nine placed blocks inside
+# it, and the vertical out of the landmarks (church 35 m, watchtower 12 m, tree 12 m).
+#
+# ⚠️ The 110 belong to THIS file: `wait 1.5` is 90 ticks at 60 Hz, `wait 0.3` another 18.
+# Whoever changes the tick count changes the image.
+#
+# ⚠️ The player falls. `warp` sets position and velocity, there is no hover mode
+# (src/player/mod.rs::apply_warps), and at gravity_m_s2 = -20 that is about 0.95 m in the
+# 0.3 s until the image. The two `assert` lines bracket exactly that — they are the reason
+# the image height is a measured number and not a claimed one.
+#
+# ⚠️ `look` really works since 2026-08-09 (src/render/camera.rs is filled). Without the
+# look downward, half the city would lie below the image edge: the camera sees a vertical
+# field of 60 degrees (game.ron: camera.fov_deg), and without any tilt the horizon is the
+# middle of the image. -26 degrees tip the ground far enough in that the streets read as
+# lines instead of as edges.
+
+wait 1.5                # let world, camera, meshes and the render pipelines come up
+
+# 70 m above the map, 130 m south of the origin, looking along -Z and 26 degrees down.
+# All three landmarks lie in that direction: tree (-20, -58), watchtower (24, -40),
+# church (60, -60).
+look 0 -26
+warp 0 70 130
+
+wait 0.3                # the warp takes effect one tick later than it is written
+assert height > 68       # the warp really did take effect
+assert height < 71       # and the player has not fallen far yet
+assert titans == 0     # the world starts out empty
+mark f003-city
+wait 5                  # keep the run alive: if it ends, the process ends before the image

@@ -1,318 +1,319 @@
-//! Der Waechter ueber die Stadt — `F-003`.
+//! The guard over the city — `F-003`.
 //!
-//! Eine Stadt aus einer Datei hat vier Arten, falsch zu sein, und **keine davon sieht man im
-//! Bild**:
+//! A city that comes out of a file has four ways of being wrong, and **you see none of them
+//! in the image**:
 //!
-//! 1. Sie wird gar nicht gebaut (oder doppelt) — im Bild sieht beides nach „Haeuser" aus.
-//! 2. Sie ist nicht deterministisch — faellt erst im Netz auf, also am teuersten Tag.
-//! 3. Die Kollisionsform hat den Faktor 2 gegen die Renderform — der Haken faengt in der
-//!    Luft, und das Bild zeigt trotzdem ein Haus.
-//! 4. Alles ist hakbar — dann prueft „kein Haken auf ungetaggten Flaechen" (`F-003`) nichts.
+//! 1. It is not built at all (or built twice) — in the image both just look like "houses".
+//! 2. It is not deterministic — that surfaces only over the network, on the most expensive
+//!    day there is.
+//! 3. The collision shape is off by a factor of 2 against the render shape — the hook catches
+//!    in mid-air, and the image still shows a house.
+//! 4. Everything is anchorable — then "no hook on untagged surfaces" (`F-003`) checks nothing.
 //!
-//! Deshalb misst dieser Test **gegen `assets/data/maps.ron`**, nicht gegen sich selbst.
+//! So this test measures **against `assets/data/maps.ron`**, not against itself.
 
 use avian3d::prelude::Collider;
 use bevy::prelude::*;
 use defeated_by_titan::data::GameData;
-use defeated_by_titan::shared::{Ankerflaeche, Bauklotz, Koerper, Maske, Start};
-use defeated_by_titan::world::karte::{kloetze_planen, Rohbau};
+use defeated_by_titan::shared::{AnchorSurface, Block, Body, BodyMask, Cli};
+use defeated_by_titan::world::map::{plan_blocks, BlockPlan};
 use std::path::PathBuf;
 
-/// Baut die **echte** App, headless, und laesst `Startup` einmal laufen.
+/// Builds the **real** app, headless, and runs `Startup` once.
 ///
-/// Nicht eine zweite, aehnliche App: sonst beweist der Test nichts ueber das Spiel, das
-/// gespielt wird (dasselbe Argument wie in `tests/mehrspieler.rs`).
-fn gebaute_welt() -> App {
-    let mut app = defeated_by_titan::app(Start { headless: true, ..default() });
+/// Not a second, similar app: otherwise the test proves nothing about the game that is
+/// actually played (the same argument as in `tests/multiplayer.rs`).
+fn built_world() -> App {
+    let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
     app.update();
     app
 }
 
-fn daten() -> GameData {
-    GameData::laden(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/data"))
+fn data() -> GameData {
+    GameData::load(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/data"))
 }
 
-/// Der Plan, den `karte_bauen` abarbeitet — dieselbe Funktion, aber ohne App.
-fn plan() -> Vec<Rohbau> {
-    let d = daten();
-    let karte = d.aktuelle_karte().expect("maps.ron: aktuell muss es geben");
-    kloetze_planen(&d, karte)
+/// The plan `build_map` works through — the same function, but without an app.
+fn plan() -> Vec<BlockPlan> {
+    let d = data();
+    let map = d.current_map().expect("maps.ron: current must exist");
+    plan_blocks(&d, map)
 }
 
-/// Alle gebauten Quader als `(Name, Mitte, volle Groesse, hakbar)`, nach Namen sortiert.
-fn gebaute_kloetze(app: &mut App) -> Vec<(String, Vec3, Vec3, bool)> {
+/// Every built cuboid as `(name, center, full size, anchorable)`, sorted by name.
+fn built_blocks(app: &mut App) -> Vec<(String, Vec3, Vec3, bool)> {
     let mut q = app
         .world_mut()
-        .query::<(&Name, &Bauklotz, &Transform, Option<&Ankerflaeche>)>();
-    let mut alle: Vec<(String, Vec3, Vec3, bool)> = q
+        .query::<(&Name, &Block, &Transform, Option<&AnchorSurface>)>();
+    let mut all: Vec<(String, Vec3, Vec3, bool)> = q
         .iter(app.world())
-        .map(|(n, k, t, a)| (n.to_string(), t.translation, k.groesse, a.is_some()))
+        .map(|(n, k, t, a)| (n.to_string(), t.translation, k.size, a.is_some()))
         .collect();
-    alle.sort_by(|a, b| a.0.cmp(&b.0));
-    alle
+    all.sort_by(|a, b| a.0.cmp(&b.0));
+    all
 }
 
 #[test]
-fn f003_die_stadt_entsteht_aus_der_datei_und_nicht_doppelt() {
-    // K1. Rot, wenn `karte_bauen` ein leerer Rumpf ist (0 statt ~90), wenn es doppelt
-    // spawnt (2x), oder wenn das Raster nichts erzeugt (dann waeren es genau die gesetzten
-    // Kloetze aus der Datei).
-    let d = daten();
-    let karte = d.aktuelle_karte().expect("aktuelle Karte");
+fn f003_the_city_comes_from_the_file_and_not_twice() {
+    // K1. Red when `build_map` is an empty body (0 instead of ~90), when it spawns twice
+    // (2x), or when the layout generates nothing (then it would be exactly the placed blocks
+    // from the file).
+    let d = data();
+    let map = d.current_map().expect("current map");
     let plan = plan();
-    let gesetzt = karte.kloetze.len();
-    let erzeugt = plan.len() - gesetzt;
+    let placed = map.blocks.len();
+    let generated = plan.len() - placed;
 
     assert!(
-        erzeugt > 40,
-        "das Raster erzeugte {erzeugt} Haeuser — eine Stadt mit weniger ist ein Stub, \
-         kein Stadtteil (maps.ron: raster)"
+        generated > 40,
+        "the layout generated {generated} houses — a city with fewer is a stub, \
+         not a district (maps.ron: layout)"
     );
 
-    let mut app = gebaute_welt();
-    let gebaut = gebaute_kloetze(&mut app);
+    let mut app = built_world();
+    let built = built_blocks(&mut app);
     assert_eq!(
-        gebaut.len(),
+        built.len(),
         plan.len(),
-        "{} Entities mit Bauklotz, aber {} geplante Quader ({gesetzt} gesetzt + {erzeugt} \
-         erzeugt). Gleich Null heisst: nichts gebaut. Doppelt heisst: zwei Schreiber",
-        gebaut.len(),
+        "{} entities with Block, but {} planned cuboids ({placed} placed + {generated} \
+         generated). Zero means: nothing built. Double means: two writers",
+        built.len(),
         plan.len()
     );
 
-    // Und weiterlaufen lassen aendert daran nichts: die Stadt gehoert in `Startup`, nicht
-    // in `Update` — sonst waechst sie jeden Frame um eine Stadt.
+    // And letting it keep running changes nothing about that: the city belongs in `Startup`,
+    // not in `Update` — otherwise it grows by one city every frame.
     for _ in 0..3 {
         app.update();
     }
-    assert_eq!(gebaute_kloetze(&mut app).len(), plan.len(), "die Stadt waechst pro Frame");
+    assert_eq!(built_blocks(&mut app).len(), plan.len(), "the city grows every frame");
 
-    // Unabhaengig von der Planfunktion: jeder gesetzte Klotz der Datei steht genau einmal
-    // in der Welt, mit genau seiner Mitte und genau seiner Groesse.
-    for (i, k) in karte.kloetze.iter().enumerate() {
-        let mitte = Vec3::new(k.mitte_m.0, k.mitte_m.1, k.mitte_m.2);
-        let groesse = Vec3::new(k.groesse_m.0, k.groesse_m.1, k.groesse_m.2);
-        let treffer: Vec<_> = gebaut
+    // Independent of the planning function: every block placed in the file stands in the
+    // world exactly once, at exactly its center and at exactly its size.
+    for (i, k) in map.blocks.iter().enumerate() {
+        let center = Vec3::new(k.center_m.0, k.center_m.1, k.center_m.2);
+        let size = Vec3::new(k.size_m.0, k.size_m.1, k.size_m.2);
+        let hits: Vec<_> = built
             .iter()
-            .filter(|(_, m, g, _)| *m == mitte && *g == groesse)
+            .filter(|(_, m, g, _)| *m == center && *g == size)
             .collect();
         assert_eq!(
-            treffer.len(),
+            hits.len(),
             1,
-            "maps.ron: kloetze[{i}] (Mitte {mitte:?}, Groesse {groesse:?}) steht {}x in der \
-             Welt statt genau einmal",
-            treffer.len()
+            "maps.ron: blocks[{i}] (center {center:?}, size {size:?}) is in the world {}x \
+             instead of exactly once",
+            hits.len()
         );
         assert_eq!(
-            treffer[0].3, k.hakbar,
-            "maps.ron: kloetze[{i}] hakbar = {} in der Datei, {} in der Welt",
-            k.hakbar, treffer[0].3
+            hits[0].3, k.anchorable,
+            "maps.ron: blocks[{i}] anchorable = {} in the file, {} in the world",
+            k.anchorable, hits[0].3
         );
     }
 }
 
 #[test]
-fn f003_derselbe_seed_ergibt_exakt_dieselbe_stadt() {
-    // K2. Rot in der Sekunde, in der jemand `rand::random()`, eine `HashMap`-Iteration oder
-    // eine Uhrzeit einbaut. Verglichen wird jeder Wert, nicht die Anzahl: eine Stadt mit
-    // gleich vielen, aber anders stehenden Haeusern ist im Netz derselbe Fehler.
-    let erste = plan();
-    let zweite = plan();
-    assert_eq!(erste.len(), zweite.len(), "zwei Laeufe, zwei Stadtgroessen");
-    for (a, b) in erste.iter().zip(zweite.iter()) {
-        assert_eq!(a, b, "derselbe Seed, zwei verschiedene Quader:\n  {a:?}\n  {b:?}");
+fn f003_the_same_seed_yields_exactly_the_same_city() {
+    // K2. Red the second somebody wires in `rand::random()`, a `HashMap` iteration or a clock
+    // reading. Every value is compared, not the count: a city with the same number of houses
+    // standing in different places is the same bug over the network.
+    let first = plan();
+    let second = plan();
+    assert_eq!(first.len(), second.len(), "two runs, two city sizes");
+    for (a, b) in first.iter().zip(second.iter()) {
+        assert_eq!(a, b, "the same seed, two different cuboids:\n  {a:?}\n  {b:?}");
     }
 
-    // Und dieselbe Stadt kommt auch aus der echten App heraus — nicht nur aus der
-    // Planfunktion. Zwei getrennte Apps, Wert fuer Wert.
-    let mut app_a = gebaute_welt();
-    let mut app_b = gebaute_welt();
-    assert_eq!(gebaute_kloetze(&mut app_a), gebaute_kloetze(&mut app_b));
+    // And the same city comes out of the real app too — not just out of the planning
+    // function. Two separate apps, value by value.
+    let mut app_a = built_world();
+    let mut app_b = built_world();
+    assert_eq!(built_blocks(&mut app_a), built_blocks(&mut app_b));
 
-    // Ein anderer Seed ergibt eine andere Stadt — sonst prueft der Vergleich oben nur, dass
-    // die Funktion ueberhaupt zweimal dasselbe tut, und das taete sie auch ohne Wuerfel.
-    let d = daten();
-    let mut karte = d.aktuelle_karte().expect("aktuelle Karte").clone();
-    karte.seed = karte.seed.wrapping_add(1);
-    let andere = kloetze_planen(&d, &karte);
-    assert_ne!(andere, erste, "ein anderer Seed ergab exakt dieselbe Stadt");
+    // A different seed yields a different city — otherwise the comparison above only checks
+    // that the function does the same thing twice, which it would do without an rng at all.
+    let d = data();
+    let mut map = d.current_map().expect("current map").clone();
+    map.seed = map.seed.wrapping_add(1);
+    let other = plan_blocks(&d, &map);
+    assert_ne!(other, first, "a different seed produced exactly the same city");
 }
 
 #[test]
-fn f003_die_collider_tragen_die_halbe_kante_aus_der_datei() {
-    // K3. `Collider::cuboid` nimmt die GANZE Kante und halbiert intern
-    // (avian3d-0.7.0/src/collision/collider/parry/mod.rs:747-749), `Koerper::halb_m` und
-    // parrys `Cuboid::half_extents` fuehren die HALBE. Ein Faktor 2 faellt im Bild nicht
-    // auf — hier schon.
+fn f003_the_colliders_carry_the_half_edge_from_the_file() {
+    // K3. `Collider::cuboid` takes the FULL edge and halves it internally
+    // (avian3d-0.7.0/src/collision/collider/parry/mod.rs:747-749), while `Body::half_size_m`
+    // and parry's `Cuboid::half_extents` carry the HALF one. A factor of 2 does not show up
+    // in the image — it does here.
     //
-    // Gemessen wird die FORMQUELLE (`collider.shape()`), nicht `ColliderAabb`: die Huelle
-    // waechst gemessen um 0,01 m je Achse und bei Bewegung um den Sweep.
-    let d = daten();
-    let karte = d.aktuelle_karte().expect("aktuelle Karte");
-    let mut app = gebaute_welt();
+    // What is measured is the SHAPE SOURCE (`collider.shape()`), not `ColliderAabb`: that
+    // hull grows by a measured 0.01 m per axis, and by the sweep once something moves.
+    let d = data();
+    let map = d.current_map().expect("current map");
+    let mut app = built_world();
 
-    let mut q = app.world_mut().query::<(&Transform, &Bauklotz, &Koerper, &Collider)>();
-    let alle: Vec<(Vec3, Vec3, Vec3, Vec3)> = q
+    let mut q = app.world_mut().query::<(&Transform, &Block, &Body, &Collider)>();
+    let all: Vec<(Vec3, Vec3, Vec3, Vec3)> = q
         .iter(app.world())
         .map(|(t, b, k, c)| {
             let form = c
                 .shape()
                 .as_cuboid()
-                .expect("jeder Klotz ist ein Quader — nichts hier wird gedreht");
+                .expect("every block is a cuboid — nothing here is rotated");
             let h = form.half_extents;
-            (t.translation, b.groesse, k.halb_m, Vec3::new(h.x, h.y, h.z))
+            (t.translation, b.size, k.half_size_m, Vec3::new(h.x, h.y, h.z))
         })
         .collect();
 
-    assert!(alle.len() > 40, "nur {} Kloetze mit Collider", alle.len());
+    assert!(all.len() > 40, "only {} blocks with a collider", all.len());
 
-    let mut gemessen = 0;
-    for (i, k) in karte.kloetze.iter().enumerate() {
-        let mitte = Vec3::new(k.mitte_m.0, k.mitte_m.1, k.mitte_m.2);
-        let voll = Vec3::new(k.groesse_m.0, k.groesse_m.1, k.groesse_m.2);
-        let (_, render, huelle, collider) = alle
+    let mut measured = 0;
+    for (i, k) in map.blocks.iter().enumerate() {
+        let center = Vec3::new(k.center_m.0, k.center_m.1, k.center_m.2);
+        let full = Vec3::new(k.size_m.0, k.size_m.1, k.size_m.2);
+        let (_, render, aabb, collider) = all
             .iter()
-            .find(|(m, _, _, _)| *m == mitte)
-            .unwrap_or_else(|| panic!("maps.ron: kloetze[{i}] steht nicht bei {mitte:?}"));
-        assert_eq!(*render, voll, "kloetze[{i}]: Renderform weicht von der Datei ab");
+            .find(|(m, _, _, _)| *m == center)
+            .unwrap_or_else(|| panic!("maps.ron: blocks[{i}] is not at {center:?}"));
+        assert_eq!(*render, full, "blocks[{i}]: render shape deviates from the file");
         assert_eq!(
             *collider,
-            voll * 0.5,
-            "kloetze[{i}]: Collider-Halbgroesse {collider:?}, erwartet {:?} — \
-             Faktor {:.2} gegen die Datei",
-            voll * 0.5,
-            collider.x / (voll.x * 0.5)
+            full * 0.5,
+            "blocks[{i}]: collider half size {collider:?}, expected {:?} — \
+             factor {:.2} against the file",
+            full * 0.5,
+            collider.x / (full.x * 0.5)
         );
-        assert_eq!(*huelle, voll * 0.5, "kloetze[{i}]: Koerper::halb_m weicht ab");
-        gemessen += 1;
+        assert_eq!(*aabb, full * 0.5, "blocks[{i}]: Body::half_size_m deviates");
+        measured += 1;
     }
-    assert!(gemessen >= 3, "nur {gemessen} Kloetze gegen die Datei geprueft, mindestens 3");
+    assert!(measured >= 3, "only {measured} blocks checked against the file, at least 3 required");
 
-    // Und fuer JEDEN Klotz, auch die erzeugten: Renderform und Kollisionsform sind dieselbe
-    // Form. Genau das ist der Grund, warum ein Schreiber beide setzt.
-    for (mitte, render, huelle, collider) in &alle {
-        assert_eq!(*collider, *render * 0.5, "Klotz bei {mitte:?}: Render {render:?}");
-        assert_eq!(*huelle, *render * 0.5, "Klotz bei {mitte:?}: Huelle {huelle:?}");
+    // And for EVERY block, the generated ones included: render shape and collision shape are
+    // the same shape. That is exactly why one writer sets both.
+    for (center, render, aabb, collider) in &all {
+        assert_eq!(*collider, *render * 0.5, "block at {center:?}: render {render:?}");
+        assert_eq!(*aabb, *render * 0.5, "block at {center:?}: aabb {aabb:?}");
     }
 }
 
 #[test]
-fn f003_nicht_jede_flaeche_ist_hakbar() {
-    // K4. Rot, sobald jemand pauschal alles taggt — dann kann „Kein Haken auf ungetaggten
-    // Flaechen" (F-003) nicht mehr widerlegt werden, und das Kriterium prueft nichts.
-    let mut app = gebaute_welt();
-    let gebaut = gebaute_kloetze(&mut app);
-    let hakbar = gebaut.iter().filter(|(_, _, _, a)| *a).count();
-    let ungetaggt = gebaut.len() - hakbar;
-    assert!(hakbar > 0, "keine einzige Ankerflaeche in der gebauten Stadt");
+fn f003_not_every_surface_is_anchorable() {
+    // K4. Red the moment somebody tags everything wholesale — then "no hook on untagged
+    // surfaces" (F-003) can no longer be falsified, and the criterion checks nothing.
+    let mut app = built_world();
+    let built = built_blocks(&mut app);
+    let anchorable = built.iter().filter(|(_, _, _, a)| *a).count();
+    let untagged = built.len() - anchorable;
+    assert!(anchorable > 0, "not a single anchor surface in the built city");
     assert!(
-        ungetaggt > 0,
-        "alle {} Kloetze tragen Ankerflaeche — F-003 prueft dann nichts",
-        gebaut.len()
+        untagged > 0,
+        "all {} blocks carry an anchor surface — then F-003 checks nothing",
+        built.len()
     );
 
-    // Der Marker und die Maske sind derselbe Zustand, an zwei Stellen geschrieben von
-    // einem Schreiber. Laufen sie auseinander, haekt der Haken woanders als das Gizmo.
-    let mut q = app.world_mut().query::<(&Koerper, Option<&Ankerflaeche>)>();
-    for (koerper, anker) in q.iter(app.world()) {
+    // The marker and the mask are the same state, written in two places by one writer. If
+    // they drift apart, the hook catches somewhere other than where the gizmo says.
+    let mut q = app.world_mut().query::<(&Body, Option<&AnchorSurface>)>();
+    for (body, anchors) in q.iter(app.world()) {
         assert_eq!(
-            koerper.maske.hat(Maske::HAKBAR),
-            anker.is_some(),
-            "Maske {:?} und Ankerflaeche {:?} widersprechen sich",
-            koerper.maske,
-            anker.is_some()
+            body.mask.contains(BodyMask::ANCHORABLE),
+            anchors.is_some(),
+            "BodyMask {:?} and AnchorSurface {:?} contradict each other",
+            body.mask,
+            anchors.is_some()
         );
     }
 }
 
 #[test]
-fn f003_kein_rasterhaus_steht_in_einem_gesetzten_klotz() {
-    // `maps.ron`: „Ausdruecklich Gesetztes gewinnt: das Erzeugte laesst um jeden gesetzten
-    // Klotz Platz." Rot, wenn die Ueberlappungspruefung fehlt — dann waechst ein 28-m-Block
-    // durch den Wachturm.
-    let d = daten();
-    let karte = d.aktuelle_karte().expect("aktuelle Karte");
+fn f003_no_grid_house_stands_inside_a_placed_block() {
+    // `maps.ron`: "What is placed explicitly wins: the generated stuff leaves room around
+    // every placed block." Red when the overlap check is missing — then a 28 m block grows
+    // straight through the watchtower.
+    let d = data();
+    let map = d.current_map().expect("current map");
     let plan = plan();
-    let (gesetzt, erzeugt) = plan.split_at(karte.kloetze.len());
+    let (placed, generated) = plan.split_at(map.blocks.len());
 
-    for haus in erzeugt {
-        for klotz in gesetzt {
-            let abstand = (haus.mitte_m - klotz.mitte_m).abs();
-            let summe = haus.groesse_m * 0.5 + klotz.groesse_m * 0.5;
+    for house in generated {
+        for block in placed {
+            let distance = (house.center_m - block.center_m).abs();
+            let sum = house.size_m * 0.5 + block.size_m * 0.5;
             assert!(
-                !(abstand.x < summe.x && abstand.y < summe.y && abstand.z < summe.z),
-                "{} steckt in {}: Abstand {abstand:?}, Summe {summe:?}",
-                haus.name,
-                klotz.name
+                !(distance.x < sum.x && distance.y < sum.y && distance.z < sum.z),
+                "{} sits inside {}: distance {distance:?}, sum {sum:?}",
+                house.name,
+                block.name
             );
         }
     }
 
-    // Der Umkehrschluss, der das Ganze erst zu einer Aussage macht: die Bodenplatte deckt
-    // die ganze Karte, und trotzdem steht die Stadt. Waere die Pruefung nicht strikt, waere
-    // hier alles leer.
-    assert!(!erzeugt.is_empty(), "die Bodenplatte hat die ganze Stadt verschluckt");
+    // The converse, which is what turns all of this into a claim: the ground slab covers the
+    // whole map, and the city still stands. If the check were not strict, everything here
+    // would be empty.
+    assert!(!generated.is_empty(), "the ground slab swallowed the whole city");
 }
 
 #[test]
-fn f003_der_platz_um_den_ursprung_bleibt_frei() {
-    // Dort startet der Spieler, und `scripts/t007-erste-fahrt.txt` laeuft 6 m nach -Z.
-    // Rot, wenn `frei_radius_m` ignoriert wird — dann steht ein Haus auf dem Spieler.
-    let d = daten();
-    let karte = d.aktuelle_karte().expect("aktuelle Karte");
-    let radius = karte.raster.frei_radius_m;
+fn f003_the_space_around_the_origin_stays_clear() {
+    // That is where the player starts, and `scripts/t007-first-run.txt` runs 6 m toward -Z.
+    // Red when `clear_radius_m` is ignored — then a house stands on top of the player.
+    let d = data();
+    let map = d.current_map().expect("current map");
+    let radius = map.layout.clear_radius_m;
     let plan = plan();
 
-    for haus in &plan[karte.kloetze.len()..] {
-        let halb = haus.groesse_m * 0.5;
-        let dx = (haus.mitte_m.x.abs() - halb.x).max(0.0);
-        let dz = (haus.mitte_m.z.abs() - halb.z).max(0.0);
-        let abstand = (dx * dx + dz * dz).sqrt();
+    for house in &plan[map.blocks.len()..] {
+        let half = house.size_m * 0.5;
+        let dx = (house.center_m.x.abs() - half.x).max(0.0);
+        let dz = (house.center_m.z.abs() - half.z).max(0.0);
+        let distance = (dx * dx + dz * dz).sqrt();
         assert!(
-            abstand >= radius,
-            "{} kommt dem Ursprung auf {abstand:.2} m nahe, frei_radius_m = {radius}",
-            haus.name
+            distance >= radius,
+            "{} comes within {distance:.2} m of the origin, clear_radius_m = {radius}",
+            house.name
         );
     }
 }
 
 #[test]
-fn f003_die_rasterhaeuser_bleiben_im_hoehenfenster_der_datei() {
-    // `maps.ron` sagt: die Stadt ist flach, die Vertikale kommt aus den Sonderbauten.
-    // Rot, wenn jemand die Wohnbebauung wieder hochzieht — im Bild sieht das nach Skyline
-    // aus und nicht nach Fehler.
-    let d = daten();
-    let karte = d.aktuelle_karte().expect("aktuelle Karte");
-    let r = &karte.raster;
+fn f003_the_grid_houses_stay_in_the_height_window_from_the_file() {
+    // `maps.ron` says: the city is flat, the vertical comes from the landmarks. Red when
+    // somebody pulls the residential band back up — in the image that looks like a skyline,
+    // not like a bug.
+    let d = data();
+    let map = d.current_map().expect("current map");
+    let r = &map.layout;
     let plan = plan();
-    let haeuser = &plan[karte.kloetze.len()..];
+    let houses = &plan[map.blocks.len()..];
 
-    let mut hoch = 0;
-    for haus in haeuser {
-        let h = haus.groesse_m.y;
+    let mut tall = 0;
+    for house in houses {
+        let h = house.size_m.y;
         assert!(
-            (r.hoehe_min_m..=r.hoehe_max_m).contains(&h),
-            "{}: {h} m liegt nicht in {}..={} (maps.ron: raster)",
-            haus.name,
-            r.hoehe_min_m,
-            r.hoehe_max_m
+            (r.min_height_m..=r.max_height_m).contains(&h),
+            "{}: {h} m is not in {}..={} (maps.ron: layout)",
+            house.name,
+            r.min_height_m,
+            r.max_height_m
         );
-        assert!(haus.mitte_m.y > 0.0, "{}: Mitte unter dem Boden", haus.name);
+        assert!(house.center_m.y > 0.0, "{}: center below the ground", house.name);
         assert!(
-            (haus.mitte_m.y - h * 0.5).abs() < 1e-4,
-            "{}: steht nicht auf y = 0, sondern bei {}",
-            haus.name,
-            haus.mitte_m.y - h * 0.5
+            (house.center_m.y - h * 0.5).abs() < 1e-4,
+            "{}: does not stand on y = 0, but at {}",
+            house.name,
+            house.center_m.y - h * 0.5
         );
-        if h > (r.hoehe_min_m + r.hoehe_max_m) * 0.5 {
-            hoch += 1;
+        if h > (r.min_height_m + r.max_height_m) * 0.5 {
+            tall += 1;
         }
     }
-    // Nicht alle gleich hoch: eine Stadt aus lauter 8-m-Kloetzen waere ein Rechenfehler,
-    // den kein Hoehenfenster faengt.
+    // Not all the same height: a city of nothing but 8 m blocks would be an arithmetic bug
+    // that no height window catches.
     assert!(
-        hoch > 0 && hoch < haeuser.len(),
-        "{hoch} von {} Haeusern in der oberen Haelfte des Fensters — die Hoehen streuen nicht",
-        haeuser.len()
+        tall > 0 && tall < houses.len(),
+        "{tall} of {} houses in the upper half of the window — the heights do not spread",
+        houses.len()
     );
 }

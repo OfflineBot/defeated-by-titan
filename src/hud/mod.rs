@@ -1,17 +1,17 @@
-//! hud — Gas, Klingenzustand, Ziel-Marker, Fadenkreuz
+//! hud — gas, blade state, target markers, crosshair
 //!
-//! **Liest nur.** Und liest den Zustand **des lokalen Spielers** ueber den
-//! [`LocalPlayer`](crate::shared::LocalPlayer)-Marker — das ist die einzige Stelle im Code,
-//! die weiss, wer „ich" bin.
+//! **Reads only.** And reads the state **of the local player** through the
+//! [`LocalPlayer`](crate::shared::LocalPlayer) marker — this is the one place in the code that
+//! knows who "I" am.
 //!
-//! PC-only heisst: mehr Information gleichzeitig, weil kein Daumen die halbe Bildflaeche
-//! verdeckt (Bibel 3.5).
+//! PC-only means: more information at once, because no thumb covers half the screen
+//! (Bible 3.5).
 //!
-//! **Stand der Naht:** [`leiste`] ist registriert und leer. Solange sie leer ist, ist der
-//! Gasstand nirgends im Bild — und `F-018` bleibt 🟨 („Logik getestet, Pixel ungesehen"),
-//! egal wie gruen sein Test ist. Eine Zahl im Terminal ist kein Bild.
+//! **Where the seam stands:** [`gas_bar`] is registered and empty. As long as it is empty the
+//! gas level is nowhere on screen — and `F-018` stays 🟨 ("logic tested, pixels unseen"), no
+//! matter how green its test is. A number in the terminal is not a picture.
 
-pub mod leiste;
+pub mod gas_bar;
 
 use bevy::prelude::*;
 
@@ -19,7 +19,7 @@ pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, leiste::leiste_bauen)
-            .add_systems(Update, leiste::leiste_fuellen);
+        app.add_systems(Startup, gas_bar::spawn_gas_bar)
+            .add_systems(Update, gas_bar::update_gas_bar);
     }
 }

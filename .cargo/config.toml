@@ -2,6 +2,6 @@
 # von Hand getippt werden muessen. Welches Fenstersystem gelinkt wird, steht in Cargo.toml.
 [alias]
 # Maschine B (offlinebot, niri/Wayland): das Spiel starten, mit Ton
-spiel = "run --features wayland,klang"
+play = "run --features wayland,audio"
 # Maschine A (debian, ohne Grafiksitzung): eine Skriptfahrt ohne Fenster
-fahrt = "run -- --headless --script"
+drive = "run -- --headless --script"

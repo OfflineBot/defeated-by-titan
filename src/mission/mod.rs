@@ -1,15 +1,15 @@
-//! mission — Einsatz: Ziele, Phasen, Spawn-Wellen, Sieg und Niederlage
+//! mission — the sortie: objectives, phases, spawn waves, victory and defeat
 //!
-//! **Ein Missionsbogen dauert 5–7 Minuten** und ist ein vollstaendiger Bogen mit garantiertem,
-//! spuerbarem Fortschritt (Bibel 5, Aenderung 10). Die Referenz hat rund 21 Minuten
-//! Sessiondauer — das sind 2–4 Missionen.
+//! **One mission arc runs 5–7 minutes** and is a complete arc with guaranteed, noticeable
+//! progress (Bible 5, change 10). The reference has a session length of about 21 minutes —
+//! that is 2–4 missions.
 //!
-//! Einsatzvorlagen stehen in `assets/data/missions.ron`: Ziele, Phasen, Spawn-Wellen,
-//! Belohnung. Eine neue Mission ist Datei-Arbeit, kein Rust.
+//! Mission templates live in `assets/data/missions.ron`: objectives, phases, spawn waves,
+//! reward. A new mission is file work, not Rust.
 //!
-//! **Noch leer.** Das Plugin steht im Baum, damit die Reihenfolge in `lib.rs` von Anfang an
-//! stimmt und ein Fan-out auf Domaenen moeglich ist, ohne dass fuenf Agenten denselben
-//! Ordner anlegen (`prompts/init.md` §17).
+//! **Still empty.** The plugin stands in the tree so that the order in `lib.rs` is right from
+//! the start and a fan-out across domains is possible without five agents creating the same
+//! folder (`prompts/init.md` §17).
 
 use bevy::prelude::*;
 

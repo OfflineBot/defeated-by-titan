@@ -1,0 +1,31 @@
+# f002-look-turned — image B of the pair: same place, looking 40 degrees to the RIGHT and
+# 15 degrees DOWN.
+#
+#   cargo run --features wayland,audio -- --offscreen \
+#       --script scripts/f002-look-turned.txt --ticks 130 \
+#       --screenshot docs/images/f002-look-turned.png
+#
+# Counterpart to scripts/f002-look.txt: same position, same tick, only a different `look`.
+# If the two PNGs do not differ, src/render/camera.rs::rotate_camera does nothing — and
+# that is exactly what the state was until 2026-08-09.
+#
+# ⚠️ **yaw is NEGATIVE to look right.** `Intent::look_dir()` is
+# `(-sin yaw · cos pitch, sin pitch, -cos yaw · cos pitch)` (src/shared/intent.rs:42):
+# positive yaw turns LEFT, positive pitch turns UP. Whoever swaps a sign here gets a
+# plausible-looking image from the wrong side.
+
+wait 1.5                # let world, camera, meshes and the render pipelines come up
+look -40 -15            # 40 degrees to the right, 15 degrees down
+
+# Exactly the same spot as in f002-look.txt — only the look is different. Turned to the
+# right, the brick-red block drops out of the image and the sand-brown cube slides to the
+# left edge; turned down, the horizon rises by 15 degrees, that is about 180 of the 720
+# image rows (the field of view is defined vertically at 60 degrees, game.ron: camera.fov_deg).
+warp 0 0 4
+
+wait 0.3                # the warp takes effect one tick later than it is written
+assert height < 0.5      # stands on the ground and is not floating above it
+assert height > -1       # and has not fallen through the ground
+assert titans == 0     # the world starts out empty
+mark f002-look-turned
+wait 5                  # keep the run alive: if it ends, the process ends before the image

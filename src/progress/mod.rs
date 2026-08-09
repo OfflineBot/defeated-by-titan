@@ -1,17 +1,16 @@
-//! progress — XP, Mark/Sigil, Gear-Budget, Traits, Lineage, Ascension
+//! progress — XP, Mark/Sigil, gear budget, Traits, Lineage, Ascension
 //!
-//! ⚠️ **Kommt erst nach dem Vector-Gear-Gate.** Faehigkeitsbaum, Wirtschaft und Lineages
-//! werden nicht angefangen, solange sich die Bewegung nicht ueberzeugend anfuehlt
-//! (Bibel 6.1) — der Friedhof des Genres besteht aus Spielen, die es andersherum gemacht
-//! haben.
+//! ⚠️ **Comes only after the Vector Gear gate.** The skill tree, the economy and Lineages are
+//! not started as long as the movement does not feel convincing (Bible 6.1) — the graveyard of
+//! this genre is made of games that did it the other way round.
 //!
-//! **Koennen schlaegt Zahlen** (Pfeiler P2): Stat-Wachstum oeffnet neue Inhalte, es ersetzt
-//! keine Faehigkeit. Und **kein Fortschritt ohne Garantie** (P3): jedes Ziel ist auf einem
-//! deterministischen Pfad erreichbar, alle Wahrscheinlichkeiten sind im Spiel einsehbar.
+//! **Skill beats numbers** (pillar P2): stat growth opens new content, it does not replace an
+//! ability. And **no progress without a guarantee** (P3): every goal is reachable on a
+//! deterministic path, and every probability is visible inside the game.
 //!
-//! **Noch leer.** Das Plugin steht im Baum, damit die Reihenfolge in `lib.rs` von Anfang an
-//! stimmt und ein Fan-out auf Domaenen moeglich ist, ohne dass fuenf Agenten denselben
-//! Ordner anlegen (`prompts/init.md` §17).
+//! **Still empty.** The plugin stands in the tree so that the order in `lib.rs` is right from
+//! the start and a fan-out across domains is possible without five agents creating the same
+//! folder (`prompts/init.md` §17).
 
 use bevy::prelude::*;
 

@@ -1,22 +1,22 @@
-// art.ron — die Registratur. EINE Zeile pro Asset, EINE Zeile zum Tauschen (init.md §7).
+// art.ron — the registry. ONE line per asset, ONE line to swap it (init.md §7).
 //
-// Der Code fragt nie nach einer Datei, immer nach einem logischen Namen. Ein Asset
-// austauschen heisst: hier `nutzen` umlegen — nicht Rust anfassen.
+// The code never asks for a file, always for a logical name. Swapping an asset means:
+// flip `use_blend` here — not touching Rust.
 //
-// nutzen: false ⇒ der Platzhalter-Weg aus Bevy-Primitiven. Beide Wege muessen jederzeit
-// laufen und dieselbe Groesse, Hitbox und Skalierung haben.
+// use_blend: false ⇒ the placeholder path built from Bevy primitives. Both paths have to
+// run at any time and carry the same size, hit zone and scale.
 //
-// STAND: alles Platzhalter. Auf Maschine A gibt es kein Blender, also entstehen hier
-// vorerst nur die tools/blend/*.py (docs/umgebung.md, docs/modelle.md).
+// STATUS: all placeholders. Machine A has no Blender, so for now only the
+// tools/blend/*.py grow here (docs/environment.md, docs/models.md).
 (
     models: {
-        "vanguard":     (blend: "vanguard",     nutzen: false, scale: 1.0, herkunft: None),
-        "titan_husk":   (blend: "titan_husk",   nutzen: false, scale: 1.0, herkunft: None),
-        "titan_gross":  (blend: "titan_gross",  nutzen: false, scale: 1.0, herkunft: None),
-        "vector_gear":  (blend: "vector_gear",  nutzen: false, scale: 1.0, herkunft: None),
-        "blade":        (blend: "blade",        nutzen: false, scale: 1.0, herkunft: None),
-        "haus_klein":   (blend: "haus_klein",   nutzen: false, scale: 1.0, herkunft: None),
-        "baum_riese":   (blend: "baum_riese",   nutzen: false, scale: 1.0, herkunft: None),
-        "kiste_nachschub": (blend: "kiste_nachschub", nutzen: false, scale: 1.0, herkunft: None),
+        "vanguard":     (blend: "vanguard",     use_blend: false, scale: 1.0, attribution: None),
+        "titan_husk":   (blend: "titan_husk",   use_blend: false, scale: 1.0, attribution: None),
+        "titan_large":  (blend: "titan_large",  use_blend: false, scale: 1.0, attribution: None),
+        "vector_gear":  (blend: "vector_gear",  use_blend: false, scale: 1.0, attribution: None),
+        "blade":        (blend: "blade",        use_blend: false, scale: 1.0, attribution: None),
+        "house_small":   (blend: "house_small",   use_blend: false, scale: 1.0, attribution: None),
+        "tree_giant":   (blend: "tree_giant",   use_blend: false, scale: 1.0, attribution: None),
+        "crate_resupply": (blend: "crate_resupply", use_blend: false, scale: 1.0, attribution: None),
     },
 )

@@ -1,65 +1,64 @@
-# multiplayer — der Plan, der heute noch nicht gebaut wird
+# multiplayer — the plan that is not built today
 
-Stand: 2026-08-09 · Stufe: ⬜ (nichts davon ist gebaut — gebaut ist nur die **Naht**, `src/net/`)
+Updated: 2026-08-09 · Stage: ⬜ (none of it is built — what is built is the **seam** alone, `src/net/`)
 
-**Der Netzcode ist nicht Teil dieses Auftrags.** Kein Server, keine Prediction, keine
-Lag-Kompensation. **Aber jede Entscheidung, die Multiplayer spaeter unmoeglich oder teuer
-macht, wird heute vermieden** — ein fertiges Einzelspieler-Spiel netzfaehig zu machen heisst
-normalerweise, die Simulation neu zu schreiben (`prompts/init.md` §6).
+**The netcode is not part of this commission.** No server, no prediction, no lag
+compensation. **But every decision that would make multiplayer impossible or expensive later
+is avoided today** — making a finished single-player game network-capable normally means
+rewriting the simulation (`prompts/init.md` §6).
 
-## Die acht Regeln, und wo sie im Code stehen
+## The eight rules, and where they stand in the code
 
-| # | Regel | wo sie heute schon gilt |
+| # | Rule | where it already holds today |
 |---|---|---|
-| 1 | **Simulation und Darstellung sind getrennt.** Simulation liest Eingaben + Zustand und schreibt Zustand; Rendering, HUD und Sound **lesen nur**. | Simulation laeuft in `FixedUpdate`, `render`/`hud`/`sound` in `Update` |
-| 2 | **Eingabe ist ein Datum, kein Tastendruck.** Es gibt **ein** `Intent` (Bewegung, Blick, Tasten, Tick), und die Simulation liest nur das. | `shared::Intent`; gefuellt von `net` — aus Tastatur **oder** Skript **oder** spaeter dem Netz |
-| 3 | **Es gibt keinen „den Spieler".** Nie `.single()`. Jeder Spieler ist einer von vielen. | `shared::PlayerId`; Gas/Klingen sind **Components am Spieler**, nie eine `Resource`. `LocalPlayer` ist die einzige Stelle, die weiss, wer „ich" ist |
-| 4 | **Fester Simulationsschritt** (60 Hz), das Bild interpoliert dazwischen. | `Time<Fixed>` auf 60 Hz in `main.rs` |
-| 5 | **Determinismus, wo er billig ist.** Zufall nur aus einem geseedeten Generator, dessen Seed Teil des Zustands ist. | `shared::Wuerfel` (`seed + tick`), nie `rand::random()` mitten in einem System |
-| 6 | **Autoritaet wird benannt.** In der Doku jeder Domaene steht, wer ein geteiltes Feld schreibt. | die Autoritaetstabelle in [`docs/architektur.md`](architektur.md) — **spaeter heisst dieser Satz „der Server"** |
-| 7 | **Stabile Ids statt Zeiger.** Alles, was gespeichert oder verschickt wird, benutzt eigene Ids. | `PlayerId`, `TitanId` — **nie** Bevys `Entity` (lokaler Index mit Generation; auf einem anderen Rechner etwas anderes). Rettet nebenbei den Spielstand |
-| 8 | **`serde` auf allem, was Zustand ist**, und Messages so entwerfen, dass sie ueber eine Leitung passen — Daten, keine Handles, keine `Entity`. | `#[derive(Serialize, Deserialize)]` auf allen `shared/`-Typen |
+| 1 | **Simulation and presentation are separate.** The simulation reads input + state and writes state; rendering, HUD and sound **only read**. | the simulation runs in `FixedUpdate`, `render`/`hud`/`sound` in `Update` |
+| 2 | **Input is a piece of data, not a key press.** There is **one** `Intent` (movement, look, buttons, tick), and the simulation reads only that. | `shared::Intent`; filled by `net` — from the keyboard **or** a script **or**, later, the network |
+| 3 | **There is no "the player".** Never `.single()`. Every player is one of many. | `shared::PlayerId`; gas and blades are **components on the player**, never a `Resource`. `LocalPlayer` is the only place that knows who "I" am |
+| 4 | **Fixed simulation step** (60 Hz), the image interpolates in between. | `Time<Fixed>` at 60 Hz in `main.rs` |
+| 5 | **Determinism where it is cheap.** Randomness only out of a seeded generator whose seed is part of the state. | `shared::Rng` (`seed + tick`), never `rand::random()` in the middle of a system |
+| 6 | **Authority is named.** The documentation of every domain says who writes a shared field. | the authority table in [`docs/architecture.md`](architecture.md) — **later that sentence reads "the server"** |
+| 7 | **Stable ids instead of pointers.** Everything that is saved or sent uses ids of our own. | `PlayerId`, `TitanId` — **never** Bevy's `Entity` (a local index with a generation; on another machine it is something else). Saves the save game while it is at it |
+| 8 | **`serde` on everything that is state**, and messages designed to fit down a wire — data, no handles, no `Entity`. | `#[derive(Serialize, Deserialize)]` on all `shared/` types |
 
-## Was die Bibel schon entschieden hat — keine offenen Fragen mehr
+## What the bible has already decided — no open questions left
 
-| Vorgabe (Bibel 3.6) | Konsequenz fuer den Code |
+| Spec (bible 3.6) | Consequence for the code |
 |---|---|
-| **Eigene Bewegung beim Client**, alles andere beim Server (Titanen, Ziele, Schaden, Beute) | Die Trennung aus Regel 1 ist damit **vorgegeben**, nicht gewaehlt: Bewegung darf lokal sofort reagieren, ein Cortex-Treffer nie |
-| **20 Spieler pro Einsatz, 10 pro Raid, 40 im Hub** | Nichts skaliert mit „einem Spieler". Zwanzig Spieler mit je **zwei Seilen** plus sechzig Titanen sind die eigentliche Belastungsprobe — nicht die Grafik |
-| **Kein Schaden, keine Kollision zwischen Spielern** (F-162a, F-163a) | Zwei Spieler muessen sich in voller Fahrt durchdringen koennen; Knockback bleibt als taktisches Element |
-| **Getrennte Beute pro Spieler** (F-160a) | Beute ist nie globaler Zustand. Jeder wuerfelt fuer sich — kein Wettlauf |
-| **Kampfunfaehigkeit statt Sofort-Tod** (F-159a), Wiederbeleben durch Mitspieler | „tot" ist ein **Zustand mit Timer**, kein Entfernen der Entity → gehoert zu `squad/`. Alleinspieler bekommen eine begrenzte Selbstaufrichtung |
-| **Kein Ausschluss in oeffentlichen Instanzen** (F-170a) | nur Melden und lokales Stummschalten |
-| **Verbindungsabbruch reserviert den Platz 120 s** (F-158a) | Die Sitzung ueberlebt den Spieler; sein Zustand haengt an einer `PlayerId`, nicht an einer Verbindung (Regel 7) |
-| **T-019: jedes Bewegungsfeature wird bei 200 ms simulierter Latenz getestet** | **Der Verzoegerungs-Schalter gehoert ins Werkzeug** (`--lag 200`), nicht in ein spaeteres Ticket: „fuehlt sich lokal gut an" ist keine Abnahme |
+| **Own movement on the client**, everything else on the server (titans, targets, damage, loot) | The separation from rule 1 is thereby **prescribed**, not chosen: movement may react locally at once, a cortex hit never |
+| **20 players per mission, 10 per raid, 40 in the hub** | Nothing scales with "one player". Twenty players with **two ropes** each plus sixty titans are the real load test — not the graphics |
+| **No damage, no collision between players** (F-162a, F-163a) | Two players have to be able to pass through each other at full speed; knockback stays as a tactical element |
+| **Separate loot per player** (F-160a) | Loot is never global state. Everyone rolls for himself — no race |
+| **Downed instead of instant death** (F-159a), revived by teammates | "dead" is a **state with a timer**, not a removal of the entity → belongs to `squad/`. Solo players get a limited self-revive |
+| **No kicking in public instances** (F-170a) | reporting and local muting, nothing else |
+| **A dropped connection holds the slot for 120 s** (F-158a) | The session outlives the player; his state hangs on a `PlayerId`, not on a connection (rule 7) |
+| **T-019: every movement feature is tested at 200 ms of simulated latency** | **The lag switch belongs in the tooling** (`--lag 200`), not in a later ticket: "feels good locally" is not an acceptance |
 
-## Die Naht: `src/net/`
+## The seam: `src/net/`
 
-`NetPlugin` tut heute genau eines — den Transport **`LocalOnly`** bereitstellen, der die Intents
-des lokalen Spielers in die Simulation schiebt. Damit ist der Ort, an dem spaeter Client und
-Server stehen, **vorhanden und leer**, statt spaeter mitten durch fuenf Domaenen zu schneiden.
+`NetPlugin` does exactly one thing today — provide the **`LocalOnly`** transport, which pushes
+the local player's intents into the simulation. That way the place where client and server will
+later stand is **there and empty**, instead of being cut through five domains afterwards.
 
 ```
-Tastatur ─┐
-Skript   ─┼─► net::Posteingang ─► net::intents_zustellen ─► Intent am Spieler ─► Simulation
-(Netz)   ─┘      (PlayerId → Roh-Intent)     FixedPreUpdate
+Keyboard  ─┐
+Script    ─┼─► net::Inbox ─► net::deliver_intents ─► Intent on the player ─► Simulation
+(network) ─┘   (PlayerId → raw Intent)                FixedPreUpdate
 ```
 
-**Drei Quellen, ein Kanal.** Der Skript-Fahrer ist kein zweiter, falscher Weg zu spielen — er
-schreibt in denselben Posteingang wie die Tastatur, und jedes System dahinter ist das echte.
-Genau dieser Kanal ist der, den Multiplayer braucht: **ein Aufwand, zwei Probleme geloest.**
+**Three sources, one channel.** The script driver is not a second, wrong way to play — it
+writes into the same inbox as the keyboard, and every system behind it is the real one. That
+channel is exactly the one multiplayer needs: **one effort, two problems solved.**
 
-## Was noch offen ist
+## What is still open
 
-Dediziert oder Host, und ob es bei den Bibel-Zahlen bleibt: [`docs/FRAGEN.md`](FRAGEN.md)
-Q-008. PvP: Q-003. Nichts davon blockiert die Arbeit — `net/` ist transport-agnostisch.
+Dedicated or host, and whether the bible's numbers stand: [`docs/QUESTIONS.md`](QUESTIONS.md)
+Q-008. PvP: Q-003. None of it blocks the work — `net/` is transport-agnostic.
 
-## Der Waechter
+## The guard
 
-**`tests/mehrspieler.rs`** spawnt **zwei** Spieler-Entities und laesst die Simulation ein paar
-Ticks laufen. Er faellt in der Sekunde um, in der jemand `.single()` auf eine Spieler-Query
-schreibt oder Spielerzustand in eine `Resource` legt. **Ohne ihn verfaellt dieses Dokument
-still** — und man merkt es erst, wenn Multiplayer dran ist, also nach Monaten Arbeit, die man
-dann anfassen muss.
+**`tests/multiplayer.rs`** spawns **two** player entities and lets the simulation run a few
+ticks. It falls over the second somebody writes `.single()` on a player query or puts player
+state into a `Resource`. **Without it this document rots quietly** — and you notice only when
+multiplayer is due, that is, after months of work you then have to touch.
 
-Verwandt: [`docs/architektur.md`](architektur.md) · [`docs/lessons/arbeitsweise.md`](lessons/arbeitsweise.md)
+Related: [`docs/architecture.md`](architecture.md) · [`docs/lessons/supervision.md`](lessons/supervision.md)

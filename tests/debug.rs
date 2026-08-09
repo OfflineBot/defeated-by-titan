@@ -1,171 +1,174 @@
-//! Der Waechter ueber den Gizmos — **den Strichen, ohne die ein Bild kein Beleg ist.**
+//! The guard over the gizmos — **the strokes without which an image is not evidence.**
 //!
-//! `docs/ABNAHME.md` verlangt fuer 🟧 ein Bild, auf dem man etwas **erkennt**. Auf
-//! `docs/bilder/t006-welt-fern.png` sieht man Kloetze, aber nicht, welcher davon hakbar ist.
-//! `src/debug/gizmo.rs` zeichnet genau das — und diese Datei sorgt dafuer, dass die Regel
-//! nicht still verfaellt:
+//! `docs/ACCEPTANCE.md` demands an image for 🟧 on which you actually **recognize**
+//! something. On `docs/images/t006-world-far.png` you see blocks, but not which of them is
+//! anchorable. `src/debug/gizmo.rs` draws exactly that — and this file is what keeps the rule
+//! from rotting quietly:
 //!
-//! - **Sie sind registriert und laufen.** Nimmt jemand die `add_systems`-Zeile aus
-//!   `src/debug/mod.rs`, faellt hier etwas um und nicht erst dem naechsten Auftrag sein Bild.
-//! - **Sie zeichnen nur, was markiert ist.** Ein Gizmo an einem Klotz ohne
-//!   [`Ankerflaeche`](defeated_by_titan::shared::Ankerflaeche) wuerde eine Aussage
-//!   behaupten, die das Spiel nicht macht — und `F-003` („kein Haken auf ungetaggten
-//!   Flaechen") waere im Bild nicht mehr pruefbar.
-//! - **Sie zeichnen gar nichts, wenn der Schalter aus ist.**
+//! - **They are registered and they run.** Take the `add_systems` line out of
+//!   `src/debug/mod.rs` and something falls over here, instead of the next job losing its
+//!   image.
+//! - **They draw only what is tagged.** A gizmo on a block without an
+//!   [`AnchorSurface`](defeated_by_titan::shared::AnchorSurface) would claim something the
+//!   game does not do — and `F-003` ("no hook on untagged surfaces") would no longer be
+//!   checkable in the image.
+//! - **They draw nothing at all while the toggle is off.**
 //!
-//! Was sich **ohne** App pruefen laesst — Farben, Kantenzahl, Masse, der Schalter —, steht
-//! als Einheitentest in `src/debug/gizmo.rs`. Hier steht nur, was eine echte App braucht.
+//! Whatever can be checked **without** an app — colors, edge counts, sizes, the toggle —
+//! lives as a unit test in `src/debug/gizmo.rs`. Only what needs a real app lives here.
 
 use bevy::prelude::*;
 use defeated_by_titan::data::GameData;
-use defeated_by_titan::debug::gizmo::{GizmoSchalter, GizmoZaehler, GizmoZeichnen};
-use defeated_by_titan::player::spieler_spawnen;
-use defeated_by_titan::shared::{Ankerflaeche, Bauklotz, IdZaehler, Start};
+use defeated_by_titan::debug::gizmo::{GizmoToggle, GizmoCounts, GizmoSystems};
+use defeated_by_titan::player::spawn_player;
+use defeated_by_titan::shared::{AnchorSurface, Block, IdCounter, Cli};
 
-/// Baut die **echte** App, headless — nicht eine zweite, aehnliche.
+/// Builds the **real** app, headless — not a second, similar one.
 ///
-/// Der Schalter wird ausdruecklich gesetzt und nicht aus der Umgebung gelesen: ein Test,
-/// der `DBT_GIZMOS` umsetzt, prueft den Prozess statt der Regel und stoert jeden parallel
-/// laufenden Test im selben Prozess.
-fn app(gizmos_an: bool) -> App {
-    let mut app = defeated_by_titan::app(Start { headless: true, ..default() });
-    app.insert_resource(GizmoSchalter { an: gizmos_an });
+/// The toggle is set explicitly instead of being read from the environment: a test that
+/// flips `DBT_GIZMOS` checks the process instead of the rule, and it disturbs every other
+/// test running in parallel in the same process.
+fn app(gizmos_on: bool) -> App {
+    let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    app.insert_resource(GizmoToggle { on: gizmos_on });
     app
 }
 
-fn zaehler(app: &App) -> GizmoZaehler {
-    *app.world().resource::<GizmoZaehler>()
+fn counts(app: &App) -> GizmoCounts {
+    *app.world().resource::<GizmoCounts>()
 }
 
-/// Ein Quader mit derselben Form wie ein Haus, damit der Test nicht an einer Sonderform
-/// haengt. Ob er hakbar ist, ist das Einzige, was sich zwischen den Faellen unterscheidet.
-fn klotz() -> Bauklotz {
-    Bauklotz { groesse: Vec3::new(6.0, 9.0, 6.0), farbe: [0.42, 0.43, 0.40] }
+/// A cuboid shaped like a house, so the test does not hang on some special shape. Whether it
+/// is anchorable is the only thing that differs between the cases.
+fn block() -> Block {
+    Block { size: Vec3::new(6.0, 9.0, 6.0), color: [0.42, 0.43, 0.40] }
 }
 
 #[test]
-fn die_gizmo_systeme_stehen_im_update_schedule() {
-    // Der wortwoertliche Teil: die drei Systeme sind eingetragen. Der Test daneben prueft,
-    // dass sie auch etwas tun — beides zusammen faellt um, egal ob jemand die Registrierung
-    // entfernt oder sie stehen laesst und den Rumpf leert.
+fn the_gizmo_systems_are_registered_in_the_update_schedule() {
+    // The literal-minded half: the three systems are registered. The test next door checks
+    // that they also do something — together the pair falls over whether somebody removes
+    // the registration or leaves it standing and empties the body.
     //
-    // Geprueft wird ueber das SET und nicht ueber Systemnamen: ohne `bevy_utils/debug`
-    // heisst hier jedes System woertlich "<Enable the debug feature to see the name>"
-    // (gemessen, siehe `src/debug/gizmo.rs::GizmoZeichnen`) — ein Namenstest waere gruen,
-    // ohne irgendetwas zu wissen.
+    // Checked through the SET and not through system names: without `bevy_utils/debug` every
+    // system here is called, verbatim, "<Enable the debug feature to see the name>"
+    // (measured, see `src/debug/gizmo.rs::GizmoSystems`) — a name test would be green while
+    // knowing nothing at all.
     let mut app = app(false);
-    app.update(); // ohne einen Durchlauf ist der Schedule nicht initialisiert
+    app.update(); // without one pass the schedule is not initialized
 
     let schedule = app.get_schedule(Update).expect("Update-Schedule");
-    let systeme = schedule
+    let systems = schedule
         .graph()
-        .systems_in_set(GizmoZeichnen.intern())
-        .expect("das Set GizmoZeichnen steht nicht im Update-Schedule");
+        .systems_in_set(GizmoSystems.intern())
+        .expect("the GizmoSystems set is not in the Update schedule");
 
     assert_eq!(
-        systeme.len(),
+        systems.len(),
         3,
-        "es sollten drei Zeichensysteme im Set stehen (Anker, Massstab, Spieler) — ohne sie \
-         hat der naechste Auftrag kein Bild, auf dem man etwas erkennt (docs/ABNAHME.md)"
+        "there should be three drawing systems in the set (anchors, reference, players) — \
+         without them the next job has no image on which anything is recognizable \
+         (docs/ABNAHME.md)"
     );
 }
 
 #[test]
-fn die_gizmos_laufen_und_umranden_die_ankerflaechen_der_karte() {
+fn the_gizmos_run_and_outline_the_anchor_surfaces_of_the_map() {
     let mut app = app(true);
-    app.update(); // Startup baut die Karte, Update zeichnet sie
+    app.update(); // Startup builds the map, Update draws it
 
-    let gezeichnet = zaehler(&app).anker;
-    let vorhanden = ankerflaechen(&mut app);
-    assert!(vorhanden > 0, "die Karte hat keine einzige Ankerflaeche — Test misst nichts");
+    let drawn = counts(&app).anchors;
+    let present = anchor_surfaces(&mut app);
+    assert!(present > 0, "the map has not a single anchor surface — the test measures nothing");
     assert_eq!(
-        gezeichnet, vorhanden,
-        "{vorhanden} Ankerflaechen in der Welt, aber {gezeichnet} umrandet"
+        drawn, present,
+        "{present} anchor surfaces in the world, but {drawn} outlined"
     );
 }
 
 #[test]
-fn ein_klotz_ohne_ankerflaeche_bekommt_kein_gizmo() {
-    // **Das ist die Aussage des Bildes.** Wuerde jeder Klotz umrandet, hiesse „umrandet"
-    // nur noch „ist ein Klotz" — und `F-003` waere auf keinem Screenshot mehr pruefbar.
+fn a_block_without_an_anchor_surface_gets_no_gizmo() {
+    // **This is the claim the image makes.** If every block were outlined, "outlined" would
+    // only mean "is a block" — and `F-003` would no longer be checkable on any screenshot.
     let mut app = app(true);
     app.update();
-    let vorher = zaehler(&app).anker;
+    let prev = counts(&app).anchors;
 
-    app.world_mut().spawn((Name::new("probe_ungetaggt"), klotz(), Transform::from_xyz(80.0, 4.5, 0.0)));
+    app.world_mut().spawn((Name::new("probe_untagged"), block(), Transform::from_xyz(80.0, 4.5, 0.0)));
     app.update();
     assert_eq!(
-        zaehler(&app).anker,
-        vorher,
-        "ein Klotz ohne Ankerflaeche wurde umrandet — das Bild wuerde etwas behaupten, \
-         was das Spiel nicht tut"
+        counts(&app).anchors,
+        prev,
+        "a block without an anchor surface was outlined — the image would claim something \
+         the game does not do"
     );
 
     app.world_mut().spawn((
-        Name::new("probe_getaggt"),
-        klotz(),
-        Ankerflaeche,
+        Name::new("probe_tagged"),
+        block(),
+        AnchorSurface,
         Transform::from_xyz(80.0, 4.5, 20.0),
     ));
     app.update();
     assert_eq!(
-        zaehler(&app).anker,
-        vorher + 1,
-        "eine neue Ankerflaeche blieb unsichtbar — dann zeigt das Bild einen alten Stand"
+        counts(&app).anchors,
+        prev + 1,
+        "a new anchor surface stayed invisible — then the image shows an old state"
     );
 }
 
 #[test]
-fn ohne_schalter_wird_nichts_gezeichnet() {
-    // Gizmos duerfen nicht immer mitlaufen: Rechenzeit, und auf einem Spielbild stoeren sie.
+fn with_the_toggle_off_nothing_is_drawn() {
+    // Gizmos must not run all the time: compute time, and on an in-game image they get in
+    // the way.
     let mut app = app(false);
     app.update();
     app.update();
     assert_eq!(
-        zaehler(&app),
-        GizmoZaehler::default(),
-        "der Schalter ist aus und es wurde trotzdem gezeichnet"
+        counts(&app),
+        GizmoCounts::default(),
+        "the toggle is off and it was drawn anyway"
     );
-    assert!(ankerflaechen(&mut app) > 0, "es haette etwas zu zeichnen gegeben");
+    assert!(anchor_surfaces(&mut app) > 0, "there would have been something to draw");
 }
 
 #[test]
-fn die_kapsel_mit_der_kamera_darin_bleibt_leer_ein_mitspieler_nicht() {
-    // Die Kamera haengt als Kind am lokalen Spieler und sitzt in seiner Kapsel. Zeichnete
-    // man sie, laege die eigene Huelle als Gitter ueber das ganze Bild — 0,35 m vor einem
-    // 60-Grad-Objektiv ist eine Kante bildfuellend.
+fn the_hull_holding_the_camera_stays_empty_a_team_mate_does_not() {
+    // The camera hangs off the local player as a child and sits inside his hull. Draw it and
+    // your own hull lies over the whole image as a wireframe — 0.35 m in front of a 60 degree
+    // lens, one edge fills the frame.
     let mut app = app(true);
     for _ in 0..3 {
-        app.update(); // Spieler, dann Kamera (Commands sind verzoegert), dann Propagation
+        app.update(); // player, then camera (commands are deferred), then propagation
     }
     assert_eq!(
-        zaehler(&app).spieler,
+        counts(&app).players,
         0,
-        "die eigene Kapsel wurde gezeichnet — sie verdeckt jedes Bild aus der Ich-Sicht"
+        "your own hull was drawn — it covers every first-person image"
     );
 
-    // Ein Mitspieler, genau so, wie er spaeter aus dem Netz dazukommt: ohne LocalPlayer,
-    // ohne Kamera. Er MUSS markiert werden, sonst ist er auf einem Fernbild unsichtbar.
+    // A team mate, exactly the way one will later arrive over the network: no LocalPlayer,
+    // no camera. He MUST be marked, otherwise he is invisible in a long-range shot.
     {
-        let welt = app.world_mut();
-        let daten = welt.resource::<GameData>().clone();
-        let mut id_zaehler = welt.resource::<IdZaehler>().to_owned();
-        let mut commands = welt.commands();
-        spieler_spawnen(&mut commands, &mut id_zaehler, &daten, Vec3::new(60.0, 2.0, 0.0), false);
+        let world = app.world_mut();
+        let data = world.resource::<GameData>().clone();
+        let mut ids = world.resource::<IdCounter>().to_owned();
+        let mut commands = world.commands();
+        spawn_player(&mut commands, &mut ids, &data, Vec3::new(60.0, 2.0, 0.0), false);
     }
     for _ in 0..2 {
         app.update();
     }
     assert_eq!(
-        zaehler(&app).spieler,
+        counts(&app).players,
         1,
-        "ein Mitspieler ohne Kamera blieb unmarkiert — genau der Fall, fuer den es die \
-         Markierung gibt (docs/multiplayer.md Regel 3)"
+        "a team mate without a camera stayed unmarked — exactly the case the marker \
+         exists for (docs/multiplayer.md rule 3)"
     );
 }
 
-/// Wie viele Entities die Welt gerade als hakbar fuehrt.
-fn ankerflaechen(app: &mut App) -> usize {
-    let mut abfrage = app.world_mut().query_filtered::<Entity, With<Ankerflaeche>>();
-    abfrage.iter(app.world()).count()
+/// How many entities the world currently lists as anchorable.
+fn anchor_surfaces(app: &mut App) -> usize {
+    let mut query = app.world_mut().query_filtered::<Entity, With<AnchorSurface>>();
+    query.iter(app.world()).count()
 }

@@ -1,78 +1,76 @@
-# BUGS — jeder Bug mit Reproduktion, Beleg, Ursache, Fix und Test
+# BUGS — every bug with repro, evidence, cause, fix and test
 
-Stand: 2026-08-09
+Updated: 2026-08-09
 
-> **Ein Bug ohne Beleg ist ein Geruecht — und Unsicherheit ist ein Mangel.**
-> Kein „muesste jetzt gehen", kein „sollte passen", kein „wahrscheinlich behoben". Entweder
-> du hast es **belegt**, oder du schreibst hin, dass du es nicht hast (`prompts/init.md` §9).
+> **A bug without evidence is a rumour — and uncertainty is a defect.**
+> No "should work now", no "should be fine", no "probably fixed". Either you have it
+> **evidenced**, or you write down that you do not (`prompts/init.md` §9).
 
-## Ein Bugbericht braucht vier Felder — sonst ist er keiner
+## A bug report needs four fields — otherwise it is not one
 
-| Feld | was hinein muss |
+| Field | what has to go in |
 |---|---|
-| **Reproduktion** | das exakte Kommando: `cargo run -- --headless --script scripts/haken-kante.txt`, plus Seed / Koordinate / Blickrichtung aus dem F3-Overlay und die **Maschine** (`[debian]`/`[cachy]`). Wer es nicht nachstellen kann, kann es nicht pruefen. |
-| **Beleg** | Screenshot in `docs/bilder/`, Logausschnitt **oder** eine Zahl (gemessen 34 m/s, erwartet ≤ 12). Nicht „sieht falsch aus". |
-| **Erwartung** | was stattdessen passieren muesste — und **woher** du das weisst (RON-Zeile, Doku-Absatz, Design-Entscheidung). |
-| **Ursache** | `datei:zeile`, sobald bekannt. Solange sie fehlt: **„Ursache unbekannt"**, nicht geraten. |
+| **Repro** | the exact command: `cargo run -- --headless --script scripts/hook-edge.txt`, plus seed / coordinate / view direction from the F3 overlay and the **machine** (`[debian]`/`[cachy]`). Whoever cannot reproduce it cannot check it. |
+| **Evidence** | screenshot in `docs/images/`, a log excerpt **or** a number (measured 34 m/s, expected ≤ 12). Not "looks wrong". |
+| **Expectation** | what should happen instead — and **where you know that from** (RON line, doc paragraph, design decision). |
+| **Cause** | `file:line`, as soon as it is known. As long as it is missing: **"cause unknown"**, not guessed. |
 
-**Kein Repro ⇒ kein Fix.** Ein Bug ohne Reproduktion wird als *unbelegt* eingetragen und
-**nicht repariert** — ein Fix fuer etwas, das du nie gesehen hast, ist eine Aenderung ohne
-Grund, und die kannst du hinterher auch nicht widerlegen.
+**No repro, no fix.** A bug without a repro is recorded as *unevidenced* and **not
+repaired** — a fix for something you have never seen is a change without a reason, and you
+cannot refute it afterwards either.
 
-## Ein Fix ohne roten Test ist eine Vermutung
+## A fix without a red test is a guess
 
-Die Reihenfolge ist **nicht verhandelbar**:
+The order is **not negotiable**:
 
-1. **Test schreiben, der den Bug zeigt** — und laufen lassen, bis er **rot** ist. Ein Test,
-   der nie rot war, beweist nur, dass er kompiliert.
-2. **Fixen**, bis er gruen ist.
-3. **Den Fix wieder herausnehmen** und zusehen, dass der Test erneut umfaellt. Erst dann
-   weisst du, dass der Test *diesen* Fix prueft und nicht irgendetwas daneben.
-4. **Hier eintragen:** Ursache, Fix, Testname. War es eine Falle, aus der man lernen kann:
-   eine Datei in `docs/lessons/`.
+1. **Write the test that shows the bug** — and run it until it is **red**. A test that was
+   never red only proves that it compiles.
+2. **Fix**, until it is green.
+3. **Take the fix out again** and watch the test fall over once more. Only then do you know
+   that the test checks *this* fix and not something next to it.
+4. **Record it here:** cause, fix, test name. If it was a trap somebody can learn from: a
+   file in `docs/lessons/`.
 
-Bei einem Bug, den nur das Auge sieht (Bewegungsgefuehl, Kameraruckeln, ein Haken, der ins
-Nichts zeigt), ist der Beleg ein **`--script`-Lauf mit `assert`** plus Screenshot
-vorher/nachher. Genau dafuer wird der Fahrer in Stufe 1 gebaut.
+For a bug that only the eye sees (movement feel, camera stutter, a hook pointing into
+nothing), the evidence is a **`--script` run with `assert`** plus a screenshot before/after.
+That is exactly what the script driver in stage 1 is built for.
 
-## Wortwahl
+## Wording
 
-| nicht schreiben | sondern |
+| do not write | but |
 |---|---|
-| „behoben" (ohne roten Test davor) | „gefixt, Test `x` war rot, ist gruen" |
-| „sollte jetzt gehen" | „gebaut, **ungetestet** — 🟨" |
-| „laeuft" | „im Spiel gesehen, Screenshot `docs/bilder/…`" |
-| „ist schneller" | „16,6 → 9,4 ms, `--release --novsync`, Median aus 5 Laeufen [cachy]" |
-| „funktioniert wahrscheinlich" | eine Zeile in `docs/FRAGEN.md` oder hier |
+| "fixed" (without a red test before it) | "fixed, test `x` was red, is green" |
+| "should work now" | "built, **untested** — 🟨" |
+| "runs" | "seen in the game, screenshot `docs/images/…`" |
+| "is faster" | "16.6 → 9.4 ms, `--release --novsync`, median of 5 runs [cachy]" |
+| "probably works" | a line in `docs/QUESTIONS.md` or here |
 
-**Unsicherheit setzt die Stufe herunter, nicht hinauf** (§8, §9). Wenn du dir nicht sicher
-bist, ist es **🟨** — auch wenn es funktioniert. Das kostet nichts. Eine zu hohe Stufe kostet
-den Naechsten einen halben Tag.
+**Doubt moves the stage down, not up** (§8, §9). If you are not sure, it is **🟨** — even if
+it works. That costs nothing. A stage that is too high costs the next person half a day.
 
-## Sicherheit im Code: nichts darf still schiefgehen
+## Safety in the code: nothing may go wrong quietly
 
-- **Kein `unsafe`.** Wer glaubt, es zu brauchen, schreibt es nach `docs/FRAGEN.md`.
-- **`unwrap()`/`expect()` nur mit Begruendung im Kommentar** — und **nie** auf Daten aus einer
-  Datei oder aus Eingaben. Beim **Laden** der RON ist ein sofortiger, lauter Abbruch mit
-  Dateiname das *richtige* Verhalten (fail fast beim Start); mitten im Spiel ist er es nie.
-- **Physik braucht Wachen.** Seilkraefte, Normalisierungen und Divisionen erzeugen NaN/∞,
-  sobald ein Vektor Laenge 0 hat oder ein Frame 0,5 s dauert. NaN im `Transform` ist der Bug,
-  der aussieht wie „der Spieler ist verschwunden": Laenge pruefen, bevor normalisiert wird,
-  `dt` clampen, und in `debug/` ein System, das **einmal warnt**, wenn eine Position nicht
-  endlich ist.
-- **Ein `panic!` im Spiel ist ein Bug**, auch wenn er „nie" auftritt. Ein `Result`, das mit
-  `let _ =` geschluckt wird, ist ein Fehler, den niemand mehr sehen kann.
+- **No `unsafe`.** Whoever believes they need it writes it into `docs/QUESTIONS.md`.
+- **`unwrap()`/`expect()` only with a reason in the comment** — and **never** on data from a
+  file or from input. While **loading** the RON, an immediate, loud abort with the file name
+  is the *right* behavior (fail fast at startup); in the middle of the game it never is.
+- **Physics needs guards.** Rope forces, normalizations and divisions produce NaN/∞ the
+  moment a vector has length 0 or a frame lasts 0.5 s. NaN in a `Transform` is the bug that
+  looks like "the player has disappeared": check the length before normalizing, clamp `dt`,
+  and put a system in `debug/` that **warns once** when a position is not finite.
+- **A `panic!` in the game is a bug**, even if it "never" happens. A `Result` swallowed with
+  `let _ =` is an error nobody can see any more.
 
 ---
 
-## Offene Bugs
+## Open bugs
 
-*(keine — es gibt noch kein laufendes Spiel, in dem einer auftreten koennte. Der erste Eintrag
-heisst `B-001`.)*
+*(none — there is no running game yet in which one could occur. The first entry is called
+`B-001`.)*
 
-## Geschlossene Bugs
+## Closed bugs
 
-*(noch keine)*
+*(none yet)*
 
-Verwandt: [`docs/FUNDE.md`](FUNDE.md) (fremde Fehler) · [`docs/STATUS.md`](STATUS.md) ·
+Related: [`docs/FINDINGS.md`](FINDINGS.md) (foreign mistakes) · [`docs/STATUS.md`](STATUS.md) ·
 [`docs/lessons/`](lessons/)

@@ -1,17 +1,17 @@
-// gear.ron — Klingen, Tanks, Nachschub. Wirtschaft statt Cooldowns (init.md §1).
-// ⚠️ UNGETUNT, siehe game.ron.
+// gear.ron — blades, tanks, resupply. Economy instead of cooldowns (init.md §1).
+// ⚠️ UNTUNED, see game.ron.
 (
-    klingen: (
-        paare_start: 5,
-        abnutzung_pro_treffer: 0.12,
-        // Schaden kommt aus GESCHWINDIGKEIT: ein Schnitt aus dem Stand kratzt,
-        // derselbe Schnitt aus 30 m/s toetet (init.md §1). Die Formel steht hier,
-        // nicht in Rust.
-        schaden_pro_m_s: 1.4,
-        mindesttempo_m_s: 8.0,
+    blades: (
+        start_pairs: 5,
+        wear_per_hit: 0.12,
+        // Damage comes out of SPEED: a slash from standing still scratches,
+        // the same slash out of 30 m/s kills (init.md §1). The formula stands
+        // here, not in Rust.
+        damage_per_m_s: 1.4,
+        min_speed_m_s: 8.0,
     ),
-    nachschub: (
-        gas_pro_s: 40.0,
-        reichweite_m: 4.0,
+    resupply: (
+        gas_per_s: 40.0,
+        range_m: 4.0,
     ),
 )

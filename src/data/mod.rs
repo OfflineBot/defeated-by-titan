@@ -1,29 +1,28 @@
-//! data — die RON-Dateien laden. **Laeuft vor allem anderen.**
+//! data — load the RON files. **Runs before everything else.**
 //!
-//! > **Zahlen gehoeren in RON, nicht in Rust.** Ein neuer Titan-Typ, eine Klingenstufe, eine
-//! > Gas-Kostenzahl: Datei-Arbeit, kein Rust. Im Code stehen nur *Einheiten* und *Mechanik*
+//! > **Numbers belong in RON, not in Rust.** A new Titan kind, a blade tier, a gas cost
+//! > figure: file work, not Rust. Only *units* and *mechanics* stand in the code
 //! > (`prompts/init.md` §4).
 //!
-//! Warum das nicht optional ist: **Balancing ist die Arbeit, die am haeufigsten passiert.**
-//! Wenn sie einen Rebuild braucht, passiert sie nicht. Und ein anderer Agent kann eine
-//! RON-Zeile aendern, ohne diesen Code zu verstehen.
+//! Why that is not optional: **balancing is the work that happens most often.** If it needs a
+//! rebuild, it does not happen. And another agent can change one RON line without
+//! understanding this code.
 //!
-//! **Kein `serde(default)` fuer Spielwerte.** Ein fehlender Wert soll beim Laden krachen,
-//! nicht still eine Null einsetzen — sonst sucht man den Bug im Code, waehrend er in der
-//! Datei sitzt. Deshalb wird hier auch **synchron beim Aufbau** geladen und nicht ueber den
-//! `AssetServer`: ein Fehler soll **beim Start** laut sein, mit Dateiname und Zeile, und
-//! nicht drei Systeme spaeter als leerer Bildschirm (§9d).
+//! **No `serde(default)` for game values.** A missing value is meant to crash at load time,
+//! not to quietly slip a zero in — otherwise you hunt the bug in the code while it sits in the
+//! file. That is also why loading happens **synchronously during setup** and not through the
+//! `AssetServer`: an error is meant to be loud **at startup**, with file name and line, and
+//! not three systems later as an empty screen (§9d).
 //!
-//! **Und `#[serde(deny_unknown_fields)]` auf jedem Typ hier.** Das Weglassen krachte schon
-//! immer; das *Hinzufuegen* nicht — serde ueberliest ein unbekanntes Feld stillschweigend.
-//! Gemessen am 2026-08-09: ein `erfunden_m: 42.0` in `massstab.ron` und ein
-//! `gewicht_kg: 70.0` unter `game.ron: spieler` luden beide ohne ein Wort. Das ist genau die
-//! Falle fuer die Datei, in die von jetzt an Zahlen des Users nachgetragen werden: ein
-//! Nachtrag auf der falschen Verschachtelungsstufe verschwindet lautlos, und die Zahl, die
-//! man eingetragen hat, ist im Spiel nicht da.
+//! **And `#[serde(deny_unknown_fields)]` on every type in here.** Leaving a field out always
+//! crashed; *adding* one did not — serde reads past an unknown field without a word. Measured
+//! on 2026-08-09: an `erfunden_m: 42.0` in `scale.ron` and a `gewicht_kg: 70.0` under
+//! `game.ron: player` both loaded without a word. That is exactly the trap for the file the
+//! user's numbers are going to be added to from now on: an addition at the wrong nesting level
+//! vanishes silently, and the number you typed in is not in the game.
 //!
-//! **Dies ist die einzige Stelle, die Dateinamen kennt.** Alle anderen fragen nach dem
-//! logischen Namen; `tools/normen.py` faellt um, wenn irgendwo sonst ein Pfad im Code steht.
+//! **This is the only place that knows file names.** Everybody else asks for the logical name;
+//! `tools/norms.py` falls over when a path stands in the code anywhere else.
 
 use bevy::prelude::*;
 use serde::Deserialize;
@@ -34,296 +33,295 @@ pub struct DataPlugin;
 
 impl Plugin for DataPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(GameData::laden(&wurzel()));
+        app.insert_resource(GameData::load(&assets_root()));
     }
 }
 
-/// Wo `assets/` liegt.
+/// Where `assets/` lives.
 ///
-/// **`cargo run`, nie das nackte Binary**: das Binary sucht `assets/` relativ zum
-/// Arbeitsverzeichnis und findet nichts — leere Welt, keine Fehlermeldung, sieht exakt wie
-/// ein Render-Bug aus (`prompts/init.md` §3). Damit ein `cargo test` aus `tests/` trotzdem
-/// findet, wird zusaetzlich das Crate-Verzeichnis geprueft.
-fn wurzel() -> PathBuf {
-    let hier = PathBuf::from("assets/data");
-    if hier.is_dir() {
-        return hier;
+/// **`cargo run`, never the bare binary**: the binary looks for `assets/` relative to the
+/// working directory and finds nothing — empty world, no error message, looks exactly like a
+/// render bug (`prompts/init.md` §3). So that a `cargo test` out of `tests/` finds it anyway,
+/// the crate directory is checked as well.
+fn assets_root() -> PathBuf {
+    let here = PathBuf::from("assets/data");
+    if here.is_dir() {
+        return here;
     }
-    let beim_crate = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/data");
-    if beim_crate.is_dir() {
-        return beim_crate;
+    let at_crate = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/data");
+    if at_crate.is_dir() {
+        return at_crate;
     }
     panic!(
-        "assets/data/ nicht gefunden — weder unter {:?} noch unter {:?}.\n\
-         Starte mit `cargo run`, nicht mit dem nackten Binary aus target/debug/ \
+        "assets/data/ not found — neither at {:?} nor at {:?}.\n\
+         Start with `cargo run`, not with the bare binary from target/debug/ \
          (prompts/init.md §3).",
-        hier.canonicalize().unwrap_or(hier.clone()),
-        beim_crate
+        here.canonicalize().unwrap_or(here.clone()),
+        at_crate
     );
 }
 
-/// Alles, was aus `assets/data/` kommt. Eine Resource, viele Leser, **kein Schreiber**.
+/// Everything that comes out of `assets/data/`. One resource, many readers, **no writer**.
 #[derive(Resource, Debug, Clone)]
 pub struct GameData {
-    pub spiel: Spiel,
+    pub game: Game,
     pub gear: Gear,
-    pub titanen: Titanen,
+    pub titans: Titans,
     pub art: Art,
-    pub missionen: Missionen,
+    pub missions: Missions,
     pub traits: Traits,
-    pub karten: Karten,
-    /// Die **eine Wahrheit ueber Groessen**, vom User vorgegeben. Alle anderen Dateien
-    /// spiegeln nur; `tests/data.rs` faellt um, sobald eine von hier abweicht.
-    pub massstab: Massstab,
+    pub maps: Maps,
+    /// The **one truth about sizes**, laid down by the user. Every other file only mirrors it;
+    /// `tests/data.rs` falls over the moment one of them deviates from this.
+    pub scale: Scale,
 }
 
 impl GameData {
-    pub fn laden(ordner: &Path) -> Self {
+    pub fn load(dir: &Path) -> Self {
         GameData {
-            spiel: lies(ordner, "game.ron"),
-            gear: lies(ordner, "gear.ron"),
-            titanen: lies(ordner, "titan.ron"),
-            art: lies(ordner, "art.ron"),
-            missionen: lies(ordner, "missions.ron"),
-            traits: lies(ordner, "traits.ron"),
-            karten: lies(ordner, "maps.ron"),
-            massstab: lies(ordner, "massstab.ron"),
+            game: load_ron(dir, "game.ron"),
+            gear: load_ron(dir, "gear.ron"),
+            titans: load_ron(dir, "titan.ron"),
+            art: load_ron(dir, "art.ron"),
+            missions: load_ron(dir, "missions.ron"),
+            traits: load_ron(dir, "traits.ron"),
+            maps: load_ron(dir, "maps.ron"),
+            scale: load_ron(dir, "scale.ron"),
         }
     }
 
-    /// Eine Karte ueber ihren logischen Namen. `None` heisst: steht nicht in `maps.ron` —
-    /// und der Aufrufer meldet das laut, statt eine leere Welt zu bauen.
-    pub fn karte(&self, id: &str) -> Option<&Karte> {
-        self.karten.karten.get(id)
+    /// A map by its logical name. `None` means: it is not in `maps.ron` — and the caller
+    /// reports that loudly instead of building an empty world.
+    pub fn map(&self, id: &str) -> Option<&Map> {
+        self.maps.maps.get(id)
     }
 
-    /// Die Karte, die beim Start gebaut wird (`maps.ron: aktuell`).
-    /// `tests/data.rs` haelt fest, dass es sie gibt.
-    pub fn aktuelle_karte(&self) -> Option<&Karte> {
-        self.karte(&self.karten.aktuell)
+    /// The map that is built at startup (`maps.ron: current`).
+    /// `tests/data.rs` pins down that it exists.
+    pub fn current_map(&self) -> Option<&Map> {
+        self.map(&self.maps.current)
     }
 
-    /// Eine Farbe aus dem einen Farbatlas. `None` heisst: der Schluessel steht nicht in
-    /// `palette` — kein stiller Ersatz, sonst rutscht irgendwann eine Signalfarbe hinein.
-    pub fn farbe(&self, name: &str) -> Option<[f32; 3]> {
-        self.karten.palette.get(name).map(|(r, g, b)| [*r, *g, *b])
+    /// A color out of the one palette. `None` means: the key does not stand in `palette` — no
+    /// silent substitute, or sooner or later a signal color slips in.
+    pub fn color(&self, name: &str) -> Option<[f32; 3]> {
+        self.maps.palette.get(name).map(|(r, g, b)| [*r, *g, *b])
     }
 
-    /// Ein Titan-Typ ueber seinen logischen Namen. `None` heisst: steht nicht in der RON —
-    /// und der Aufrufer meldet das laut, statt einen Ersatztitanen zu erfinden.
-    pub fn titan(&self, art: &str) -> Option<&TitanArt> {
-        self.titanen.arten.get(art)
+    /// A Titan kind by its logical name. `None` means: it is not in the RON — and the caller
+    /// reports that loudly instead of inventing a stand-in Titan.
+    pub fn titan(&self, kind: &str) -> Option<&TitanKind> {
+        self.titans.kinds.get(kind)
     }
 
-    pub fn modell(&self, name: &str) -> Option<&Modell> {
+    pub fn model(&self, name: &str) -> Option<&Model> {
         self.art.models.get(name)
     }
 
-    /// Eine Groessenklasse ueber ihren logischen Namen (`massstab.ron: titan.klassen`).
-    /// `None` heisst: die Klasse steht nicht in der RON — `tests/data.rs` faengt das ab,
-    /// bevor ein Titan mit Hoehe 0 im Boden steht.
-    pub fn groessenklasse(&self, name: &str) -> Option<&Groessenklasse> {
-        self.massstab.titan.klassen.get(name)
+    /// A size class by its logical name (`scale.ron: titan.classes`). `None` means: the class
+    /// does not stand in the RON — `tests/data.rs` catches that before a Titan of height 0
+    /// stands in the ground.
+    pub fn size_class(&self, name: &str) -> Option<&SizeClass> {
+        self.scale.titan.classes.get(name)
     }
 
-    /// Die Hoehe einer Titanart. Sie steht **nicht** in `titan.ron` — dort steht nur die
-    /// Klasse, und die Hoehe kommt aus `massstab.ron`. Eine Zahl, ein Ort.
-    pub fn titan_hoehe_m(&self, art: &TitanArt) -> Option<f32> {
-        self.groessenklasse(&art.groessenklasse).map(|k| k.hoehe_m)
+    /// The height of a Titan kind. It does **not** stand in `titan.ron` — only the class does,
+    /// and the height comes out of `scale.ron`. One number, one place.
+    pub fn titan_height_m(&self, kind: &TitanKind) -> Option<f32> {
+        self.size_class(&kind.size_class).map(|k| k.height_m)
     }
 
-    /// Wo der Cortex sitzt — **die Meterangabe des Users**, nicht `hoehe_m * 0,89`.
+    /// Where the Cortex sits — **the user's figure in meters**, not `height_m * 0.89`.
     ///
-    /// **Die einzige toedliche Trefferzone** (`F-030`). Bis 2026-08-09 wurde sie hier aus
-    /// dem Anteil gerechnet; das war bequem und falsch: der User nennt fuenf Cortexhoehen in
-    /// Metern, und *eine direkte Meterangabe schlaegt jede Ableitung*. Die Rechnung lag bei
-    /// der kleinen Klasse 4 cm daneben. Der Anteil ist jetzt das, was er beim User ist —
-    /// eine Regel, gegen die `tests/data.rs` die fuenf Zahlen prueft.
-    pub fn titan_cortex_hoehe_m(&self, art: &TitanArt) -> Option<f32> {
-        self.groessenklasse(&art.groessenklasse).map(|k| k.cortex_m)
+    /// **The only lethal weak point** (`F-030`). Until 2026-08-09 it was computed here out of
+    /// the fraction; that was convenient and wrong: the user names five Cortex heights in
+    /// meters, and *a direct figure in meters beats every derivation*. For the small class the
+    /// calculation was off by 4 cm. The fraction is now what it is for the user — a rule that
+    /// `tests/data.rs` checks the five numbers against.
+    pub fn titan_cortex_height_m(&self, kind: &TitanKind) -> Option<f32> {
+        self.size_class(&kind.size_class).map(|k| k.cortex_height_m)
     }
 
-    /// Die groesste Kopfhoehe, die die Kopfregel des Users fuer diese Art zulaesst
-    /// (`hoehe_m * massstab.titan.kopf_anteil_max`, also 1/9 der Koerperhoehe).
+    /// The largest head height the user's head rule allows for this kind
+    /// (`height_m * scale.titan.max_head_fraction`, that is 1/9 of the body height).
     ///
-    /// Sie ist die **geometrische Obergrenze fuer `cortex_radius_m`**: eine Trefferzone,
-    /// deren Durchmesser groesser ist als der ganze Kopf, kann kein Halsansatz sein. Vor
-    /// diesem Waechter trugen `scuttler` (0,80 m Cortex an 0,47 m Kopf) und `weaver`
-    /// (0,90 m) genau das.
-    pub fn titan_kopf_hoehe_max_m(&self, art: &TitanArt) -> Option<f32> {
-        self.titan_hoehe_m(art).map(|h| h * self.massstab.titan.kopf_anteil_max)
+    /// It is the **geometric upper bound for `cortex_radius_m`**: a hit zone whose diameter is
+    /// larger than the whole head cannot be the base of a neck. Before this guard, `scuttler`
+    /// (0.80 m Cortex on a 0.47 m head) and `weaver` (0.90 m) carried exactly that.
+    pub fn titan_max_head_height_m(&self, kind: &TitanKind) -> Option<f32> {
+        self.titan_height_m(kind).map(|h| h * self.scale.titan.max_head_fraction)
     }
 }
 
-/// Liest eine RON-Datei oder bricht mit einer Meldung ab, die den Fehler **in der Datei**
-/// zeigt statt im Code.
-fn lies<T: for<'a> Deserialize<'a>>(ordner: &Path, datei: &str) -> T {
-    let pfad = ordner.join(datei);
-    let text = std::fs::read_to_string(&pfad).unwrap_or_else(|e| {
-        panic!("{}: laesst sich nicht lesen — {e}", pfad.display())
+/// Reads a RON file, or aborts with a message that points at the error **in the file** instead
+/// of in the code.
+fn load_ron<T: for<'a> Deserialize<'a>>(dir: &Path, file: &str) -> T {
+    let path = dir.join(file);
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("{}: cannot be read — {e}", path.display())
     });
     ron::de::from_str(&text).unwrap_or_else(|e| {
-        // ron nennt Zeile und Spalte; genau die will man sehen.
-        panic!("{}: kein gueltiges RON — {e}", pfad.display())
+        // ron names line and column; those are exactly what you want to see.
+        panic!("{}: not valid RON — {e}", path.display())
     })
 }
 
 // ---------------------------------------------------------------------------
-// game.ron — Tuning: Vector Gear, Kamera, Physik
+// game.ron — tuning: Vector Gear, camera, physics
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Spiel {
+pub struct Game {
     pub simulation_hz: f64,
-    pub schwerkraft_m_s2: f32,
-    pub spieler: SpielerWerte,
-    pub vector: VectorWerte,
-    pub kamera: KameraWerte,
-    pub welt: WeltWerte,
+    pub gravity_m_s2: f32,
+    pub player: PlayerTuning,
+    pub vector: VectorTuning,
+    pub camera: CameraTuning,
+    pub world: WorldTuning,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SpielerWerte {
-    pub hoehe_m: f32,
+pub struct PlayerTuning {
+    pub height_m: f32,
     pub radius_m: f32,
-    pub laufen_m_s: f32,
-    pub sprung_m_s: f32,
-    pub augenhoehe_m: f32,
-    /// Groesster Weg pro Teilschritt des Integrators. Muss echt kleiner sein als
-    /// [`WeltWerte::wand_min_m`], sonst tunnelt der Spieler durch die duennste Wand.
-    pub schritt_max_m: f32,
+    pub run_speed_m_s: f32,
+    pub jump_speed_m_s: f32,
+    pub eye_height_m: f32,
+    /// Largest distance per substep of the integrator. Has to be strictly smaller than
+    /// [`WorldTuning::min_wall_m`], or the player tunnels through the thinnest wall.
+    pub max_substep_m: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct VectorWerte {
-    pub hakenreichweite_m: f32,
-    pub hakenflug_m_s: f32,
-    pub haken_ruecklauf_m_s: f32,
-    pub seilzug_m_s: f32,
-    pub seil_min_m: f32,
-    /// Gauss-Seidel-Durchlaeufe ueber beide Seilzwaenge (`shared::seil::seil_schritt`).
-    pub seil_durchlaeufe: u32,
+pub struct VectorTuning {
+    pub hook_range_m: f32,
+    pub hook_speed_m_s: f32,
+    pub hook_retract_speed_m_s: f32,
+    pub reel_speed_m_s: f32,
+    pub min_rope_m: f32,
+    /// Gauss-Seidel iterations over both rope constraints (`shared::rope::rope_step`).
+    pub rope_iterations: u32,
     pub gas_tank: f32,
-    pub gas_boost_pro_s: f32,
-    pub gas_einholen_pro_s: f32,
-    /// Wer zahlt zuerst, wenn der Tank fuer beides nicht reicht. **Eine
-    /// Spielwertentscheidung**, deshalb hier und nicht als `if` in `vector/gas.rs`.
-    pub gas_rangfolge: Vec<Gasverbraucher>,
+    pub gas_boost_per_s: f32,
+    pub gas_reel_per_s: f32,
+    /// Who pays first when the tank does not cover both. **A game-value decision**, which is
+    /// why it stands here and not as an `if` in `vector/gas.rs`.
+    pub gas_priority: Vec<GasConsumer>,
     pub boost_m_s2: f32,
-    pub tempo_max_m_s: f32,
+    pub max_speed_m_s: f32,
 }
 
-/// Wer Gas verbraucht. Eigener Typ statt `String`, damit ein Tippfehler in der RON **beim
-/// Laden kracht** statt still einen Verbraucher zu verlieren.
+/// Who spends gas. Its own type instead of `String`, so that a typo in the RON **crashes at
+/// load time** instead of silently losing a consumer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
-pub enum Gasverbraucher {
-    /// `F-007` Gas-Boost.
+pub enum GasConsumer {
+    /// `F-007` gas boost.
     Boost,
-    /// `F-005` Reel-In.
-    Einholen,
+    /// `F-005` reel-in.
+    ReelIn,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct KameraWerte {
-    /// Sichtfeld im **Bodenkampf** — die Basis, nicht die Obergrenze. Muss im Fenster
-    /// `massstab.ron: kamera.sicht_boden_min_grad ..= sicht_boden_max_grad` liegen.
-    pub sicht_grad: f32,
-    /// Sichtfeld bei `vector.tempo_max_m_s`. `F-017` interpoliert spaeter zwischen beiden;
-    /// die **Kurve** gehoert in den Code, die beiden **Enden** in die RON.
-    pub sicht_tempo_grad: f32,
-    pub maus_grad_pro_punkt: f32,
-    pub pitch_grenze_grad: f32,
-    pub glaetten_halbwertszeit_s: f32,
+pub struct CameraTuning {
+    /// Field of view in **ground combat** — the base, not the ceiling. Has to lie inside the
+    /// window `scale.ron: camera.min_ground_fov_deg ..= max_ground_fov_deg`.
+    pub fov_deg: f32,
+    /// Field of view at `vector.max_speed_m_s`. `F-017` will interpolate between the two
+    /// later; the **curve** belongs in the code, the two **ends** belong in the RON.
+    pub fov_max_speed_deg: f32,
+    pub mouse_deg_per_px: f32,
+    pub pitch_limit_deg: f32,
+    pub smoothing_half_life_s: f32,
 }
 
-/// Was die Welt selbst kostet: raeumlicher Index und Kollision.
+/// What the world itself costs: spatial index and collision.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct WeltWerte {
-    /// Kantenlaenge einer Gitterzelle (`T-036a`). **Ungemessen** —
-    /// `docs/lessons/performance.md`, `docs/FRAGEN.md` Q-014. (Stand hier bis 2026-08-09 als
-    /// Q-013; Q-013 ist die Frage nach der maximalen Seillaenge.)
-    pub zelle_m: f32,
-    /// Halbe Kantenlaenge des Gitters. Muss Karte **und** Hakenreichweite abdecken.
-    pub halbe_ausdehnung_m: f32,
-    /// Ab wie vielen belegten Zellen ein Koerper in die lineare Grosskoerper-Liste geht.
-    pub grosskoerper_zellen: u32,
-    /// Die duennste zulaessige Wand. Kalibriert [`SpielerWerte::schritt_max_m`].
-    pub wand_min_m: f32,
-    /// Kollisionshaut gegen Zittern im Kontakt.
-    pub kollision_haut_m: f32,
+pub struct WorldTuning {
+    /// Edge length of one grid cell (`T-036a`). **Unmeasured** —
+    /// `docs/lessons/performance.md`, `docs/QUESTIONS.md` Q-014. (Stood here as Q-013 until
+    /// 2026-08-09; Q-013 is the question about the maximum rope length.)
+    pub cell_m: f32,
+    /// Half the edge length of the grid. Has to cover the map **and** the hook range.
+    pub half_extent_m: f32,
+    /// How many occupied cells it takes before a body goes into the linear large-body list.
+    pub large_body_cells: u32,
+    /// The thinnest wall allowed. Calibrates [`PlayerTuning::max_substep_m`].
+    pub min_wall_m: f32,
+    /// Collision margin against jitter in contact.
+    pub collision_margin_m: f32,
 }
 
 // ---------------------------------------------------------------------------
-// maps.ron — die Stadt als Daten (E13, F-003, Q-010)
+// maps.ron — the city as data (E13, F-003, Q-010)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Karten {
-    /// Logischer Name der Karte, die beim Start gebaut wird.
-    pub aktuell: String,
-    /// Der eine Farbatlas, lineares RGB. Kein RGB-Tripel je Klotz — sonst rutscht
-    /// irgendwann eine Signalfarbe hinein (`docs/konventionen.md`).
+pub struct Maps {
+    /// Logical name of the map that is built at startup.
+    pub current: String,
+    /// The one palette, linear RGB. No RGB triple per block — or sooner or later a signal
+    /// color slips in (`docs/conventions.md`).
     pub palette: BTreeMap<String, (f32, f32, f32)>,
-    pub karten: BTreeMap<String, Karte>,
+    pub maps: BTreeMap<String, Map>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Karte {
+pub struct Map {
     pub name: String,
-    /// Kantenlaenge in X und Z, in Metern.
-    pub groesse_m: (f32, f32),
-    /// Seed fuer `shared::Wuerfel`. Teil des Zustands, **nie** `rand::random()`.
+    /// Edge length in X and Z, in meters.
+    pub size_m: (f32, f32),
+    /// Seed for `shared::Rng`. Part of the state, **never** `rand::random()`.
     pub seed: u64,
-    pub raster: Raster,
-    /// Ausdruecklich gesetzte Quader. Sie gewinnen gegen das Raster.
-    pub kloetze: Vec<Kartenklotz>,
+    pub layout: Layout,
+    /// Explicitly placed boxes. They beat the generated layout.
+    pub blocks: Vec<MapBlock>,
 }
 
-/// Die Regel, aus der `world` deterministisch Gebaeude erzeugt.
+/// The rule `world` deterministically generates buildings from.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Raster {
-    pub block_m: f32,
-    pub gasse_m: f32,
-    pub hoehe_min_m: f32,
-    pub hoehe_max_m: f32,
-    /// Anteil bebauter Rasterplaetze, 0..1.
-    pub dichte: f32,
-    /// Anteil hakbarer Gebaeude, 0..1.
-    pub hakbar_anteil: f32,
-    /// Radius um den Ursprung, der frei bleibt.
-    pub frei_radius_m: f32,
-    /// Erlaubte Farbschluessel aus [`Karten::palette`].
-    pub farben: Vec<String>,
+pub struct Layout {
+    pub lot_m: f32,
+    pub street_m: f32,
+    pub min_height_m: f32,
+    pub max_height_m: f32,
+    /// Fraction of lots that get built on, 0..1.
+    pub density: f32,
+    /// Fraction of anchorable buildings, 0..1.
+    pub anchorable_fraction: f32,
+    /// Radius around the origin that stays clear.
+    pub clear_radius_m: f32,
+    /// Allowed color keys out of [`Maps::palette`].
+    pub colors: Vec<String>,
 }
 
-/// Ein ausdruecklich gesetzter Quader. Ursprung in der Mitte, wie `shared::Bauklotz`.
+/// One explicitly placed box. Origin at the center, like `shared::Block`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Kartenklotz {
-    pub mitte_m: (f32, f32, f32),
-    /// Volle Kantenlaenge. Der Index haelt intern die halbe.
-    pub groesse_m: (f32, f32, f32),
-    pub farbe: String,
-    /// Bekommt `shared::Ankerflaeche` und `Maske::HAKBAR` (`F-003`).
-    pub hakbar: bool,
-    /// Stoppt einen Koerper — `Maske::FEST`.
-    pub fest: bool,
-    /// `false` = Wohnbebauung und muss unter `massstab.ron: architektur.hoehen_m`
-    /// `haus_gross` (11,5 m) bleiben. `true` = Kirche, Wachturm, Baum, Mauer — **sie tragen
-    /// die Vertikale** und duerfen darueber.
+pub struct MapBlock {
+    pub center_m: (f32, f32, f32),
+    /// Full edge length. The index keeps the half internally.
+    pub size_m: (f32, f32, f32),
+    pub color: String,
+    /// Gets `shared::AnchorSurface` and `BodyMask::ANCHORABLE` (`F-003`).
+    pub anchorable: bool,
+    /// Stops a body — `BodyMask::SOLID`.
+    pub solid: bool,
+    /// `false` = housing, and it has to stay below `scale.ron: architecture.heights_m`
+    /// `house_large` (11.5 m). `true` = church, watchtower, tree, wall — **they carry the
+    /// vertical** and are allowed above it.
     ///
-    /// Ohne dieses Feld galt die Flachheitsregel nur fuer `raster`, und die ausdruecklich
-    /// gesetzten Quader der Graubox standen mit 12, 14 und 18 m Firsthoehe ausserhalb des
-    /// Waechters, der die Stadt flach halten soll.
-    pub sonderbau: bool,
+    /// Without this field the flatness rule only held for `layout`, and the explicitly placed
+    /// boxes of the graybox stood at 12, 14 and 18 m ridge height outside the guard that is
+    /// supposed to keep the city flat.
+    pub landmark: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -333,24 +331,24 @@ pub struct Kartenklotz {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Gear {
-    pub klingen: KlingenWerte,
-    pub nachschub: NachschubWerte,
+    pub blades: BladeTuning,
+    pub resupply: ResupplyTuning,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct KlingenWerte {
-    pub paare_start: u8,
-    pub abnutzung_pro_treffer: f32,
-    pub schaden_pro_m_s: f32,
-    pub mindesttempo_m_s: f32,
+pub struct BladeTuning {
+    pub start_pairs: u8,
+    pub wear_per_hit: f32,
+    pub damage_per_m_s: f32,
+    pub min_speed_m_s: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct NachschubWerte {
-    pub gas_pro_s: f32,
-    pub reichweite_m: f32,
+pub struct ResupplyTuning {
+    pub gas_per_s: f32,
+    pub range_m: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -359,218 +357,221 @@ pub struct NachschubWerte {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Titanen {
-    pub arten: BTreeMap<String, TitanArt>,
+pub struct Titans {
+    pub kinds: BTreeMap<String, TitanKind>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct TitanArt {
-    /// Schluessel in `massstab.ron: titan.klassen` (`F-064`). **Keine Hoehe je Art** — Hoehe
-    /// und Cortexhoehe kommen ueber [`GameData::titan_hoehe_m`] und
-    /// [`GameData::titan_cortex_hoehe_m`] aus dem Massstab, damit sie nicht auseinanderlaufen.
+pub struct TitanKind {
+    /// Key in `scale.ron: titan.classes` (`F-064`). **No height per kind** — height and Cortex
+    /// height come out of the scale table through [`GameData::titan_height_m`] and
+    /// [`GameData::titan_cortex_height_m`], so that the two cannot drift apart.
     ///
-    /// Hiess bis 2026-08-09 `groesse`; ein Feldname auf „-groesse" liest sich wie eine
-    /// Laenge (`docs/konventionen.md` §5), hier steht aber ein Schluessel.
-    pub groessenklasse: String,
-    pub tempo_m_s: f32,
+    /// Was called `groesse` until 2026-08-09; a field name ending in "-size" reads like a
+    /// length (`docs/conventions.md` §5), but what stands here is a key.
+    pub size_class: String,
+    pub speed_m_s: f32,
     pub cortex_radius_m: f32,
-    pub regeneration_pro_s: f32,
-    /// Ausholphase jedes Angriffs. **Mindestens 0,4 s** — Bibel, Pfeiler P4
-    /// (Lesbarkeit vor Realismus). `tests/data.rs` faellt um, wenn eine Art darunter liegt.
-    pub ausholphase_s: f32,
-    pub modell: String,
+    pub regen_per_s: f32,
+    /// Windup of every attack. **At least 0.4 s** — Bible, pillar P4 (readability before
+    /// realism). `tests/data.rs` falls over when a kind drops below it.
+    pub windup_s: f32,
+    pub model: String,
 }
 
 // ---------------------------------------------------------------------------
-// massstab.ron — die eine Wahrheit ueber Groessen (vom User vorgegeben, 2026-08-09)
+// scale.ron — the one truth about sizes (laid down by the user, 2026-08-09)
 // ---------------------------------------------------------------------------
 
-/// Die Groessentabelle des Users als Typ.
+/// The user's size table as a type.
 ///
-/// **Diese Zahlen sind nicht ungetunt, sie sind vorgegeben.** Alles andere in `assets/data/`
-/// darf jeder aendern; wer hier etwas aendert, aendert eine Entscheidung des Users. Die
-/// Vorrangregel dazu: **eine direkte Meterangabe des Users schlaegt jede Ableitung** — auch
-/// die Umrechnung aus dem Backlog (`docs/FRAGEN.md` Q-002).
+/// **These numbers are not untuned, they are laid down.** Everything else in `assets/data/` is
+/// anybody's to change; whoever changes something here changes a decision of the user's. The
+/// precedence rule that goes with it: **a direct figure in meters from the user beats every
+/// derivation** — including the conversion out of the backlog (`docs/QUESTIONS.md` Q-002).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Massstab {
-    /// Die Welt ist **bewusst nicht einheitlich skaliert**: Architektur 1,0, Titanen 1,4,
-    /// Mauern 2,4. Ein Titan wirkt groesser als „realistisch", eine Mauer monumental — das
-    /// ist die Bildsprache, keine Ungenauigkeit. Wer die drei angleicht, zerstoert sie.
-    pub architektur_faktor: f32,
-    pub titan_faktor: f32,
-    pub mauer_faktor: f32,
-    pub referenz: Referenz,
-    pub architektur: ArchitekturMasse,
-    pub titan: TitanMassstab,
-    pub mauer: MauerMasse,
-    pub kamera: KameraMassstab,
-    pub vector: VectorMassstab,
+pub struct Scale {
+    /// The world is **deliberately not scaled uniformly**: architecture 1.0, Titans 1.4, walls
+    /// 2.4. A Titan reads bigger than "realistic", a wall monumental — that is the visual
+    /// language, not sloppiness. Whoever levels the three destroys it.
+    pub architecture_factor: f32,
+    pub titan_factor: f32,
+    pub wall_factor: f32,
+    pub reference: Reference,
+    pub architecture: ArchitectureSizes,
+    pub titan: TitanScale,
+    pub wall: WallSizes,
+    pub camera: CameraScale,
+    pub vector: VectorScale,
 }
 
-/// Woran das Auge alles andere misst.
+/// What the eye measures everything else against.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Referenz {
-    /// „Kapsel exakt pruefen!" — `game.ron: spieler.hoehe_m` muss **exakt** das sein.
-    pub mensch_hoehe_m: f32,
-    pub tuer_hoehe_m: f32,
-    /// Fenster fuer `maps.ron: raster.gasse_m`. „eng halten."
-    pub strasse_breite_min_m: f32,
-    pub strasse_breite_max_m: f32,
-    /// 1/7,5. Der **Vergleichswert** zu [`TitanMassstab::kopf_anteil_min`]: der Titankopf
-    /// ist relativ kleiner, und genau daran liest das Auge „riesig" statt „nah".
-    pub kopf_anteil_mensch: f32,
+pub struct Reference {
+    /// "Check the capsule exactly!" — `game.ron: player.height_m` has to be **exactly** this.
+    pub human_height_m: f32,
+    pub door_height_m: f32,
+    /// Window for `maps.ron: layout.street_m`. "Keep them tight."
+    pub min_street_m: f32,
+    pub max_street_m: f32,
+    /// 1/7.5. The **yardstick** for [`TitanScale::min_head_fraction`]: the Titan head is
+    /// relatively smaller, and that is exactly what makes the eye read "huge" instead of
+    /// "close".
+    pub human_head_fraction: f32,
 }
 
-/// Bauhoehen. Die Wohnbebauung ist absichtlich flach; die Vertikale kommt aus Mauer,
-/// Kirche, Wachturm und Baeumen.
+/// Building heights. The housing is deliberately flat; the vertical comes from the wall, the
+/// church, the watchtower and the trees.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ArchitekturMasse {
-    /// Logischer Name -> Gesamthoehe in Metern.
-    pub hoehen_m: BTreeMap<String, f32>,
-    /// Logischer Name -> Traufhoehe (Oberkante Aussenwand, wo das Dach ansetzt).
-    /// **Nur dort gefuellt, wo der User eine Zahl genannt hat** — jeder Schluessel muss auch
-    /// in [`Self::hoehen_m`] stehen, `tests/data.rs` prueft das.
-    pub traufen_m: BTreeMap<String, f32>,
+pub struct ArchitectureSizes {
+    /// Logical name -> total height in meters.
+    pub heights_m: BTreeMap<String, f32>,
+    /// Logical name -> eaves height (top edge of the outer wall, where the roof starts).
+    /// **Filled in only where the user named a number** — every key has to stand in
+    /// [`Self::heights_m`] as well, and `tests/data.rs` checks that.
+    pub eaves_m: BTreeMap<String, f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct TitanMassstab {
-    /// Der Anteil der Koerperhoehe, bei dem der Cortex sitzt (0,89) — **eine Pruefregel,
-    /// keine Quelle.** Die fuenf Cortexhoehen stehen als Meterangaben in
-    /// [`Groessenklasse::cortex_m`]; dieser Wert ist das, was der User daneben geschrieben
-    /// hat, und `tests/data.rs` haelt die fuenf damit im Fenster 0,88..0,90.
+pub struct TitanScale {
+    /// The fraction of the body height the Cortex sits at (0.89) — **a check rule, not a
+    /// source.** The five Cortex heights stand as figures in meters in
+    /// [`SizeClass::cortex_height_m`]; this value is what the user wrote next to them, and
+    /// `tests/data.rs` uses it to hold the five inside the window 0.88..0.90.
     ///
-    /// Als Quelle dient er nur, wo der User keine Cortexhoehe genannt hat — heute genau
-    /// einmal: beim Ashwalker (150 m ⇒ 133,5 m).
-    pub cortex_anteil: f32,
-    /// Kopfhoehe als Anteil der Koerperhoehe: 1/10 bis 1/9.
-    pub kopf_anteil_min: f32,
-    pub kopf_anteil_max: f32,
-    /// Die fuenf Groessenklassen (`F-064`). `titan.ron` verweist mit `groesse` hierher.
-    pub klassen: BTreeMap<String, Groessenklasse>,
-    /// Der 150-m-Boss. **Ausserhalb der Klassen**: kein skalierter Gegnertyp, sondern ein
-    /// Bauwerk mit Gesicht. Probe des Users: 150 − 120 = 30 m ueber der Mauer.
-    pub ashwalker_hoehe_m: f32,
+    /// It serves as a source only where the user named no Cortex height — today exactly once:
+    /// for the Ashwalker (150 m ⇒ 133.5 m).
+    pub cortex_fraction: f32,
+    /// Head height as a fraction of the body height: 1/10 to 1/9.
+    pub min_head_fraction: f32,
+    pub max_head_fraction: f32,
+    /// The five size classes (`F-064`). `titan.ron` points here with `size_class`.
+    pub classes: BTreeMap<String, SizeClass>,
+    /// The 150 m boss. **Outside the classes**: not a scaled enemy kind but a structure with a
+    /// face. The user's own check: 150 − 120 = 30 m above the wall.
+    pub ashwalker_height_m: f32,
 }
 
-/// Eine Groessenklasse. Eigener Typ statt nackter `f32`, damit spaetere Klassenwerte
-/// (Reichweite, Trefferpunkte, Schrittlaenge) hier landen und nicht je Art dupliziert werden.
+/// One size class. Its own type instead of a bare `f32`, so that later per-class values (range,
+/// hit points, stride length) land here instead of being duplicated per kind.
 ///
-/// **Beide Felder sind Meterangaben des Users** — `cortex_m` wird nicht aus `hoehe_m`
-/// gerechnet. Der Anteil ([`TitanMassstab::cortex_anteil`]) prueft sie, statt sie zu erzeugen.
+/// **Both fields are figures in meters from the user** — `cortex_height_m` is not computed from
+/// `height_m`. The fraction ([`TitanScale::cortex_fraction`]) checks them instead of producing
+/// them.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Groessenklasse {
-    pub hoehe_m: f32,
-    /// Hoehe des Cortex ueber dem Boden. Die **einzige toedliche Trefferzone** (`F-030`).
-    pub cortex_m: f32,
+pub struct SizeClass {
+    pub height_m: f32,
+    /// Height of the Cortex above the ground. The **only lethal weak point** (`F-030`).
+    pub cortex_height_m: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct MauerMasse {
-    pub hoehe_m: f32,
-    pub dicke_oben_m: f32,
-    /// Groesser als [`Self::dicke_oben_m`]: die Mauer ist angeschraegt.
-    pub dicke_basis_m: f32,
-    /// Zwischenstopp auf halber Hoehe. Ohne ihn ist die Mauerkrone mit 90 m Ankerreichweite
-    /// von unten nicht erreichbar (120 > 90).
-    pub plattform_hoehe_m: f32,
-    /// **Skalenleiter.** Eine Steinreihe von 0,6 m und ein Band alle 15 m sind der Grund,
-    /// warum eine 120-m-Wand gross aussieht statt grau.
-    pub steinreihe_m: f32,
-    pub baenderung_m: f32,
+pub struct WallSizes {
+    pub height_m: f32,
+    pub top_thickness_m: f32,
+    /// Larger than [`Self::top_thickness_m`]: the wall tapers toward the top.
+    pub base_thickness_m: f32,
+    /// A staging point at half height. Without it the crown of the wall cannot be reached from
+    /// below with a 90 m anchor range (120 > 90).
+    pub platform_height_m: f32,
+    /// **The ladder of scale.** A 0.6 m stone course and a band every 15 m are the reason a
+    /// 120 m wall looks big instead of gray.
+    pub stone_course_m: f32,
+    pub band_spacing_m: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct KameraMassstab {
-    /// Augenhoehe. `game.ron: spieler.augenhoehe_m` muss das sein.
-    pub hoehe_m: f32,
-    /// Fenster fuer `game.ron: kamera.sicht_grad` — **Bodenkampf**, „groesster Hebel".
-    pub sicht_boden_min_grad: f32,
-    pub sicht_boden_max_grad: f32,
+pub struct CameraScale {
+    /// Eye height. `game.ron: player.eye_height_m` has to be this.
+    pub height_m: f32,
+    /// Window for `game.ron: camera.fov_deg` — **ground combat**, "the biggest lever".
+    pub min_ground_fov_deg: f32,
+    pub max_ground_fov_deg: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct VectorMassstab {
-    /// 90 m, direkt vom User. `game.ron: vector.hakenreichweite_m` muss das sein — und
-    /// **nicht** die 112 m aus der Umrechnung (Q-002).
-    pub ankerreichweite_m: f32,
-    /// „x1,5 vs. Standard". **Wird nicht verrechnet**, solange der Bezug fehlt
-    /// (`docs/FRAGEN.md` Q-018).
-    pub tempo_faktor: f32,
+pub struct VectorScale {
+    /// 90 m, straight from the user. `game.ron: vector.hook_range_m` has to be this — and
+    /// **not** the 112 m out of the conversion (Q-002).
+    pub anchor_range_m: f32,
+    /// "x1.5 vs. standard". **Is not applied to anything** as long as the reference is missing
+    /// (`docs/QUESTIONS.md` Q-018).
+    pub speed_factor: f32,
 }
 
 // ---------------------------------------------------------------------------
-// art.ron — die Registratur
+// art.ron — the registry
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Art {
-    pub models: BTreeMap<String, Modell>,
+    pub models: BTreeMap<String, Model>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Modell {
-    /// Name der `.blend` ohne Endung. Der Auto-Export macht daraus die `.glb` (§7).
+pub struct Model {
+    /// Name of the `.blend` without the extension. The auto-export turns it into the `.glb`
+    /// (§7).
     pub blend: String,
-    /// `false` ⇒ der **Platzhalter-Weg** aus Bevy-Primitiven. Beide Wege muessen jederzeit
-    /// laufen und dieselbe Groesse, Hitbox und Skalierung haben — sonst ist das Umschalten
-    /// kein Schalter, sondern ein Umbau.
-    pub nutzen: bool,
+    /// `false` ⇒ the **placeholder path** out of Bevy primitives. Both paths have to run at any
+    /// time and have the same size, hit zone and scale — otherwise switching is not a switch
+    /// but a rebuild.
+    pub use_blend: bool,
     pub scale: f32,
-    /// Nur bei Fremdmaterial gesetzt: URL · Datum · Lizenz · was es ersetzen soll.
-    /// Damit ist die Ersetzungsliste ein `grep` (§7).
-    pub herkunft: Option<String>,
+    /// Set only on third-party material: URL · date · license · what it is meant to replace.
+    /// That makes the replacement list a `grep` (§7).
+    pub attribution: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
-// missions.ron / traits.ron — noch fast leer, aber vorhanden und geladen
+// missions.ron / traits.ron — still nearly empty, but present and loaded
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Missionen {
-    pub vorlagen: BTreeMap<String, Missionsvorlage>,
+pub struct Missions {
+    pub templates: BTreeMap<String, MissionTemplate>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Missionsvorlage {
+pub struct MissionTemplate {
     pub name: String,
     pub map: String,
-    /// Der Missionsbogen dauert 5–7 min (Bibel 5, Aenderung 10).
-    pub dauer_ziel_s: f32,
-    pub wellen: Vec<Welle>,
+    /// The mission arc runs 5–7 min (Bible 5, change 10).
+    pub target_duration_s: f32,
+    pub waves: Vec<Wave>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Welle {
-    pub bei_s: f32,
-    pub art: String,
-    pub anzahl: u32,
+pub struct Wave {
+    pub at_s: f32,
+    pub kind: String,
+    pub count: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Traits {
-    pub eintraege: BTreeMap<String, TraitWert>,
+    pub entries: BTreeMap<String, TraitDef>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct TraitWert {
+pub struct TraitDef {
     pub name: String,
-    pub kosten: u32,
-    pub beschreibung: String,
+    pub cost: u32,
+    pub description: String,
 }

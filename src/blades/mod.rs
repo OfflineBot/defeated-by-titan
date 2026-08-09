@@ -1,13 +1,13 @@
-//! blades — Klingen: Schwung, Abnutzung, Bruch, Wechsel, Nachschub
+//! blades — the blades: swing, wear, breakage, swapping, resupply
 //!
-//! **Wirtschaft statt Cooldowns.** Klingen werden stumpf und brechen; nachgeladen wird an
-//! Versorgungspunkten, vom Pferd oder an gefallenen Kameraden.
+//! **Economy instead of cooldowns.** Blades go blunt and break; you reload at supply points,
+//! from the horse, or on fallen comrades.
 //!
-//! Schreibt [`Klingen`](crate::shared::Klingen).
+//! Writes [`Blades`](crate::shared::Blades).
 //!
-//! **Noch leer.** Das Plugin steht im Baum, damit die Reihenfolge in `lib.rs` von Anfang an
-//! stimmt und ein Fan-out auf Domaenen moeglich ist, ohne dass fuenf Agenten denselben
-//! Ordner anlegen (`prompts/init.md` §17).
+//! **Still empty.** The plugin stands in the tree so that the order in `lib.rs` is right from
+//! the start and a fan-out across domains is possible without five agents creating the same
+//! folder (`prompts/init.md` §17).
 
 use bevy::prelude::*;
 

@@ -1,18 +1,17 @@
-//! combat — Treffer, Schaden aus Geschwindigkeit, Amputation, Dampf, Tod
+//! combat — hits, damage out of speed, amputation, steam, death
 //!
-//! **Schaden kommt aus Geschwindigkeit.** Ein Schnitt aus dem Stand kratzt, derselbe Schnitt
-//! aus 30 m/s toetet — und die Formel gehoert in die RON, nicht in den Code
-//! (`prompts/init.md` §1, §4).
+//! **Damage comes out of speed.** A slash from standing scratches, the same slash at 30 m/s
+//! kills — and the formula belongs in the RON, not in the code (`prompts/init.md` §1, §4).
 //!
-//! **Der Cortex ist die einzige Wahrheit:** ein Cortex-Treffer toetet, egal wie voll der
-//! Titan ist. Alles andere ist Vorbereitung.
+//! **The cortex is the only truth:** a cortex hit kills, no matter how full the titan is.
+//! Everything else is preparation.
 //!
-//! Kein Splatter: Titanen verdampfen, Wunden stossen Dampf aus (Bibel 3.3). Das war ohnehin
-//! doppelt begruendet und bleibt als Stilregel, auch ohne Plattform-Moderation.
+//! No splatter: titans evaporate, wounds vent steam (Bible 3.3). That had two independent
+//! reasons anyway, and it stays as a style rule even without platform moderation.
 //!
-//! **Noch leer.** Das Plugin steht im Baum, damit die Reihenfolge in `lib.rs` von Anfang an
-//! stimmt und ein Fan-out auf Domaenen moeglich ist, ohne dass fuenf Agenten denselben
-//! Ordner anlegen (`prompts/init.md` §17).
+//! **Still empty.** The plugin stands in the tree so that the order in `lib.rs` is right from
+//! the start and a fan-out across domains is possible without five agents creating the same
+//! folder (`prompts/init.md` §17).
 
 use bevy::prelude::*;
 

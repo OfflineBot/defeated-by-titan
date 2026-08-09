@@ -1,29 +1,28 @@
-//! net — **die Naht fuer Multiplayer.** Heute ein Transport, spaeter Client und Server.
+//! net — **the seam for multiplayer.** One transport today, client and server later.
 //!
-//! Der Netzcode ist nicht Teil dieses Auftrags. **Aber der Ort, an dem er einmal steht, ist
-//! ab Tag 1 vorhanden und leer** — statt spaeter mitten durch fuenf Domaenen zu schneiden
+//! The net code is not part of this commission. **But the place it will one day stand in
+//! exists from day 1, and it is empty** — instead of cutting through five domains later
 //! (`prompts/init.md` §6, `docs/multiplayer.md`).
 //!
 //! ```text
-//! Tastatur ─┐
-//! Skript   ─┼─► Posteingang ─► intents_zustellen ─► Intent am Spieler ─► Simulation
-//! (Netz)   ─┘   (PlayerId → Intent)   FixedPreUpdate
+//! Keyboard ─┐
+//! Script   ─┼─► Inbox ─► deliver_intents ─► Intent on the player ─► Simulation
+//! (net)    ─┘   (PlayerId → Intent)   FixedPreUpdate
 //! ```
 //!
-//! **Drei Quellen, ein Kanal.** Der Skript-Fahrer ist kein zweiter, falscher Weg zu
-//! spielen — jedes System dahinter ist das echte. Und weil in dieser Umgebung niemand
-//! klicken kann, wird dieser Kanal ohnehin gebaut: **ein Aufwand, zwei Probleme geloest.**
+//! **Three sources, one channel.** The script driver is not a second, wrong way to play —
+//! every system behind it is the real one. And because nobody in this environment can
+//! click, this channel gets built anyway: **one effort, two problems solved.**
 //!
-//! Hier sitzt auch der **Verzoegerungs-Schalter** (`--lag 200`). Er gehoert ins Werkzeug und
-//! nicht in ein spaeteres Ticket: „fuehlt sich lokal gut an" ist keine Abnahme
-//! (Bibel T-019).
+//! The **latency switch** (`--lag 200`) lives here too. It belongs in the tooling and not
+//! in some later ticket: "feels good locally" is not an acceptance (bible T-019).
 
-pub mod lokal;
+pub mod local;
 
 use bevy::prelude::*;
 use std::collections::{BTreeMap, VecDeque};
 
-use crate::shared::{EingabeSet, Intent, PlayerId, Start, Tick};
+use crate::shared::{IntentSystems, Intent, PlayerId, Cli, Tick};
 
 pub struct NetPlugin;
 
@@ -31,116 +30,117 @@ impl Plugin for NetPlugin {
     fn build(&self, app: &mut App) {
         let start = app
             .world()
-            .get_resource::<Start>()
+            .get_resource::<Cli>()
             .cloned()
             .unwrap_or_default();
 
-        // 60 Hz feste Simulation -> ein Tick sind 16,67 ms. Aufgerundet, damit `--lag 200`
-        // nie WENIGER als 200 ms simuliert: eine zu kleine Latenz beim Testen ist die
-        // gefaehrlichere Richtung.
+        // A fixed 60 Hz simulation -> one tick is 16.67 ms. Rounded up so that `--lag 200`
+        // never simulates LESS than 200 ms: too little latency in a test is the more
+        // dangerous direction.
         let lag_ticks = (start.lag_ms as f64 / 1000.0 * 60.0).ceil() as u64;
 
         app.insert_resource(Transport::LocalOnly)
-            .insert_resource(Posteingang::mit_lag(lag_ticks))
-            .init_resource::<crate::shared::BlickVorgabe>()
+            .insert_resource(Inbox::with_lag(lag_ticks))
+            .init_resource::<crate::shared::LookOverride>()
             .configure_sets(
                 FixedPreUpdate,
-                (EingabeSet::Quelle, EingabeSet::Sammeln, EingabeSet::Zustellen).chain(),
+                (IntentSystems::Source, IntentSystems::Collect, IntentSystems::Deliver).chain(),
             )
-            .add_systems(FixedPreUpdate, lokal::tastatur_lesen.in_set(EingabeSet::Sammeln))
+            .add_systems(FixedPreUpdate, local::read_input.in_set(IntentSystems::Collect))
             .add_systems(
                 FixedPreUpdate,
-                (tick_zaehlen, intents_zustellen)
+                (advance_tick, deliver_intents)
                     .chain()
-                    .in_set(EingabeSet::Zustellen),
+                    .in_set(IntentSystems::Deliver),
             );
     }
 }
 
-/// Woher die Intents kommen.
+/// Where the intents come from.
 ///
-/// Heute gibt es genau eine Variante. Sie steht trotzdem als Enum da, weil der Tag, an dem
-/// die zweite dazukommt, sonst der Tag ist, an dem jemand `net` umbaut statt erweitert.
+/// Today there is exactly one variant. It stands there as an enum anyway, because
+/// otherwise the day the second one arrives is the day somebody rebuilds `net` instead of
+/// extending it.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Transport {
     #[default]
     LocalOnly,
 }
 
-/// Der eine Kanal. **Niemand schreibt `Intent` direkt an einen Spieler** — alle werfen hier
-/// ein, und [`intents_zustellen`] stellt zu.
+/// The one channel. **Nobody writes an `Intent` straight onto a player** — everybody posts
+/// here, and [`deliver_intents`] delivers.
 #[derive(Resource, Debug, Default)]
-pub struct Posteingang {
-    /// Wie viele Ticks eine Nachricht liegen bleibt (`--lag`).
+pub struct Inbox {
+    /// How many ticks a message stays put before it is delivered (`--lag`).
     pub lag_ticks: u64,
-    warteschlange: VecDeque<(u64, PlayerId, Intent)>,
-    /// Der zuletzt zugestellte Intent je Spieler. Wird gehalten, damit ein Spieler ohne
-    /// neue Nachricht nicht schlagartig stehen bleibt — im Netz waere genau das das
-    /// Ruckeln, das man als „Lag" sieht.
-    letzter: BTreeMap<PlayerId, Intent>,
+    queue: VecDeque<(u64, PlayerId, Intent)>,
+    /// The last intent delivered per player. Kept so that a player without a new message
+    /// does not stop dead — over a network that is exactly the stutter people see as
+    /// "lag".
+    last: BTreeMap<PlayerId, Intent>,
 }
 
-impl Posteingang {
-    /// Ein Posteingang mit fester Latenz. Der einzige Weg, `lag_ticks` von aussen zu
-    /// setzen — die Warteschlange gehoert dieser Domaene und niemandem sonst.
-    pub fn mit_lag(lag_ticks: u64) -> Self {
-        Posteingang { lag_ticks, ..default() }
+impl Inbox {
+    /// An inbox with a fixed latency. The only way to set `lag_ticks` from outside — the
+    /// queue belongs to this domain and to nobody else.
+    pub fn with_lag(lag_ticks: u64) -> Self {
+        Inbox { lag_ticks, ..default() }
     }
 
-    /// Einwerfen. `faellig_ab` ist der Tick, ab dem zugestellt werden darf.
-    pub fn einwerfen(&mut self, spieler: PlayerId, intent: Intent, jetzt: u64) {
-        self.warteschlange
-            .push_back((jetzt + self.lag_ticks, spieler, intent));
+    /// Post an intent. Delivery is allowed from `current + lag_ticks` on.
+    pub fn push(&mut self, player: PlayerId, intent: Intent, current: u64) {
+        self.queue
+            .push_back((current + self.lag_ticks, player, intent));
     }
 
-    /// Alles abholen, was faellig ist. Reihenfolge bleibt erhalten (FIFO je Spieler).
-    pub fn abholen(&mut self, jetzt: u64) -> Vec<(PlayerId, Intent)> {
-        let mut fertig = Vec::new();
-        while let Some(&(faellig, _, _)) = self.warteschlange.front() {
-            if faellig > jetzt {
+    /// Take everything that is due. The order is preserved (FIFO per player).
+    pub fn drain_due(&mut self, current: u64) -> Vec<(PlayerId, Intent)> {
+        let mut done = Vec::new();
+        while let Some(&(due, _, _)) = self.queue.front() {
+            if due > current {
                 break;
             }
-            let (_, spieler, intent) = self.warteschlange.pop_front().expect(
-                // Begruendung: `front()` hat gerade Some geliefert, und niemand sonst
-                // haelt hier eine Referenz.
-                "front() war Some",
+            let (_, player, intent) = self.queue.pop_front().expect(
+                // Reason: `front()` just returned Some, and nobody else holds a reference
+                // here.
+                "front() returned Some",
             );
-            self.letzter.insert(spieler, intent);
-            fertig.push((spieler, intent));
+            self.last.insert(player, intent);
+            done.push((player, intent));
         }
-        fertig
+        done
     }
 
-    pub fn letzter(&self, spieler: PlayerId) -> Option<Intent> {
-        self.letzter.get(&spieler).copied()
+    pub fn last(&self, player: PlayerId) -> Option<Intent> {
+        self.last.get(&player).copied()
     }
 
-    pub fn wartend(&self) -> usize {
-        self.warteschlange.len()
+    pub fn pending(&self) -> usize {
+        self.queue.len()
     }
 }
 
-/// Der Tick zaehlt in `FixedPreUpdate` hoch — **vor** allem, was ihn liest.
-fn tick_zaehlen(mut tick: ResMut<Tick>) {
+/// The tick counts up in `FixedPreUpdate` — **before** everything that reads it.
+fn advance_tick(mut tick: ResMut<Tick>) {
     tick.0 += 1;
 }
 
-/// Stellt faellige Intents an die Spieler zu.
+/// Delivers due intents to the players.
 ///
-/// Ueber [`PlayerId`], nicht ueber `Entity`: eine `Entity` bedeutet auf einem anderen
-/// Rechner etwas anderes (§6 Regel 7).
-fn intents_zustellen(
+/// By [`PlayerId`], not by `Entity`: an `Entity` means something different on another
+/// machine (§6 rule 7).
+fn deliver_intents(
     tick: Res<Tick>,
-    mut post: ResMut<Posteingang>,
-    mut spieler: Query<(&PlayerId, &mut Intent)>,
+    mut inbox: ResMut<Inbox>,
+    mut players: Query<(&PlayerId, &mut Intent)>,
 ) {
-    let faellig = post.abholen(tick.0);
-    if faellig.is_empty() {
+    let due = inbox.drain_due(tick.0);
+    if due.is_empty() {
         return;
     }
-    for (id, mut intent) in &mut spieler {
-        if let Some((_, neu)) = faellig.iter().rev().find(|(w, _)| w == id) {
-            *intent = *neu;
+    for (id, mut intent) in &mut players {
+        if let Some((_, new_intent)) = due.iter().rev().find(|(w, _)| w == id) {
+            *intent = *new_intent;
         }
     }
 }
@@ -150,55 +150,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ohne_lag_wird_sofort_zugestellt() {
-        let mut p = Posteingang::default();
-        p.einwerfen(PlayerId(1), Intent { tick: 5, ..default() }, 5);
-        let raus = p.abholen(5);
-        assert_eq!(raus.len(), 1);
-        assert_eq!(raus[0].0, PlayerId(1));
+    fn without_lag_delivery_is_immediate() {
+        let mut p = Inbox::default();
+        p.push(PlayerId(1), Intent { tick: 5, ..default() }, 5);
+        let out = p.drain_due(5);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, PlayerId(1));
     }
 
     #[test]
-    fn lag_haelt_genau_so_viele_ticks_zurueck() {
-        // 200 ms bei 60 Hz sind 12 Ticks — das ist die Zahl, mit der jedes
-        // Bewegungsfeature geprueft wird (Bibel T-019).
-        let mut p = Posteingang::mit_lag(12);
-        p.einwerfen(PlayerId(1), Intent::default(), 100);
-        for jetzt in 100..112 {
-            assert!(p.abholen(jetzt).is_empty(), "bei Tick {jetzt} noch nicht faellig");
+    fn lag_holds_back_exactly_that_many_ticks() {
+        // 200 ms at 60 Hz are 12 ticks — that is the number every movement feature is
+        // checked against (bible T-019).
+        let mut p = Inbox::with_lag(12);
+        p.push(PlayerId(1), Intent::default(), 100);
+        for current in 100..112 {
+            assert!(p.drain_due(current).is_empty(), "not due yet at tick {current}");
         }
-        assert_eq!(p.abholen(112).len(), 1);
+        assert_eq!(p.drain_due(112).len(), 1);
     }
 
     #[test]
-    fn mehrere_spieler_bekommen_ihre_eigene_post() {
-        // Es gibt keinen „den Spieler" (§6 Regel 3).
-        let mut p = Posteingang::default();
-        p.einwerfen(PlayerId(1), Intent { yaw: 1.0, ..default() }, 0);
-        p.einwerfen(PlayerId(2), Intent { yaw: 2.0, ..default() }, 0);
-        let raus = p.abholen(0);
-        assert_eq!(raus.len(), 2);
-        assert_eq!(p.letzter(PlayerId(1)).map(|i| i.yaw), Some(1.0));
-        assert_eq!(p.letzter(PlayerId(2)).map(|i| i.yaw), Some(2.0));
+    fn several_players_get_their_own_mail() {
+        // There is no such thing as "the player" (§6 rule 3).
+        let mut p = Inbox::default();
+        p.push(PlayerId(1), Intent { yaw: 1.0, ..default() }, 0);
+        p.push(PlayerId(2), Intent { yaw: 2.0, ..default() }, 0);
+        let out = p.drain_due(0);
+        assert_eq!(out.len(), 2);
+        assert_eq!(p.last(PlayerId(1)).map(|i| i.yaw), Some(1.0));
+        assert_eq!(p.last(PlayerId(2)).map(|i| i.yaw), Some(2.0));
     }
 
     #[test]
-    fn reihenfolge_bleibt_erhalten() {
-        let mut p = Posteingang::default();
+    fn order_is_preserved() {
+        let mut p = Inbox::default();
         for t in 0..5u64 {
-            p.einwerfen(PlayerId(1), Intent { tick: t, ..default() }, 0);
+            p.push(PlayerId(1), Intent { tick: t, ..default() }, 0);
         }
-        let ticks: Vec<u64> = p.abholen(0).into_iter().map(|(_, i)| i.tick).collect();
+        let ticks: Vec<u64> = p.drain_due(0).into_iter().map(|(_, i)| i.tick).collect();
         assert_eq!(ticks, vec![0, 1, 2, 3, 4]);
     }
 
     #[test]
-    fn nichts_geht_verloren_wenn_niemand_abholt() {
-        let mut p = Posteingang::mit_lag(3);
-        p.einwerfen(PlayerId(1), Intent::default(), 0);
-        p.einwerfen(PlayerId(1), Intent::default(), 1);
-        assert_eq!(p.wartend(), 2);
-        assert_eq!(p.abholen(10).len(), 2, "spaeter abholen holt beides");
-        assert_eq!(p.wartend(), 0);
+    fn nothing_is_lost_if_nobody_collects() {
+        let mut p = Inbox::with_lag(3);
+        p.push(PlayerId(1), Intent::default(), 0);
+        p.push(PlayerId(1), Intent::default(), 1);
+        assert_eq!(p.pending(), 2);
+        assert_eq!(p.drain_due(10).len(), 2, "draining later collects both");
+        assert_eq!(p.pending(), 0);
     }
 }

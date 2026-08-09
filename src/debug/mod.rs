@@ -1,290 +1,292 @@
-//! debug — der `--script`-Fahrer, `--bild`, die Gizmos, das F3-Overlay und die NaN-Wache.
+//! debug — the `--script` driver, `--screenshot`, the gizmos, the F3 overlay and the NaN
+//! guard.
 //!
-//! **Die Werkzeuge kommen vor den Features** (`prompts/init.md` §12). Ohne sie ist alles
-//! gebaut und nichts gesehen, weil jedes Feature hinter Maus und Tastatur liegt und niemand
-//! am Keyboard sitzt.
+//! **The tools come before the features** (`prompts/init.md` §12). Without them everything
+//! is built and nothing is seen, because every feature sits behind mouse and keyboard and
+//! nobody is at the keyboard.
 //!
-//! Der Fahrer schreibt in **echte** `ButtonInput`-Ressourcen; `net::lokal` liest sie
-//! anschliessend genauso, wie es die Tastatur eines Menschen lesen wuerde. Die Reihenfolge
-//! garantiert [`EingabeSet`](crate::shared::EingabeSet) — nicht der Zufall der
-//! Systemreihenfolge.
+//! The driver writes into **real** `ButtonInput` resources; `net::local` then reads them
+//! exactly the way it would read a human's keyboard. The order is guaranteed by
+//! [`IntentSystems`](crate::shared::IntentSystems) — not by the accident of system
+//! ordering.
 
-pub mod bild;
+pub mod screenshot;
 pub mod gizmo;
-pub mod skript;
+pub mod script;
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::text::FontSize;
 
 use crate::shared::{
-    Bewegungszustand, BlickVorgabe, EingabeSet, Gas, LocalPlayer, Markierung, PlayerId,
-    SpielerWarpen, Start, Tempo, Tick, TitanId, TitanSpawnen,
+    MovementState, LookOverride, IntentSystems, Gas, LocalPlayer, Mark, PlayerId,
+    WarpPlayer, Cli, Velocity, Tick, TitanId, SpawnTitan,
 };
-use skript::{Anweisung, Befehl, Groesse};
+use script::{Instruction, ScriptCommand, Metric};
 
 pub struct DebugPlugin;
 
 impl Plugin for DebugPlugin {
     fn build(&self, app: &mut App) {
-        let start = app.world().get_resource::<Start>().cloned().unwrap_or_default();
+        let start = app.world().get_resource::<Cli>().cloned().unwrap_or_default();
 
-        app.init_resource::<Fahrt>()
-            .add_systems(FixedPreUpdate, fahren.in_set(EingabeSet::Quelle))
-            .add_systems(FixedPostUpdate, nan_wache);
+        app.init_resource::<ScriptRun>()
+            .add_systems(FixedPreUpdate, run_script.in_set(IntentSystems::Source))
+            .add_systems(FixedPostUpdate, nan_guard);
 
-        // Gizmos sind Darstellung, also `Update` und nicht der feste Schritt.
+        // Gizmos are presentation, so `Update` and not the fixed step.
         //
-        // Registriert wird **immer**, gezeichnet nur bei eingeschaltetem Schalter: ein
-        // `run_if` kostet nichts, ein nicht registriertes System dagegen laesst sich nicht
-        // pruefen — und ein Zeichensystem, das je nach Startmodus da ist oder nicht, ist
-        // genau die Sorte Schein-Schalter, die man erst im Bild vermisst
+        // They are registered **always** and drawn only when the toggle is on: a `run_if`
+        // costs nothing, whereas a system that is not registered cannot be checked at all
+        // — and a drawing system that is there or not depending on the launch mode is
+        // exactly the kind of fake switch you first miss in the image
         // (`docs/lessons/bevy.md`).
-        gizmo::einhaengen(app);
-        app.configure_sets(Update, gizmo::GizmoZeichnen.run_if(gizmo::gizmos_an));
+        gizmo::install(app);
+        app.configure_sets(Update, gizmo::GizmoSystems.run_if(gizmo::gizmos_on));
         app.add_systems(
             Update,
             (
-                gizmo::schalter_umschalten,
-                (gizmo::anker_zeichnen, gizmo::massstab_zeichnen, gizmo::spieler_zeichnen)
-                    .in_set(gizmo::GizmoZeichnen),
+                gizmo::toggle_gizmos,
+                (gizmo::draw_anchors, gizmo::draw_reference, gizmo::draw_players)
+                    .in_set(gizmo::GizmoSystems),
             )
                 .chain(),
         );
 
-        if let Some(pfad) = start.script.clone() {
-            let inhalt = std::fs::read_to_string(&pfad).unwrap_or_else(|e| {
-                // Beim Start laut abbrechen ist hier das richtige Verhalten: eine Fahrt,
-                // die ihr Skript nicht findet, wuerde sonst gruen enden, ohne etwas
-                // getan zu haben (§9).
-                panic!("--script {}: laesst sich nicht lesen — {e}", pfad.display())
+        if let Some(path) = start.script.clone() {
+            let content = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                // Aborting loudly at startup is the right behavior here: a run that
+                // cannot find its script would otherwise end green without having done
+                // anything (§9).
+                panic!("--script {}: cannot be read — {e}", path.display())
             });
-            let plan = skript::lesen(&inhalt).unwrap_or_else(|fehler| {
-                let liste: Vec<String> = fehler.iter().map(|f| f.to_string()).collect();
+            let plan = script::parse(&content).unwrap_or_else(|errors| {
+                let list: Vec<String> = errors.iter().map(|f| f.to_string()).collect();
                 panic!(
-                    "--script {}: {} Zeile(n) nicht verstanden:\n  {}",
-                    pfad.display(),
-                    fehler.len(),
-                    liste.join("\n  ")
+                    "--script {}: {} line(s) not understood:\n  {}",
+                    path.display(),
+                    errors.len(),
+                    list.join("\n  ")
                 )
             });
-            info!("Fahrt {}: {} Anweisungen", pfad.display(), plan.len());
-            app.insert_resource(Fahrt { plan, ..default() });
+            info!("script run {}: {} instructions", path.display(), plan.len());
+            app.insert_resource(ScriptRun { plan, ..default() });
         }
 
-        // `--bild`: ohne das Flag haengt hier gar nichts ein (`debug::bild`).
-        bild::einhaengen(app, &start);
+        // `--screenshot`: without the flag nothing is installed here at all
+        // (`debug::screenshot`).
+        screenshot::install(app, &start);
     }
 }
 
-/// Der Stand einer Skriptfahrt.
+/// The state of a script run.
 #[derive(Resource, Debug, Default)]
-pub struct Fahrt {
-    pub plan: Vec<Anweisung>,
-    /// Naechste Anweisung.
-    pub bei: usize,
-    /// Restzeit der laufenden `wait`/`key`-Anweisung in Sekunden.
-    pub warten_s: f32,
-    /// Tasten, die bis zum Ablauf gehalten werden.
-    gehalten: Vec<(Gehalten, f32)>,
-    pub gescheitert: Vec<String>,
-    pub geprueft: u32,
-    pub fertig: bool,
+pub struct ScriptRun {
+    pub plan: Vec<Instruction>,
+    /// Next instruction.
+    pub at: usize,
+    /// Time left on the running `wait`/`key` instruction, in seconds.
+    pub wait_s: f32,
+    /// Keys that are held until their time runs out.
+    held: Vec<(Held, f32)>,
+    pub failures: Vec<String>,
+    pub checked: u32,
+    pub done: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Gehalten {
-    Taste(KeyCode),
-    Maus(MouseButton),
+enum Held {
+    Key(KeyCode),
+    Mouse(MouseButton),
 }
 
-impl Fahrt {
-    pub fn laeuft(&self) -> bool {
-        !self.plan.is_empty() && !self.fertig
+impl ScriptRun {
+    pub fn is_running(&self) -> bool {
+        !self.plan.is_empty() && !self.done
     }
 }
 
-/// Bundelt, was der Fahrer anfassen darf. Ein System nimmt maximal ~16 Parameter, und
-/// darueber schlaegt es als unlesbarer Trait-Fehler zu (`docs/lessons/bevy.md`).
+/// Bundles what the driver is allowed to touch. A system takes at most ~16 parameters, and
+/// beyond that it hits you as an unreadable trait error (`docs/lessons/bevy.md`).
 #[derive(SystemParam)]
-pub struct FahrerWelt<'w, 's> {
-    tasten: ResMut<'w, ButtonInput<KeyCode>>,
-    maus: ResMut<'w, ButtonInput<MouseButton>>,
-    blick: ResMut<'w, BlickVorgabe>,
-    spawnen: MessageWriter<'w, TitanSpawnen>,
-    warpen: MessageWriter<'w, SpielerWarpen>,
-    marken: MessageWriter<'w, Markierung>,
-    beenden: MessageWriter<'w, AppExit>,
-    spieler: Query<
+pub struct DriverWorld<'w, 's> {
+    keys: ResMut<'w, ButtonInput<KeyCode>>,
+    mouse: ResMut<'w, ButtonInput<MouseButton>>,
+    look: ResMut<'w, LookOverride>,
+    spawn_titan: MessageWriter<'w, SpawnTitan>,
+    warp: MessageWriter<'w, WarpPlayer>,
+    marks: MessageWriter<'w, Mark>,
+    exit: MessageWriter<'w, AppExit>,
+    players: Query<
         'w,
         's,
-        (&'static PlayerId, &'static Transform, &'static Gas, &'static Tempo),
+        (&'static PlayerId, &'static Transform, &'static Gas, &'static Velocity),
         With<LocalPlayer>,
     >,
-    titanen: Query<'w, 's, &'static TitanId>,
+    titans: Query<'w, 's, &'static TitanId>,
 }
 
-/// Fuehrt die Fahrt aus — eine Anweisung pro Tick, ausser bei `wait`.
-fn fahren(mut fahrt: ResMut<Fahrt>, tick: Res<Tick>, zeit: Res<Time<Fixed>>, mut welt: FahrerWelt) {
-    if !fahrt.laeuft() {
+/// Runs the script — one instruction per tick, except at `wait`.
+fn run_script(mut run: ResMut<ScriptRun>, tick: Res<Tick>, time: Res<Time<Fixed>>, mut world: DriverWorld) {
+    if !run.is_running() {
         return;
     }
-    let dt = zeit.delta_secs();
+    let dt = time.delta_secs();
 
-    // Gehaltene Tasten ablaufen lassen, bevor neue dazukommen.
-    fahrt.gehalten.retain_mut(|(was, rest)| {
+    // Let held keys expire before new ones are added.
+    run.held.retain_mut(|(command, rest)| {
         *rest -= dt;
         if *rest > 0.0 {
             return true;
         }
-        match was {
-            Gehalten::Taste(k) => welt.tasten.release(*k),
-            Gehalten::Maus(m) => welt.maus.release(*m),
+        match command {
+            Held::Key(k) => world.keys.release(*k),
+            Held::Mouse(m) => world.mouse.release(*m),
         }
         false
     });
 
-    if fahrt.warten_s > 0.0 {
-        fahrt.warten_s -= dt;
+    if run.wait_s > 0.0 {
+        run.wait_s -= dt;
         return;
     }
 
-    while fahrt.bei < fahrt.plan.len() {
-        let anweisung = fahrt.plan[fahrt.bei].clone();
-        fahrt.bei += 1;
-        match anweisung.was {
-            Befehl::SpawnTitan { art, pos } => {
-                welt.spawnen.write(TitanSpawnen {
-                    art,
+    while run.at < run.plan.len() {
+        let instruction = run.plan[run.at].clone();
+        run.at += 1;
+        match instruction.command {
+            ScriptCommand::SpawnTitan { kind, pos } => {
+                world.spawn_titan.write(SpawnTitan {
+                    kind,
                     pos_x: pos.x,
                     pos_y: pos.y,
                     pos_z: pos.z,
                 });
             }
-            Befehl::Warp(pos) => {
-                if let Some((id, _, _, _)) = welt.spieler.iter().next() {
-                    welt.warpen.write(SpielerWarpen {
-                        spieler: *id,
+            ScriptCommand::Warp(pos) => {
+                if let Some((id, _, _, _)) = world.players.iter().next() {
+                    world.warp.write(WarpPlayer {
+                        player: *id,
                         pos_x: pos.x,
                         pos_y: pos.y,
                         pos_z: pos.z,
                     });
                 }
             }
-            Befehl::Blick { yaw_grad, pitch_grad } => {
-                welt.blick.0 = Some((yaw_grad.to_radians(), pitch_grad.to_radians()));
+            ScriptCommand::Look { yaw_deg, pitch_deg } => {
+                world.look.0 = Some((yaw_deg.to_radians(), pitch_deg.to_radians()));
             }
-            Befehl::Taste { code, dauer_s } => {
-                welt.tasten.press(code);
-                fahrt.gehalten.push((Gehalten::Taste(code), dauer_s));
+            ScriptCommand::Key { code, duration_s } => {
+                world.keys.press(code);
+                run.held.push((Held::Key(code), duration_s));
             }
-            Befehl::Haken { rechts, dauer_s } => {
-                let m = if rechts { MouseButton::Right } else { MouseButton::Left };
-                welt.maus.press(m);
-                fahrt.gehalten.push((Gehalten::Maus(m), dauer_s));
+            ScriptCommand::Hook { right, duration_s } => {
+                let m = if right { MouseButton::Right } else { MouseButton::Left };
+                world.mouse.press(m);
+                run.held.push((Held::Mouse(m), duration_s));
             }
-            Befehl::Warten(s) => {
-                // Commands sind verzoegert: was dieser Tick gespawnt wird, existiert erst
-                // am Ende des Ticks. Ohne `wait` fotografiert man ein leeres Feld (§3).
-                fahrt.warten_s = s;
+            ScriptCommand::Wait(s) => {
+                // Commands are deferred: whatever is spawned this tick exists only at the
+                // end of the tick. Without `wait` you photograph an empty field (§3).
+                run.wait_s = s;
                 return;
             }
-            Befehl::Marke(text) => {
-                info!("MARKE t={} {}", tick.0, text);
-                welt.marken.write(Markierung { text, tick: tick.0 });
+            ScriptCommand::Mark(text) => {
+                info!("MARK t={} {}", tick.0, text);
+                world.marks.write(Mark { text, tick: tick.0 });
             }
-            Befehl::Pruefe { groesse, vergleich, wert } => {
-                let ist = messen(groesse, &welt, tick.0);
-                fahrt.geprueft += 1;
-                let haelt = ist.is_some_and(|i| vergleich.haelt(i, wert));
-                if !haelt {
-                    let meldung = format!(
-                        "Zeile {}: assert {groesse:?} {} {wert} — gemessen {}",
-                        anweisung.zeile,
-                        vergleich.zeichen(),
-                        ist.map_or("nichts (keinen Spieler gefunden)".to_string(), |i| format!("{i:.3}")),
+            ScriptCommand::Assert { metric, comparison, value } => {
+                let actual = measure(metric, &world, tick.0);
+                run.checked += 1;
+                let holds = actual.is_some_and(|i| comparison.holds(i, value));
+                if !holds {
+                    let message = format!(
+                        "line {}: assert {metric:?} {} {value} — measured {}",
+                        instruction.line,
+                        comparison.symbol(),
+                        actual.map_or("nothing (no player found)".to_string(), |i| format!("{i:.3}")),
                     );
-                    error!("{meldung}");
-                    fahrt.gescheitert.push(meldung);
+                    error!("{message}");
+                    run.failures.push(message);
                 }
             }
-            Befehl::Ende => {
-                fahrt.bei = fahrt.plan.len();
+            ScriptCommand::End => {
+                run.at = run.plan.len();
             }
         }
     }
 
-    if fahrt.bei >= fahrt.plan.len() && fahrt.gehalten.is_empty() {
-        fahrt.fertig = true;
-        let n = fahrt.gescheitert.len();
+    if run.at >= run.plan.len() && run.held.is_empty() {
+        run.done = true;
+        let n = run.failures.len();
         if n == 0 {
             info!(
-                "Fahrt beendet: {} assert gehalten, {} Ticks",
-                fahrt.geprueft, tick.0
+                "script run finished: {} asserts held, {} ticks",
+                run.checked, tick.0
             );
-            welt.beenden.write(AppExit::Success);
+            world.exit.write(AppExit::Success);
         } else {
-            error!("Fahrt beendet: {n} von {} assert gescheitert", fahrt.geprueft);
-            for m in &fahrt.gescheitert {
+            error!("script run finished: {n} of {} asserts failed", run.checked);
+            for m in &run.failures {
                 error!("  {m}");
             }
-            welt.beenden.write(AppExit::error());
+            world.exit.write(AppExit::error());
         }
     }
 }
 
-/// Was ein `assert` messen kann. `None` heisst „nicht messbar" und **gilt als gescheitert** —
-/// eine Pruefung, die nichts vorfand, ist keine bestandene Pruefung (§9).
-fn messen(groesse: Groesse, welt: &FahrerWelt, tick: u64) -> Option<f32> {
-    match groesse {
-        Groesse::Titanen => Some(welt.titanen.iter().count() as f32),
-        Groesse::Tick => Some(tick as f32),
+/// What an `assert` can measure. `None` means "not measurable" and **counts as failed** —
+/// a check that found nothing is not a check that passed (§9).
+fn measure(metric: Metric, world: &DriverWorld, tick: u64) -> Option<f32> {
+    match metric {
+        Metric::Titans => Some(world.titans.iter().count() as f32),
+        Metric::Tick => Some(tick as f32),
         _ => {
-            let (_, transform, gas, tempo) = welt.spieler.iter().next()?;
-            Some(match groesse {
-                Groesse::Hoehe => transform.translation.y,
-                Groesse::Gas => gas.jetzt,
-                Groesse::Tempo => tempo.betrag_m_s(),
-                Groesse::Titanen | Groesse::Tick => unreachable!("oben behandelt"),
+            let (_, transform, gas, tempo) = world.players.iter().next()?;
+            Some(match metric {
+                Metric::Height => transform.translation.y,
+                Metric::Gas => gas.current,
+                Metric::Speed => tempo.speed_m_s(),
+                Metric::Titans | Metric::Tick => unreachable!("high behandelt"),
             })
         }
     }
 }
 
-/// Warnt **einmal**, wenn eine Position nicht endlich ist.
+/// Warns **once** when a position is not finite.
 ///
-/// NaN im `Transform` ist der Bug, der aussieht wie „der Spieler ist verschwunden" — und
-/// ohne diese Wache sucht man ihn drei Systeme zu spaet (`prompts/init.md` §9d).
-fn nan_wache(
-    positionen: Query<(Entity, &Transform), Or<(With<PlayerId>, With<TitanId>)>>,
-    mut gewarnt: Local<bool>,
+/// NaN in the `Transform` is the bug that looks like "the player has vanished" — and
+/// without this guard you hunt for it three systems too late (`prompts/init.md` §9d).
+fn nan_guard(
+    positions: Query<(Entity, &Transform), Or<(With<PlayerId>, With<TitanId>)>>,
+    mut warned: Local<bool>,
 ) {
-    if *gewarnt {
+    if *warned {
         return;
     }
-    for (e, t) in &positionen {
-        if !crate::shared::mathe::ist_endlich(t.translation) {
+    for (e, t) in &positions {
+        if !crate::shared::math::is_finite(t.translation) {
             error!(
-                "Position von {e:?} ist nicht endlich: {:?} — irgendwo wurde durch null \
-                 geteilt oder ein Nullvektor normalisiert (docs/BUGS.md §9d)",
+                "position of {e:?} is not finite: {:?} — somewhere a division by zero happened \
+                 or a zero vector was normalized (docs/BUGS.md §9d)",
                 t.translation
             );
-            *gewarnt = true;
+            *warned = true;
             return;
         }
     }
 }
 
-/// Das F3-Overlay: Position, Blick, Tempo, Gas, Zustand, Tick — **im Bild**.
+/// The F3 overlay: position, look, speed, gas, state, tick — **in the image**.
 ///
-/// Damit ist jede Meldung nachstellbar: der User schickt eine Koordinate, und man steht per
-/// `warp` genau dort (§12c). Ohne Fenster gibt es kein Overlay — dann tut es das Log.
+/// That makes every report reproducible: the user sends a coordinate, and `warp` puts you
+/// exactly there (§12c). Without a window there is no overlay — then the log does the job.
 #[derive(Component)]
-pub struct F3Zeile;
+pub struct DebugOverlay;
 
-pub fn overlay_bauen(mut commands: Commands) {
+pub fn spawn_overlay(mut commands: Commands) {
     commands.spawn((
-        F3Zeile,
+        DebugOverlay,
         Text::new("F3"),
         TextFont { font_size: FontSize::Px(14.0), ..default() },
         Node {
@@ -296,34 +298,34 @@ pub fn overlay_bauen(mut commands: Commands) {
     ));
 }
 
-pub fn overlay_fuellen(
-    tasten: Res<ButtonInput<KeyCode>>,
+pub fn update_overlay(
+    keys: Res<ButtonInput<KeyCode>>,
     tick: Res<Tick>,
-    spieler: Query<(&Transform, &Gas, &Bewegungszustand), With<LocalPlayer>>,
-    mut zeilen: Query<(&mut Text, &mut Node), With<F3Zeile>>,
-    mut sichtbar: Local<bool>,
+    players: Query<(&Transform, &Gas, &MovementState), With<LocalPlayer>>,
+    mut lines: Query<(&mut Text, &mut Node), With<DebugOverlay>>,
+    mut visible: Local<bool>,
 ) {
-    if tasten.just_pressed(KeyCode::F3) {
-        *sichtbar = !*sichtbar;
+    if keys.just_pressed(KeyCode::F3) {
+        *visible = !*visible;
     }
-    for (mut text, mut node) in &mut zeilen {
-        node.display = if *sichtbar { Display::Flex } else { Display::None };
-        if !*sichtbar {
+    for (mut text, mut node) in &mut lines {
+        node.display = if *visible { Display::Flex } else { Display::None };
+        if !*visible {
             continue;
         }
-        let inhalt = match spieler.iter().next() {
-            Some((t, gas, zustand)) => format!(
+        let content = match players.iter().next() {
+            Some((t, gas, state)) => format!(
                 "t={}  pos {:.1} {:.1} {:.1}  gas {:.0}/{:.0}  {:?}",
                 tick.0,
                 t.translation.x,
                 t.translation.y,
                 t.translation.z,
-                gas.jetzt,
-                gas.maximal,
-                zustand
+                gas.current,
+                gas.max,
+                state
             ),
-            None => format!("t={}  (kein lokaler Spieler)", tick.0),
+            None => format!("t={}  (no local player)", tick.0),
         };
-        **text = inhalt;
+        **text = content;
     }
 }

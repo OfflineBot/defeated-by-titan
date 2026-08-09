@@ -1,96 +1,94 @@
 # Defeated by Titan
 
-Ein 3D-Lowpoly-Actionspiel ueber den Kampf gegen Titanen, gebaut in **Bevy (Rust)**.
+A 3D low-poly action game about the fight against Titans, built in **Bevy (Rust)**.
 
-Du bist ein Vanguard-Bergungsmann mit **Vector Gear**: zwei Greifhaken, zwei Gastanks, zwei
-Klingen. Du hakst ein, schwingst, beschleunigst mit Gas — und toetest einen Titanen **nur**
-durch einen schnellen Schnitt in den **Cortex**. Alles andere kostet ihn ein Bein und dich
-Zeit.
+You are a Vanguard salvager with the **Vector Gear**: two grappling hooks, two gas tanks, two
+blades. You hook in, you swing, you accelerate on gas — and you kill a Titan **only** with a
+fast cut into the **Cortex**. Anything else costs him a leg and costs you time.
 
-> **Das Spiel in einem Satz:** ein Bewegungsspiel mit hoher Meisterschaftsgrenze, in dem
-> Kaempfen der Nebeneffekt guter Bewegung ist.
+> **The game in one sentence:** a movement game with a high mastery ceiling, in which fighting
+> is the side effect of moving well.
 
-Der Krieg ist bereits verloren. Ashgate ist gefallen; die Vanguard fuehrt Bergungsmissionen
-in die eigenen Ruinen. Der Ton ist gedaempft und erwachsen, nie zynisch — Titanen verdampfen,
-statt zu bluten.
+The war is already lost. Ashgate has fallen; the Vanguard runs salvage missions into its own
+ruins. The tone is muted and grown-up, never cynical — Titans vaporize instead of bleeding.
 
-## Stand
+## Where it stands
 
-**Aufsetzen.** Es gibt noch kein spielbares Spiel: Projektbaum, Werkzeuge, Datenextraktion und
-Doku stehen, der Stufenplan ist bei Stufe 0/1.
+**Setup.** There is no playable game yet: the project tree, the tools, the data extraction and
+the documentation stand, and the build-up plan is at step 0/1.
 
-Der ehrliche Stand jeder einzelnen Sache steht in **[`docs/STATUS.md`](docs/STATUS.md)**, mit
-einer von vier Stufen pro Zeile:
+The honest state of each individual thing is in **[`docs/STATUS.md`](docs/STATUS.md)**, with
+one of four stages per row:
 
-| | Stufe | heisst |
+| | Stage | means |
 |---|---|---|
-| ⬜ | nicht implementiert | existiert nicht oder nur als Stub. Auch: „Code da, tut aber nichts" |
-| 🟨 | halb | gebaut, **nicht getestet, nicht gesehen**. Es kompiliert. Mehr ist nicht behauptet |
-| 🟧 | fast | gebaut **und** mit Tests abgesichert, die umfallen **und** im laufenden Spiel gesehen (Screenshot) |
-| ✅ | fertig | **der User hat draufgeschaut und abgenommen** — das setzt nur er |
+| ⬜ | unbuilt | does not exist, or only as a stub. Also: "there is code, but it does nothing" |
+| 🟨 | built | built, **not tested, not seen**. It compiles. Nothing more than that is claimed |
+| 🟧 | proven | built **and** covered by tests that go red **and** seen in the running game (screenshot) |
+| ✅ | accepted | **the user looked at it and signed off** — only he sets this |
 
-## Starten
+## Running it
 
-Rust 1.85+ (edition 2024). Auf Maschine A liegt die Toolchain in `~/.cargo`:
+Rust 1.85+ (edition 2024). On machine A the toolchain lives in `~/.cargo`:
 
 ```bash
 export PATH="$HOME/.cargo/bin:$PATH"
 ```
 
-**Welches Fenstersystem gelinkt wird, entscheidet die Maschine** — Bevys Sammelfeatures
-ziehen `wayland` fest nach, und das laesst sich nicht ueberall bauen:
+**Which window system gets linked is decided by the machine** — Bevy's umbrella features pull
+`wayland` in hard, and that does not build everywhere:
 
 ```bash
-cargo run                     # x11 (Vorgabe) — baut ueberall, auch ohne Wayland-Bibliotheken
-cargo spiel                   # = cargo run --features wayland   (Wayland-Compositor, z. B. niri)
+cargo run                     # x11 (default) — builds everywhere, even without Wayland libraries
+cargo play                    # = cargo run --features wayland,audio   (Wayland compositor, e.g. niri)
 ```
 
-### Start-Flags
+### Startup flags
 
-Ein Hauptmenue ist fuer ein Werkzeug eine Wand ohne Tuer. Deshalb gibt es Wege daran vorbei:
+For a tool, a main menu is a wall without a door. So there are ways past it:
 
-| Flag | wofuer |
+| Flag | what for |
 |---|---|
-| `--sandbox` | leeres Feld, ein Titan, unendlich Gas — zum Anschauen |
-| `--mission <name>` | direkt in einen Einsatz, kein Menue |
-| `--headless` | **kein Fenster**, fester Tick, laeuft N Ticks und beendet sich mit einem Exit-Code. Der einzige Weg auf einer Maschine ohne Grafiksitzung |
-| `--script <datei>` | das Spiel spielen, ohne zu tippen — und mit `assert` wird die Fahrt zu einem Test |
-| `--novsync` | zum Messen. Unter Vsync ist jede Bildzeit 16,6 ms, damit misst man sechsmal denselben Deckel |
-| `--lag <ms>` | simulierte Latenz. **Jedes Bewegungsfeature wird auch bei 200 ms geprueft**, nicht nur lokal |
+| `--sandbox` | empty field, one titan, unlimited gas — for looking at things |
+| `--mission <name>` | straight into a sortie, no menu |
+| `--headless` | **no window**, fixed tick, runs N ticks and exits with an exit code. The only way on a machine without a display |
+| `--script <file>` | play the game without typing — and with `assert` the run becomes a test |
+| `--novsync` | for measuring. Under vsync every frame time is 16.6 ms, so you measure the same ceiling six times |
+| `--lag <ms>` | simulated latency. **Every movement feature is checked at 200 ms too**, not only locally |
 
-## Tastenbelegung
+## Key bindings
 
-**Steht noch nicht fest, weil noch nichts davon gebaut ist.** Fest steht aus der Design-Bibel:
-**PC ausschliesslich, Tastatur und Maus als einziges Eingabegeraet** — kein Gamepad, kein
-Touch. Und: freie Tastenbelegung ist eine Anforderung, keine Kuer.
+**Not settled yet, because none of it is built yet.** What is settled, out of the design
+bible: **PC only, keyboard and mouse as the sole input device** — no gamepad, no touch. And:
+rebindable keys are a requirement, not a nicety.
 
-Sobald Stufe 1 steht, kommt die Tabelle hierher. Bis dahin waere sie eine Behauptung.
+As soon as step 1 stands, the table comes here. Until then it would be a claim.
 
-## Der Aufbau
+## The layout
 
 ```
-src/        eine Domaene = ein Ordner = ein Plugin (vector, titan, combat, world, net …)
-assets/     data/ (die RON-Zahlen)  3d/  textures/  audio/  vfx/  extern/
-tools/      baut Dinge: features.py, normen.py, blend/, atlas/, sound/
-scripts/    spielt das Spiel: --script-Fahrten
-docs/       der Spiegel: STATUS, TODO, Architektur, Konventionen, Fallgeschichten
-tests/      tests/<domaene>.rs — plus domaenen.rs, mehrspieler.rs, modelle.rs
+src/        one domain = one folder = one plugin (vector, titan, combat, world, net …)
+assets/     data/ (the RON numbers)  3d/  textures/  audio/  vfx/  extern/
+tools/      builds things: features.py, norms.py, blend/, atlas/, sound/
+scripts/    plays the game: --script runs
+docs/       the mirror: STATUS, TODO, architecture, conventions, case histories
+tests/      tests/<domain>.rs — plus domains.rs, multiplayer.rs, models.rs
 ```
 
-**Balancing ist Datei-Arbeit, kein Rust.** Ein neuer Titan-Typ, eine Klingenstufe, eine
-Gas-Kostenzahl: alles in `assets/data/*.ron`. Im Code stehen nur Einheiten und Mechanik —
-sonst braucht die haeufigste Arbeit im Projekt einen Rebuild und passiert deshalb nicht.
+**Balancing is file work, not Rust.** A new titan kind, a blade tier, a gas cost: all of it in
+`assets/data/*.ron`. The code holds units and mechanics only — otherwise the most frequent
+work in the project needs a rebuild, and therefore does not happen.
 
-## Mitarbeiten
+## Contributing
 
-- **Was gebaut werden soll**, steht in [`docs/TODO.md`](docs/TODO.md) (erzeugt, in baubarer
-  Reihenfolge) — die Quelle ist `gameplay/features.xlsx` mit 687 Ticketzeilen.
-- **Wie gearbeitet wird**, steht in [`CLAUDE.md`](CLAUDE.md) und
+- **What is to be built** is in [`docs/TODO.md`](docs/TODO.md) (generated, in buildable order)
+  — the source is `gameplay/features.xlsx` with 687 ticket rows.
+- **How the work is done** is in [`CLAUDE.md`](CLAUDE.md) and
   [`docs/README.md`](docs/README.md).
-- **Wuensche und Design** gehen bis auf Weiteres in den Eingangskorb `gameplay/`.
-  *(Nach der Aufloesung des Bootstrap-Geruests ist es `docs/gameplay/` plus
+- **Wishes and design** go into the inbox `gameplay/` until further notice.
+  *(Once the bootstrap scaffolding is dissolved it is `docs/gameplay/` plus
   `docs/TODO.md` — `prompts/init.md` §18.)*
 
-**Vorbild:** [Attack on Titan Revolution](https://www.roblox.com/games/13379208636/Attack-on-Titan-Revolution)
-(Roblox). Uebernommen wird das *Gefuehl* des Gear, nicht die Plattform: dies hier ist ein
-eigenstaendiges Spiel in Bevy/Rust.
+**The reference:** [Attack on Titan Revolution](https://www.roblox.com/games/13379208636/Attack-on-Titan-Revolution)
+(Roblox). What is taken from it is the *feel* of the gear, not the platform: this here is a
+standalone game in Bevy/Rust.

@@ -1,0 +1,34 @@
+# t006-shot-far — the view onto the world from outside, for the evidence in
+# docs/ACCEPTANCE.md.
+#
+#   cargo run --features wayland,audio -- \
+#       --script scripts/t006-shot-far.txt --ticks 110 --screenshot docs/images/t006-world-far.png
+#
+# ⚠️ The 110 belong to THIS file. `wait 1.5` is 90 ticks at 60 Hz, `wait 0.3` another
+# 18 — so the image is taken about 20 ticks after the `warp`. Whoever changes the tick
+# count changes the image.
+#
+# ⚠️ The player falls: there is no hover mode, and `warp` sets only position and velocity
+# (src/player/mod.rs::apply_warps). In the 0.33 s until the image that is about 1.1 m at
+# gravity_m_s2 = -20. The two `assert` lines below bracket exactly that: they are the
+# reason the image height is a measured number and not a claimed one.
+#
+# ⚠️ `look` has NO EFFECT on the image today: src/render/camera.rs::rotate_camera is an
+# empty stub (it has a two-line body and does nothing), so the camera always looks along
+# -Z. The line stands here anyway, because it spells out the axis contract — and because
+# this script becomes wrong the moment the stub is filled and nobody has read it.
+
+wait 1.5                # let world, camera, meshes and the render pipelines come up
+look 0 0                # look along -Z, the axis contract (docs/conventions.md)
+
+# Eye height about 20 m. Because the camera cannot look down, the horizon always lies in
+# the middle of the image — at this height the whole world stands below it in the image,
+# and the tallest block (18 m ridge height, 85 m away) lies just under the center line.
+warp 6 20 45
+
+wait 0.3                # the warp takes effect one tick later than it is written
+assert height > 18       # the warp really did take effect
+assert height < 21       # and the player has not fallen far yet
+assert titans == 0     # the world starts out empty
+mark far
+wait 5                  # keep the run alive: if it ends, the process ends before the image

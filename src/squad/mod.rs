@@ -1,17 +1,17 @@
-//! squad — Mitspieler und Eskorte: Kampfunfaehigkeit, Wiederbeleben, Markieren
+//! squad — fellow players and escort: going down, reviving, marking
 //!
-//! Die vier Grundregeln der Bibel (3.6) sind **nicht verhandelbar** und stehen hier im Code:
-//! kein Schaden zwischen Spielern, **keine Kollision** zwischen Spielern (bei dieser
-//! Geschwindigkeit die groesste Frustquelle ueberhaupt), getrennte Beute pro Spieler, kein
-//! Ausschluss in oeffentlichen Instanzen.
+//! The Bible's four ground rules (3.6) are **not negotiable** and stand here in the code: no
+//! damage between players, **no collision** between players (at this speed the single biggest
+//! source of frustration there is), separate loot per player, no exclusion in public
+//! instances.
 //!
-//! **Kampfunfaehigkeit statt Tod**: „tot" ist ein Zustand mit Timer, kein Entfernen der
-//! Entity. Das erzeugt den wertvollsten Moment im Koop-Design — jemand muss entscheiden, ob
-//! er mitten im Titanenfeuer landet, um einen anderen aufzurichten.
+//! **Downed instead of dead**: "dead" is a state with a timer, not a removal of the entity.
+//! That produces the most valuable moment in co-op design — somebody has to decide whether to
+//! land in the middle of titan fire to pull another player back up.
 //!
-//! **Noch leer.** Das Plugin steht im Baum, damit die Reihenfolge in `lib.rs` von Anfang an
-//! stimmt und ein Fan-out auf Domaenen moeglich ist, ohne dass fuenf Agenten denselben
-//! Ordner anlegen (`prompts/init.md` §17).
+//! **Still empty.** The plugin stands in the tree so that the order in `lib.rs` is right from
+//! the start and a fan-out across domains is possible without five agents creating the same
+//! folder (`prompts/init.md` §17).
 
 use bevy::prelude::*;
 

@@ -1,45 +1,44 @@
-//! shared — Typen, die niemandem gehoeren.
+//! shared — the types that belong to nobody.
 //!
-//! **Dies ist die einzige Domaene ohne Plugin.** Hier liegt, was mehrere Domaenen brauchen,
-//! ohne dass eine davon die andere kennen muss: Ids, der Eingabekanal, die Messages, die
-//! Mathe-Helfer, die Startflags.
+//! **This is the only domain without a plugin.** What lives here is what several domains
+//! need without any one of them having to know the others: ids, the input channel, the
+//! messages, the math helpers, the launch flags.
 //!
-//! Warum die Messages hier liegen und nicht beim Sender: `combat` schickt
-//! [`TitanGetroffen`], `titan` liest es. Laege der Typ in `combat`, braeuchte `titan` eine
-//! Kante zu `combat` — und die Domaenenregel waere nach einer Woche leer
-//! (`docs/architektur.md`).
+//! Why the messages live here and not with the sender: `combat` sends [`TitanHit`], `titan`
+//! reads it. If the type lived in `combat`, `titan` would need an edge to `combat` — and the
+//! domain rule would be empty within a week (`docs/architecture.md`).
 //!
-//! Warum hier auch [`Gas`] und [`Klingen`] liegen, obwohl `vector` und `blades` sie
-//! schreiben: weil `hud` und `sound` sie **lesen** muessen. Wer schreibt, steht in der
-//! Autoritaetstabelle in `docs/architektur.md` — nicht im Typ.
+//! Why [`Gas`] and [`Blades`] live here too, although `vector` and `blades` write them:
+//! because `hud` and `sound` have to **read** them. Who writes stands in the authority table
+//! in `docs/architecture.md` — not in the type.
 
-pub mod ablauf;
-pub mod bau;
+pub mod schedule;
+pub mod geometry;
 pub mod gear;
 pub mod ids;
 pub mod intent;
-pub mod mathe;
-pub mod nachricht;
-pub mod raum;
-pub mod seil;
-pub mod start;
-pub mod zufall;
-pub mod zustand;
+pub mod math;
+pub mod message;
+pub mod spatial;
+pub mod rope;
+pub mod cli;
+pub mod rng;
+pub mod state;
 
-pub use ablauf::{EingabeSet, SchrittSet, Tick};
-pub use bau::{spielerhuelle, Ankerflaeche, Bauklotz, Boden, Koerper, Maske};
+pub use schedule::{IntentSystems, SimulationSystems, Tick};
+pub use geometry::{player_aabb, AnchorSurface, Block, Ground, Body, BodyMask};
 pub use gear::{
-    AntriebEinholen, AntriebLauf, AntriebSchub, Gasfreigabe, Haken, Hakenarm, Hakenzustand,
-    Seillaenge, Seite, VorigeTasten, Zielpunkt,
+    ReelSpeed, RunAccel, BoostAccel, GasGrant, Hook, HookArm, HookState,
+    RopeLength, Side, PrevButtons, AimPoint,
 };
-pub use ids::{IdZaehler, KoerperId, LocalPlayer, PlayerId, TitanId};
-pub use intent::{BlickVorgabe, Intent, Tasten};
-pub use nachricht::{
-    Aufprall, HakenGeloest, HakenGesetzt, KoerperWeg, Koerperteil, Loesegrund, Markierung,
-    SpielerWarpen, TitanGetroffen, TitanSpawnen,
+pub use ids::{IdCounter, BodyId, LocalPlayer, PlayerId, TitanId};
+pub use intent::{LookOverride, Intent, Buttons};
+pub use message::{
+    Impact, HookReleased, HookAnchored, BodyGone, HitZone, ReleaseReason, Mark,
+    WarpPlayer, TitanHit, SpawnTitan,
 };
-pub use raum::{Eintrag, RaumIndex, Strahlergebnis, Treffer};
-pub use seil::{seil_einholen, seil_schritt, Seilzwang, Zwangsergebnis};
-pub use start::Start;
-pub use zufall::Wuerfel;
-pub use zustand::{Bewegungszustand, Gas, Klingen, Tempo};
+pub use spatial::{IndexEntry, SpatialIndex, RayResult, RayHit};
+pub use rope::{rope_reel_in, rope_step, RopeConstraint, ConstraintResult};
+pub use cli::Cli;
+pub use rng::Rng;
+pub use state::{MovementState, Gas, Blades, Velocity};

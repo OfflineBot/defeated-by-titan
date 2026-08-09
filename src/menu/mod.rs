@@ -1,15 +1,15 @@
-//! menu — Hauptmenue, Pause, Optionen
+//! menu — main menu, pause, options
 //!
-//! Ein Hauptmenue ist fuer jemanden, der nicht klicken kann, eine Wand ohne Tuer — deshalb
-//! gibt es `--sandbox`, `--mission` und `--script`, die daran vorbeigehen
+//! For somebody who cannot click, a main menu is a wall without a door — which is why
+//! `--sandbox`, `--mission` and `--script` exist and walk straight past it
 //! (`prompts/init.md` §12a).
 //!
-//! Freie Tastenbelegung, Farbenblindmodi, Screenshake-Regler und Bewegungsreduktion sind
-//! Anforderungen, keine Kuer (Bibel 3.5).
+//! Rebindable keys, color-blind modes, a screenshake slider and reduced motion are
+//! requirements, not decoration (Bible 3.5).
 //!
-//! **Noch leer.** Das Plugin steht im Baum, damit die Reihenfolge in `lib.rs` von Anfang an
-//! stimmt und ein Fan-out auf Domaenen moeglich ist, ohne dass fuenf Agenten denselben
-//! Ordner anlegen (`prompts/init.md` §17).
+//! **Still empty.** The plugin stands in the tree so that the order in `lib.rs` is right from
+//! the start and a fan-out across domains is possible without five agents creating the same
+//! folder (`prompts/init.md` §17).
 
 use bevy::prelude::*;
 

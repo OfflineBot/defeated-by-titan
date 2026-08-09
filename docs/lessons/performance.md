@@ -1,116 +1,124 @@
-# performance — die fünf Regeln aus §11, die Zielzahlen aus der Bibel, und was in beiden Quellen fehlt
+# performance — the five rules from §11, the target numbers from the bible, and what is missing from both sources
 
-Stand: 2026-08-09 · Stufe: 🟨 (aus den Quellen aufgeschrieben, in diesem Projekt noch nichts davon gemessen)
+Updated: 2026-08-09 · Stage: 🟨 (written down from the sources; none of it measured in this project yet)
 
-§11 heißt „die Regel, die man von Anfang an einhalten muss" — Performance ist hier also kein
-Feinschliff am Ende. Quellen: `prompts/init.md` §11 (Zeile 1151-1172) und
-`prompts/DefeatedByTitan_Design-Bibel.md` 3.5 (Zeile 99) / 6.4 (Zeile 235). Was hier steht, steht
-dort; wo etwas abgeleitet ist, ist es als abgeleitet markiert.
+§11 is titled *„die Regel, die man von Anfang an einhalten muss"* — the rule you have to keep
+from the very start. Performance is therefore not a final polish here. Sources:
+`prompts/init.md` §11 (lines 1151-1172) and `prompts/DefeatedByTitan_Design-Bibel.md` 3.5
+(line 99) / 6.4 (line 235). What stands here stands there; where something is derived, it is
+marked as derived.
 
-## Die Zielzahlen aus der Bibel
+## The target numbers from the bible
 
-| Vorgabe | Zahl | Quelle |
+| Requirement | Number | Source |
 |---|---|---|
-| Bildrate | **Mindestprofil und Vollprofil zielen beide auf 60 FPS** | Bibel 3.5 |
-| Mindestprofil | Einsteiger-Laptop, **integrierte Grafik** | Bibel 3.5 |
-| Qualitätsprofile insgesamt | **zwei statt fünf** | Bibel 3.5 |
-| Eigentliche Belastungsprobe | **20 Spieler mit je zwei Seilen + 60 Titanen** — „nicht die Grafik" | Bibel 6.4 |
-| Gegenmaßnahme dafür | Interpolationspuffer und Replikationsdrosselung **ab P1 einplanen** | Bibel 6.4 |
+| Frame rate | **the minimum profile and the full profile both aim at 60 FPS** | bible 3.5 |
+| Minimum profile | entry-level laptop, **integrated graphics** | bible 3.5 |
+| Quality profiles in total | **two instead of five** | bible 3.5 |
+| The real stress test | **20 players with two ropes each + 60 titans** — "not the graphics" | bible 6.4 |
+| Countermeasure for it | plan interpolation buffers and replication throttling **in from P1 on** | bible 6.4 |
 
-60 FPS heißt 16,6 ms pro Bild — für **alles** zusammen: Simulation, Netz, Rendering. Eine
-Aufteilung dieses Budgets nennt keine der beiden Quellen (siehe Lücken).
+60 FPS means 16.6 ms per frame — for **everything** together: simulation, network, rendering.
+Neither source names a split of that budget (see Gaps).
 
-## Regel 1 — der räumliche Index gehört in `world/`, ab dem ersten Tag
+## Rule 1 — the spatial index belongs in `world/`, from day one
 
-Eine Stadt hat Tausende Häuser, ein Einsatz Dutzende Titanen, jeder Titan sechs Gliedmaßen
-(§11). Die harte Formulierung der Quelle:
+A city has thousands of houses, a mission dozens of titans, every titan six limbs (§11). The
+source puts it hard:
 
 > **Nichts darf alle Entities durchlaufen, um eine Frage über die zehn Meter vor der Nase zu
 > beantworten.**
 
+— nothing may walk every entity to answer a question about the ten meters in front of your nose.
+
 | | |
 |---|---|
-| **Was** | Gitterzellen → Entities, in `world/` (siehe `docs/architektur.md`: `world/` führt den räumlichen Index) |
-| **Wie gepflegt** | über Bevys `Added` / `RemovedComponents` — damit der Index **nicht veralten kann** |
-| **Wer benutzt ihn** | Hakeneinschlag, Klingentreffer, Kollision, Titanen-Zielsuche — **alle vier**, keine Ausnahme |
-| **Woran man den Verstoß erkennt** | eine Query ohne Ortsfilter in einem System, das eine lokale Frage stellt |
+| **What** | grid cells → entities, in `world/` (see `docs/architecture.md`: `world/` keeps the spatial index) |
+| **How it stays current** | through Bevy's `Added` / `RemovedComponents` — so the index **cannot go stale** |
+| **Who uses it** | hook impact, blade hits, collision, titan target search — **all four**, no exception |
+| **How you spot the violation** | a query without a location filter in a system that asks a local question |
 
-## Regel 2 — nichts ändert sich pro Frame, alles pro Sekunde
+## Rule 2 — nothing changes per frame, everything per second
 
-`* time.delta_secs()` allein reicht **nicht**. Drei Unterfälle, die alle so aussehen, als wären sie
-schon framerate-unabhängig, und es nicht sind:
+`* time.delta_secs()` alone is **not** enough. Three sub-cases that all look as if they were
+already frame-rate independent, and are not:
 
-| Fall | Falsch (pro Frame) | Richtig (pro Sekunde) |
+| Case | Wrong (per frame) | Right (per second) |
 |---|---|---|
-| **(a) Ganzzahlen** | `(schaden * dt).ceil()` — das „macht die Framerate zur Schadenszahl" (§11) | Bruchteile mittragen, **nie runden** |
-| **(b) Exponentielles Glätten** | `x += (ziel - x) * 0.1` | Faktor `1 - e^(-k*dt)` |
-| **(c) Rauschen** | `rauschen * dt` | Rauschen skaliert mit **`sqrt(dt)`** |
+| **(a) Integers** | `(damage * dt).ceil()` — this "macht die Framerate zur Schadenszahl" (§11): the frame rate becomes the damage number | carry the fractions along, **never round** |
+| **(b) Exponential smoothing** | `x += (target - x) * 0.1` | factor `1 - e^(-k*dt)` |
+| **(c) Noise** | `noise * dt` | noise scales with **`sqrt(dt)`** |
 
-**Die Vorschrift dazu ist organisatorisch, nicht mathematisch:** eine einzige Hilfsfunktion in
-`shared/` schreiben und **nur die** benutzen (§11).
+**The instruction for this is organizational, not mathematical:** write one single helper in
+`shared/` and use **only that one** (§11).
 
-Im Repo steht sie bereits: `src/shared/mathe.rs` — `dt_gezaehmt`, `glaetten`, `glaetten_vec3`,
-`rausch_faktor`. Neue Aufrufer nehmen diese Funktionen, keine zweite Rechnung daneben.
+It is already in the repo: `src/shared/math.rs` — `clamped_dt_s`, `smooth`, `smooth_vec3`,
+`noise_scale`. New callers take these functions, not a second calculation next to them.
 
-## Regel 3 — erst messen, dann behaupten. Und: Debug ist langsam
+## Rule 3 — measure first, then claim. And: debug is slow
 
 ```bash
-cargo run              # Debug-Build — der eigene Crate steht auf opt-level = 1
-cargo run --release    # das Einzige, worüber man eine Perf-Aussage machen darf
+cargo run              # debug build — our own crate sits at opt-level = 1
+cargo run --release    # the only thing you may make a perf claim about
 ```
 
-| Beobachtung | Richtige Reaktion |
+| Observation | Correct reaction |
 |---|---|
-| „Es ruckelt seit heute" — gemessen mit `cargo run` | Nichts tun. **Debug-Langsamkeit ist keine Regression** (§11). Erst `--release` gegenmessen |
-| „Das System ist zu teuer" ohne Zahl | Keine Optimierung beginnen. Erst messen, dann behaupten |
+| "it has been stuttering since today" — measured with `cargo run` | Do nothing. **Debug slowness is not a regression** (§11). Measure against `--release` first |
+| "that system is too expensive" without a number | Do not start optimizing. Measure first, then claim |
 
-## Regel 4 — unter Vsync ist jede Bildzeit 16,6 ms
+## Rule 4 — under vsync every frame time is 16.6 ms
 
-Mit Vsync misst die Frage „was kostet das?" **sechsmal denselben Deckel** (§11).
+With vsync, the question "what does this cost?" measures **the same ceiling six times** (§11).
 
-Beides zusammengelesen (§11 + Bibel 3.5, so in keiner Quelle formuliert): das Ziel ist 60 FPS, und
-der Vsync-Deckel liegt bei genau diesen 16,6 ms. „Läuft mit 60" ist damit **kein** Beleg, dass Luft
-im Budget ist. Erst ohne Deckel gemessen sagt die Zahl etwas.
+Both read together (§11 + bible 3.5, phrased this way in neither source): the target is 60 FPS,
+and the vsync ceiling sits at exactly those 16.6 ms. "Runs at 60" is therefore **no** evidence
+that there is room in the budget. Only measured without the ceiling does the number say
+anything.
 
-| Werkzeug | Status | Was es liefert |
+| Tool | Status | What it gives you |
 |---|---|---|
-| `--novsync`-Startflag | **muss gebaut werden**, „früh" (§11) — existiert noch nicht | Deckel weg, echte Frametime |
-| Bevys `RenderDiagnosticsPlugin` | von §11 als Alternative oder Ergänzung genannt, hier noch nicht eingebaut | **echte GPU-Zeitstempel pro Renderpass** |
+| `--novsync` launch flag | **has to be built**, "early" (§11) — does not exist yet | ceiling gone, real frame time |
+| Bevy's `RenderDiagnosticsPlugin` | named by §11 as an alternative or an addition, not built in here yet | **real GPU timestamps per render pass** |
 
-## Regel 5 — Schatten sind der teuerste Schalter im Spiel
+## Rule 5 — shadows are the most expensive switch in the game
 
-Punktlichter sind fast gratis, Schatten nicht (§11). Deshalb: **erst am Ende, mit Zahl.**
+Point lights are almost free, shadows are not (§11). Therefore: **at the end, and with a
+number.**
 
-## Die eigentliche Belastungsprobe ist nicht die Grafik
+## The real stress test is not the graphics
 
-Die Bibel führt das unter **Risiken** (6.4), nicht unter Grafik:
+The bible files this under **risks** (6.4), not under graphics:
 
-> Zwanzig Spieler mit je zwei Seilen und sechzig Titanen sind die eigentliche Belastungsprobe, nicht
-> die Grafik.
+> Zwanzig Spieler mit je zwei Seilen und sechzig Titanen sind die eigentliche Belastungsprobe,
+> nicht die Grafik.
 
-| Was | Zahl | Woher |
+— twenty players with two ropes each and sixty titans are the real stress test, not the
+graphics.
+
+| What | Number | Where from |
 |---|---|---|
-| Spieler pro Instanz | 20 | Bibel 6.4 |
-| Seile | 2 pro Spieler → **40** gleichzeitig | 2 pro Spieler steht in Bibel 6.4; die 40 sind gerechnet |
-| Titanen | 60 | Bibel 6.4 |
-| Gliedmaßen | 6 pro Titan → **360** (§11 × Bibel 6.4, in keiner Quelle so genannt) | abgeleitet |
+| Players per instance | 20 | bible 6.4 |
+| Ropes | 2 per player → **40** at once | the 2 per player stands in bible 6.4; the 40 is arithmetic |
+| Titans | 60 | bible 6.4 |
+| Limbs | 6 per titan → **360** (§11 × bible 6.4, named this way in neither source) | derived |
 
-Praktische Folge für die Reihenfolge: eine Szene, die 60 Titanen und 40 Seile gleichzeitig
-simuliert, ist der Maßstab. Und die Gegenmaßnahme, die die Bibel dazu nennt, ist **Netz**, nicht
-Rendering: Interpolationspuffer und Replikationsdrosselung, ab P1 eingeplant (siehe
+Practical consequence for the order of work: a scene that simulates 60 titans and 40 ropes at
+the same time is the yardstick. And the countermeasure the bible names for it is **network**,
+not rendering: interpolation buffers and replication throttling, planned in from P1 on (see
 `docs/multiplayer.md`).
 
-## Lücken — was in den Quellen NICHT steht
+## Gaps — what is NOT in the sources
 
-| Lücke | Warum sie weh tut |
+| Gap | Why it hurts |
 |---|---|
-| Keine Aufteilung der 16,6 ms auf Simulation / Netz / Rendering | „Zu teuer" ist ohne Teilbudget nicht entscheidbar |
-| Keine Hardware-Definition des Mindestprofils außer „Einsteiger-Laptop, integrierte Grafik" | Ohne konkretes Gerät ist „60 FPS auf Mindestprofil" nicht prüfbar |
-| Keine definierte Messszene | 60 FPS worin? Die 20/40/60-Szene aus 6.4 ist die naheliegende Kandidatin, aber nirgends als Prüfszene festgeschrieben |
-| Keine Zellgröße für den räumlichen Index | §11 sagt „Gitterzellen", nicht wie groß. Muss gemessen werden |
-| Kein Zahlenwert für die Schattenkosten | „Erst am Ende, mit Zahl" — die Zahl gibt es noch nicht |
-| Kein Wert für `k` in `1 - e^(-k*dt)` | §11 gibt die Formel vor, nicht die Konstante; `mathe.rs` nimmt sie als Halbwertszeit-Parameter entgegen, pro Anwendungsfall zu bestimmen |
+| No split of the 16.6 ms across simulation / network / rendering | "too expensive" cannot be decided without a sub-budget |
+| No hardware definition of the minimum profile beyond "entry-level laptop, integrated graphics" | without a concrete device, "60 FPS on the minimum profile" cannot be checked |
+| No defined measurement scene | 60 FPS in what? The 20/40/60 scene from 6.4 is the obvious candidate, but nowhere written down as the check scene |
+| No cell size for the spatial index | §11 says "grid cells", not how big. Has to be measured |
+| No number for what shadows cost | "at the end, and with a number" — the number does not exist yet |
+| No value for `k` in `1 - e^(-k*dt)` | §11 prescribes the formula, not the constant; `math.rs` takes it as a half-life parameter, to be determined per use case |
 
-Diese sechs Punkte gehören als Fragen in `docs/FRAGEN.md`, nicht als Annahmen in den Code.
+These six points belong in `docs/QUESTIONS.md` as questions, not in the code as assumptions.
 
-Verwandt: [architektur.md](../architektur.md) · [multiplayer.md](../multiplayer.md) · [konventionen.md](../konventionen.md) · [umgebung.md](../umgebung.md) · [FRAGEN.md](../FRAGEN.md) · [ROADMAP.md](../ROADMAP.md) · [umgebung.md (lessons)](umgebung.md) · [workflow.md](workflow.md) · [arbeitsweise.md](arbeitsweise.md)
+Related: [architecture.md](../architecture.md) · [multiplayer.md](../multiplayer.md) · [conventions.md](../conventions.md) · [environment.md](../environment.md) · [QUESTIONS.md](../QUESTIONS.md) · [ROADMAP.md](../ROADMAP.md) · [environment.md (lessons)](environment.md) · [workflow.md](workflow.md) · [supervision.md](supervision.md)

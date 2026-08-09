@@ -1,31 +1,31 @@
 #!/usr/bin/env python3
-"""features.py — liest gameplay/features.xlsx aus und erzeugt die Arbeitsformate.
+"""features.py — reads gameplay/features.xlsx and writes the working formats.
 
-    python3 tools/features.py [--pruefen]
+    python3 tools/features.py [--check]
 
-Warum ein Skript und kein Abtippen: bei ~800 Zeilen verliert Abtippen garantiert
-Zeilen, und niemand merkt welche (prompts/init.md §2).
+Why a script and not typing it out: at ~800 rows, typing it out loses rows for
+certain, and nobody notices which ones (prompts/init.md §2).
 
-Warum die Standardbibliothek und nicht openpyxl: auf Maschine A (debian) gibt es
-weder pip noch passwortloses sudo. Eine .xlsx ist ein ZIP aus XML — das reicht.
-Damit laeuft die Extraktion auf jeder Maschine ohne Installation.
+Why the standard library and not openpyxl: machine A (debian) has neither pip nor
+passwordless sudo. An .xlsx is a ZIP of XML — that is enough. It makes the
+extraction run on any machine without installing anything.
 
-Erzeugt:
-    docs/backlog/<blatt>.ron   ein RON pro Excel-Blatt (die Blaetter haben
-                               verschiedene Spalten, deshalb je eine Datei)
-    docs/backlog/README.md     aus Blatt 00_Anleitung
-    docs/features.ron          die Arbeitsliste (F-IDs + T-IDs) — MERGE, siehe unten
-    docs/TODO.md               generierte Ansicht, nach Domaene, baubare Reihenfolge
-    docs/STATUS.md             generierte Ansicht, die vier Stufen (§8)
+Writes:
+    docs/backlog/<sheet>.ron   one RON per spreadsheet sheet (the sheets have
+                               different columns, hence one file each)
+    docs/backlog/README.md     from sheet 00_Anleitung
+    docs/features.ron          the working list (F-IDs + T-IDs) — MERGED, see below
+    docs/TODO.md               generated view, by domain, in buildable order
+    docs/STATUS.md             generated view, the four stages (§8)
 
-MERGE statt Ueberschreiben: docs/features.ron traegt `stufe`, `beleg` und `notiz` —
-das ist Arbeitsstand, kein Excel-Inhalt. Beim erneuten Lauf werden diese Felder je
-`id` aus der vorhandenen Datei uebernommen. Verschwundene Zeilen werden NICHT
-still geloescht, sondern gemeldet (§2).
+MERGE instead of overwrite: docs/features.ron carries `stage`, `evidence` and `note` —
+that is work state, not spreadsheet content. On a re-run those fields are carried over
+per `id` from the existing file. Rows that have vanished are NOT deleted silently, they
+are reported (§2).
 
-Der Beweis, dass nichts verlorenging, ist eine Zahl: die Zeilenzahl je Blatt steht
-in ERWARTETE_ZEILEN und stammt aus prompts/init.md §2. Stimmt sie nicht, bricht das
-Skript ab — dann weisst du, wie viele Zeilen fehlen, statt es zu ahnen (§9).
+The proof that nothing was lost is a number: the row count per sheet lives in
+EXPECTED_ROWS and comes from prompts/init.md §2. If it no longer matches, the script
+stops — then you know how many rows are missing instead of guessing (§9).
 """
 
 from __future__ import annotations
@@ -39,12 +39,13 @@ from pathlib import Path
 M = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 
-WURZEL = Path(__file__).resolve().parent.parent
-XLSX = WURZEL / "gameplay" / "features.xlsx"
-BACKLOG = WURZEL / "docs" / "backlog"
+ROOT = Path(__file__).resolve().parent.parent
+XLSX = ROOT / "gameplay" / "features.xlsx"
+BACKLOG = ROOT / "docs" / "backlog"
 
-# Pruefwert aus prompts/init.md §2 — Zeilen inklusive Kopf, Titel und Leerzeilen.
-ERWARTETE_ZEILEN = {
+# The row-count guard from prompts/init.md §2 — rows including header, title and blank
+# lines. The sheet names are the user's own tabs and stay exactly as he wrote them.
+EXPECTED_ROWS = {
     "00_Anleitung": 28,
     "01_Spielfunktionen": 197,
     "02_3D-Assets": 103,
@@ -59,68 +60,73 @@ ERWARTETE_ZEILEN = {
     "11_Zusammenfassung": 18,
 }
 
-# Blatt -> Zieldatei unter docs/backlog/. 11_Zusammenfassung wird bewusst NICHT
-# uebertragen: sie ist berechnet, unsere Zahlen kommen aus features.ron (§2).
-BLATT_ZU_RON = {
-    "01_Spielfunktionen": "funktionen",
-    "02_3D-Assets": "modelle",
-    "03_Animationen": "animationen",
-    "04_Texturen": "texturen",
+# Sheet -> target file under docs/backlog/. 11_Zusammenfassung is deliberately NOT
+# transferred: it is computed, and our numbers come from features.ron (§2).
+SHEET_TO_RON = {
+    "01_Spielfunktionen": "gameplay",
+    "02_3D-Assets": "models",
+    "03_Animationen": "animations",
+    "04_Texturen": "textures",
     "05_VFX": "vfx",
     "06_Audio": "audio",
     "07_UI-Screens": "ui",
     "08_Maps": "maps",
     "09_Tech-Backlog": "tech",
-    "10_Namensschema": "namensschema",
+    "10_Namensschema": "naming",
 }
 
-# Spaltenueberschrift -> RON-Schluessel. snake_case, deutsch, eine Sprache pro
-# Datei (§10). Was hier fehlt, wird aus der Ueberschrift abgeleitet.
-SPALTE_ZU_SCHLUESSEL = {
+# Column heading -> RON key. The keys are the user's German column headings and are
+# looked up verbatim; the values are the English RON keys we write. What is missing
+# here is derived from the heading — and that derivation is SILENT: a key that no
+# longer matches the spreadsheet exactly does not raise, it quietly writes a German
+# key into the RON that nobody looks at again.
+COLUMN_TO_KEY = {
     "ID": "id",
     "System": "system",
     "Feature": "name",
-    "Beschreibung": "beschreibung",
-    "Akzeptanzkriterium": "akzeptanz",
+    "Beschreibung": "description",
+    "Akzeptanzkriterium": "acceptance",
     "Prio": "prio",
-    "Aufwand (PT)": "aufwand_pt",
-    "Disziplin": "disziplin",
-    "Abhaengig von": "abhaengt_von",
+    "Aufwand (PT)": "effort_pd",
+    "Disziplin": "discipline",
+    "Abhaengig von": "depends_on",
     "Status": "status",
-    "Kategorie": "kategorie",
+    "Kategorie": "category",
     "Asset": "name",
     "Tris LOD0": "tris_lod0",
     "Tris LOD1": "tris_lod1",
     "Tris LOD2": "tris_lod2",
-    "Varianten": "varianten",
-    "Textur-Slot": "textur_slot",
+    "Varianten": "variants",
+    "Textur-Slot": "texture_slot",
     "Rig": "rig",
     "Clip": "name",
-    "Dauer (s)": "dauer_s",
+    "Dauer (s)": "duration_s",
+    "Laenge": "length",
     "Loop": "loop",
     "Name": "name",
-    "Aufloesung": "aufloesung",
-    "Typ": "typ",
-    "Technik": "technik",
-    "Ausloeser": "ausloeser",
+    "Aufloesung": "resolution",
+    "Typ": "kind",
+    "Technik": "technique",
+    "Ausloeser": "trigger",
     "Screen": "name",
-    "Wichtigste Elemente": "elemente",
-    "Plattform": "plattform",
+    "Wichtigste Elemente": "elements",
+    "Plattform": "platform",
     "Map": "name",
-    "Unterstuetzte Modi": "modi",
-    "Groesse (studs)": "groesse_studs",
-    "Ankerdichte": "ankerdichte",
-    "Modul": "modul",
+    "Unterstuetzte Modi": "modes",
+    "Groesse (studs)": "size_studs",
+    "Ankerdichte": "anchor_density",
+    "Modul": "module",
     "Task": "name",
-    "Rolle": "rolle",
-    "Referenzbegriff": "referenzbegriff",
-    "Defeated by Titan": "begriff",
-    "Anmerkung": "anmerkung",
+    "Rolle": "role",
+    "Referenzbegriff": "reference_term",
+    "Defeated by Titan": "term",
+    "Anmerkung": "note",
 }
 
-# Excel-System -> Domaene aus prompts/init.md §5. Das Feld `system` bleibt
-# zusaetzlich erhalten, damit diese Zuordnung nachpruefbar und korrigierbar ist.
-SYSTEM_ZU_DOMAENE = {
+# Excel system -> domain, from prompts/init.md §5. The `system` field is kept as well,
+# so that this mapping stays checkable and correctable. Keys are the user's spreadsheet
+# values and stay German.
+SYSTEM_TO_DOMAIN = {
     "Vector Gear": "vector",
     "Ankersystem": "world",
     "Kampf": "combat",
@@ -140,7 +146,7 @@ SYSTEM_ZU_DOMAENE = {
     "Live Ops": "mission",
 }
 
-MODUL_ZU_DOMAENE = {
+MODULE_TO_DOMAIN = {
     "Projekt": "tooling",
     "Architektur": "shared",
     "Daten": "data",
@@ -157,34 +163,34 @@ MODUL_ZU_DOMAENE = {
     "Telemetrie": "tooling",
 }
 
-PRIO_ZU_ZAHL = {"Must": 1, "Should": 2, "Could": 3}
+PRIO_TO_RANK = {"Must": 1, "Should": 2, "Could": 3}
 
-# Backlog-Status -> Stufe (§2). `Fertig` setzt nur der User, deshalb steht es hier
-# nicht als Zielwert eines Skriptlaufs.
-STATUS_ZU_STUFE = {
-    "Offen": "Nicht",
-    "In Arbeit": "Halb",
-    "Review": "Fast",
-    "Fertig": "Fertig",
-    "Zurueckgestellt": "Nicht",
-    "Gestrichen": "Nicht",
+# Backlog status -> stage (§2). `Accepted` is set only by the user, which is why it is
+# not a target value of a script run. Keys are his spreadsheet values and stay German.
+STATUS_TO_STAGE = {
+    "Offen": "Unbuilt",
+    "In Arbeit": "Built",
+    "Review": "Proven",
+    "Fertig": "Accepted",
+    "Zurueckgestellt": "Unbuilt",
+    "Gestrichen": "Unbuilt",
 }
 
-STUFE_MARKE = {"Nicht": "⬜", "Halb": "🟨", "Fast": "🟧", "Fertig": "✅"}
+STAGE_MARK = {"Unbuilt": "⬜", "Built": "🟨", "Proven": "🟧", "Accepted": "✅"}
 
 
 # --------------------------------------------------------------------------
-# xlsx lesen
+# reading the xlsx
 # --------------------------------------------------------------------------
 
-def spalten_nummer(ref: str) -> int:
+def column_number(ref: str) -> int:
     n = 0
     for ch in re.match(r"([A-Z]+)", ref).group(1):
         n = n * 26 + (ord(ch) - 64)
     return n
 
 
-def spalten_name(n: int) -> str:
+def column_name(n: int) -> str:
     s = ""
     while n:
         n, rest = divmod(n - 1, 26)
@@ -192,15 +198,15 @@ def spalten_name(n: int) -> str:
     return s
 
 
-class Blatt:
-    def __init__(self, name: str, zeilen: dict[int, dict[str, str]], zeilenzahl: int):
+class Sheet:
+    def __init__(self, name: str, rows: dict[int, dict[str, str]], row_count: int):
         self.name = name
-        self.zeilen = zeilen          # Zeilennummer -> {Spaltenbuchstabe: Text}
-        self.zeilenzahl = zeilenzahl  # Anzahl <row>-Elemente, der Pruefwert
+        self.rows = rows            # row number -> {column letter: text}
+        self.row_count = row_count  # number of <row> elements, the guard
 
 
-def lies_arbeitsmappe(pfad: Path) -> list[Blatt]:
-    z = zipfile.ZipFile(pfad)
+def read_workbook(path: Path) -> list[Sheet]:
+    z = zipfile.ZipFile(path)
 
     shared: list[str] = []
     if "xl/sharedStrings.xml" in z.namelist():
@@ -209,430 +215,441 @@ def lies_arbeitsmappe(pfad: Path) -> list[Blatt]:
 
     wb = ET.fromstring(z.read("xl/workbook.xml"))
     rels = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
-    rid_zu_ziel = {r.get("Id"): r.get("Target") for r in rels}
+    rid_to_target = {r.get("Id"): r.get("Target") for r in rels}
 
-    blaetter = []
+    sheets = []
     for sh in wb.find(M + "sheets"):
-        ziel = rid_zu_ziel[sh.get(R + "id")]
-        if not ziel.startswith("xl/"):
-            ziel = "xl/" + ziel.lstrip("/")
-        ws = ET.fromstring(z.read(ziel))
+        target = rid_to_target[sh.get(R + "id")]
+        if not target.startswith("xl/"):
+            target = "xl/" + target.lstrip("/")
+        ws = ET.fromstring(z.read(target))
 
-        # Verbundene Zellen wuerden leere Nachbarwerte liefern (§2). Diese Mappe
-        # hat keine — wenn doch eine dazukommt, soll es auffallen, nicht stillschweigen.
-        verbund = ws.findall(".//" + M + "mergeCell")
-        if verbund:
-            print(f"WARNUNG: {sh.get('name')} hat {len(verbund)} verbundene Zellen "
-                  f"— Werte pruefen (init.md §2).", file=sys.stderr)
+        # Merged cells would hand back empty neighboring values (§2). This workbook
+        # has none — if one ever appears it should be noticed, not passed over.
+        merged = ws.findall(".//" + M + "mergeCell")
+        if merged:
+            print(f"WARNING: {sh.get('name')} has {len(merged)} merged cells "
+                  f"— check the values (init.md §2).", file=sys.stderr)
 
-        rohzeilen = ws.findall(".//" + M + "sheetData/" + M + "row")
-        zeilen: dict[int, dict[str, str]] = {}
-        for r in rohzeilen:
-            nr = int(r.get("r"))
-            felder: dict[str, str] = {}
+        raw_rows = ws.findall(".//" + M + "sheetData/" + M + "row")
+        rows: dict[int, dict[str, str]] = {}
+        for r in raw_rows:
+            no = int(r.get("r"))
+            fields: dict[str, str] = {}
             for c in r.findall(M + "c"):
                 ref = c.get("r")
-                sp = re.match(r"([A-Z]+)", ref).group(1)
+                col = re.match(r"([A-Z]+)", ref).group(1)
                 v = c.find(M + "v")
                 if v is not None:
-                    # data_only: <v> ist der zwischengespeicherte WERT, auch wenn
-                    # daneben ein <f> mit der Formel steht (§2).
+                    # data_only: <v> is the CACHED value, even when an <f> with the
+                    # formula sits right next to it (§2).
                     txt = shared[int(v.text)] if c.get("t") == "s" else (v.text or "")
                 else:
                     inline = c.find(M + "is")
                     if inline is None:
                         if c.find(M + "f") is not None:
-                            print(f"WARNUNG: {sh.get('name')}!{ref} ist eine Formel "
-                                  f"OHNE zwischengespeicherten Wert — in Excel oeffnen "
-                                  f"und speichern, oder von Hand nachzaehlen.",
-                                  file=sys.stderr)
+                            print(f"WARNING: {sh.get('name')}!{ref} is a formula "
+                                  f"with NO cached value — open it in Excel and save, "
+                                  f"or count it by hand.", file=sys.stderr)
                         continue
                     txt = "".join(t.text or "" for t in inline.iter(M + "t"))
                 txt = txt.strip()
                 if txt:
-                    felder[sp] = txt
-            if felder:
-                zeilen[nr] = felder
-        blaetter.append(Blatt(sh.get("name"), zeilen, len(rohzeilen)))
-    return blaetter
+                    fields[col] = txt
+            if fields:
+                rows[no] = fields
+        sheets.append(Sheet(sh.get("name"), rows, len(raw_rows)))
+    return sheets
 
 
-def kopfzeile(blatt: Blatt) -> tuple[int, dict[str, str]] | None:
-    """Die Kopfzeile steht nicht ueberall in derselben Zeile (mal 3, mal 4).
+def header_row(sheet: Sheet) -> tuple[int, dict[str, str]] | None:
+    """The header is not in the same row everywhere (sometimes 3, sometimes 4).
 
-    `None` heisst: dieses Blatt ist Fliesstext (00_Anleitung), keine Tabelle.
+    `None` means: this sheet is prose (00_Anleitung), not a table. The three markers
+    are the user's own column titles and stay German.
     """
-    for nr in sorted(blatt.zeilen):
-        felder = blatt.zeilen[nr]
-        if felder.get("A") in ("ID", "Referenzbegriff", "Blatt"):
-            return nr, felder
+    for no in sorted(sheet.rows):
+        fields = sheet.rows[no]
+        if fields.get("A") in ("ID", "Referenzbegriff", "Blatt"):
+            return no, fields
     return None
 
 
-def datensaetze(blatt: Blatt) -> list[tuple[int, dict[str, str]]]:
-    """(Zeilennummer, {RON-Schluessel: Wert}) fuer jede Datenzeile."""
-    kopf = kopfzeile(blatt)
-    if kopf is None:
+def records(sheet: Sheet) -> list[tuple[int, dict[str, str]]]:
+    """(row number, {RON key: value}) for every data row."""
+    head = header_row(sheet)
+    if head is None:
         return []
-    kopf_nr, kopf = kopf
-    schluessel = {}
-    for sp, titel in kopf.items():
-        schluessel[sp] = SPALTE_ZU_SCHLUESSEL.get(
-            titel, re.sub(r"[^a-z0-9]+", "_", titel.lower()).strip("_"))
-    saetze = []
-    for nr in sorted(blatt.zeilen):
-        if nr <= kopf_nr:
+    head_no, head = head
+    keys = {}
+    for col, title in head.items():
+        keys[col] = COLUMN_TO_KEY.get(
+            title, re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_"))
+    out = []
+    for no in sorted(sheet.rows):
+        if no <= head_no:
             continue
-        felder = blatt.zeilen[nr]
-        satz = {schluessel[sp]: wert for sp, wert in felder.items() if sp in schluessel}
-        if satz:
-            saetze.append((nr, satz))
-    return saetze
+        fields = sheet.rows[no]
+        record = {keys[col]: value for col, value in fields.items() if col in keys}
+        if record:
+            out.append((no, record))
+    return out
 
 
 # --------------------------------------------------------------------------
-# RON schreiben
+# writing RON
 # --------------------------------------------------------------------------
 
-def ron_text(s: str) -> str:
+def ron_string(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
 
 
-def ron_wert(v) -> str:
+def ron_value(v) -> str:
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, int):
         return str(v)
     if isinstance(v, list):
-        return "[" + ", ".join(ron_wert(x) for x in v) + "]"
-    if isinstance(v, Roh):
+        return "[" + ", ".join(ron_value(x) for x in v) + "]"
+    if isinstance(v, Raw):
         return v.text
-    return ron_text(str(v))
+    return ron_string(str(v))
 
 
-class Roh:
-    """Ein Wert, der unveraendert in die RON geht (Enum-Variante, Zahl)."""
+class Raw:
+    """A value that goes into the RON unchanged (enum variant, number)."""
     def __init__(self, text: str):
         self.text = text
 
 
-KOPF_GENERIERT = (
-    "// GENERIERT von tools/features.py aus gameplay/features.xlsx — NICHT von Hand aendern.\n"
-    "// Handarbeit hier ist beim naechsten Lauf verloren. Quelle aendern heisst: die .xlsx\n"
-    "// aendern und das Skript erneut laufen lassen (prompts/init.md §2).\n"
+GENERATED_RON_HEADER = (
+    "// GENERATED by tools/features.py from gameplay/features.xlsx — do NOT edit by hand.\n"
+    "// Hand edits here are lost on the next run. Changing the source means: change the\n"
+    "// .xlsx and run the script again (prompts/init.md §2).\n"
 )
 
 
-def schreibe_ron(pfad: Path, wurzel_name: str, saetze: list[dict], quelle: str) -> None:
-    zeilen = [KOPF_GENERIERT, f"// Quelle: {quelle}\n", f"{wurzel_name}: [\n"]
-    for satz in saetze:
-        felder = ", ".join(f"{k}: {ron_wert(v)}" for k, v in satz.items())
-        zeilen.append(f"    ({felder}),\n")
-    zeilen.append("]\n")
-    pfad.parent.mkdir(parents=True, exist_ok=True)
-    pfad.write_text("".join(zeilen), encoding="utf-8")
+def write_ron(path: Path, root_name: str, rows: list[dict], source: str) -> None:
+    lines = [GENERATED_RON_HEADER, f"// Source: {source}\n", f"{root_name}: [\n"]
+    for row in rows:
+        fields = ", ".join(f"{k}: {ron_value(v)}" for k, v in row.items())
+        lines.append(f"    ({fields}),\n")
+    lines.append("]\n")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(lines), encoding="utf-8")
 
 
 # --------------------------------------------------------------------------
-# features.ron: erzeugen und mit dem vorhandenen Arbeitsstand mischen
+# features.ron: generate it and merge it with the existing work state
 # --------------------------------------------------------------------------
 
-def lies_arbeitsstand(pfad: Path) -> dict[str, dict[str, str]]:
-    """Holt stufe/beleg/notiz je id aus einer vorhandenen features.ron.
+def read_work_state(path: Path) -> dict[str, dict[str, str]]:
+    """Pulls stage/evidence/note per id out of an existing features.ron.
 
-    Bewusst eine Regex und kein RON-Parser: die Datei ist von diesem Skript
-    erzeugt, das Format also bekannt, und eine Abhaengigkeit weniger.
+    Deliberately a regex and not a RON parser: the file is written by this script, so
+    the format is known, and it is one dependency less.
     """
-    if not pfad.exists():
+    if not path.exists():
         return {}
-    stand: dict[str, dict[str, str]] = {}
-    for zeile in pfad.read_text(encoding="utf-8").splitlines():
-        m_id = re.search(r'id:\s*"([^"]+)"', zeile)
+    state: dict[str, dict[str, str]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        m_id = re.search(r'id:\s*"([^"]+)"', line)
         if not m_id:
             continue
-        eintrag = {}
-        m = re.search(r"stufe:\s*(\w+)", zeile)
+        entry = {}
+        m = re.search(r"stage:\s*(\w+)", line)
         if m:
-            eintrag["stufe"] = m.group(1)
-        for feld in ("beleg", "notiz"):
-            m = re.search(rf'{feld}:\s*"((?:[^"\\]|\\.)*)"', zeile)
+            entry["stage"] = m.group(1)
+        for field in ("evidence", "note"):
+            m = re.search(rf'{field}:\s*"((?:[^"\\]|\\.)*)"', line)
             if m:
-                eintrag[feld] = m.group(1)
-        stand[m_id.group(1)] = eintrag
-    return stand
+                entry[field] = m.group(1)
+        state[m_id.group(1)] = entry
+    # A features.ron full of ids and without a single `stage:` is not an empty work
+    # state, it is a file this script no longer reads. Merging it anyway resets every
+    # hand-set stage, every evidence line and every note to the spreadsheet default —
+    # silently, with exit 0, in a diff that looks like a rename. Say it instead.
+    if state and not any("stage" in e for e in state.values()):
+        print(f"ERROR: {path} holds {len(state)} ids but not one `stage:` — this file "
+              f"is not in the format this script reads. Merging it would reset every "
+              f"stage, every evidence line and every note to the spreadsheet default. "
+              f"Migrate the file first, then run again.", file=sys.stderr)
+        raise SystemExit(2)
+    return state
 
 
-def baue_features(blaetter: dict[str, Blatt]) -> list[dict]:
-    eintraege: list[dict] = []
+def build_features(sheets: dict[str, Sheet]) -> list[dict]:
+    entries: list[dict] = []
 
-    for nr, satz in datensaetze(blaetter["01_Spielfunktionen"]):
-        system = satz.get("system", "")
-        abh = [t.strip() for t in re.split(r"[,;]", satz.get("abhaengt_von", "")) if t.strip()]
-        eintraege.append({
-            "id": satz.get("id", ""),
-            "name": satz.get("name", ""),
-            "domain": SYSTEM_ZU_DOMAENE.get(system, "offen"),
+    for no, record in records(sheets["01_Spielfunktionen"]):
+        system = record.get("system", "")
+        deps = [t.strip() for t in re.split(r"[,;]", record.get("depends_on", ""))
+                if t.strip()]
+        entries.append({
+            "id": record.get("id", ""),
+            "name": record.get("name", ""),
+            "domain": SYSTEM_TO_DOMAIN.get(system, "open"),
             "system": system,
-            "stufe": Roh(STATUS_ZU_STUFE.get(satz.get("status", "Offen"), "Nicht")),
-            "beschreibung": satz.get("beschreibung", ""),
-            "akzeptanz": satz.get("akzeptanz", ""),
-            "abhaengt_von": abh,
-            "prio": PRIO_ZU_ZAHL.get(satz.get("prio", "Could"), 3),
-            "aufwand_pt": Roh(satz.get("aufwand_pt", "0")),
-            "quelle": f"features.xlsx!01_Spielfunktionen!Z{nr}",
-            "beleg": "",
-            "notiz": "",
+            "stage": Raw(STATUS_TO_STAGE.get(record.get("status", "Offen"), "Unbuilt")),
+            "description": record.get("description", ""),
+            "acceptance": record.get("acceptance", ""),
+            "depends_on": deps,
+            "prio": PRIO_TO_RANK.get(record.get("prio", "Could"), 3),
+            "effort_pd": Raw(record.get("effort_pd", "0")),
+            "source": f"features.xlsx!01_Spielfunktionen!R{no}",
+            "evidence": "",
+            "note": "",
         })
 
-    # Das Tech-Backlog kommt mit in die Arbeitsliste: es traegt genau die Zeilen,
-    # die das Aufsetzen betreffen (T-IDs), und ohne sie haette docs/STATUS.md
-    # keine Zeile fuer Fenster, Werkzeuge oder Tests. Benannte Abweichung von der
-    # Tabelle in §2 — dort ist features.ron nur aus Blatt 01 gespeist.
-    for nr, satz in datensaetze(blaetter["09_Tech-Backlog"]):
-        modul = satz.get("modul", "")
-        eintraege.append({
-            "id": satz.get("id", ""),
-            "name": satz.get("name", ""),
-            "domain": MODUL_ZU_DOMAENE.get(modul, "tooling"),
-            "system": modul,
-            "stufe": Roh(STATUS_ZU_STUFE.get(satz.get("status", "Offen"), "Nicht")),
-            "beschreibung": satz.get("beschreibung", ""),
-            "akzeptanz": "",
-            "abhaengt_von": [],
-            "prio": PRIO_ZU_ZAHL.get(satz.get("prio", "Could"), 3),
-            "aufwand_pt": Roh(satz.get("aufwand_pt", "0")),
-            "quelle": f"features.xlsx!09_Tech-Backlog!Z{nr}",
-            "beleg": "",
-            "notiz": "",
+    # The tech backlog comes into the working list too: it carries exactly the rows the
+    # setup is about (T-IDs), and without them docs/STATUS.md would have no row for the
+    # window, the tools or the tests. A named deviation from the table in §2 — there,
+    # features.ron is fed from sheet 01 alone.
+    for no, record in records(sheets["09_Tech-Backlog"]):
+        module = record.get("module", "")
+        entries.append({
+            "id": record.get("id", ""),
+            "name": record.get("name", ""),
+            "domain": MODULE_TO_DOMAIN.get(module, "tooling"),
+            "system": module,
+            "stage": Raw(STATUS_TO_STAGE.get(record.get("status", "Offen"), "Unbuilt")),
+            "description": record.get("description", ""),
+            "acceptance": "",
+            "depends_on": [],
+            "prio": PRIO_TO_RANK.get(record.get("prio", "Could"), 3),
+            "effort_pd": Raw(record.get("effort_pd", "0")),
+            "source": f"features.xlsx!09_Tech-Backlog!R{no}",
+            "evidence": "",
+            "note": "",
         })
-    return eintraege
+    return entries
 
 
-def mische(neu: list[dict], stand: dict[str, dict[str, str]]) -> list[str]:
-    """Traegt den Arbeitsstand nach. Gibt die Meldungen fuer docs/FRAGEN.md zurueck."""
-    meldungen = []
-    ids_neu = {e["id"] for e in neu}
-    for e in neu:
-        alt = stand.get(e["id"])
-        if not alt:
+def merge(new: list[dict], state: dict[str, dict[str, str]]) -> list[str]:
+    """Carries the work state over. Returns the messages for docs/QUESTIONS.md."""
+    messages = []
+    new_ids = {e["id"] for e in new}
+    for e in new:
+        old = state.get(e["id"])
+        if not old:
             continue
-        if "stufe" in alt:
-            e["stufe"] = Roh(alt["stufe"])
-        for feld in ("beleg", "notiz"):
-            if alt.get(feld):
-                e[feld] = alt[feld]
-    for alte_id, alt in stand.items():
-        if alte_id not in ids_neu:
-            meldungen.append(
-                f"{alte_id} war in docs/features.ron, steht aber nicht mehr in der "
-                f"features.xlsx (Stufe war {alt.get('stufe', '?')})")
-    return meldungen
+        if "stage" in old:
+            e["stage"] = Raw(old["stage"])
+        for field in ("evidence", "note"):
+            if old.get(field):
+                e[field] = old[field]
+    for old_id, old in state.items():
+        if old_id not in new_ids:
+            messages.append(
+                f"{old_id} was in docs/features.ron but is no longer in "
+                f"features.xlsx (stage was {old.get('stage', '?')})")
+    return messages
 
 
 # --------------------------------------------------------------------------
-# Ansichten
+# views
 # --------------------------------------------------------------------------
 
-KOPF_MD = (
-    "<!-- GENERIERT von tools/features.py aus docs/features.ron — NICHT von Hand aendern.\n"
-    "     Handarbeit hier ist beim naechsten Lauf verloren. Arbeitsstand (Stufe, Beleg)\n"
-    "     gehoert nach docs/features.ron, dann `python3 tools/features.py`.\n"
-    "     Ohne 'Stand:'-Zeile mit Absicht: der Stand ist der von docs/features.ron, und\n"
-    "     ein Datum, das sich bei jedem Lauf aendert, ist Diff-Rauschen. -->\n\n"
+GENERATED_MD_HEADER = (
+    "<!-- GENERATED by tools/features.py from docs/features.ron — do NOT edit by hand.\n"
+    "     Hand edits here are lost on the next run. Work state (stage, evidence)\n"
+    "     belongs in docs/features.ron, then `python3 tools/features.py`.\n"
+    "     No 'Updated:' line, on purpose: the state is the state of docs/features.ron,\n"
+    "     and a date that changes on every run is diff noise. -->\n\n"
 )
 
 
-def baubare_reihenfolge(eintraege: list[dict]) -> list[dict]:
-    """Topologisch nach abhaengt_von, bei Gleichstand nach Prio, dann nach ID."""
-    nach_id = {e["id"]: e for e in eintraege}
-    fertig: list[dict] = []
-    gesetzt: set[str] = set()
-    offen = sorted(eintraege, key=lambda e: (e["prio"], e["id"]))
-    while offen:
-        runde = [e for e in offen
-                 if all(a in gesetzt or a not in nach_id for a in e["abhaengt_von"])]
-        if not runde:      # Zyklus — nicht still auflösen, sondern anhaengen
-            runde = offen[:]
-        for e in runde:
-            fertig.append(e)
-            gesetzt.add(e["id"])
-        offen = [e for e in offen if e["id"] not in gesetzt]
-    return fertig
+def buildable_order(entries: list[dict]) -> list[dict]:
+    """Topological by depends_on, ties broken by prio, then by ID."""
+    by_id = {e["id"]: e for e in entries}
+    done: list[dict] = []
+    placed: set[str] = set()
+    open_ = sorted(entries, key=lambda e: (e["prio"], e["id"]))
+    while open_:
+        round_ = [e for e in open_
+                  if all(a in placed or a not in by_id for a in e["depends_on"])]
+        if not round_:     # a cycle — do not resolve it silently, append it
+            round_ = open_[:]
+        for e in round_:
+            done.append(e)
+            placed.add(e["id"])
+        open_ = [e for e in open_ if e["id"] not in placed]
+    return done
 
 
-def schreibe_todo(pfad: Path, eintraege: list[dict]) -> None:
-    z = [KOPF_MD, "# TODO — offene Arbeit, in baubarer Reihenfolge\n\n",
-         "Sortiert nach Domaene; innerhalb der Domaene so, dass `abhaengt_von` erfuellt\n"
-         "ist, bevor eine Zeile drankommt. Prio 1 = Must, 2 = Should, 3 = Could —\n"
-         "`Must` vor `Should` vor `Could` ist die Reihenfolge, keine Empfehlung\n"
-         "(prompts/init.md §2).\n\n"]
-    geordnet = baubare_reihenfolge(eintraege)
-    for domaene in sorted({e["domain"] for e in eintraege}):
-        zeilen = [e for e in geordnet
-                  if e["domain"] == domaene and e["stufe"].text != "Fertig"]
-        if not zeilen:
+def write_todo(path: Path, entries: list[dict]) -> None:
+    z = [GENERATED_MD_HEADER, "# TODO — open work, in buildable order\n\n",
+         "Sorted by domain; inside a domain so that `depends_on` is satisfied before a\n"
+         "row comes up. Prio 1 = Must, 2 = Should, 3 = Could — `Must` before `Should`\n"
+         "before `Could` is the order, not a recommendation (prompts/init.md §2).\n\n"]
+    ordered = buildable_order(entries)
+    for domain in sorted({e["domain"] for e in entries}):
+        rows = [e for e in ordered
+                if e["domain"] == domain and e["stage"].text != "Accepted"]
+        if not rows:
             continue
-        z.append(f"## {domaene} ({len(zeilen)} offen)\n\n")
-        z.append("| Stufe | ID | Sache | Prio | haengt an | warum hier |\n")
+        z.append(f"## {domain} ({len(rows)} open)\n\n")
+        z.append("| Stage | ID | Item | Prio | Depends on | Why here |\n")
         z.append("|---|---|---|---|---|---|\n")
-        for e in zeilen:
-            abh = ", ".join(e["abhaengt_von"]) or "—"
-            grund = (f"braucht {abh}" if e["abhaengt_von"]
-                     else {1: "Must, ohne Vorbedingung", 2: "Should", 3: "Could"}[e["prio"]])
-            z.append(f"| {STUFE_MARKE[e['stufe'].text]} | {e['id']} | {e['name']} "
-                     f"| {e['prio']} | {abh} | {grund} |\n")
+        for e in rows:
+            deps = ", ".join(e["depends_on"]) or "—"
+            reason = (f"needs {deps}" if e["depends_on"]
+                      else {1: "Must, no prerequisite", 2: "Should", 3: "Could"}[e["prio"]])
+            z.append(f"| {STAGE_MARK[e['stage'].text]} | {e['id']} | {e['name']} "
+                     f"| {e['prio']} | {deps} | {reason} |\n")
         z.append("\n")
-    pfad.write_text("".join(z), encoding="utf-8")
+    path.write_text("".join(z), encoding="utf-8")
 
 
-def schreibe_status(pfad: Path, eintraege: list[dict]) -> None:
-    zaehler = {k: 0 for k in STUFE_MARKE}
-    for e in eintraege:
-        zaehler[e["stufe"].text] += 1
-    z = [KOPF_MD, "# STATUS — was implementiert ist und was nicht\n\n",
-         "Stufen: ⬜ nicht implementiert · 🟨 halb (gebaut, ungetestet, ungesehen) ·\n"
-         "🟧 fast (Tests, die umfallen + im Spiel gesehen) · ✅ fertig "
-         "(**nur der User setzt das**).\n\n",
-         "**🟧 braucht drei Belege:** Bild (Screenshot-Pfad), Zahl (gemessen, mit "
-         "Maschine `[debian]`/`[cachy]`) und Code (ein Test, der rot wird, wenn es "
-         "kaputtgeht). Fehlt einer, ist es 🟨 — Unsicherheit setzt die Stufe herunter, "
-         "nicht hinauf (prompts/init.md §8, §9).\n\n",
-         f"**Stand:** {zaehler['Nicht']} ⬜ · {zaehler['Halb']} 🟨 · "
-         f"{zaehler['Fast']} 🟧 · {zaehler['Fertig']} ✅ "
-         f"von {len(eintraege)} Zeilen.\n\n"]
-    for domaene in sorted({e["domain"] for e in eintraege}):
-        zeilen = [e for e in eintraege if e["domain"] == domaene]
-        rang = {"Fertig": 0, "Fast": 1, "Halb": 2, "Nicht": 3}
-        zeilen.sort(key=lambda e: (rang[e["stufe"].text], e["prio"], e["id"]))
-        z.append(f"## {domaene}\n\n")
-        z.append("| Sache | ID | Stufe | Beleg (Test / Screenshot / Zahl) | Stand |\n")
+def write_status(path: Path, entries: list[dict]) -> None:
+    counts = {k: 0 for k in STAGE_MARK}
+    for e in entries:
+        counts[e["stage"].text] += 1
+    z = [GENERATED_MD_HEADER, "# STATUS — what is implemented and what is not\n\n",
+         "Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·\n"
+         "🟧 proven (tests that go red + seen in the game) · ✅ accepted "
+         "(**only the user sets this**).\n\n",
+         "**🟧 needs three pieces of evidence:** a picture (screenshot path), a number "
+         "(measured, with the machine `[debian]`/`[cachy]`) and code (a test that goes "
+         "red when it breaks). If one is missing it is 🟨 — doubt moves the stage down, "
+         "not up (prompts/init.md §8, §9).\n\n",
+         f"**Tally:** {counts['Unbuilt']} ⬜ · {counts['Built']} 🟨 · "
+         f"{counts['Proven']} 🟧 · {counts['Accepted']} ✅ "
+         f"of {len(entries)} rows.\n\n"]
+    for domain in sorted({e["domain"] for e in entries}):
+        rows = [e for e in entries if e["domain"] == domain]
+        rank = {"Accepted": 0, "Proven": 1, "Built": 2, "Unbuilt": 3}
+        rows.sort(key=lambda e: (rank[e["stage"].text], e["prio"], e["id"]))
+        z.append(f"## {domain}\n\n")
+        z.append("| Item | ID | Stage | Evidence (test / screenshot / number) | Note |\n")
         z.append("|---|---|---|---|---|\n")
-        for e in zeilen:
-            beleg = e["beleg"] or "—"
-            stand = e["notiz"] or "—"
-            z.append(f"| {e['name']} | {e['id']} | {STUFE_MARKE[e['stufe'].text]} "
-                     f"| {beleg} | {stand} |\n")
+        for e in rows:
+            evidence = e["evidence"] or "—"
+            note = e["note"] or "—"
+            z.append(f"| {e['name']} | {e['id']} | {STAGE_MARK[e['stage'].text]} "
+                     f"| {evidence} | {note} |\n")
         z.append("\n")
-    pfad.write_text("".join(z), encoding="utf-8")
+    path.write_text("".join(z), encoding="utf-8")
 
 
-def schreibe_backlog_readme(pfad: Path, blatt: Blatt, blaetter: dict[str, Blatt]) -> None:
-    z = ["<!-- GENERIERT von tools/features.py aus gameplay/features.xlsx, "
-         "Blatt 00_Anleitung. -->\n\n",
-         "# docs/backlog/ — die Excel-Blaetter als Daten\n\n",
-         "Ein RON pro Blatt, weil die Blaetter verschiedene Spalten haben. Die `.xlsx`\n"
-         "selbst bleibt liegen und unangetastet — sie ist die Quelle, und der User\n"
-         "arbeitet darin weiter (prompts/init.md §2).\n\n",
-         "## Was in der Anleitung des Backlogs steht\n\n"]
-    for nr in sorted(blatt.zeilen):
-        felder = blatt.zeilen[nr]
-        a, b = felder.get("A", ""), felder.get("B", "")
+def write_backlog_readme(path: Path, sheet: Sheet, sheets: dict[str, Sheet]) -> None:
+    z = ["<!-- GENERATED by tools/features.py from gameplay/features.xlsx, "
+         "sheet 00_Anleitung. -->\n\n",
+         "# docs/backlog/ — the spreadsheet sheets as data\n\n",
+         "One RON per sheet, because the sheets have different columns. The `.xlsx`\n"
+         "itself stays where it is, untouched — it is the source, and the user keeps\n"
+         "working in it (prompts/init.md §2).\n\n",
+         "## What the backlog's own instructions say\n\n"]
+    for no in sorted(sheet.rows):
+        fields = sheet.rows[no]
+        a, b = fields.get("A", ""), fields.get("B", "")
         if a and b:
             z.append(f"- **{a}** — {b}\n")
         elif a:
             z.append(f"\n### {a}\n\n" if len(a) < 60 else f"{a}\n\n")
-    z.append("\n## Die Blaetter und ihre Dateien\n\n")
-    z.append("| Blatt | Zeilen (inkl. Kopf) | Datensaetze | Datei |\n|---|---|---|---|\n")
-    for name in ERWARTETE_ZEILEN:
-        b = blaetter[name]
-        ziel = BLATT_ZU_RON.get(name)
-        datei = f"`{ziel}.ron`" if ziel else "— (berechnet, nicht uebertragen)"
-        anzahl = len(datensaetze(b)) if ziel else "—"
-        z.append(f"| `{name}` | {b.zeilenzahl} | {anzahl} | {datei} |\n")
-    z.append("\n**Die Zeilenzahl ist der Pruefwert.** `python3 tools/features.py --pruefen`\n"
-             "faellt um, wenn eine Zahl nicht mehr stimmt — dann ist die Extraktion nicht\n"
-             "fertig, und man weiss genau, wie viele Zeilen fehlen (prompts/init.md §2, §9).\n\n"
-             "`docs/features.ron` ist die Arbeitsliste daraus: alle F-IDs aus\n"
-             "`01_Spielfunktionen` **und** alle T-IDs aus `09_Tech-Backlog`. Die T-Zeilen\n"
-             "sind mit drin, weil genau sie das Aufsetzen beschreiben — ohne sie haette\n"
-             "`docs/STATUS.md` keine Zeile fuer Fenster, Werkzeuge oder Tests. Das ist eine\n"
-             "benannte Abweichung von der Tabelle in `prompts/init.md` §2, wo\n"
-             "`features.ron` nur aus Blatt 01 gespeist wird.\n")
-    pfad.write_text("".join(z), encoding="utf-8")
+    z.append("\n## The sheets and their files\n\n")
+    z.append("| Sheet | Rows (incl. header) | Records | File |\n|---|---|---|---|\n")
+    for name in EXPECTED_ROWS:
+        s = sheets[name]
+        target = SHEET_TO_RON.get(name)
+        file = f"`{target}.ron`" if target else "— (computed, not transferred)"
+        count = len(records(s)) if target else "—"
+        z.append(f"| `{name}` | {s.row_count} | {count} | {file} |\n")
+    z.append("\n**The row count is the guard.** `python3 tools/features.py --check`\n"
+             "falls over when a number stops matching — then the extraction is not\n"
+             "finished, and you know exactly how many rows are missing, instead of\n"
+             "guessing that some are (prompts/init.md §2, §9).\n\n"
+             "`docs/features.ron` is the working list built from it: every F-ID from\n"
+             "`01_Spielfunktionen` **and** every T-ID from `09_Tech-Backlog`. The T rows\n"
+             "are in there because they are exactly what describes the setup — without\n"
+             "them `docs/STATUS.md` would have no row for the window, the tools or the\n"
+             "tests. That is a named deviation from the table in `prompts/init.md` §2,\n"
+             "where `features.ron` is fed from sheet 01 alone.\n")
+    path.write_text("".join(z), encoding="utf-8")
 
 
 # --------------------------------------------------------------------------
 
 def main() -> int:
-    nur_pruefen = "--pruefen" in sys.argv
+    check_only = "--check" in sys.argv
     if not XLSX.exists():
-        print(f"FEHLER: {XLSX} fehlt", file=sys.stderr)
+        print(f"ERROR: {XLSX} is missing", file=sys.stderr)
         return 2
 
-    blaetter = {b.name: b for b in lies_arbeitsmappe(XLSX)}
+    sheets = {s.name: s for s in read_workbook(XLSX)}
 
-    # 1. Pruefwert: Zeilenzahl je Blatt
-    fehler = []
-    for name, erwartet in ERWARTETE_ZEILEN.items():
-        if name not in blaetter:
-            fehler.append(f"Blatt {name} fehlt in der Mappe")
+    # 1. The guard: row count per sheet
+    errors = []
+    for name, expected in EXPECTED_ROWS.items():
+        if name not in sheets:
+            errors.append(f"sheet {name} is missing from the workbook")
             continue
-        ist = blaetter[name].zeilenzahl
-        if ist != erwartet:
-            fehler.append(f"Blatt {name}: {ist} Zeilen, erwartet {erwartet} "
-                          f"(Differenz {ist - erwartet})")
-    for name in blaetter:
-        if name not in ERWARTETE_ZEILEN:
-            fehler.append(f"Blatt {name} ist neu — ERWARTETE_ZEILEN ergaenzen")
-    if fehler:
-        print("PRUEFWERT NICHT ERFUELLT (prompts/init.md §2):", file=sys.stderr)
-        for f in fehler:
-            print("  - " + f, file=sys.stderr)
+        actual = sheets[name].row_count
+        if actual != expected:
+            errors.append(f"sheet {name}: {actual} rows, expected {expected} "
+                          f"(difference {actual - expected})")
+    for name in sheets:
+        if name not in EXPECTED_ROWS:
+            errors.append(f"sheet {name} is new — add it to EXPECTED_ROWS")
+    if errors:
+        print("ROW-COUNT GUARD FAILED (prompts/init.md §2):", file=sys.stderr)
+        for e in errors:
+            print("  - " + e, file=sys.stderr)
         return 1
 
-    saetze_je_blatt = {name: datensaetze(b) for name, b in blaetter.items()}
+    records_per_sheet = {name: records(s) for name, s in sheets.items()}
 
-    if nur_pruefen:
-        print(f"{'Blatt':<22} {'Zeilen':>7} {'Datensaetze':>12}")
-        for name in ERWARTETE_ZEILEN:
-            print(f"{name:<22} {blaetter[name].zeilenzahl:>7} "
-                  f"{len(saetze_je_blatt[name]):>12}")
-        gesamt = sum(len(saetze_je_blatt[n]) for n in BLATT_ZU_RON)
-        print(f"{'SUMME (uebertragen)':<22} {'':>7} {gesamt:>12}")
+    if check_only:
+        print(f"{'Sheet':<22} {'Rows':>7} {'Records':>12}")
+        for name in EXPECTED_ROWS:
+            print(f"{name:<22} {sheets[name].row_count:>7} "
+                  f"{len(records_per_sheet[name]):>12}")
+        total = sum(len(records_per_sheet[n]) for n in SHEET_TO_RON)
+        print(f"{'TOTAL (transferred)':<22} {'':>7} {total:>12}")
         return 0
 
-    # 2. Ein RON pro Blatt
-    for blatt_name, datei in BLATT_ZU_RON.items():
-        saetze = [dict(s) for _, s in saetze_je_blatt[blatt_name]]
-        wurzel = "eintraege"
-        schreibe_ron(BACKLOG / f"{datei}.ron", wurzel, saetze,
-                     f"gameplay/features.xlsx!{blatt_name} "
-                     f"({len(saetze)} Datensaetze aus "
-                     f"{blaetter[blatt_name].zeilenzahl} Zeilen)")
+    # 2. One RON per sheet
+    for sheet_name, file in SHEET_TO_RON.items():
+        rows = [dict(r) for _, r in records_per_sheet[sheet_name]]
+        write_ron(BACKLOG / f"{file}.ron", "entries", rows,
+                  f"gameplay/features.xlsx!{sheet_name} "
+                  f"({len(rows)} records from "
+                  f"{sheets[sheet_name].row_count} rows)")
 
-    schreibe_backlog_readme(BACKLOG / "README.md", blaetter["00_Anleitung"], blaetter)
+    write_backlog_readme(BACKLOG / "README.md", sheets["00_Anleitung"], sheets)
 
-    # 3. Arbeitsliste mit Merge
-    ziel = WURZEL / "docs" / "features.ron"
-    stand = lies_arbeitsstand(ziel)
-    eintraege = baue_features(blaetter)
-    verschwunden = mische(eintraege, stand)
-    schreibe_ron(ziel, "features", eintraege,
-                 "gameplay/features.xlsx!01_Spielfunktionen + !09_Tech-Backlog")
+    # 3. The working list, with merge
+    target = ROOT / "docs" / "features.ron"
+    state = read_work_state(target)
+    entries = build_features(sheets)
+    vanished = merge(entries, state)
+    write_ron(target, "features", entries,
+              "gameplay/features.xlsx!01_Spielfunktionen + !09_Tech-Backlog")
 
-    # 4. Ansichten
-    schreibe_todo(WURZEL / "docs" / "TODO.md", eintraege)
-    schreibe_status(WURZEL / "docs" / "STATUS.md", eintraege)
+    # 4. Views
+    write_todo(ROOT / "docs" / "TODO.md", entries)
+    write_status(ROOT / "docs" / "STATUS.md", entries)
 
-    # 5. Bericht
-    print(f"{'Blatt':<22} {'Zeilen':>7} {'Datensaetze':>12}  Datei")
-    for name in ERWARTETE_ZEILEN:
-        datei = BLATT_ZU_RON.get(name)
-        print(f"{name:<22} {blaetter[name].zeilenzahl:>7} "
-              f"{len(saetze_je_blatt[name]):>12}  "
-              f"{'docs/backlog/' + datei + '.ron' if datei else '(nicht uebertragen)'}")
-    print(f"\ndocs/features.ron: {len(eintraege)} Eintraege "
-          f"({len(saetze_je_blatt['01_Spielfunktionen'])} F + "
-          f"{len(saetze_je_blatt['09_Tech-Backlog'])} T)")
-    if verschwunden:
-        print("\nACHTUNG — Zeilen aus dem alten Stand fehlen in der neuen .xlsx.")
-        print("Nach docs/FRAGEN.md eintragen, NICHT still loeschen (init.md §2):")
-        for m in verschwunden:
+    # 5. Report
+    print(f"{'Sheet':<22} {'Rows':>7} {'Records':>12}  File")
+    for name in EXPECTED_ROWS:
+        file = SHEET_TO_RON.get(name)
+        print(f"{name:<22} {sheets[name].row_count:>7} "
+              f"{len(records_per_sheet[name]):>12}  "
+              f"{'docs/backlog/' + file + '.ron' if file else '(not transferred)'}")
+    print(f"\ndocs/features.ron: {len(entries)} entries "
+          f"({len(records_per_sheet['01_Spielfunktionen'])} F + "
+          f"{len(records_per_sheet['09_Tech-Backlog'])} T)")
+    if vanished:
+        print("\nATTENTION — rows from the old state are missing in the new .xlsx.")
+        print("Record them in docs/QUESTIONS.md, do NOT delete them silently "
+              "(init.md §2):")
+        for m in vanished:
             print("  - " + m)
-    doppelt = [e["id"] for e in eintraege
-               if [x["id"] for x in eintraege].count(e["id"]) > 1]
-    if doppelt:
-        print(f"\nWARNUNG: doppelte IDs: {sorted(set(doppelt))}", file=sys.stderr)
+    duplicates = [e["id"] for e in entries
+                  if [x["id"] for x in entries].count(e["id"]) > 1]
+    if duplicates:
+        print(f"\nWARNING: duplicate IDs: {sorted(set(duplicates))}", file=sys.stderr)
         return 1
     return 0
 
