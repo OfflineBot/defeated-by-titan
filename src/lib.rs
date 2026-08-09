@@ -38,7 +38,8 @@ use bevy::render::RenderPlugin;
 use bevy::window::{ExitCondition, PresentMode};
 
 use shared::{
-    IdZaehler, Markierung, SpielerWarpen, Start, Tick, TitanGetroffen, TitanSpawnen, Wuerfel,
+    Aufprall, HakenGeloest, HakenGesetzt, IdZaehler, KoerperWeg, Markierung, SchrittSet,
+    SpielerWarpen, Start, Tick, TitanGetroffen, TitanSpawnen, Wuerfel,
 };
 
 /// Der Fenstertitel. Steht an **genau einer** Stelle — `docs/konventionen.md` nennt die drei
@@ -75,7 +76,37 @@ pub fn app(start: Start) -> App {
         .add_message::<TitanGetroffen>()
         .add_message::<TitanSpawnen>()
         .add_message::<SpielerWarpen>()
-        .add_message::<Markierung>();
+        .add_message::<Markierung>()
+        // Ein `MessageWriter<T>` ohne `add_message::<T>()` ist ein LAUFZEITfehler beim
+        // System-Init, kein Compilefehler — er faellt erst auf, wenn jemand das System
+        // schreibt, und wirft dann jeden Test der Runde um. Deshalb stehen alle vier hier,
+        // bevor der erste Sender existiert (docs/schnittstelle.md, „Die Naht zuerst").
+        .add_message::<HakenGesetzt>()
+        .add_message::<HakenGeloest>()
+        .add_message::<Aufprall>()
+        .add_message::<KoerperWeg>();
+
+    // Die sechs Stufen eines Simulationsschritts, an GENAU EINER Stelle konfiguriert.
+    //
+    // Nicht in einem Plugin: `world`, `vector` und `player` sind alle drei Mitglieder, und
+    // eine Domaene, die die Reihenfolge einer anderen festlegt, ist eine versteckte Kante an
+    // der Erlaubnisliste vorbei. `src/lib.rs` ist die bereits benannte Naht.
+    //
+    // Die Reihenfolge ist die Antwort auf „wer gewinnt": der Index ist aktuell, bevor
+    // jemand ihn fragt; gefragt wird, bevor sich etwas bewegt; gewollt wird, bevor Kraefte
+    // entstehen; und bewegt wird zuletzt, von genau einem System.
+    app.configure_sets(
+        FixedUpdate,
+        (
+            SchrittSet::Raum,
+            SchrittSet::Welt,
+            SchrittSet::Absicht,
+            SchrittSet::Antrieb,
+            SchrittSet::Vollzug,
+            SchrittSet::Nachlauf,
+        )
+            .chain(),
+    );
 
     // Die Reihenfolge IST die Abhaengigkeitsreihenfolge (docs/architektur.md).
     // Verschachtelt, weil `add_plugins` maximal ~15 Elemente pro Tupel nimmt und darueber

@@ -6,22 +6,40 @@
 //! und nichts darf alle Entities durchlaufen, um eine Frage ueber die zehn Meter vor der Nase
 //! zu beantworten (`prompts/init.md` §11).
 //!
-//! **Stand:** ein Boden und ein paar Kloetze, damit Stufe 1 etwas hat, worauf man steht und
-//! wogegen man sich bewegt. Kein Index, keine Stadt, keine Ankerdichte — das ist Stufe 2 und
-//! haengt an `docs/FRAGEN.md` Q-010.
+//! **Stand:** die Naht steht — `RaumIndex` als Resource, der Pfleger in `SchrittSet::Raum`,
+//! der Abmelde-Beobachter, und `karte::karte_bauen` als Stub gegen `assets/data/maps.ron`.
+//! Gefuellt sind sie nicht: [`welt_aufbauen`] spawnt weiterhin die vier Platzhalter-Kloetze
+//! und stirbt im selben Commit, in dem `karte_bauen` die Karte wirklich baut. **Nicht
+//! vorher** — ohne Kloetze und ohne gefuellten Index faellt der Spieler 600 Ticks lang, und
+//! `scripts/t007-erste-fahrt.txt` faellt mit ihm.
 //!
 //! Gespawnt werden **Daten**, keine Meshes: `render` macht daraus Dreiecke, ohne diese
 //! Domaene zu kennen (`shared::Bauklotz`).
 
+pub mod index;
+pub mod karte;
+
 use bevy::prelude::*;
 
-use crate::shared::{Ankerflaeche, Bauklotz, Boden};
+use crate::data::GameData;
+use crate::shared::{Ankerflaeche, Bauklotz, Boden, RaumIndex, SchrittSet};
 
 pub struct WorldPlugin;
 
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, welt_aufbauen);
+        // Der Index braucht drei Zahlen aus der RON und **kein `Default`**: `zelle_m = 0.0`
+        // waere eine Division durch null im DDA, und `init_resource` ist die naheliegendste
+        // Zeile der Welt. Deshalb nur `insert_resource(RaumIndex::neu(..))`.
+        let w = &app.world().resource::<GameData>().spiel.welt;
+        let raum = RaumIndex::neu(w.zelle_m, w.halbe_ausdehnung_m, w.grosskoerper_zellen);
+        app.insert_resource(raum);
+
+        // Der Beobachter statt `RemovedComponents` — Begruendung in `world::index`.
+        app.add_observer(index::koerper_abmelden);
+
+        app.add_systems(Startup, (welt_aufbauen, karte::karte_bauen))
+            .add_systems(FixedUpdate, index::index_pflegen.in_set(SchrittSet::Raum));
     }
 }
 

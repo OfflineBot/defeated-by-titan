@@ -67,6 +67,156 @@ Der Modellierer entscheidet damit **wo**, die RON **wie stark**:
 > wie ein kaputtes Spiel an. `tests/modelle.rs` faellt deshalb um, wenn einem Modell mit
 > `nutzen: true` ein geforderter Anker fehlt.
 
+---
+
+## Die Groessentabelle — vom User vorgegeben, 2026-08-09
+
+**Das hier ist die Wahrheit ueber Groessen.** Sie schlaegt jede Ableitung: wo frueher aus dem
+Backlog umgerechnet wurde (0,28 m je Backlog-Einheit, [`docs/FRAGEN.md`](FRAGEN.md) Q-002) und
+das Ergebnis dieser Tabelle widerspricht, gilt **diese Tabelle**. Die Umrechnung bleibt nur
+fuer alles, wozu der User nichts gesagt hat.
+
+> Die Tabelle steht **maschinenlesbar** in `assets/data/massstab.ron` — das hier ist die
+> Fassung fuer den Modellierer. Seit 2026-08-09 ist das kein Versprechen mehr, sondern ein
+> Waechter: `tests/data.rs::t005_die_groessentabelle_in_der_doku_zeigt_dieselben_zahlen` liest
+> **diese Datei** und faellt um, sobald eine Zahl hier von der RON abweicht oder ein neues
+> Bauwerk in der RON hier fehlt. Deshalb stehen die Zahlen **exakt so wie in der RON** — ohne
+> haengende Null (`1,8 m`, nicht `1,80 m`); sonst prueft der Waechter nichts.
+
+| Objekt | Hoehe | Notiz |
+|---|---|---|
+| **Referenz** | | |
+| Mensch | 1,8 m | Kapsel **exakt** pruefen |
+| Tuer | 2,1 m | |
+| Strassenbreite | 6–8 m | eng halten |
+| **Architektur (×1,0)** | | |
+| Kleines Haus (1 Stock) | 4,5 m | Traufe 3 m |
+| Stadthaus (2 Stock) | 8 m | Traufe 6 m |
+| Grosses Haus (3 Stock) | 11,5 m | Obergrenze der Wohnbebauung |
+| Baum | 12 m | Vordergrund-Staffelung |
+| Wachturm auf Mauer | 12 m | |
+| Kirche / Glockenturm | 35 m | Sonderbau, kein Rasterhaus |
+| **Titanen (×1,4)** | | Cortex bei ~89 % |
+| Kleiner Titan | 4,2 m | Cortex 3,7 m |
+| Mittlerer Titan | 10 m | Cortex 8,9 m |
+| Mittlerer Titan (gross) | 14 m | Cortex 12,5 m |
+| Grosser Titan | 21 m | Cortex 18,7 m |
+| Abnormaler / Boss | 28 m | Cortex 24,9 m — Zeilentitel wie beim User, [Q-020](FRAGEN.md) |
+| Kopfgroesse Titan | 1/9 – 1/10 der Hoehe | Mensch = 1/7,5 |
+| **Mauern (×2,4)** | | |
+| Mauerhoehe | 120 m | |
+| Mauerdicke oben | 28 m | |
+| Mauerdicke Basis | 45 m | angeschraegt |
+| Zwischenplattform | 60 m | Zwischenstopp beim Aufstieg |
+| Steinreihe | 0,6 m | Skalenleiter, sichtbare Fugen |
+| Horizontale Baenderung | 15 m | alle 15 m ein Band |
+| **Boss** | | |
+| The Ashwalker | 150 m | 30 m ueber der Mauer |
+| **Kamera / Vector Gear** | | |
+| Kamerahoehe | 1,6 m | |
+| Sichtfeld Bodenkampf | 55–65 Grad | groesster Hebel — senkrecht oder waagerecht? [Q-021](FRAGEN.md) |
+| Ankerreichweite | 90 m | |
+| Geschwindigkeit | ×1,5 | vs. Standard — Bezug offen, [Q-018](FRAGEN.md) |
+
+*Der User hat die letzten vier Zeilen mit dem Referenzbegriff des Vorbilds beschriftet; hier
+stehen sie mit den Projektbegriffen aus [`docs/konventionen.md`](konventionen.md) §2.*
+
+> ⚠️ **Eine Zeile ist uebersetzt, nicht gelesen.** Der User schreibt „Abnormaler / Boss —
+> 28 m". Im Projektvokabular ist „Abnormal" ein **Titan-Typ** und heisst **Errant**
+> ([`docs/konventionen.md`](konventionen.md) §2) — die Zeile koennte also heissen „der Errant
+> ist 28 m hoch" statt „es gibt eine Groessenklasse namens Boss". Hier gilt die zweite
+> Lesart, `assets/data/titan.ron` laesst den Errant bei 10 m, und die Klasse `boss` hat
+> keinen Vertreter. **Das ist eine Annahme, keine Uebersetzung** — sie steht als
+> [Q-020](FRAGEN.md) und wird mit einem Satz des Users zurueckgenommen.
+
+### Die drei Massstaebe — und warum niemand sie „korrigiert"
+
+Architektur ×1,0, Titanen ×1,4, Mauern ×2,4. **Die Welt ist bewusst nicht einheitlich
+skaliert.** Ein Haus ist so gross, wie ein Haus ist; ein Titan ist ueberzeichnet; eine Mauer
+ist monumental. Der Mensch ist klein, die Bedrohung unverhaeltnismaessig, die Mauer ein
+Horizont — das ist die Bildsprache, nicht ein Rechenfehler.
+
+Wer die drei Faktoren spaeter angleicht, weil ihm eine Zahl unrealistisch vorkommt, macht das
+Spiel technisch sauberer und kuenstlerisch tot — und merkt es erst, wenn alles beliebig
+aussieht. `tests/data.rs::t005_die_massstabsfaktoren_bleiben_ungleich` wird deshalb rot, sobald
+jemand es versucht.
+
+**Die Stadt ist flach, und das ist Absicht.** Wohnbebauung geht von 4,5 m bis 11,5 m. Die
+Vertikale kommt aus Mauer (120 m), Kirche (35 m), Wachturm (12 m) und Baeumen (12 m). Ein
+Ziegeldach-Meer, aus dem einzelne Bauwerke herausragen — keine Skyline.
+
+**Und genau deshalb sind die vier Sonderbauten keine Deko.** Aus 11,5 m Dachhoehe und 3,0 m
+Mindestseil (`assets/data/game.ron: vector.seil_min_m`) folgt eine **Ankerdecke von 14,5 m** —
+darueber haelt an einem Wohnhaus kein Seil mehr. Der Cortex sitzt beim mittleren grossen Titan
+auf 12,5 m, beim grossen auf 18,7 m, beim Boss auf 24,9 m. Eine Stadt ohne Kirche und Turm
+laesst also drei von fuenf Groessenklassen nur noch ballistisch angreifen: hinspringen, treffen
+oder fallen. Wer ein Modell fuer Kirche, Wachturm oder Baum baut, baut **Spielmechanik**, nicht
+Kulisse. Die Rechnung steht als [Q-022](FRAGEN.md), und `tests/data.rs` haelt fest, dass die
+Startkarte wirklich einen hakbaren Sonderbau traegt.
+
+### Kopf und Cortex: die zwei Regeln, an denen die Lesbarkeit haengt
+
+- **Der Kopf ist 1/9 bis 1/10 der Koerperhoehe** — beim Menschen ist er 1/7,5, also relativ
+  **groesser**. Genau daran liest das Auge „das Ding ist riesig" statt „das Ding ist nah". Ein
+  zu grosser Kopf laesst jeden Titanen wie eine Puppe aussehen, egal wie viele Meter im
+  Datenblatt stehen.
+- **Der Cortex sitzt bei rund 89 % der Koerperhoehe.** Das ist keine Deko, das ist die
+  **einzige toedliche Trefferzone** (`F-030`) — beim 21-m-Titanen also auf 18,7 m. Das
+  `cortex`-Empty im Modell gehoert dorthin, nicht „ungefaehr oben".
+  **Massgeblich ist die Meterangabe, nicht die Prozentzahl:** die fuenf Cortexhoehen stehen
+  einzeln in `assets/data/massstab.ron` (`titan.klassen[...].cortex_m`), weil der User sie
+  einzeln genannt hat. Die 89 % sind die *Regel*, an der geprueft wird, ob eine der fuenf
+  wegdriftet — aus ihr gerechnet laege der kleine Titan 4 cm daneben.
+- **Der Cortex ist kleiner als der Kopf.** Klingt selbstverstaendlich, war es nicht: der
+  kleine Titan trug bis 2026-08-09 eine Trefferzone von 0,80 m Durchmesser an einem Kopf von
+  0,42–0,47 m. `tests/data.rs` haelt jetzt `2 × cortex_radius_m ≤ Kopfhoehe` fest.
+
+Beide zusammen entscheiden, ob das Kriterium der Bibel haelt: **der Cortex muss auf Distanz
+erkennbar sein.** Auf 100 m ist ein Kopf von 2,1 m (21-m-Titan, 1/10) rund 1,2 Grad breit —
+sichtbar. Die Trefferzone selbst ist kleiner; ob ihr Radius mit der Groesse mitwachsen soll,
+ist offen und steht als [Q-019](FRAGEN.md) fest.
+
+> **Welche Distanz gilt eigentlich?** `docs/features.ron` `F-030` fordert woertlich „Cortex ist
+> aus 100 **Backlog-Einheiten** Entfernung erkennbar" — das sind 28 m (Faktor 0,28), nicht
+> 100 m. Der Unterschied ist Faktor 3,6 im Pixelmass und entscheidet Q-019 mit. Gemessen bei
+> 1920 × 1080 und dem neuen Sichtfeld: der Cortex des Husk (1,10 m) ist auf 28 m **36,7 px**
+> breit, auf 100 m **10,3 px**. Der Wechsel von 90 auf 60 Grad hat diese Zahl **fast
+> verdoppelt** — das engere Bild ist fuer `F-030` die bessere Zahl, nicht die schlechtere.
+
+### Die Skalenleiter der Mauer: 0,6 m und 15 m
+
+Eine 120 m hohe Wand ohne Struktur ist **eine graue Flaeche**. Das Auge hat nichts, woran es
+Groesse abliest, und aus der Naehe sieht dieselbe Wand aus wie eine 12 m hohe. Genau dagegen
+sind die beiden Zahlen da:
+
+- **Steinreihe 0,6 m, mit sichtbaren Fugen.** Eine Reihe ist ein Drittel eines Menschen — wer
+  auf der Mauer steht, sieht neben sich drei Reihen und weiss sofort, wie hoch er ist. Die
+  Fugen muessen **sichtbar** sein: eine glatte Wand mit Steintextur leistet das nicht.
+- **Horizontale Baenderung alle 15 m.** Die grobe Leiter: acht Baender bis zur Krone, das
+  vierte auf Hoehe der Zwischenplattform.
+
+**Das sind keine Deko-Details, die man bei der Performance-Optimierung zuerst streicht** — sie
+sind der Grund, warum die Mauer gross *aussieht*. `tests/data.rs::t005_die_skalenleiter_der_mauer_bleibt_lesbar`
+haelt beide Zahlen fest.
+
+### Wo die spielwirksamen Zahlen liegen
+
+**In `assets/data/*.ron`, nirgends sonst** — damit niemand die Tabelle doppelt pflegt:
+
+| Was | Datei |
+|---|---|
+| Die Tabelle selbst, als Daten | `assets/data/massstab.ron` |
+| Spielerkapsel, Kamerahoehe, Sichtfeld, Ankerreichweite | `assets/data/game.ron` |
+| Groessenklasse je Titanart (**keine Hoehe je Art**) | `assets/data/titan.ron` |
+| Gassenbreite, Hoehenfenster, gesetzte Sonderbauten | `assets/data/maps.ron` |
+
+Die letzten drei **spiegeln** nur, was in `massstab.ron` steht; `tests/data.rs` faellt um,
+sobald eine von ihnen abweicht. Diese Datei hier ist die **Erklaerung** fuer den Modellierer —
+wer eine Zahl aendern will, aendert sie in der RON und schreibt hier den Grund dazu. Und weil
+„gemeinsam aendern" eine Bitte ist und kein Werkzeug, prueft
+`t005_die_groessentabelle_in_der_doku_zeigt_dieselben_zahlen` die Tabelle oben Zelle fuer Zelle
+gegen die RON.
+
 ## Drei glTF-Fallen, die alle gleich aussehen
 
 *(„mein Modell ist weiss / chrom / unsichtbar")*

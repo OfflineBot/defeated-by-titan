@@ -15,19 +15,31 @@
 
 pub mod ablauf;
 pub mod bau;
+pub mod gear;
 pub mod ids;
 pub mod intent;
 pub mod mathe;
 pub mod nachricht;
+pub mod raum;
+pub mod seil;
 pub mod start;
 pub mod zufall;
 pub mod zustand;
 
-pub use ablauf::{EingabeSet, Tick};
-pub use bau::{Ankerflaeche, Bauklotz, Boden};
-pub use ids::{IdZaehler, LocalPlayer, PlayerId, TitanId};
+pub use ablauf::{EingabeSet, SchrittSet, Tick};
+pub use bau::{spielerhuelle, Ankerflaeche, Bauklotz, Boden, Koerper, Maske};
+pub use gear::{
+    AntriebEinholen, AntriebLauf, AntriebSchub, Gasfreigabe, Haken, Hakenarm, Hakenzustand,
+    Seillaenge, Seite, VorigeTasten, Zielpunkt,
+};
+pub use ids::{IdZaehler, KoerperId, LocalPlayer, PlayerId, TitanId};
 pub use intent::{BlickVorgabe, Intent, Tasten};
-pub use nachricht::{Koerperteil, Markierung, SpielerWarpen, TitanGetroffen, TitanSpawnen};
+pub use nachricht::{
+    Aufprall, HakenGeloest, HakenGesetzt, KoerperWeg, Koerperteil, Loesegrund, Markierung,
+    SpielerWarpen, TitanGetroffen, TitanSpawnen,
+};
+pub use raum::{Eintrag, RaumIndex, Strahlergebnis, Treffer};
+pub use seil::{seil_einholen, seil_schritt, Seilzwang, Zwangsergebnis};
 pub use start::Start;
 pub use zufall::Wuerfel;
 pub use zustand::{Bewegungszustand, Gas, Klingen, Tempo};

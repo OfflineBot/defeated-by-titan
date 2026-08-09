@@ -19,6 +19,16 @@ pub struct PlayerId(pub u32);
 #[derive(Component, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 pub struct TitanId(pub u32);
 
+/// Wer ein **Koerper** in der Welt ist — Haus, Dach, Boden, spaeter eine Titanenschulter.
+///
+/// Ein Haken merkt sich diese Id und **nicht** die Position und **nicht** die `Entity`:
+/// Positionen bewegen sich (`F-029`), `Entity` bedeutet auf einem anderen Rechner etwas
+/// anderes. Verschwindet der Traeger — Titanentod, entladener Bereich (`T-020`) —, meldet
+/// der raeumliche Index das ueber `KoerperWeg` und der Haken loest mit
+/// `Loesegrund::TraegerWeg`.
+#[derive(Component, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
+pub struct KoerperId(pub u32);
+
 /// **Die einzige Stelle im Code, die weiss, welcher Spieler „ich" bin.**
 ///
 /// Daran haengt die Kamera, daran haengt das HUD — und sonst nichts. Jedes System, das
@@ -34,6 +44,7 @@ pub struct LocalPlayer;
 pub struct IdZaehler {
     pub spieler: u32,
     pub titan: u32,
+    pub koerper: u32,
 }
 
 impl IdZaehler {
@@ -45,5 +56,10 @@ impl IdZaehler {
     pub fn naechster_titan(&mut self) -> TitanId {
         self.titan += 1;
         TitanId(self.titan)
+    }
+
+    pub fn naechster_koerper(&mut self) -> KoerperId {
+        self.koerper += 1;
+        KoerperId(self.koerper)
     }
 }

@@ -11,6 +11,15 @@
 //! ⚠️ Nichts davon ist je **gesehen** worden — auf Maschine A gibt es kein Fenster
 //! (`docs/umgebung.md`). Alles hier bleibt 🟨, bis jemand auf Maschine B draufschaut.
 
+//! **Stand der Naht:** [`kamera::kamera_drehen`] und [`seil::seile_zeichnen`] sind
+//! registriert und leer. Bis `kamera_drehen` gefuellt ist, blickt die Kamera **immer nach
+//! −Z**, waehrend der Zielstrahl nach `intent.blick()` geht — jedes Bildkriterium ist bis
+//! dahin wertlos, und das ist der Grund, warum dieser Auftrag ganz vorn im Fahrplan steht
+//! (`docs/schnittstelle.md`).
+
+pub mod kamera;
+pub mod seil;
+
 use bevy::prelude::*;
 
 use crate::data::GameData;
@@ -20,8 +29,10 @@ pub struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, licht_aufbauen)
-            .add_systems(Update, (kamera_anhaengen, kloetze_bauen));
+        app.add_systems(Startup, licht_aufbauen).add_systems(
+            Update,
+            (kamera_anhaengen, kloetze_bauen, kamera::kamera_drehen, seil::seile_zeichnen),
+        );
     }
 }
 

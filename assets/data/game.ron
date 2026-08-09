@@ -7,6 +7,13 @@
 // ⚠️ UNGETUNT. Diese Zahlen sind Startwerte, kein Balancing. Genau dafuer ist die Datei da:
 // sie zu aendern kostet keinen Rebuild. Das P1-Gate ist ein Blindtest gegen die Referenz,
 // und bis der bestanden ist, ist hier nichts fertig (Bibel 6.2).
+//
+// ⚠️ AUSNAHME: was aus assets/data/massstab.ron kommt, ist NICHT ungetunt — es ist vom User
+// vorgegeben (2026-08-09) und hier nur gespiegelt, damit die Spielsysteme eine Zahl haben.
+// Betroffen sind spieler.hoehe_m, spieler.augenhoehe_m, kamera.sicht_grad und
+// vector.hakenreichweite_m. tests/data.rs faellt um, sobald eine davon von massstab.ron
+// abweicht. **Eine direkte Meterangabe des Users schlaegt jede Ableitung** — auch die
+// Umrechnung aus dem Backlog (Q-002).
 (
     // 60 Hz feste Simulation. Das Bild interpoliert dazwischen; im Netz ist ein
     // frameabhaengiges Ergebnis kein Komfortproblem, sondern Desync (init.md §6 Regel 4).
@@ -14,31 +21,121 @@
     schwerkraft_m_s2: -20.0,   // haerter als 9,81: Schwungspiel, nicht Simulation
 
     spieler: (
+        // = massstab.ron:referenz.mensch_hoehe_m. Der User schreibt „Kapsel exakt pruefen!" —
+        // also EXAKT, nicht ungefaehr: jeder Groessenvergleich im Bild haengt an dieser Zahl.
         hoehe_m: 1.8,
         radius_m: 0.35,
         laufen_m_s: 6.0,
+        // 6,5 m/s bei g = −20 ergeben 6,5²/(2·20) = **1,056 m Scheitel**. Das reicht weder
+        // fuer eine Tuer (2,10 m; dafuer braeuchte es 9,17 m/s) noch fuer die Traufe des
+        // kleinen Hauses (3,00 m). **Ohne Gas kommt man in dieser Stadt auf gar nichts
+        // drauf** — fuer ein Vector-Gear-Spiel ist das richtig, aber es ist eine
+        // Entscheidung und keine Nebenwirkung, und deshalb steht sie hier.
         sprung_m_s: 6.5,
-        augenhoehe_m: 1.65,
+        // 1.65 -> 1.60: der User gibt die Kamerahoehe direkt an
+        // (massstab.ron:kamera.hoehe_m). Die alten 1,65 waren aus der Koerperhoehe
+        // geschaetzt; eine Angabe schlaegt eine Schaetzung.
+        augenhoehe_m: 1.6,
+        // Groesster Weg pro Teilschritt des Integrators. Bei tempo_max_m_s = 75 legt ein
+        // 60-Hz-Tick 1,25 m zurueck — ohne Teilschritte faehrt der Spieler durch jede Wand,
+        // und zwar nur manchmal. Muss echt kleiner als welt.wand_min_m sein, sonst faellt
+        // tests/data.rs um. 0,25 m ergeben bei Hoechsttempo 5 Teilschritte.
+        schritt_max_m: 0.25,
     ),
 
     vector: (
-        // F-002: Reichweite = Range-Stat, Basis 400 studs -> 112 m
-        hakenreichweite_m: 112.0,
+        // 112.0 -> 90.0. Die 112 kamen aus 400 studs x 0,28 (Q-002). Der User gibt die
+        // Ankerreichweite direkt mit **90 m** an (massstab.ron:vector.ankerreichweite_m),
+        // und eine direkte Meterangabe schlaegt jede Ableitung. Folge fuer Q-002: 90/400
+        // waeren 0,225 m/stud — der Faktor 0,28 gilt weiter fuer alles, wozu der User nichts
+        // gesagt hat, aber er ist damit fraglich geworden.
+        hakenreichweite_m: 90.0,
         hakenflug_m_s: 90.0,
+        // F-001 nennt „einziehend" als vierten Hakenzustand; game.ron kannte bisher nur den
+        // Hinflug. Schneller als der Hinflug, damit ein Fehlschuss nicht bestraft wird.
+        // ⚠️ Reiner Startwert, keine Quelle (docs/FRAGEN.md Q-016).
+        haken_ruecklauf_m_s: 120.0,
         seilzug_m_s: 28.0,        // F-005 Reel-In
         seil_min_m: 3.0,          // naeher heran wuerde die Kamera in die Wand ziehen
+        // Gauss-Seidel-Durchlaeufe ueber beide Seilzwaenge. Mit einem Durchlauf verletzt der
+        // zweite Zwang den ersten wieder; zwei reichen im Normalfall (zwei Daecher, Winkel
+        // ueber 60 Grad) auf unter 1 % Restfehler. Der entartete Fall — beide Anker fast in
+        // einer Linie — konvergiert auch mit zwei nicht (docs/schnittstelle.md).
+        seil_durchlaeufe: 2,
         gas_tank: 100.0,
         gas_boost_pro_s: 18.0,
         gas_einholen_pro_s: 6.0,
+        // Wer zahlt zuerst, wenn der Tank fuer beides nicht reicht? Das ist eine
+        // SPIELWERT-Entscheidung und kein `if` im Code (docs/FRAGEN.md Q-017).
+        gas_rangfolge: [Boost, Einholen],
         boost_m_s2: 34.0,
         // Velocity-Clamp ab Tag 1, nicht nachtraeglich (Bibel 6.4, Risiko Fling-Exploits)
+        //
+        // ⚠️ Gerechnet gegen die Stadt der Groessentabelle, und die Zahlen passen nicht
+        // zusammen (docs/FRAGEN.md Q-018): reines Schwingen an einem 11,5-m-Dach gibt
+        // 17-21 m/s, die Ausholphasen der Titanen sind bis 6-20 m/s lesbar, und 75 m/s
+        // entsteht nur aus einem vollen Einholen entlang einer freien 30-m-Sichtlinie.
+        // 75 m/s durchqueren die 400-m-Graubox in 5,33 s und machen aus einer 7-m-Gasse
+        // eine Kurve mit 164 g und 1228 Grad/s Drehrate. Die Zahl bleibt trotzdem stehen:
+        // sie ist ein Clamp gegen Exploits, kein Zieltempo, und der Bezug des vom User
+        // genannten Faktors x1,5 ist offen. Geaendert wird sie erst mit einer Antwort.
         tempo_max_m_s: 75.0,
     ),
 
     kamera: (
-        sicht_grad: 90.0,
+        // 90.0 -> 60.0. Der User nennt „FOV Bodenkampf 55-65 Grad" und nennt es den
+        // „groessten Hebel". Das Wort BODENKAMPF ist der Schluessel: 60 Grad ist die BASIS
+        // am Boden, nicht die Obergrenze. Ein 90-Grad-Bild macht jeden Titanen klein und
+        // jeden Meter kurz — genau das, was dieses Spiel nicht will.
+        // Fenster: massstab.ron:kamera.sicht_boden_min_grad/-max_grad, tests/data.rs prueft.
+        //
+        // ⚠️ Die Zahl wird SENKRECHT gelesen — src/render/mod.rs legt sie in
+        // `PerspectiveProjection.fov`, und Bevy dokumentiert das Feld als „the vertical
+        // field of view". Auf 16:9 sind das 91,5 Grad waagerecht (vorher: 121,3). Ob der
+        // User seine 55-65 Grad senkrecht oder waagerecht meint, hat niemand entschieden,
+        // und die beiden Lesarten unterscheiden sich um Faktor 1,7: docs/FRAGEN.md Q-021.
+        sicht_grad: 60.0,
+        // Sichtfeld bei tempo_max_m_s. F-017 „Geschwindigkeits-Feedback" interpoliert spaeter
+        // zwischen sicht_grad und diesem Wert — die Kurve gehoert in den Code, die beiden
+        // Enden hierher.
+        // ⚠️ STARTWERT, nicht vom User: 90 Grad ist genau der Wert, der bis 2026-08-09 hier
+        // stand. Am oberen Ende bleibt das Bild damit, wie es war; nur der Bodenkampf zieht
+        // sich zusammen. Das ist die kleinste Aenderung, die die Vorgabe erfuellt — nicht
+        // eine erfundene zweite Zahl. F-017 nennt „abschaltbar fuer Motion Sickness"; wer
+        // den Effekt aus will, setzt diesen Wert auf sicht_grad.
+        sicht_tempo_grad: 90.0,
         maus_grad_pro_punkt: 0.08,
         pitch_grenze_grad: 89.0,
         glaetten_halbwertszeit_s: 0.05,
+    ),
+
+    welt: (
+        // Kantenlaenge einer Gitterzelle des raeumlichen Index (T-036a).
+        // ⚠️ UNGEMESSEN. docs/lessons/performance.md sagt woertlich: „§11 sagt
+        // ‚Gitterzellen', nicht wie gross. Muss gemessen werden." Ein 90-m-Strahl kreuzt
+        // bei 8 m rund 11 Zellen waagerecht und 15 senkrecht an der Mauer
+        // (docs/FRAGEN.md **Q-014** — hier stand bis 2026-08-09 ein Verweis auf Q-013, und
+        // Q-013 ist die Frage nach der maximalen Seillaenge).
+        zelle_m: 8.0,
+        // Halbe Kantenlaenge des Gitters. Muss die Karte UND eine volle Hakenreichweite
+        // darueber hinaus abdecken.
+        // 320.0 -> 300.0: nachgerechnet mit der neuen Reichweite. 400/2 + 90 = 290 -> 300
+        // (aufgerundet auf eine glatte Zahl). Die 320 gehoerten zu 112 m (400/2 + 112 = 312).
+        // In der HOEHE deckt dieselbe Zahl Mauer (120 m) + Ashwalker (150 m) = 270 m mit
+        // 30 m Rand. Ob das Gitter ueberhaupt dreidimensional ist, entscheidet Q-014;
+        // tests/data.rs haelt die 270 trotzdem fest, weil ein Gitter, das kleiner ist als
+        // die Welt, in beiden Faellen falsch waere.
+        halbe_ausdehnung_m: 300.0,
+        // Wer mehr Zellen belegt, kommt in die lineare Grosskoerper-Liste statt ins Gitter.
+        // Der Boden (400 x 400 m) belegt bei 8-m-Zellen 2500 Zellen; jeder waagerechte
+        // Strahl wuerde ihn sonst einmal pro besuchter Zelle testen.
+        grosskoerper_zellen: 64,
+        // Die duennste Wand, die es geben darf. Kalibriert schritt_max_m.
+        // ⚠️ In KEINER Quelle: modelle.ron A-080 nennt 4 studs Raster, das ist die
+        // Modulbreite, nicht die Dicke (docs/FRAGEN.md Q-015).
+        wand_min_m: 0.5,
+        // Kollisionshaut: der Abstand, mit dem ein Koerper vor einer Flaeche stehen bleibt.
+        // Ohne sie zittert jeder Kontakt, und die Zahl landet als 1e-3 im Rust.
+        kollision_haut_m: 0.01,
     ),
 )

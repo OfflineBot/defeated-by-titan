@@ -7,14 +7,19 @@
 //! PC-only heisst: mehr Information gleichzeitig, weil kein Daumen die halbe Bildflaeche
 //! verdeckt (Bibel 3.5).
 //!
-//! **Noch leer.** Das Plugin steht im Baum, damit die Reihenfolge in `lib.rs` von Anfang an
-//! stimmt und ein Fan-out auf Domaenen moeglich ist, ohne dass fuenf Agenten denselben
-//! Ordner anlegen (`prompts/init.md` §17).
+//! **Stand der Naht:** [`leiste`] ist registriert und leer. Solange sie leer ist, ist der
+//! Gasstand nirgends im Bild — und `F-018` bleibt 🟨 („Logik getestet, Pixel ungesehen"),
+//! egal wie gruen sein Test ist. Eine Zahl im Terminal ist kein Bild.
+
+pub mod leiste;
 
 use bevy::prelude::*;
 
 pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
-    fn build(&self, _app: &mut App) {}
+    fn build(&self, app: &mut App) {
+        app.add_systems(Startup, leiste::leiste_bauen)
+            .add_systems(Update, leiste::leiste_fuellen);
+    }
 }

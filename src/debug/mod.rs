@@ -9,6 +9,7 @@
 //! garantiert [`EingabeSet`](crate::shared::EingabeSet) — nicht der Zufall der
 //! Systemreihenfolge.
 
+pub mod gizmo;
 pub mod skript;
 
 use bevy::ecs::system::SystemParam;
@@ -29,7 +30,9 @@ impl Plugin for DebugPlugin {
 
         app.init_resource::<Fahrt>()
             .add_systems(FixedPreUpdate, fahren.in_set(EingabeSet::Quelle))
-            .add_systems(FixedPostUpdate, nan_wache);
+            .add_systems(FixedPostUpdate, nan_wache)
+            // Gizmos sind Darstellung, also `Update` und nicht der feste Schritt.
+            .add_systems(Update, gizmo::gizmos_zeichnen);
 
         if let Some(pfad) = start.script.clone() {
             let inhalt = std::fs::read_to_string(&pfad).unwrap_or_else(|e| {

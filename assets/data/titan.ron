@@ -5,31 +5,82 @@
 // sonst verkommt der Kampf zu Mausklicken auf Zielscheiben.
 // ausholphase_s ist ueberall >= 0,4 (Bibel, Pfeiler P4). tests/data.rs prueft das.
 // ⚠️ UNGETUNT, siehe game.ron.
+//
+// **Keine Hoehe steht in dieser Datei.** Jede Art nennt nur ihre `groessenklasse` — eine der
+// fuenf Klassen aus assets/data/massstab.ron (F-064, vom User vorgegeben 2026-08-09).
+// Grund: die Hoehe und die Cortexhoehe gehoeren zusammen. Stuenden sie je Art hier, waeren es
+// sechzehn Zahlen, die niemand gegeneinander prueft — und die erste, die jemand vergisst
+// nachzuziehen, laesst den Cortex im Bauch sitzen.
+// tests/data.rs faellt um, wenn eine Art eine Klasse nennt, die es nicht gibt.
+//
+// Das Feld hiess bis 2026-08-09 `groesse`. Umbenannt, weil ein Name auf „-groesse" nach einer
+// LAENGE klingt (docs/konventionen.md §5: Feldnamen tragen ihre Einheit) — hier steht aber
+// ein Schluessel, kein Meterwert.
+//
+// ⚠️ `cortex_radius_m` ist der einzige Wert dieser Datei, der die Groessentabelle NICHT
+// mitgemacht hat: die Koerper sind bis auf das Doppelte gewachsen, die Trefferzone nicht.
+// Relativ zur Koerperhoehe hat sich das Ziel quer durch alle Arten halbiert (bellower:
+// 14,0 % -> 6,7 %). Das ist ein Balancing-Riss und keine Formfrage; er steht als
+// docs/FRAGEN.md Q-019 mit Annahme und Ruecknahmestelle. Korrigiert sind unten nur die zwei
+// GEOMETRISCH unmoeglichen Faelle (Cortex groesser als der ganze Kopf) — nicht das
+// Verhaeltnis insgesamt.
 (
     arten: {
-        // Grundlage: Anflugwinkel lernen
-        "husk":     (hoehe_m:  5.0, tempo_m_s:  3.0, cortex_radius_m: 0.55,
+        // Grundlage: Anflugwinkel lernen. Der Standardtitan, an dem der Spieler den ersten
+        // Schnitt uebt — deshalb die mittlere Klasse (10 m) und nicht die kleine.
+        // 5.0 m -> 10.0 m (Klasse `mittel`)
+        "husk":     (groessenklasse: "mittel",       tempo_m_s:  3.0, cortex_radius_m: 0.55,
                      regeneration_pro_s: 0.8, ausholphase_s: 0.60, modell: "titan_husk"),
-        // Unvorhersehbare Richtungswechsel -> Fuehrungsschuesse
-        "errant":   (hoehe_m:  5.0, tempo_m_s:  6.5, cortex_radius_m: 0.50,
+        // Unvorhersehbare Richtungswechsel -> Fuehrungsschuesse. Bleibt der Husk-Groesse:
+        // die Ueberraschung liegt in der Bewegung, nicht im Umfang.
+        // 5.0 m -> 10.0 m (Klasse `mittel`)
+        "errant":   (groessenklasse: "mittel",       tempo_m_s:  6.5, cortex_radius_m: 0.50,
                      regeneration_pro_s: 0.8, ausholphase_s: 0.45, modell: "titan_husk"),
-        // Sehr schnell, Sprungangriff -> vertikales Ausweichen
-        "scuttler": (hoehe_m:  3.5, tempo_m_s: 11.0, cortex_radius_m: 0.40,
+        // Sehr schnell, Sprungangriff -> vertikales Ausweichen. **Der schnelle kleine.**
+        // Die kleinste Klasse ist seine Rolle: klein genug, um zwischen Haeusern zu passen.
+        // 3.5 m -> 4.2 m (Klasse `klein`)
+        // cortex_radius_m 0.40 -> 0.20: 0,40 m Radius sind 0,80 m Durchmesser, und der
+        // GANZE Kopf eines 4,2-m-Titanen ist nach der Kopfregel des Users nur 0,42..0,47 m
+        // hoch (massstab.ron: titan.kopf_anteil_min/-max). Der Cortex war damit fast doppelt
+        // so gross wie der Kopf — geometrisch unmoeglich, und im Bild traegt der kleine
+        // Titan eine Zielscheibe statt eines Halses. Der Fehler ist aelter als die
+        // Groessentabelle (3,5 m Koerper, 0,80 m Cortex), er ist nur jetzt erst messbar,
+        // weil die Kopfregel als Zahl in der RON steht. Obergrenze: 0,47/2 = 0,233 m.
+        "scuttler": (groessenklasse: "klein",        tempo_m_s: 11.0, cortex_radius_m: 0.20,
                      regeneration_pro_s: 1.1, ausholphase_s: 0.40, modell: "titan_husk"),
-        // Ausweichrolle mit I-Frames -> Timing statt Spam
-        "weaver":   (hoehe_m:  4.5, tempo_m_s:  7.0, cortex_radius_m: 0.45,
+        // Ausweichrolle mit I-Frames -> Timing statt Spam. Eine Rolle braucht einen kurzen
+        // Koerper; 4,5 m lagen zwischen `klein` (4,2) und `mittel` (10) — entschieden fuer
+        // `klein`, weil 10 m sich nicht mehr glaubhaft wegrollen.
+        // 4.5 m -> 4.2 m (Klasse `klein`)
+        // cortex_radius_m 0.45 -> 0.23: dieselbe Rechnung wie beim scuttler, an der
+        // Obergrenze (0,233 m) statt darunter — der weaver ist der Timing-Gegner, sein
+        // Fenster ist die I-Frame-Rolle, nicht ein kleineres Ziel.
+        "weaver":   (groessenklasse: "klein",        tempo_m_s:  7.0, cortex_radius_m: 0.23,
                      regeneration_pro_s: 1.0, ausholphase_s: 0.50, modell: "titan_husk"),
-        // Schuetzt den Cortex mit der Hand -> erst Arme, dann Cortex
-        "warden":   (hoehe_m:  8.0, tempo_m_s:  3.5, cortex_radius_m: 0.60,
+        // Schuetzt den Cortex mit der Hand -> erst Arme, dann Cortex. Die Deckung wirkt nur,
+        // wenn die Hand den Cortex wirklich verdeckt: dafuer braucht er Armlaenge.
+        // 8.0 m -> 14.0 m (Klasse `mittel_gross`)
+        "warden":   (groessenklasse: "mittel_gross", tempo_m_s:  3.5, cortex_radius_m: 0.60,
                      regeneration_pro_s: 0.6, ausholphase_s: 0.70, modell: "titan_gross"),
-        // Regloser Hinterhalt, Griff aus der Luft -> Hoehenwechsel, Aufmerksamkeit
-        "lurker":   (hoehe_m:  5.0, tempo_m_s:  2.0, cortex_radius_m: 0.50,
-                     regeneration_pro_s: 0.7, ausholphase_s: 0.40, modell: "titan_husk"),
-        // Reagiert auf Gas-Geraeusch, ruft Verstaerkung -> Ressourcendisziplin
-        "bellower": (hoehe_m: 10.0, tempo_m_s:  2.5, cortex_radius_m: 0.70,
+        // Regloser Hinterhalt, Griff aus der Luft -> Hoehenwechsel, Aufmerksamkeit.
+        // „Aus der Luft" ist eine Reichweitenfrage: mit 10 m greift er unter dem Dach, mit
+        // 14 m ueber dem Dach — erst dann zwingt er zum Hoehenwechsel.
+        // 5.0 m -> 14.0 m (Klasse `mittel_gross`), Modell titan_husk -> titan_gross
+        "lurker":   (groessenklasse: "mittel_gross", tempo_m_s:  2.0, cortex_radius_m: 0.50,
+                     regeneration_pro_s: 0.7, ausholphase_s: 0.40, modell: "titan_gross"),
+        // Reagiert auf Gas-Geraeusch, ruft Verstaerkung -> Ressourcendisziplin.
+        // **Der grosse laute.** Er war bisher der groesste Typ und bleibt es: die groesste
+        // Klasse, die im normalen Einsatz vorkommt.
+        // 10.0 m -> 21.0 m (Klasse `gross`)
+        "bellower": (groessenklasse: "gross",        tempo_m_s:  2.5, cortex_radius_m: 0.70,
                      regeneration_pro_s: 0.5, ausholphase_s: 0.80, modell: "titan_gross"),
-        // Paare decken sich gegenseitig -> Zielpriorisierung, Trennung
-        "chorus":   (hoehe_m:  5.0, tempo_m_s:  5.0, cortex_radius_m: 0.50,
+        // Paare decken sich gegenseitig -> Zielpriorisierung, Trennung. Zwei gleich grosse
+        // Standardtitanen; die Aufgabe ist das Paar, nicht der einzelne Koerper.
+        // 5.0 m -> 10.0 m (Klasse `mittel`)
+        "chorus":   (groessenklasse: "mittel",       tempo_m_s:  5.0, cortex_radius_m: 0.50,
                      regeneration_pro_s: 0.9, ausholphase_s: 0.55, modell: "titan_husk"),
+
+        // Die Klasse `boss` (28 m) ist bewusst unbelegt: ihr erster Vertreter ist ein
+        // Raid-Gegner, und Raids stehen hinter dem Vector-Gear-Gate (docs/ROADMAP.md).
     },
 )

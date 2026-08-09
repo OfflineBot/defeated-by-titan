@@ -1,0 +1,227 @@
+// massstab.ron — die EINE Wahrheit ueber Groessen. Vom User vorgegeben, 2026-08-09.
+//
+// Alle Laengen in METERN (1 Bevy-Einheit = 1 Meter, docs/konventionen.md).
+//
+// ⚠️ Diese Zahlen sind **NICHT ungetunt** — und das ist der Unterschied zu game.ron:7,
+// maps.ron:15 und titan.ron:7. Dort stehen Startwerte, die jeder aendern darf. **Hier
+// stehen vorgegebene Werte.** Wer sie aendert, aendert keine Annahme, sondern eine
+// ENTSCHEIDUNG DES USERS — und muss ihn fragen, nicht messen.
+//
+// Die Vorrangregel dazu: **eine direkte Meterangabe des Users schlaegt jede Ableitung.**
+// Wo bisher aus dem Backlog umgerechnet wurde (0,28 m/stud, docs/FRAGEN.md Q-002) und das
+// Ergebnis dieser Datei widerspricht, gilt diese Datei. Die Umrechnung bleibt fuer alles,
+// wozu der User nichts gesagt hat.
+//
+// Diese Datei ist die QUELLE, game.ron / maps.ron / titan.ron sind die VERBRAUCHER: sie
+// holen ihre Groessen hierher, und tests/data.rs faellt um, sobald eine der drei von hier
+// abweicht. Eine Groesse steht genau einmal — sonst driften zwei Wahrheiten auseinander,
+// und niemand merkt es, bis ein Titan durch ein Dach ragt.
+(
+    // ------------------------------------------------------------------------
+    // Die drei Massstaebe — die Welt ist BEWUSST nicht einheitlich skaliert.
+    // ------------------------------------------------------------------------
+    //
+    // Architektur steht auf 1,0: ein Haus ist so gross, wie ein Haus ist. Titanen sind um
+    // 1,4 ueberzeichnet, Mauern um 2,4. Ein Titan wirkt damit groesser als er „realistisch"
+    // waere, eine Mauer monumental — genau das ist die Bildsprache des Referenzwerks: der
+    // Mensch ist klein, die Bedrohung unverhaeltnismaessig, die Mauer ein Horizont.
+    //
+    // **Das ist eine Designentscheidung, keine Ungenauigkeit.** Wer die drei Faktoren
+    // spaeter „korrigiert", weil ihm eine Zahl unrealistisch vorkommt, zerstoert die
+    // Bildsprache und merkt es erst, wenn das Spiel beliebig aussieht. Die Faktoren stehen
+    // hier als Zahl, damit man SIEHT, dass sie verschieden sind — nicht damit man sie
+    // angleicht. (Vom User vorgegeben, 2026-08-09.)
+    architektur_faktor: 1.0,
+    titan_faktor: 1.4,
+    mauer_faktor: 2.4,
+
+    // ------------------------------------------------------------------------
+    // Referenz — woran das Auge alles andere misst
+    // ------------------------------------------------------------------------
+    referenz: (
+        // „Kapsel exakt pruefen!" — der User ausdruecklich. Die Spielerkapsel in
+        // game.ron:spieler.hoehe_m MUSS diese Zahl sein, nicht ungefaehr. Jeder
+        // Groessenvergleich im Spiel haengt an ihr. (Vom User vorgegeben, 2026-08-09.)
+        mensch_hoehe_m: 1.8,
+        // Eine Tuer ist der zweite Massstab, den jeder Betrachter unbewusst liest.
+        tuer_hoehe_m: 2.1,
+        // „eng halten" — der User. Enge Gassen sind kein Detail, sie sind der Grund, warum
+        // sich Tempo im Vector Gear nach Tempo anfuehlt. maps.ron:raster.gasse_m liegt in
+        // diesem Fenster, tests/data.rs prueft es. (Vom User vorgegeben, 2026-08-09.)
+        strasse_breite_min_m: 6.0,
+        strasse_breite_max_m: 8.0,
+        // Ein Menschenkopf ist rund 1/7,5 der Koerperhoehe. Der Wert steht hier, weil er der
+        // VERGLEICH ist: der Titankopf ist relativ KLEINER (siehe titan.kopf_anteil_*), und
+        // genau daran liest das Auge „das Ding ist riesig" statt „das Ding ist nah".
+        kopf_anteil_mensch: 0.1333,
+    ),
+
+    // ------------------------------------------------------------------------
+    // Architektur (Faktor 1,0)
+    // ------------------------------------------------------------------------
+    //
+    // ⚠️ Die Wohnbebauung ist FLACH: 4,5 bis 11,5 m. Das ist beabsichtigt.
+    // Die Vertikale dieses Spiels kommt aus der Mauer (120 m), der Kirche (35 m), dem
+    // Wachturm und den Baeumen — **nicht** aus den Wohnhaeusern. Eine Stadt aus 30-m-Bloecken
+    // waere kein Referenz-Look, sondern eine Skyline, und die Mauer verloere ihre Wirkung.
+    //
+    // ⚠️ Und genau deshalb sind Kirche, Wachturm und Baum hier KEINE Deko: sie sind die
+    // einzigen Anker ueber 11,5 m. Aus 11,5 m Dach und 3,0 m Mindestseil folgt eine
+    // Ankerdecke von 14,5 m — darueber haelt an einem Wohnhaus kein Seil mehr. Der Cortex
+    // liegt bei `mittel_gross` auf 12,5 m, bei `gross` auf 18,7 m, bei `boss` auf 24,9 m.
+    // Eine Stadt ohne Sonderbauten laesst also drei von fuenf Klassen nur noch ballistisch
+    // angreifen (docs/FRAGEN.md Q-022). tests/data.rs haelt fest, dass fuer jede Klasse ein
+    // Bauwerk ueber ihrer Cortexhoehe existiert — und dass die aktuelle Karte wenigstens
+    // eines davon wirklich gesetzt hat.
+    architektur: (
+        hoehen_m: {
+            "haus_klein":  4.5,   // 1 Stock
+            "haus_stadt":  8.0,   // 2 Stock
+            "haus_gross": 11.5,   // 3 Stock — die Obergrenze normaler Bebauung
+            "baum":       12.0,   // Vordergrund-Staffelung: gibt der Tiefe eine Leiter
+            "wachturm":   12.0,   // auf der Mauer stehend
+            "kirche":     35.0,   // Glockenturm. SONDERBAU, kein Rasterhaus
+        },
+        // Traufe = Oberkante der Aussenwand, wo das Dach ansetzt. Der Unterschied zur
+        // Gesamthoehe ist das Dach — und das Dach ist die Flaeche, auf der man landet.
+        // Nur dort eingetragen, wo der User eine Zahl genannt hat; wer eine weitere braucht,
+        // fragt ihn, statt sie zu erfinden. (Vom User vorgegeben, 2026-08-09.)
+        traufen_m: {
+            "haus_klein": 3.0,
+            "haus_stadt": 6.0,
+        },
+    ),
+
+    // ------------------------------------------------------------------------
+    // Titanen (Faktor 1,4)
+    // ------------------------------------------------------------------------
+    titan: (
+        // **Der Cortex sitzt bei rund 89 % der Koerperhoehe.** Das ist die einzige toedliche
+        // Trefferzone (F-030) — und diese Zahl stand bis 2026-08-09 NIRGENDWO.
+        //
+        // ⚠️ Dieser Anteil ist eine **PRUEFREGEL, keine Quelle.** Bis 2026-08-09 wurden die
+        // fuenf Cortexhoehen daraus gerechnet — das war ein Verstoss gegen die eigene
+        // Vorrangregel: der User nennt fuenf **Meterangaben** (3,7 · 8,9 · 12,5 · 18,7 ·
+        // 24,9), und eine direkte Meterangabe schlaegt jede Ableitung. Aus 0,89 gerechnet
+        // lag die kleine Klasse 4 cm daneben (4,2 × 0,89 = 3,738 statt 3,7 — +1,03 %).
+        // Jetzt stehen die fuenf Zahlen des Users in `klassen`, und dieser Anteil ist das,
+        // was der User daneben geschrieben hat (bei ihm „~89 %"): der Waechter, der
+        // merkt, wenn eine der fuenf wegdriftet (tests/data.rs haelt 0,88..0,90).
+        //
+        // Benutzt wird er als QUELLE nur noch dort, wo der User keine Cortexhoehe genannt
+        // hat — heute genau ein Fall: der Ashwalker (150 m ⇒ 133,5 m).
+        // (Vom User vorgegeben, 2026-08-09.)
+        cortex_anteil: 0.89,
+
+        // Der Titankopf ist 1/9 bis 1/10 der Hoehe — RELATIV KLEINER als beim Menschen
+        // (1/7,5, siehe referenz.kopf_anteil_mensch). Das ist der Trick, mit dem ein Modell
+        // gross wirkt: ein zu grosser Kopf laesst jeden Titanen wie eine Puppe aussehen,
+        // egal wie viele Meter im Datenblatt stehen. (Vom User vorgegeben, 2026-08-09.)
+        //
+        // Die Obergrenze ist AUFGERUNDET: 1/9 = 0,111111…, und mit 0,1111 faellt ein Modell,
+        // das den User exakt beim Wort nimmt, knapp aus dem eigenen Fenster. 0,1112 ist die
+        // kleinste Zahl, die 1/9 noch einschliesst.
+        kopf_anteil_min: 0.1,      // 1/10
+        kopf_anteil_max: 0.1112,   // 1/9 = 0,111111…, aufgerundet
+
+        // Die fuenf Groessenklassen (F-064). titan.ron nennt je Art NUR die Klasse, Hoehe
+        // und Cortexhoehe kommen von hier — sonst gibt es sechzehn Zahlen, die niemand
+        // gegeneinander prueft.
+        //
+        // **Beide Spalten sind Meterangaben des Users**, keine ist gerechnet. Das ist der
+        // teurere, aber richtige Weg: der Waechter oben prueft ihr Verhaeltnis, statt es zu
+        // erzeugen — er wird dadurch staerker, nicht schwaecher. (2026-08-09.)
+        klassen: {
+            "klein":        (hoehe_m:  4.2, cortex_m:  3.7),
+            "mittel":       (hoehe_m: 10.0, cortex_m:  8.9),
+            "mittel_gross": (hoehe_m: 14.0, cortex_m: 12.5),
+            "gross":        (hoehe_m: 21.0, cortex_m: 18.7),
+            // Der User nennt die Klasse „Abnormaler / Boss". Ob damit die Groessenklasse
+            // gemeint ist oder der Titan-Typ, der im Projektvokabular „Errant" heisst, ist
+            // offen — docs/FRAGEN.md Q-020. Sie ist bewusst noch von KEINER Art in
+            // titan.ron belegt: der erste Vertreter ist ein Raid-Gegner, und Raids sind
+            // hinter dem Vector-Gear-Gate (docs/ROADMAP.md).
+            "boss":         (hoehe_m: 28.0, cortex_m: 24.9),
+        },
+
+        // Der 150-m-Boss. Steht ABSICHTLICH ausserhalb von `klassen`: er ist kein
+        // Gegnertyp, den man skaliert, sondern ein Bauwerk mit Gesicht. Die Probe des
+        // Users: 150 − 120 = **30 m ueber der Mauer**. tests/data.rs haelt die 30 fest.
+        // Name nach docs/konventionen.md §2. (Vom User vorgegeben, 2026-08-09.)
+        ashwalker_hoehe_m: 150.0,
+    ),
+
+    // ------------------------------------------------------------------------
+    // Mauern (Faktor 2,4)
+    // ------------------------------------------------------------------------
+    mauer: (
+        hoehe_m: 120.0,
+        // Oben schmaler als unten: die Mauer ist angeschraegt. Der Unterschied
+        // (45 − 28 = 17 m auf 120 m Hoehe) ist die Boeschung, an der ein Haken haelt.
+        dicke_oben_m: 28.0,
+        dicke_basis_m: 45.0,
+        // Zwischenstopp auf halber Hoehe: mit 90 m Ankerreichweite ist die Mauerkrone von
+        // unten NICHT in einem Zug erreichbar (120 > 90). Die Plattform bei 60 m macht aus
+        // einer unmoeglichen Wand zwei moegliche Zuege. tests/data.rs prueft, dass beide
+        // Teilstrecken in Reichweite bleiben. (Vom User vorgegeben, 2026-08-09.)
+        //
+        // Nachgerechnet mit der Boeschung ((45 − 28)/2 = 8,5 m Einzug auf 120 m, 4,05 Grad):
+        // Boden -> Plattform 60,15 m ✓ · Plattform -> Krone 60,15 m ✓ · Boden -> Krone
+        // direkt 120,30 m ✗. Die Rechnung bestaetigt die Zahl — aber sie ist NICHT der
+        // Grund fuer die Plattform: der hoechste Punkt der Flanke, der vom Mauerfuss aus in
+        // 90 m liegt, ist y = 89,78 m, also waere die Krone auch in zwei freien Zuegen
+        // (90 + 30) erreichbar. Tragend ist die Plattform erst, wenn die FLANKE nicht
+        // hakbar ist und nur Plattform und Krone Anker sind — das ist nirgends entschieden:
+        // docs/FRAGEN.md Q-023.
+        plattform_hoehe_m: 60.0,
+
+        // ---- Die Skalenleiter -------------------------------------------------
+        // Eine 120 m hohe Wand ohne Struktur ist eine graue Flaeche: das Auge hat nichts,
+        // woran es Groesse abliest, und die Mauer wirkt wie eine 12 m hohe Wand aus der
+        // Naehe. Die sichtbaren Fugen einer 0,6-m-Steinreihe und ein Band alle 15 m sind
+        // KEINE Deko — sie sind der Grund, warum die Mauer gross aussieht.
+        // (Vom User vorgegeben, 2026-08-09.)
+        steinreihe_m: 0.6,
+        baenderung_m: 15.0,
+    ),
+
+    // ------------------------------------------------------------------------
+    // Kamera und Vector Gear
+    // ------------------------------------------------------------------------
+    kamera: (
+        // Augenhoehe. Der User nennt 1,60 m — das schlaegt jede Ableitung aus der
+        // Koerperhoehe. game.ron:spieler.augenhoehe_m MUSS diese Zahl sein.
+        // (Vom User vorgegeben, 2026-08-09.)
+        hoehe_m: 1.6,
+        // „FOV Bodenkampf 55-65 Grad — groesster Hebel". Der User sagt ausdruecklich
+        // BODENKAMPF: das ist die Basis, nicht die Obergrenze. Beim schnellen Fliegen steigt
+        // das Sichtfeld (F-017 Geschwindigkeits-Feedback), und der obere Wert dafuer steht
+        // in game.ron:kamera.sicht_tempo_grad. game.ron:kamera.sicht_grad muss in dieses
+        // Fenster fallen, tests/data.rs prueft es. (Vom User vorgegeben, 2026-08-09.)
+        //
+        // ⚠️ **SENKRECHT gelesen** — und das hat niemand entschieden, es folgt aus Bevy:
+        // src/render/mod.rs legt den Wert in `PerspectiveProjection.fov`, und Bevy
+        // dokumentiert das Feld als „The vertical field of view (FOV) in radians"
+        // (bevy_camera-0.19.0/src/projection.rs:284-287). Auf 16:9 sind 60 Grad senkrecht
+        // = 91,5 Grad waagerecht. Waere die Angabe des Users WAAGERECHT gemeint — die
+        // uebliche Lesart einer „FOV"-Zahl —, muesste hier 32,6..39,4 stehen. Der Faktor
+        // zwischen beiden Lesarten ist 1,7, und der User nennt genau diesen Wert seinen
+        // „groessten Hebel": docs/FRAGEN.md Q-021.
+        sicht_boden_min_grad: 55.0,
+        sicht_boden_max_grad: 65.0,
+    ),
+
+    vector: (
+        // **90 m, direkt vom User** — nicht 112 m aus der Umrechnung des Backlogs. Die
+        // Vorrangregel: eine direkte Meterangabe schlaegt jede Ableitung
+        // (docs/FRAGEN.md Q-002). game.ron:vector.hakenreichweite_m MUSS diese Zahl sein.
+        // (Vom User vorgegeben, 2026-08-09.)
+        ankerreichweite_m: 90.0,
+        // „Vector-Gear-Geschwindigkeit x1,5 vs. Standard" — der Faktor ist vorgegeben, aber
+        // der BEZUG fehlt: x1,5 wovon? Laufen (6 m/s) waeren 9 m/s und damit absurd langsam
+        // fuer ein Vector Gear; das Tempolimit (75 m/s) waere 112,5 m/s. Die Zahl steht
+        // hier, damit sie nicht verlorengeht — sie wird NICHT verrechnet, bis der User
+        // antwortet (docs/FRAGEN.md Q-018). (Vom User vorgegeben, 2026-08-09.)
+        tempo_faktor: 1.5,
+    ),
+)

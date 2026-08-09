@@ -13,7 +13,8 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use super::ids::{PlayerId, TitanId};
+use super::gear::Seite;
+use super::ids::{KoerperId, PlayerId, TitanId};
 
 /// Welcher Teil eines Titanen getroffen wurde.
 ///
@@ -80,5 +81,84 @@ pub struct SpielerWarpen {
 #[derive(Message, Clone, Debug, Serialize, Deserialize)]
 pub struct Markierung {
     pub text: String,
+    pub tick: u64,
+}
+
+/// Ein Haken hat sich verankert (`F-001`).
+///
+/// Nackte `f32` fuer den Punkt, wie bei [`SpielerWarpen`]: dieser Typ geht eines Tages ueber
+/// eine Leitung. `koerper` statt einer Weltposition, damit der Empfaenger weiss, **woran**
+/// der Haken haengt.
+#[derive(Message, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HakenGesetzt {
+    pub spieler: PlayerId,
+    pub seite: Seite,
+    pub koerper: KoerperId,
+    pub punkt_x: f32,
+    pub punkt_y: f32,
+    pub punkt_z: f32,
+    pub tick: u64,
+}
+
+impl HakenGesetzt {
+    pub fn punkt(&self) -> Vec3 {
+        Vec3::new(self.punkt_x, self.punkt_y, self.punkt_z)
+    }
+}
+
+/// Warum ein Haken losgelassen hat.
+///
+/// Der Grund ist kein Protokolltext: `hud` und `sound` unterscheiden daran, ob der Spieler
+/// selbst losgelassen hat oder ob ihm das Seil gerissen ist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Loesegrund {
+    /// Taste losgelassen.
+    Losgelassen,
+    /// Das Seil musste ueber `vector.hakenreichweite_m` hinaus nachgezogen werden, weil eine
+    /// Wand gewonnen hat.
+    Ueberdehnt,
+    /// Der Strahl traf nichts Hakbares — die Spitze kommt leer zurueck.
+    KeinAnker,
+    /// **Der Traeger ist weg** (`F-029`: „loest sich beim Tod des Titanen mit Feedback";
+    /// `T-020`: entladener Bereich).
+    TraegerWeg,
+}
+
+/// Ein Haken hat losgelassen (`F-001`).
+#[derive(Message, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HakenGeloest {
+    pub spieler: PlayerId,
+    pub seite: Seite,
+    pub grund: Loesegrund,
+    pub tick: u64,
+}
+
+/// Ein Spieler ist gegen Geometrie gefahren.
+///
+/// `tempo_vorher_m_s` ist die Zahl, aus der `F-013` den Stagger rechnet — dieselbe Logik wie
+/// bei [`TitanGetroffen`]: **die Wirkung kommt aus der Geschwindigkeit**, und die Formel
+/// steht in der RON.
+#[derive(Message, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Aufprall {
+    pub spieler: PlayerId,
+    pub tempo_vorher_m_s: f32,
+    pub tempo_nachher_m_s: f32,
+    pub normale_x: f32,
+    pub normale_y: f32,
+    pub normale_z: f32,
+    pub tick: u64,
+}
+
+impl Aufprall {
+    pub fn normale(&self) -> Vec3 {
+        Vec3::new(self.normale_x, self.normale_y, self.normale_z)
+    }
+}
+
+/// Ein Koerper ist aus dem raeumlichen Index verschwunden. **Wer daran haengt, muss
+/// loslassen.**
+#[derive(Message, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct KoerperWeg {
+    pub koerper: KoerperId,
     pub tick: u64,
 }

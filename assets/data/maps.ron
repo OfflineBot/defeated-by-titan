@@ -1,0 +1,153 @@
+// maps.ron — die Stadt als DATEN, nicht als 200 handgeschriebene Zeilen Rust.
+//
+// Alle Laengen in METERN (1 Bevy-Einheit = 1 Meter, docs/konventionen.md). Das Backlog
+// rechnet in studs; umgerechnet wird bei der Uebernahme HIERHER, mit 0,28 m
+// (docs/FRAGEN.md Q-002) — im Code gibt es keine studs.
+//
+// Eine Karte hat zwei Quellen: `raster` erzeugt Bloecke deterministisch aus `seed` ueber
+// shared::Wuerfel, `kloetze` setzt einzelne Quader ausdruecklich. Ausdruecklich Gesetztes
+// gewinnt: das Erzeugte laesst um jeden gesetzten Klotz und um `frei_radius_m` Platz.
+//
+// Kein Klotz wird GEDREHT. Ein achsenparalleler Quader ist exakt seine AABB; eine gedrehte
+// Cuboid liefert die umschliessende, zu grosse Huelle, und der Haken faengt in der Luft
+// (bevy_math-0.19.0/src/bounding/bounded3d/primitive_impls.rs:100-115).
+//
+// ⚠️ UNGETUNT. Diese Zahlen sind Startwerte, kein Leveldesign. Die Ankerdichte ist das Gate
+// von P3 und wird beim Bau von Ashgate an gemessenen Traversal-Zeiten geeicht
+// (docs/FRAGEN.md Q-010) — bis dahin ist hier nichts fertig.
+//
+// ⚠️ AUSNAHME: `gasse_m`, `hoehe_min_m` und `hoehe_max_m` sind NICHT ungetunt. Sie kommen
+// aus assets/data/massstab.ron und damit vom User (2026-08-09); tests/data.rs faellt um,
+// sobald sie das dortige Fenster verlassen. Dasselbe Fenster gilt seit 2026-08-09 auch fuer
+// jeden `kloetze`-Eintrag mit `sonderbau: false` — vorher galt es nur fuer das Raster, und
+// die ausdruecklich gesetzten Quader standen mit 12, 14 und 18 m Firsthoehe darueber.
+(
+    // Welche Karte beim Start gebaut wird. Muss in `karten` stehen (tests/data.rs).
+    aktuell: "graubox",
+
+    // Der eine Farbatlas fuer die gesamte Umgebung (Bibel 3.4: minimale Drawcalls).
+    // Lineares RGB. **Keine der drei Signalfarben** (Zyan, Bernstein, Karminrot) — die sind
+    // ausschliesslich fuer Gameplay reserviert, auch fuer Platzhalter
+    // (docs/konventionen.md).
+    palette: {
+        "steingrau": (0.42, 0.43, 0.40),
+        "ziegelrot": (0.45, 0.26, 0.20),
+        "olivgruen": (0.29, 0.33, 0.20),
+        "sandbraun": (0.55, 0.47, 0.33),
+    },
+
+    karten: {
+        // Stufe 2, Bibel 6.2 P1: „Nur Bewegung. Weisse Boxen, keine Assets, keine Gegner."
+        "graubox": (
+            name: "Graubox",
+            groesse_m: (400.0, 400.0),
+            // Fester Seed: dieselbe Stadt auf jedem Rechner, in jedem Rollback, in jedem
+            // Testlauf. Ein `rand::random()` waere hier ein Desync (docs/multiplayer.md).
+            seed: 3735928559,
+
+            raster: (
+                // Blockkante und Gassenbreite. Der Haken reicht 90 m weit — eine Gasse
+                // muss schmal genug sein, dass beide Seiten gleichzeitig erreichbar sind.
+                block_m: 28.0,
+                // 9.0 -> 7.0: der User gibt die Strassenbreite mit 6-8 m an und schreibt
+                // ausdruecklich „eng halten" (massstab.ron:referenz.strasse_breite_min_m/
+                // -max_m). 7,0 ist die Mitte des Fensters. Enge Gassen sind kein Detail:
+                // sie sind der Grund, warum sich Tempo nach Tempo anfuehlt.
+                gasse_m: 7.0,
+                // 8.0 -> 4.5 und 34.0 -> 11.5. Die erzeugte Stadt war VIEL zu hoch: 34 m
+                // ist die Groesse einer Kirche (35 m), nicht die eines Wohnhauses. Nach der
+                // Vorgabe des Users liegt normale Bebauung zwischen kleinem Haus (4,5 m)
+                // und grossem Haus (11,5 m) — massstab.ron:architektur.hoehen_m.
+                //
+                // ⚠️ **Die Stadt wird dadurch FLACH. Das ist beabsichtigt.**
+                // Die Vertikale dieses Spiels kommt aus der Mauer (120 m), der Kirche
+                // (35 m), dem Wachturm (12 m) und den Baeumen (12 m) — **nicht aus der
+                // Wohnbebauung**. Genau das ist der Look des Referenzwerks: ein flaches
+                // Ziegeldach-Meer, aus dem einzelne Bauwerke herausragen. Wer die
+                // Rasterhaeuser wieder hochzieht, „repariert" nichts, sondern macht aus der
+                // Stadt eine Skyline und aus der Mauer eine Wand unter vielen.
+                // Kirche, Wachturm und Baum stehen unten als `kloetze` mit
+                // `sonderbau: true`; die Mauer fehlt noch (docs/FRAGEN.md Q-022, Q-023).
+                //
+                // Was diese beiden Zahlen fuer die Bewegung bedeuten, ist gerechnet und
+                // gehoert hierher, weil es sonst niemand nachrechnet: ein sauberer Bogen
+                // braucht Seillaenge <= Ankerhoehe, also <= 11,5 m — **87 % der 90-m-
+                // Hakenreichweite erzeugen an einem Rasterhaus kein Schwingen, sondern
+                // einen Fall an der Leine.** Reines Pendeln von 11,5 m gibt hoechstens
+                // sqrt(2 * 20 * 11,5) = 21,4 m/s; die Viertelperiode eines 11,5-m-Seils ist
+                // mit 1,19-1,41 s laenger als der freie Fall aus derselben Hoehe (1,07 s).
+                // Brauchbar bleiben Seile von 3 bis 7 m — eine Gassenbreite.
+                // Das ist eine Folge der Vorgabe, kein Fehler in ihr: docs/FRAGEN.md Q-022.
+                hoehe_min_m: 4.5,
+                hoehe_max_m: 11.5,
+                // Anteil der Rasterplaetze, die wirklich bebaut werden (0..1).
+                dichte: 0.72,
+                // Anteil der erzeugten Gebaeude, die hakbar sind (0..1). **Nicht alles ist
+                // hakbar** — erst damit ist „Kein Haken auf ungetaggten Parts moeglich"
+                // (F-003) ueberhaupt pruefbar.
+                hakbar_anteil: 0.8,
+                // Radius um den Ursprung, der frei bleibt: dort steht der Spieler beim
+                // Start, und scripts/t007-erste-fahrt.txt laeuft 6 m nach -Z.
+                frei_radius_m: 24.0,
+                farben: ["steingrau", "ziegelrot", "sandbraun"],
+            ),
+
+            // Ausdruecklich gesetzt. Die Kloetze waren bis 2026-08-09 1:1 die aus
+            // src/world/mod.rs — damit der Umbau verhaltensgleich nachweisbar ist.
+            //
+            // ⚠️ Drei von ihnen ragten mit 12,0 / 18,0 / 14,0 m Firsthoehe ueber die
+            // Wohnbebauung (11,5 m) hinaus, die dieselbe Datei drei Zeilen weiter oben dem
+            // RASTER verbietet. Der Waechter t005_die_rasterstadt_bleibt_wohnbebauung sah
+            // sie nicht, weil er nur `raster` las — die halbe Stadt stand ausserhalb der
+            // Regel, die sie flach halten soll. Aufgeloest ueber ein neues Feld:
+            //
+            //   `sonderbau: false` — Wohnbebauung. Muss unter architektur.hoehen_m
+            //                        `haus_gross` (11,5 m) bleiben.
+            //   `sonderbau: true`  — Kirche, Wachturm, Baum, Mauer. **Sie tragen die
+            //                        Vertikale** und duerfen darueber.
+            //
+            // Damit ist „die Vertikale kommt aus Sonderbauten" kein Vorsatz mehr, sondern
+            // eine Eigenschaft der Datei, die tests/data.rs pruefen kann.
+            kloetze: [
+                // Der Boden. Nicht hakbar: sonst haekt man in den Bodenplatten.
+                (mitte_m: (0.0, -0.1, 0.0), groesse_m: (400.0, 0.2, 400.0), farbe: "olivgruen", hakbar: false, fest: true, sonderbau: false),
+                (mitte_m: (-12.0, 4.0, -20.0), groesse_m: (8.0, 8.0, 8.0), farbe: "ziegelrot", hakbar: true, fest: true, sonderbau: false),
+                // First 12,0 -> 11,5 m: das ist `haus_gross`, die Obergrenze der
+                // Wohnbebauung. Ein halber Meter, damit der Klotz das ist, wonach er
+                // aussieht — ein grosses Haus.
+                (mitte_m: (10.0, 5.75, -28.0), groesse_m: (10.0, 11.5, 10.0), farbe: "steingrau", hakbar: true, fest: true, sonderbau: false),
+                (mitte_m: (0.0, 2.0, -12.0), groesse_m: (4.0, 4.0, 4.0), farbe: "sandbraun", hakbar: true, fest: true, sonderbau: false),
+                // First 18,0 -> 12,0 m und `sonderbau: true`: 18 m ist weder Wohnhaus
+                // (<= 11,5) noch eine Groesse, die der User nennt. Als **Wachturm** (12 m,
+                // massstab.ron: architektur.hoehen_m) ist er beides eindeutig — und er war
+                // ohnehin schon der Turm dieser Graubox.
+                (mitte_m: (24.0, 6.0, -40.0), groesse_m: (12.0, 12.0, 12.0), farbe: "steingrau", hakbar: true, fest: true, sonderbau: true),
+                // Eine ungetaggte Wand VOR einem hakbaren Dach — der Testfall aus F-023
+                // („Sichtlinienpruefung verhindert Haken durch Waende"). Ohne ein Paar
+                // dieser Art im Level ist das Kriterium nicht fahrbar.
+                (mitte_m: (-30.0, 5.0, -34.0), groesse_m: (14.0, 10.0, 1.0), farbe: "steingrau", hakbar: false, fest: true, sonderbau: false),
+                // First 14,0 -> 11,5 m, aus demselben Grund wie oben.
+                (mitte_m: (-30.0, 5.75, -46.0), groesse_m: (14.0, 11.5, 10.0), farbe: "ziegelrot", hakbar: true, fest: true, sonderbau: false),
+
+                // ---- Die Vertikale ---------------------------------------------------
+                // Diese Datei versprach sich oben selbst „Kirche, Wachturm und Mauer werden
+                // als `kloetze` gesetzt" — bis 2026-08-09 stand davon **nichts** in einer
+                // Karte, und damit war die Aussage „die Vertikale kommt aus Sonderbauten"
+                // eine Absicht statt eines Zustands. Die Folge war messbar: hoechster Anker
+                // 11,5 m + seil_min_m 3,0 m = **Ankerdecke 14,5 m**, waehrend der Cortex
+                // eines `mittel_gross` auf 12,5 m, eines `gross` auf 18,7 m und eines
+                // `boss` auf 24,9 m sitzt. Drei von fuenf Groessenklassen waeren nur noch
+                // ballistisch angreifbar gewesen (docs/FRAGEN.md Q-022).
+                //
+                // Die Kirche hebt die Decke auf 38 m und deckt damit alle fuenf Klassen.
+                // Hoehen aus massstab.ron: architektur.hoehen_m, Grundflaechen sind
+                // Graubox-Schaetzung und ausdruecklich ungetunt.
+                (mitte_m: (60.0, 17.5, -60.0), groesse_m: (14.0, 35.0, 14.0), farbe: "steingrau", hakbar: true, fest: true, sonderbau: true),
+                // Ein Baum als Vordergrund-Staffelung: schmal, hoch, hakbar. Er ist der
+                // billigste Anker ueber der Traufe und der einzige, der mitten in einer
+                // Gasse stehen darf.
+                (mitte_m: (-20.0, 6.0, -58.0), groesse_m: (2.5, 12.0, 2.5), farbe: "olivgruen", hakbar: true, fest: true, sonderbau: true),
+            ],
+        ),
+    },
+)

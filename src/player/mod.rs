@@ -4,19 +4,29 @@
 //! eines Tages das Netz — ist dieser Domaene egal, und genau das ist der Punkt
 //! (`prompts/init.md` §6 Regel 2).
 //!
-//! Schreibt den `Transform` **nur**, solange der Bewegungszustand `AmBoden` oder
-//! `InDerLuft` ist. Am Seil gehoert er `vector`: zwei Schreiber auf demselben Feld sind kein
-//! Design, sondern ein Muenzwurf mit 60 Hz (`docs/architektur.md`, Autoritaetstabelle).
+//! **Der `Transform` des Spielers hat genau einen Schreiber**, und der wird
+//! [`koerper::schritt`] heissen. Die alte Teilung „`player` am Boden, `vector` am Seil,
+//! getrennt ueber `Bewegungszustand`" haelt nicht: ein Gas-Boost wirkt in der Luft **und**
+//! am Seil gleichzeitig, es gibt also keinen Zustand, der die beiden Schreiber trennt
+//! (`docs/architektur.md`, Autoritaetstabelle).
 //!
-//! **Stand:** ein Spieler, WASD, Schwerkraft, Boden bei y = 0. Kein Sprung-Feintuning, keine
-//! echte Kollision — das haengt am raeumlichen Index in `world/` (Stufe 2).
+//! **Stand:** die Naht steht. [`koerper::schritt`] ist als Stub in `SchrittSet::Vollzug`
+//! registriert und tut nichts; die heutige Bewegung laeuft weiter in [`bewegen`] — WASD,
+//! Schwerkraft, Bodenebene bei y = 0, keine echte Kollision. **[`bewegen`] und das harte
+//! `boden_y = 0.0` sterben in dem Commit, der `koerper::schritt` fuellt**, zusammen mit
+//! `shared::Boden`. Vorher nicht: sonst faellt der Spieler 600 Ticks lang und
+//! `scripts/t007-erste-fahrt.txt` mit ihm.
+
+pub mod koerper;
+pub mod lauf;
 
 use bevy::prelude::*;
 
 use crate::data::GameData;
 use crate::shared::{
-    Bewegungszustand, Gas, IdZaehler, Intent, Klingen, LocalPlayer, PlayerId, SpielerWarpen,
-    Start, Tempo,
+    AntriebEinholen, AntriebLauf, AntriebSchub, Bewegungszustand, Gas, Gasfreigabe, Haken,
+    IdZaehler, Intent, Klingen, LocalPlayer, PlayerId, SchrittSet, Seillaenge, SpielerWarpen,
+    Start, Tempo, VorigeTasten, Zielpunkt,
 };
 
 pub struct PlayerPlugin;
@@ -24,7 +34,13 @@ pub struct PlayerPlugin;
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, lokalen_spieler_spawnen)
-            .add_systems(FixedUpdate, (warpen_ausfuehren, bewegen).chain());
+            .add_systems(FixedUpdate, lauf::lauf.in_set(SchrittSet::Antrieb))
+            .add_systems(
+                FixedUpdate,
+                (warpen_ausfuehren, bewegen, koerper::schritt)
+                    .chain()
+                    .in_set(SchrittSet::Vollzug),
+            );
     }
 }
 
@@ -41,6 +57,8 @@ pub fn spieler_spawnen(
     lokal: bool,
 ) -> Entity {
     let id = zaehler.naechster_spieler();
+    // Verschachtelt, weil ein Tupel in `spawn` nur begrenzt viele Elemente nimmt und
+    // darueber als unlesbarer Trait-Fehler zuschlaegt (`docs/lessons/bevy.md`).
     let mut e = commands.spawn((
         Name::new(format!("spieler_{}", id.0)),
         id,
@@ -50,6 +68,19 @@ pub fn spieler_spawnen(
         Gas::voll(daten.spiel.vector.gas_tank),
         Klingen::frisch(daten.gear.klingen.paare_start),
         Transform::from_translation(pos),
+        // Das Vector Gear haengt am Spieler, nicht an der Welt: jeder Spieler hat sein
+        // eigenes (`docs/multiplayer.md` Regel 3). Alle acht sind ab Tick 1 vorhanden, damit
+        // kein System auf ein fehlendes Component filtert und den Spieler still auslaesst.
+        (
+            Haken::default(),
+            Seillaenge::default(),
+            Zielpunkt::default(),
+            Gasfreigabe::default(),
+            AntriebLauf::default(),
+            AntriebSchub::default(),
+            AntriebEinholen::default(),
+            VorigeTasten::default(),
+        ),
     ));
     if lokal {
         e.insert(LocalPlayer);
