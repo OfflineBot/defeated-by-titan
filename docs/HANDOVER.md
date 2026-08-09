@@ -136,3 +136,29 @@ features are self-reported and unattacked. `examples/probe_avian.rs` has no inco
 and escapes the zombie rule only because the norms tool does not glob `examples/`. And the
 disk is at 92 %: the next session should deal with that before it starts a big build, because
 `ld: signal 7` reads like a compiler bug and is a full disk.
+
+---
+
+## 7. Git state — read before you push
+
+**The work is on the branch `session-2026-08-09`, not on `main`.**
+
+`main` and `origin/main` have **diverged**: the seventeen setup commits exist on GitHub under
+different hashes than the ones in the local history (`6a4e87b` there against `86e6b35` here
+for the same initial commit — someone rewrote the history at some point). `main` is 32 ahead
+and 17 behind, and neither is an ancestor of the other.
+
+Pushing this session's work onto `main` would therefore have needed a force push, and that
+would have thrown away seventeen commits on the remote. **That decision is the user's, not
+mine**, so the work went to its own branch instead. Nothing is lost, and everything is on
+GitHub:
+
+```
+origin/session-2026-08-09   ← this session, 176 tests green
+origin/main                 ← the old setup commits, untouched
+```
+
+Content-wise the branch contains everything `origin/main` has; the difference is 160 files,
++21572/-6760. Whoever continues either merges the branch, or force-pushes it onto `main`
+after checking that nothing on the remote is worth keeping — **check first, the seventeen
+commits are real work.**
