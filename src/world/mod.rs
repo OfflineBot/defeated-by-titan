@@ -8,16 +8,23 @@
 //!
 //! **Where this stands:** [`map::build_map`] really builds the city since 2026-08-09 — out
 //! of `assets/data/maps.ron`, placed blocks 1:1 and the layout deterministically from the
-//! map's seed. That retires the four hard-wired placeholder blocks in [`spawn_ground`]; they
-//! are the first entries in the file and can be checked there as **behavior-identical**
-//! (`tests/world.rs`).
+//! map's seed. Every block it spawns carries `RigidBody::Static` and a `Collider`, so the
+//! ground under the player and the wall in front of him are the same kind of thing as
+//! everything else in the file.
 //!
-//! ⚠️ What is left in [`spawn_ground`] is **the ground marker and nothing else**. The
-//! visible ground slab now comes from the file (`maps.ron: blocks[0]`) — spawned twice it
-//! would be a flicker between two coincident surfaces. [`Ground`] itself has **no reader
-//! left** today; it dies together with the hard-coded `ground_y = 0.0` in
-//! `src/player/mod.rs`, as soon as `player::integrator::step` is filled — not before, or the
-//! player falls for 600 ticks and `scripts/t007-first-run.txt` falls with him.
+//! ⚠️ **`spawn_ground` is gone, and with it the last user of `shared::Ground`.** It was the
+//! stand-in for "there is no collision yet": a marker at `y = 0` that the hand-written player
+//! integrator clamped against. Since the player is an avian body and the visible ground slab
+//! comes out of `maps.ron: blocks[0]` (top edge exactly at y = 0), ground contact comes from
+//! the collider. The type `shared::Ground` now has **no reader and no writer left anywhere**
+//! — it belongs to `shared/` and is reported for deletion, not deleted here.
+//!
+//! **Every world collider must carry a `RigidBody`, and `Static` is enough.** Not because
+//! anything today needs it — a collider without a body already collides — but because a
+//! character controller added later filters on `With<ColliderOf>`
+//! (`avian3d-0.7.0/.../move_and_slide.rs:82`) and would be blind to exactly the bodies that
+//! carry no `RigidBody`. That is not a bug you find, it is a bug you walk through. [`map`]
+//! sets both from one writer.
 //!
 //! What gets spawned is **data**, not meshes: `render` turns it into triangles without
 //! knowing this domain (`shared::Block`).
@@ -28,7 +35,7 @@ pub mod map;
 use bevy::prelude::*;
 
 use crate::data::GameData;
-use crate::shared::{Ground, SpatialIndex, SimulationSystems};
+use crate::shared::{SimulationSystems, SpatialIndex};
 
 pub struct WorldPlugin;
 
@@ -44,21 +51,7 @@ impl Plugin for WorldPlugin {
         // The observer instead of `RemovedComponents` — reasoning in `world::index`.
         app.add_observer(index::on_body_removed);
 
-        app.add_systems(Startup, (spawn_ground, map::build_map))
+        app.add_systems(Startup, map::build_map)
             .add_systems(FixedUpdate, index::maintain_index.in_set(SimulationSystems::Spatial));
     }
-}
-
-/// The ground marker — **and nothing else any more.**
-///
-/// The blocks stood here in the code until 2026-08-09; they now stand in
-/// `assets/data/maps.ron` and are built by [`map::build_map`]. The visible ground slab comes
-/// from there too: this marker carries **no** [`Block`](crate::shared::Block) any more, or
-/// two coincident 400 m surfaces would lie on top of each other.
-fn spawn_ground(mut commands: Commands) {
-    commands.spawn((
-        Name::new("ground"),
-        Ground { height_m: 0.0 },
-        Transform::from_xyz(0.0, 0.0, 0.0),
-    ));
 }

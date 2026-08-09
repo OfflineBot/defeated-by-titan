@@ -18,6 +18,14 @@
     // 60 Hz fixed simulation. The image interpolates in between; over the network a
     // frame-dependent result is not a comfort problem, it is desync (init.md §6 rule 4).
     simulation_hz: 60.0,
+    // Solver substeps per simulation step. avian's own default is 6
+    // (avian3d-0.7.0/src/dynamics/solver/schedule.rs:185-191) — and that is measurably too
+    // few for this game. 24 is the ONLY measured value that holds both ends at once: the
+    // swing loses 4.26 %/s instead of 8.97 %/s at 6, and the worst wall penetration over 18
+    // measured cases stays at -0.0043 m of the -0.01 m allowed. It costs 0.72 ms/tick with
+    // 20 players in a 401-body city against a 4 ms budget.
+    // NOT untuned — this number was measured. Whoever lowers it measures again.
+    substeps: 24,
     gravity_m_s2: -20.0,   // harder than 9.81: momentum play, not simulation
 
     player: (
@@ -41,6 +49,23 @@
         // only sometimes. Has to be strictly smaller than world.min_wall_m, or
         // tests/data.rs falls over. 0.25 m give 5 substeps at top speed.
         max_substep_m: 0.25,
+        // ⚠️ UNTUNED, and INVENTED — no source, no measurement of its own. The reasoning:
+        // on the ground the horizontal velocity is written directly (src/player/locomotion.rs),
+        // so friction brakes nothing you want braked; what it WOULD brake is a swinging
+        // player who grazes a wall, and a measurement puts that at 75 % of the speed per
+        // second at a combined 0.65. The player therefore carries 0.0 and the combine rule
+        // `Min`, so that no wall can put its own friction on him.
+        // The consequence of `Min`: at exactly 0.0 this knob pins the combined value to 0,
+        // whatever the wall carries. Above 0.0 it is a real knob again.
+        friction: 0.0,
+        // ⚠️ UNTUNED, but not invented: 0.0 is avian's own default and means "does not
+        // bounce". A player who rebounds off a wall is a bug, not a feature.
+        restitution: 0.0,
+        // ⚠️ UNTUNED and INVENTED. How steep a surface may be and still count as ground.
+        // **Measures nothing today:** every body in this world is an axis-aligned cuboid, so
+        // every contact normal is exactly ±X, ±Y or ±Z, and every value strictly between 0
+        // and 90 gives the identical result. The number becomes real the day a ramp does.
+        max_ground_slope_deg: 50.0,
     ),
 
     vector: (

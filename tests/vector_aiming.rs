@@ -1,0 +1,497 @@
+//! `F-002` — free aiming by ray. The guard over `src/vector/aim.rs`.
+//!
+//! `F-002` demands a ray "from the camera position along the look direction, range = range
+//! stat", whose hit point "is checked against a valid anchor surface". Three of the four ways
+//! of getting that wrong pass every test that only measures a **distance**:
+//!
+//! 1. The ray starts at the player's origin instead of at his eye. It still lands on the same
+//!    wall *plane*, 1.6 m too low — and the crosshair points somewhere the hook does not go.
+//! 2. The ray is cast with a filter for anchorable bodies. It then travels **through** the
+//!    untagged wall to the roof behind it, which is exactly what `F-023` forbids
+//!    ("line-of-sight check prevents hooking through walls").
+//! 3. `hook_range_m` is a comment rather than a limit, or is a number in Rust rather than the
+//!    90 m out of `assets/data/game.ron`.
+//!
+//! Each of the three has a test here that measures the **full three-dimensional hit point**
+//! against a coordinate computed from `assets/data/maps.ron` — never a distance alone.
+//!
+//! The fourth way is the one nothing in the game can see: a ray that hits the player's own
+//! capsule. The eye sits at 1.6 m *inside* a capsule spanning 0 .. 1.8 m, so an unexcluded
+//! shot reports a hit at zero distance, every tick, for every player.
+//!
+//! ## Why these tests drive with `app.update()`
+//!
+//! The same reason as in `tests/player.rs`: avian takes its step size from the *generic*
+//! `Time` (`avian3d-0.7.0/src/schedule/mod.rs:238-244`), which only `run_fixed_main_schedule`
+//! switches over. Running `FixedMain` by hand measures the machine instead of the game.
+//! `TimeUpdateStrategy::FixedTimesteps(1)` makes one `update()` exactly one simulation step.
+//!
+//! ## Why the test player is never the local one
+//!
+//! `net::local::read_input` refills the local player's `Intent` out of the keyboard on every
+//! tick, and a keyboard knows no absolute look angle. A second player has exactly one source
+//! of intents — the inbox — and that is the same channel the network will use
+//! (`docs/multiplayer.md`). It is also the honest shape of the rule: there is no such thing
+//! as *the* player.
+//!
+//! The picture that belongs to these numbers is `docs/images/f-002-aiming.png`, taken with
+//! `scripts/f-002-aiming.txt`.
+
+use bevy::prelude::*;
+use bevy::time::TimeUpdateStrategy;
+use defeated_by_titan::data::GameData;
+use defeated_by_titan::net::Inbox;
+use defeated_by_titan::player::spawn_player;
+use defeated_by_titan::shared::{
+    AimPoint, AnchorSurface, Body, BodyMask, Cli, IdCounter, Intent, PlayerId, Tick, WarpPlayer,
+};
+
+/// Builds the **real** app, headless, one simulation step per `update()`.
+fn app() -> App {
+    let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    app.update(); // Startup: the city out of `maps.ron` and the local player come into being
+    app
+}
+
+fn ticks(app: &mut App, n: u64) {
+    for _ in 0..n {
+        app.update();
+    }
+}
+
+fn data(app: &App) -> GameData {
+    app.world().resource::<GameData>().clone()
+}
+
+/// A second player at `pos` — **without** the `LocalPlayer` marker, so nothing but the inbox
+/// ever writes his `Intent`.
+fn test_player(app: &mut App, pos: Vec3) -> (Entity, PlayerId) {
+    let world = app.world_mut();
+    let data = world.resource::<GameData>().clone();
+    let mut ids = world.resource::<IdCounter>().to_owned();
+    let mut commands = world.commands();
+    let e = spawn_player(&mut commands, &mut ids, &data, pos, false);
+    *world.resource_mut::<IdCounter>() = ids;
+    app.update();
+    let id = *app.world().get::<PlayerId>(e).expect("a fresh player carries his id");
+    (e, id)
+}
+
+/// Posts a look direction into the inbox and runs **one** step, so that the aim ray of that
+/// step is cast along exactly this direction. Degrees in, radians on the wire
+/// (`docs/conventions.md`).
+fn look(app: &mut App, id: PlayerId, yaw_deg: f32, pitch_deg: f32) {
+    let tick = app.world().resource::<Tick>().0;
+    app.world_mut().resource_mut::<Inbox>().push(
+        id,
+        Intent {
+            yaw: yaw_deg.to_radians(),
+            pitch: pitch_deg.to_radians(),
+            tick,
+            ..default()
+        },
+        tick,
+    );
+    app.update();
+}
+
+/// `warp` through the same message the script driver uses — position exact, velocity zero.
+fn warp(app: &mut App, id: PlayerId, pos: Vec3) {
+    app.world_mut().write_message(WarpPlayer {
+        player: id,
+        pos_x: pos.x,
+        pos_y: pos.y,
+        pos_z: pos.z,
+    });
+    app.update();
+}
+
+fn aim_of(app: &App, e: Entity) -> AimPoint {
+    *app.world().get::<AimPoint>(e).expect("every player carries an AimPoint from tick 1")
+}
+
+fn at(app: &App, e: Entity) -> Vec3 {
+    app.world().get::<Transform>(e).expect("the player has a transform").translation
+}
+
+/// The eye the ray really starts from — computed here out of `game.ron`, not read out of the
+/// system under test.
+fn eye(app: &App, e: Entity) -> Vec3 {
+    at(app, e) + Vec3::Y * data(app).game.player.eye_height_m
+}
+
+// ---------------------------------------------------------------------------------------
+// 1. The full coordinate — not "distance to the plane"
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn f002_the_aim_point_is_the_whole_coordinate_and_not_just_the_plane() {
+    // The target is the untagged wall out of `maps.ron`: center (-30, 5, -34), size
+    // (14, 10, 1) — so its near face is the plane z = -33.5, spanning x -37..-23 and
+    // y 0..10.
+    //
+    // A ray from the player's ORIGIN instead of his eye lands on that same plane, at the
+    // same z, at almost the same distance. What it does not land on is y = 1.6 — and that
+    // is the whole difference between a crosshair and a decoration.
+    let mut app = app();
+    let d = data(&app);
+    let (e, id) = test_player(&mut app, Vec3::new(-30.0, 0.0, -20.0));
+    ticks(&mut app, 60); // land and settle: standing is a measured state, not an assumption
+
+    look(&mut app, id, 0.0, 0.0); // yaw 0 = along -Z (the axis contract)
+
+    let eye = eye(&app, e);
+    let hit = aim_of(&app, e).point_m.expect("the wall stands 13.5 m in front of him");
+    let expected = Vec3::new(eye.x, eye.y, -33.5);
+
+    assert!(
+        (hit - expected).length() < 0.02,
+        "aim point {hit:?} instead of {expected:?} — eye at {eye:?}"
+    );
+    // Said once more the way it goes red: the height is the EYE height, not the ground.
+    assert!(
+        (hit.y - d.game.player.eye_height_m).abs() < 0.02,
+        "the ray landed at y = {} instead of at eye height {} — it starts between the feet",
+        hit.y,
+        d.game.player.eye_height_m
+    );
+    assert!(
+        hit.y > 1.0,
+        "y = {} is the player's origin, not his eye (game.ron: player.eye_height_m = {})",
+        hit.y,
+        d.game.player.eye_height_m
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// 2. F-023 — first the hit, then the question whether it is anchorable
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn f002_an_untagged_wall_in_front_of_a_roof_is_not_hookable_and_not_transparent() {
+    // `maps.ron` keeps this pair for exactly this criterion: an untagged wall at z = -33.5
+    // and, 7.5 m behind it, the anchorable brick-red house whose near face is z = -41.
+    //
+    // A ray filtered for anchorable bodies reports the house: same direction, 21 m instead
+    // of 13.5 m, `anchorable: true`. That is "hooking through a wall" (`F-023`), and it is
+    // invisible in a screenshot because the rope end lies inside the building.
+    let mut app = app();
+    let (e, id) = test_player(&mut app, Vec3::new(-30.0, 0.0, -20.0));
+    ticks(&mut app, 60);
+
+    look(&mut app, id, 0.0, 0.0);
+
+    let a = aim_of(&app, e);
+    let hit = a.point_m.expect("something stands in that direction");
+    assert!(
+        (hit.z + 33.5).abs() < 0.02,
+        "the ray landed at z = {} — the untagged wall stands at z = -33.5, the anchorable \
+         house behind it at z = -41. Anything past -34 means the ray went THROUGH the wall",
+        hit.z
+    );
+    assert!(
+        !a.anchorable,
+        "the untagged wall reports itself as anchorable — then `AnchorSurface` decides nothing"
+    );
+
+    // And the roof behind it really is reachable when the line of sight is clear —
+    // otherwise this test would also pass in a world where the ray hits nothing at all, and
+    // "not hookable" would be a statement about the ray rather than about the wall.
+    //
+    // From an eye at 16.6 m, 11.5 degrees down: at the wall (13.5 m ahead) the ray is at
+    // 13.9 m and clears its 10 m top edge; it comes down on the house roof at y = 11.5,
+    // which spans z = -51 .. -41.
+    let pitch_deg = -11.5_f32;
+    warp(&mut app, id, Vec3::new(-30.0, 15.0, -20.0));
+    look(&mut app, id, 0.0, pitch_deg);
+
+    let eye = eye(&app, e);
+    let pitch = pitch_deg.to_radians();
+    // Distance along the ray down to the roof plane y = 11.5.
+    let t = (11.5 - eye.y) / pitch.sin();
+    let expected = Vec3::new(eye.x, 11.5, eye.z - t * pitch.cos());
+
+    let over = aim_of(&app, e);
+    let roof = over.point_m.expect("over the wall the house roof stands free");
+    assert!(
+        roof.z < -41.0,
+        "the ray landed at z = {} — that is still the wall (z = -33.5), not the roof behind it",
+        roof.z
+    );
+    assert!(
+        (roof - expected).length() < 0.05,
+        "roof hit {roof:?} instead of {expected:?} (eye {eye:?}, pitch {pitch_deg} deg)"
+    );
+    assert!(over.anchorable, "the brick-red house is tagged `anchorable: true` in maps.ron");
+}
+
+// ---------------------------------------------------------------------------------------
+// 3. Free aiming — the hit point is continuous, not one of a handful of placed anchors
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn f002_free_aiming_hits_any_point_of_a_tagged_face_not_a_placed_anchor() {
+    // The brick-red 8 m cube at (-12, 4, -20): near face z = -16, spanning x -16..-8 and
+    // y 0..8. Nine directions, nine different points on that one face — computed from the
+    // geometry, not read back out of the system.
+    //
+    // This is what "free" means in `F-002`: the layer is a ray, not a lookup of anchor
+    // points somebody placed. A snap implementation would return the same point nine times.
+    let mut app = app();
+    let (e, id) = test_player(&mut app, Vec3::new(-12.0, 0.0, 0.0));
+    ticks(&mut app, 60);
+
+    let face_z = -16.0_f32;
+    let mut seen: Vec<Vec3> = Vec::new();
+
+    for yaw_deg in [-10.0_f32, 0.0, 10.0] {
+        for pitch_deg in [0.0_f32, 8.0, 16.0] {
+            look(&mut app, id, yaw_deg, pitch_deg);
+            let eye = eye(&app, e);
+            let (yaw, pitch) = (yaw_deg.to_radians(), pitch_deg.to_radians());
+            // Distance along the ray to the plane z = face_z: the -Z component of the look
+            // direction is cos(yaw)*cos(pitch).
+            let t = (eye.z - face_z) / (yaw.cos() * pitch.cos());
+            let expected = Vec3::new(
+                eye.x - t * yaw.sin() * pitch.cos(),
+                eye.y + t * pitch.sin(),
+                face_z,
+            );
+
+            let a = aim_of(&app, e);
+            let hit = a.point_m.unwrap_or_else(|| {
+                panic!("yaw {yaw_deg}, pitch {pitch_deg}: nothing hit, expected {expected:?}")
+            });
+            assert!(
+                (hit - expected).length() < 0.03,
+                "yaw {yaw_deg}, pitch {pitch_deg}: hit {hit:?} instead of {expected:?}"
+            );
+            assert!(
+                a.anchorable,
+                "yaw {yaw_deg}, pitch {pitch_deg}: the block is `anchorable: true` in maps.ron"
+            );
+            seen.push(hit);
+        }
+    }
+
+    for (i, a) in seen.iter().enumerate() {
+        for b in &seen[i + 1..] {
+            assert!(
+                (*a - *b).length() > 0.5,
+                "two directions gave the same point {a:?} — that is a snap, not free aiming"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// 4. The acceptance criterion: EVERY tagged surface is reachable
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn f002_every_tagged_surface_in_the_map_is_reachable_by_free_aiming() {
+    // `F-002`'s own acceptance: "every tagged surface is reachable by free aiming, even
+    // where no anchor point was placed". So: not one example — **all of them**, taken out of
+    // the world and not out of a list in this file.
+    //
+    // Aimed at from 5 m straight above the roof centre, looking down. That is the one
+    // direction that is free for every block in this map (a roof has nothing on top of it),
+    // and it makes the expected hit point exactly the centre of the top face.
+    let mut app = app();
+    let (e, id) = test_player(&mut app, Vec3::new(0.0, 4.0, 0.0));
+    let eye_height_m = data(&app).game.player.eye_height_m;
+
+    let mut roofs: Vec<(String, Vec3)> = {
+        let world = app.world_mut();
+        let mut q = world.query_filtered::<(&Name, &Transform, &Body), With<AnchorSurface>>();
+        q.iter(world)
+            .map(|(name, t, body)| {
+                (
+                    name.to_string(),
+                    t.translation + Vec3::Y * body.half_size_m.y,
+                )
+            })
+            .collect()
+    };
+    roofs.sort_by(|a, b| a.0.cmp(&b.0)); // a stable order — a test is a measurement, not a lottery
+
+    assert!(
+        roofs.len() > 20,
+        "only {} tagged surfaces in the map — is the city built at all?",
+        roofs.len()
+    );
+
+    let mut unreachable: Vec<String> = Vec::new();
+    for (name, roof) in &roofs {
+        // Feet 5 m above the roof centre, so the eye is 5 m above it.
+        warp(&mut app, id, *roof + Vec3::Y * (5.0 - eye_height_m));
+        look(&mut app, id, 0.0, -90.0);
+
+        let a = aim_of(&app, e);
+        match a.point_m {
+            Some(hit) if a.anchorable && (hit - *roof).length() < 0.05 => {}
+            other => unreachable.push(format!(
+                "{name}: roof centre {roof:?} -> {other:?} (anchorable: {})",
+                a.anchorable
+            )),
+        }
+    }
+
+    assert!(
+        unreachable.is_empty(),
+        "{} of {} tagged surfaces are not reachable by free aiming: {unreachable:#?}",
+        unreachable.len(),
+        roofs.len()
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// 5. The range comes out of the file
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn f002_beyond_the_hook_range_from_the_file_there_is_no_hit() {
+    // Straight down onto the ground slab, whose top edge lies exactly at y = 0
+    // (`maps.ron: blocks[0]`). The **eye** height above it IS the ray length, so the boundary
+    // is a number you can read off: one metre inside the range there is a hit, one metre
+    // outside there is none.
+    //
+    // Red the day somebody writes 112 (the old conversion out of 400 studs, Q-002) or an
+    // invented 100 into the code instead of taking `vector.hook_range_m` out of the file.
+    //
+    // 8 m to the side of the origin: the local player stands there, and his capsule blocks
+    // the line of sight like any other body would.
+    let mut app = app();
+    let d = data(&app);
+    let range_m = d.game.vector.hook_range_m;
+    let feet_for_eye = |eye_m: f32| Vec3::new(8.0, eye_m - d.game.player.eye_height_m, 8.0);
+    let (e, id) = test_player(&mut app, feet_for_eye(range_m + 1.0));
+
+    look(&mut app, id, 0.0, -90.0);
+    let far = aim_of(&app, e);
+    let height = eye(&app, e).y;
+    assert!(
+        far.point_m.is_none(),
+        "with the eye {height:.3} m above the ground the ray found {:?} — the range is \
+         {range_m} m (game.ron: vector.hook_range_m)",
+        far.point_m
+    );
+
+    warp(&mut app, id, feet_for_eye(range_m - 1.0));
+    look(&mut app, id, 0.0, -90.0);
+    let near = aim_of(&app, e);
+    let hit = near
+        .point_m
+        .unwrap_or_else(|| panic!("at an eye height of {} m the ground is within the {range_m} m range", range_m - 1.0));
+    assert!(
+        hit.y.abs() < 0.05,
+        "the ray landed at y = {} instead of on the ground slab at y = 0",
+        hit.y
+    );
+    assert!(
+        !near.anchorable,
+        "the ground is `anchorable: false` in maps.ron — otherwise you hook into the pavement"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// 6. The ray does not hit the player it belongs to
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn f002_the_ray_ignores_the_players_own_capsule() {
+    // The eye sits at 1.6 m INSIDE a capsule that spans 0 .. 1.8 m with radius 0.35
+    // (`player::spawn_player`). Without the exclusion, `cast_ray(.., solid: true, ..)`
+    // returns the origin itself (`avian3d-0.7.0/src/spatial_query/system_param.rs:111-120`)
+    // — every player, every tick, at zero distance.
+    //
+    // And the exclusion works only because collider and body sit on the SAME entity: the
+    // filter is tested against `proxy.collider` (`system_param.rs:190`,
+    // `query_filter.rs:97`), not against the body.
+    let mut app = app();
+    let d = data(&app);
+    let (e, id) = test_player(&mut app, Vec3::new(-12.0, 0.0, 0.0));
+    ticks(&mut app, 60);
+
+    look(&mut app, id, 0.0, 0.0);
+
+    let eye = eye(&app, e);
+    let a = aim_of(&app, e);
+    let hit = a.point_m.expect("the 8 m cube stands 16 m in front of him");
+    let distance = (hit - eye).length();
+    assert!(
+        distance > d.game.player.height_m,
+        "the aim point lies {distance:.4} m from the eye — that is the player's own capsule \
+         (radius {} m, height {} m), not the world",
+        d.game.player.radius_m,
+        d.game.player.height_m
+    );
+    assert!(
+        (distance - 16.0).abs() < 0.05,
+        "distance {distance:.4} m instead of the 16 m to the block at z = -16 (maps.ron)"
+    );
+    assert!(a.anchorable, "and that block is tagged");
+}
+
+// ---------------------------------------------------------------------------------------
+// 7. Nothing in range is a state, not a stale value
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn f002_with_nothing_in_range_the_aim_point_is_empty_and_not_the_last_one() {
+    // A crosshair that keeps the last hit when you look at the sky offers the hook a target
+    // that is no longer there. `AimPoint` is recomputed every tick; "nothing" is a value.
+    let mut app = app();
+    let (e, id) = test_player(&mut app, Vec3::new(-12.0, 0.0, 0.0));
+    ticks(&mut app, 60);
+
+    look(&mut app, id, 0.0, 0.0);
+    assert!(aim_of(&app, e).point_m.is_some(), "first he is looking at the block");
+
+    look(&mut app, id, 0.0, 89.0); // the pitch limit out of game.ron — nothing is up there
+    let a = aim_of(&app, e);
+    assert_eq!(
+        a,
+        AimPoint::default(),
+        "looking at the sky the aim point has to be empty, and empty in every field"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// 8. The tag and the bit that is derived from it do not drift apart
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn f002_the_anchor_tag_and_the_body_mask_say_the_same_thing_about_every_block() {
+    // `vector::aim` decides on `BodyMask::ANCHORABLE`, the gizmo in `debug` and `F-003` speak
+    // of the marker `AnchorSurface`. Both come out of the same `anchorable:` in `maps.ron`
+    // through `world::index::mask_from` — but they are written in two places
+    // (`world::map::BlockPlan::spawn`), and if they ever drift the crosshair says one thing
+    // and the cyan outline another.
+    let mut app = app();
+    let world = app.world_mut();
+    let mut q = world.query::<(&Name, &Body, Has<AnchorSurface>)>();
+    let disagreeing: Vec<String> = q
+        .iter(world)
+        .filter(|(_, body, tagged)| body.mask.contains(BodyMask::ANCHORABLE) != *tagged)
+        .map(|(name, body, tagged)| format!("{name}: tag {tagged}, mask {:?}", body.mask))
+        .collect();
+    assert!(
+        disagreeing.is_empty(),
+        "{} block(s) whose tag and mask contradict each other: {disagreeing:?}",
+        disagreeing.len()
+    );
+
+    let mut all = world.query::<&Body>();
+    let anchorable = all
+        .iter(world)
+        .filter(|b| b.mask.contains(BodyMask::ANCHORABLE))
+        .count();
+    let total = all.iter(world).count();
+    assert!(
+        anchorable > 0 && anchorable < total,
+        "{anchorable} of {total} bodies anchorable — the criterion \"no hook on untagged \
+         parts\" (F-003) is only checkable if the map has both kinds"
+    );
+}

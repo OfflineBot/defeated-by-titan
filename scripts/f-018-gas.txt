@@ -1,0 +1,62 @@
+# f-018-gas — the tank empties at exactly the rate the file names, and then stops.
+#
+#   cargo run -- --offscreen --script scripts/f-018-gas.txt --ticks 600 \
+#       --screenshot docs/images/f-018-gas.png
+#
+# The point of this run is the ARITHMETIC, and the arithmetic is done by the `assert` lines,
+# not by a human reading a bar. `assert gas` measures `Gas::current` of the local player
+# (src/debug/mod.rs), and every value below is computed from assets/data/game.ron alone:
+#
+#   gas_tank         = 100
+#   gas_boost_per_s  =  18   -> 0.3 per tick at 60 Hz
+#   gas_reel_per_s   =   6   -> 0.1 per tick at 60 Hz
+#
+# A `key Shift <s>` holds the key for <s> seconds of FIXED time, so 1.0 is 60 ticks and 60
+# ticks are 18 gas. If somebody multiplies by dt a second time, one tick costs 18/3600 =
+# 0.005 instead of 0.3, the second assert below measures 99.7 instead of 82, and the run
+# exits 1.
+#
+# ⚠️ The brackets are 0.35 wide, and that is not sloppiness — it is exactly ONE TICK of boost
+# (0.3) plus a little. The driver counts a held key down in f32 (`run.held` in
+# src/debug/mod.rs), and sixty subtractions of 1/60 do not land on exactly 0.0: measured
+# [offlinebot], `key Shift 1.0` holds for 61 ticks and costs 18.300, not 18.000. A script
+# that asserts to the tick is therefore flaky by construction; one that asserts to the tick
+# +-1 measures the rate and nothing else.
+#
+# ⚠️ WHAT THIS IMAGE DOES NOT SHOW: the gas level. `src/hud/gas_bar.rs` is an empty stub, and
+# the F3 overlay that prints "gas 82/100" is never registered in any schedule
+# (`debug::spawn_overlay` has no caller), so the tank is on no pixel of any image today.
+# Until one of the two is fixed, F-018 is "measured, not seen": the numbers here are real,
+# the picture only proves that the same game they were measured in still stands and renders.
+
+wait 1.5                 # world, camera, meshes and the render pipelines come up
+look 0 -10               # yaw along -Z (the axis contract), a little down: ground and houses
+
+mark f018-tank-full
+assert gas == 100        # game.ron: vector.gas_tank
+
+key Shift 1.0            # one second of boost = 60 ticks x 0.3
+wait 1.0
+mark f018-one-second-of-boost
+assert gas < 82.35       # 100 - 18, plus/minus the one tick above
+assert gas > 81.65
+
+key Shift 4.0            # four more seconds = 4 x 18 = 72
+wait 4.0
+mark f018-four-more-seconds
+assert gas < 10.7        # 82 - 72, plus/minus one tick per `key` line so far
+assert gas > 9.3
+
+key Shift 1.0            # ten gas is not enough for a whole second of boost
+wait 1.0
+mark f018-dry
+assert gas >= 0          # a tank never goes negative
+assert gas < 0.3         # and what is left over is less than one tick's cost: no half boost
+
+key Ctrl 1.0             # reel-in without an anchored hook pulls on nothing
+wait 1.0
+mark f018-reel-without-a-hook
+assert gas >= 0
+assert gas < 0.3         # and therefore costs nothing, empty tank or not
+
+wait 3                   # keep the run alive: if it ends, the process ends before the image

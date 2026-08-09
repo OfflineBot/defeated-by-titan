@@ -1,0 +1,55 @@
+# f-002-aiming — what the crosshair sits on, and whether you may hook it.
+#
+#   DBT_GIZMOS=1 cargo run -- --offscreen \
+#       --script scripts/f-002-aiming.txt --ticks 95 --screenshot docs/images/f-002-aiming.png
+#
+# **The image centre IS the aim ray.** `render::camera::rotate_camera` puts `Intent.yaw` and
+# `Intent.pitch` onto the camera as `Ry(yaw) * Rx(pitch)`, and `Transform::forward()` is then
+# exactly `Intent::look_dir()` — worked through sign for sign in `src/render/camera.rs` and
+# nailed down in `tests/render.rs`. `vector::aim` casts along the same vector from the same
+# eye height. So the pixel at (640, 360) is the body the hook would fly to, and the picture
+# is a measurement of the ray and not an illustration of it.
+#
+# **`DBT_GIZMOS=1` is not decoration here, it is the second half of the statement.**
+# `debug::gizmo::draw_anchors` outlines every `AnchorSurface` in cyan and nothing else. So
+# the image says both things `F-002` asks for at once:
+#
+#   the crosshair sits on the roof of the brick-red house at (-30, 5.75, -46) — cyan
+#   outline, `anchorable: true` in maps.ron — and it got there over the untagged wall at
+#   z = -33.5, which fills the lower half of the frame WITHOUT an outline.
+#
+# That pair is in `maps.ron` for exactly this criterion (`F-023`, "line-of-sight check
+# prevents hooking through walls"): a ray filtered for anchorable bodies would report the
+# roof from ground level too, straight through the wall.
+#
+# ⚠️ The 95 belong to THIS file. `wait 1.5` is 90 ticks at 60 Hz, `wait 0.05` another 3.
+# Whoever changes the tick count changes the image.
+#
+# ⚠️ The player falls. `warp` sets position and velocity, there is no hover mode
+# (src/player/mod.rs::apply_warps), and at gravity_m_s2 = -20 that is about 4.4 cm in the
+# four ticks up to the image. The two `assert` lines bracket exactly that — they are the
+# reason the eye height in the image is a measured number and not a claimed one. At
+# 11.5 degrees down, 4.4 cm of eye height move the hit point 22 cm along z, inside a roof
+# that is 10 m deep.
+#
+# ⚠️ `--offscreen`, not `--headless`: --headless switches the wgpu adapter off
+# (backends: None) and ends in exit 1 with no file (docs/ACCEPTANCE.md).
+
+wait 1.5                # let world, camera, meshes and the render pipelines come up
+
+# 15 m up, 13.5 m in front of the untagged wall, looking 11.5 degrees down.
+#
+# The geometry, all of it out of assets/data/maps.ron:
+#   wall   (-30, 5,    -34), size (14, 10,   1)  -> top edge y = 10,   near face z = -33.5
+#   house  (-30, 5.75, -46), size (14, 11.5, 10) -> roof     y = 11.5, spans z = -51 .. -41
+# From an eye at 16.6 m the ray is at 13.85 m when it crosses the wall — 3.85 m of daylight
+# over its top edge — and comes down on the roof at z = -45.1, in the middle of the roof.
+look 0 -11.5
+warp -30 15 -20
+
+wait 0.05               # the warp takes effect one tick later than it is written
+assert height > 14.9    # the warp really did take effect
+assert height < 15.01   # and he has only just started to fall
+assert titans == 0      # the world starts out empty
+mark f-002-aiming
+wait 5                  # keep the run alive: if it ends, the process ends before the image

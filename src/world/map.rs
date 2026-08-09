@@ -11,9 +11,14 @@
 //! for `anchorable` an [`AnchorSurface`] on top. **One writer for all four**, so that render
 //! shape, index aabb and collision shape cannot drift apart.
 //!
-//! ⚠️ The avian components have **no effect** today: `PhysicsPlugins` is not registered in
-//! `src/lib.rs`. They are still right now instead of wrong later — and `tests/world.rs`
-//! measures their shape, not their effect.
+//! Since 2026-08-09 the avian components have an **effect**: `PhysicsPlugins` is registered
+//! in `src/lib.rs`, and this is the ground the player stands on and the wall he stops at.
+//!
+//! **`RigidBody::Static` is not optional, even though a bare collider already collides.** A
+//! character controller added later filters on `With<ColliderOf>`
+//! (`avian3d-0.7.0/.../move_and_slide.rs:82`) and is blind to every collider without a body.
+//! Retrofitting that means touching every row of every map — so it stands here from the
+//! start, and `tests/player.rs` counts it.
 //!
 //! ## The trap that does not show up in the picture
 //!

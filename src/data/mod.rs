@@ -174,6 +174,11 @@ fn load_ron<T: for<'a> Deserialize<'a>>(dir: &Path, file: &str) -> T {
 #[serde(deny_unknown_fields)]
 pub struct Game {
     pub simulation_hz: f64,
+    /// Solver substeps per simulation step — avian's [`SubstepCount`](avian3d::prelude::SubstepCount),
+    /// whose own default is 6. **Measured, not guessed:** 24 is the smallest value that holds
+    /// both the swing loss (4.26 %/s against 8.97 %/s at 6) and the wall. It belongs here and
+    /// not in Rust, because it is the price of the simulation and thus a number you tune (§4).
+    pub substeps: u32,
     pub gravity_m_s2: f32,
     pub player: PlayerTuning,
     pub vector: VectorTuning,
@@ -192,6 +197,20 @@ pub struct PlayerTuning {
     /// Largest distance per substep of the integrator. Has to be strictly smaller than
     /// [`WorldTuning::min_wall_m`], or the player tunnels through the thinnest wall.
     pub max_substep_m: f32,
+    /// Coefficient of friction of the player's capsule against everything else.
+    ///
+    /// Combined with the surface's own value by `CoefficientCombine::Min`, so that a wall
+    /// cannot brake the player — a measurement showed a combined 0.65 eating 75 % of the
+    /// speed per second when a swinging player grazes a wall in a 7 m alley.
+    pub friction: f32,
+    /// Coefficient of restitution of the player's capsule. `0.0` = no bounce.
+    pub restitution: f32,
+    /// How steep a surface may be and still count as ground. Degrees in the RON, radians in
+    /// the code (`docs/conventions.md`). Decides whether [`MovementState::Grounded`] holds —
+    /// and with it whether you may jump off it.
+    ///
+    /// [`MovementState::Grounded`]: crate::shared::MovementState::Grounded
+    pub max_ground_slope_deg: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]

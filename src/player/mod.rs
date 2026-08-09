@@ -4,43 +4,70 @@
 //! one day the network — is none of this domain's business, and that is exactly the point
 //! (`prompts/init.md` §6 rule 2).
 //!
-//! **The player's `Transform` has exactly one writer**, and it will be called
-//! [`integrator::step`]. The old split "`player` on the ground, `vector` on the rope, kept
-//! apart by `MovementState`" does not hold: a gas boost acts in the air **and** on the rope
-//! at the same time, so there is no state that separates the two writers
-//! (`docs/architecture.md`, authority table).
+//! ## Since 2026-08-09 the player is a physics body
 //!
-//! **Status:** the seam is in place. [`integrator::step`] is registered as a stub in
-//! `SimulationSystems::Integrate` and does nothing; today's movement still runs in
-//! [`move_players`] — WASD, gravity, a ground plane at y = 0, no real collision.
-//! **[`move_players`] and the hardcoded `ground_y = 0.0` die in the commit that fills
-//! `integrator::step`**, together with `shared::Ground`. Not before: otherwise the player
-//! falls for 600 ticks and takes `scripts/t007-first-run.txt` down with him.
+//! The hand-written `translation += velocity * dt` with a hard-coded ground plane at
+//! `y = 0.0` is **gone**, and with it `move_players` and the reader of `shared::Ground`. What
+//! moves the player now is avian, registered in `src/lib.rs`. Three components of this domain
+//! are therefore written by three different hands, and each has exactly one:
+//!
+//! | field | writer |
+//! |---|---|
+//! | `Position`, `Rotation`, `Transform` | **avian** (integrator and writeback) |
+//! | `LinearVelocity` | **avian**, plus [`locomotion::ground_locomotion`] before every avian system |
+//! | `Velocity`, `MovementState` | [`integrator::readback`], after `PhysicsSystems::Writeback` |
+//!
+//! ## The three traps that are already paid for here
+//!
+//! - **The collider sits on the SAME entity as the body**, as
+//!   `Collider::capsule_endpoints(r, (0, r, 0), (0, h − r, 0))`
+//!   (`avian3d-0.7.0/src/collision/collider/parry/mod.rs:800-802`). Not as a child: a ray
+//!   would hit the player's own collider, and `with_excluded_entities([player])` does **not**
+//!   help, because the filter matches the collider entity and not the body. On the same
+//!   entity the exclusion works, the center of mass lands at h/2, and the resting position is
+//!   y = 0 — which is what the origin between the feet requires (`docs/conventions.md`).
+//! - **`LockedAxes::ROTATION_LOCKED`.** The camera hangs off the player as a child and the
+//!   hull is axis-aligned. A capsule that tips over takes both with it —
+//!   `tests/render.rs::f002_the_camera_rotates_not_the_player` is the guard.
+//! - **`SleepingDisabled`.** avian puts a body to sleep after 0.5 s below 0.15 m/s
+//!   (`avian3d-0.7.0/src/dynamics/rigid_body/sleeping.rs:103-107`). A player hanging still on
+//!   a rope would fall asleep, and a sleeping player takes no input.
 
 pub mod integrator;
 pub mod locomotion;
 
+use avian3d::prelude::{
+    CoefficientCombine, Collider, Friction, LinearVelocity, LockedAxes, MaxLinearSpeed,
+    PhysicsSystems, Restitution, RigidBody, SleepingDisabled,
+};
 use bevy::prelude::*;
 
 use crate::data::GameData;
 use crate::shared::{
-    ReelSpeed, RunAccel, BoostAccel, MovementState, Gas, GasGrant, Hook,
-    IdCounter, Intent, Blades, LocalPlayer, PlayerId, SimulationSystems, RopeLength, WarpPlayer,
-    Cli, Velocity, PrevButtons, AimPoint,
+    AimPoint, Blades, BoostAccel, Cli, Gas, GasGrant, Hook, IdCounter, Intent, LocalPlayer,
+    MovementState, PlayerId, PrevButtons, ReelSpeed, RopeLength, RunAccel, SimulationSystems,
+    Velocity, WarpPlayer,
 };
 
 pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_local_player)
-            .add_systems(FixedUpdate, locomotion::ground_run.in_set(SimulationSystems::Drive))
-            .add_systems(
-                FixedUpdate,
-                (apply_warps, move_players, integrator::step)
+        app.add_systems(Startup, spawn_local_player).add_systems(
+            FixedUpdate,
+            (
+                // Before EVERY avian system, not just before `Prepare`: what is written here
+                // is the input to the step, and `PhysicsSystems::First` already carries
+                // avian's own `assert_components_finite` in a debug build.
+                (apply_warps, locomotion::ground_locomotion)
                     .chain()
-                    .in_set(SimulationSystems::Integrate),
-            );
+                    .before(PhysicsSystems::First),
+                // After the writeback, so that what is read back is this step's result and
+                // not the one before it.
+                integrator::readback.after(PhysicsSystems::Writeback),
+            )
+                .in_set(SimulationSystems::Integrate),
+        );
     }
 }
 
@@ -57,6 +84,7 @@ pub fn spawn_player(
     local: bool,
 ) -> Entity {
     let id = ids.next_player();
+    let s = &data.game.player;
     // Nested, because a tuple in `spawn` takes only so many elements and beyond that
     // hits you as an unreadable trait error (`docs/lessons/bevy.md`).
     let mut e = commands.spawn((
@@ -81,6 +109,27 @@ pub fn spawn_player(
             ReelSpeed::default(),
             PrevButtons::default(),
         ),
+        // The physics body. See the module header for why each of these is here.
+        (
+            RigidBody::Dynamic,
+            // Endpoints, not `Collider::capsule`: that one centers the capsule on the origin
+            // (parry/mod.rs:790-797) and would sink the player half his height into the
+            // ground, because a body's origin lies between his feet.
+            Collider::capsule_endpoints(
+                s.radius_m,
+                Vec3::new(0.0, s.radius_m, 0.0),
+                Vec3::new(0.0, s.height_m - s.radius_m, 0.0),
+            ),
+            LockedAxes::ROTATION_LOCKED,
+            SleepingDisabled,
+            // `F-012` — the clamp exists from day one and is not retrofitted (bible 6.4,
+            // fling exploits). Measured: it holds at exactly 75.0000 m/s.
+            MaxLinearSpeed(data.game.vector.max_speed_m_s),
+            // `Min` and not avian's `Average`: a wall must not be able to put its own
+            // friction on the player. See `game.ron: player.friction`.
+            Friction::new(s.friction).with_combine_rule(CoefficientCombine::Min),
+            Restitution::new(s.restitution).with_combine_rule(CoefficientCombine::Min),
+        ),
     ));
     if local {
         e.insert(LocalPlayer);
@@ -104,67 +153,26 @@ fn spawn_local_player(
     }
 }
 
+/// `warp x y z` — the player stands exactly there afterwards (§12c).
+///
+/// Writes the `Transform`, not `Position`: avian takes the transform over in
+/// `PhysicsSystems::Prepare` as long as nothing has written `Position` since the last physics
+/// tick (`avian3d-0.7.0/src/physics_transform/mod.rs:215-223`), and this system is ordered
+/// before every avian system. `Velocity` is deliberately **not** written — it is derived, and
+/// [`integrator::readback`] derives it from the `LinearVelocity` zeroed here.
 fn apply_warps(
     mut messages: MessageReader<WarpPlayer>,
-    mut players: Query<(&PlayerId, &mut Transform, &mut Velocity)>,
+    mut players: Query<(&PlayerId, &mut Transform, &mut LinearVelocity)>,
 ) {
     for w in messages.read() {
-        for (id, mut transform, mut tempo) in &mut players {
+        for (id, mut transform, mut velocity) in &mut players {
             if *id == w.player {
                 transform.translation = Vec3::new(w.pos_x, w.pos_y, w.pos_z);
                 // Without this the player carries his old velocity along and keeps
                 // falling the moment he arrives — a `warp` that does not stop is
                 // worthless as a debugging tool (§12c).
-                tempo.0 = Vec3::ZERO;
+                velocity.0 = Vec3::ZERO;
             }
-        }
-    }
-}
-
-/// Running and falling. **Everything per second**, nothing per frame (§11).
-fn move_players(
-    time: Res<Time<Fixed>>,
-    data: Res<GameData>,
-    mut players: Query<(&Intent, &mut Transform, &mut Velocity, &mut MovementState)>,
-) {
-    let dt = crate::shared::math::clamped_dt_s(time.delta_secs());
-    let s = &data.game.player;
-    let ground_y = 0.0;
-
-    for (intent, mut transform, mut tempo, mut state) in &mut players {
-        if *state == MovementState::Tethered {
-            // On the rope the transform belongs to `vector`. This domain does not touch it.
-            continue;
-        }
-
-        // Movement is player-local: rotate into world coordinates first, then apply.
-        let (sin, cos) = intent.yaw.sin_cos();
-        let forward = Vec3::new(-sin, 0.0, -cos);
-        let right = Vec3::new(cos, 0.0, -sin);
-        let desired = (forward * intent.move_y + right * intent.move_x)
-            .clamp_length_max(1.0)
-            * s.run_speed_m_s;
-
-        let grounded = transform.translation.y <= ground_y + 1e-3;
-        if grounded {
-            tempo.0.x = desired.x;
-            tempo.0.z = desired.z;
-            if intent.pressed(crate::shared::Buttons::JUMP) {
-                tempo.0.y = s.jump_speed_m_s;
-                *state = MovementState::Airborne;
-            } else {
-                tempo.0.y = 0.0;
-                *state = MovementState::Grounded;
-            }
-        } else {
-            tempo.0.y += data.game.gravity_m_s2 * dt;
-            *state = MovementState::Airborne;
-        }
-
-        transform.translation += tempo.0 * dt;
-        if transform.translation.y < ground_y {
-            transform.translation.y = ground_y;
-            tempo.0.y = 0.0;
         }
     }
 }

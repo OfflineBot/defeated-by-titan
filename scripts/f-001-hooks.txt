@@ -1,0 +1,68 @@
+# f-001-hooks — both triggers, through the real input path, in the real city.
+#
+# **Two runs, because one command cannot do both.** The picture:
+#
+#   env DBT_GIZMOS=1 cargo run --features wayland,audio -- --offscreen \
+#       --script scripts/f-001-hooks.txt --ticks 260 --screenshot docs/images/f-001-hooks.png
+#
+# and the test, which is a SEPARATE run:
+#
+#   cargo run -- --headless --script scripts/f-001-hooks.txt --ticks 800
+#
+# The second one is not redundant. With `--screenshot`, `debug::screenshot::exit_when_written`
+# owns the ending and writes `AppExit::Success` the moment the PNG is on disk — the script has
+# not finished by then, its assert summary never prints, and **a failed assert does not fail
+# the run**. Only the headless run reports "N asserts held" and returns a usable exit code.
+#
+# **What this run proves and what it does not.** It drives the two mouse buttons the way a
+# human does — `hook left` presses `MouseButton::Left`, `src/net/local.rs` turns it into
+# `Buttons::HOOK_LEFT`, the inbox delivers it as an `Intent`, and `vector::hook::update_hooks`
+# reads the edge. Every station of that chain reports in the log.
+#
+# What it does NOT prove is a hook that holds. `vector::aim::aim` (`F-002`) is built and its
+# ray does hit — measured here: `point_m: Some((0, 1.5999689, -10))`, `anchorable: true` — but
+# **`body: None`**, because `world::index::maintain_index` (`T-036a`) is a stub and not one
+# entity in this world carries a `BodyId`. A hook stores the stable id of its carrier and
+# never an `Entity`, so with no id there is nothing to hang on: every shot ends as
+# `ReleaseReason::NoAnchor`.
+#
+# Which turns the miss into the evidence for the other half: **two lines in the log, not
+# sixty.** Both buttons are held for a full second each (60 ticks), and the trigger reports
+# exactly once per press — that is `just_pressed` against `PrevButtons` doing its job in the
+# real game, not in a test.
+#
+# ⚠️ `DBT_GIZMOS=1` is part of the command, not decoration (`src/debug/gizmo.rs`). It outlines
+# every `AnchorSurface` in cyan — the 63 anchorable blocks of the graybox out of
+# `assets/data/maps.ron`. Without it the image shows a city and says nothing about F-001; with
+# it, it shows what a hook is allowed to take and, by the log line beside it, that nothing was
+# taken because the aim layer is missing. The rope itself is not in the image either:
+# `src/render/rope.rs::draw_ropes` is registered and empty.
+#
+# ⚠️ The 260 ticks belong to THIS file: both shots and all six `assert`s are past by tick 235.
+# Whoever changes a `wait` changes the image.
+
+wait 1.5                # world, camera, meshes and the render pipelines come up (90 ticks)
+
+# 4 m south of the origin, eye height, looking along -Z and slightly down: the sand-brown
+# 4 m block at (0, 2, -12) and the blocks behind it fill the frame, and all of them carry
+# `anchorable: true` in maps.ron.
+look 0 -8
+warp 0 0 4
+wait 0.3                # the warp takes effect one tick later than it is written
+
+assert height > -0.1    # standing on the ground, not sunk into it
+assert height < 0.5     # and not floating
+mark f-001-aiming
+
+hook left 1.0           # hold the LEFT trigger for a full second
+wait 1.0
+mark f-001-left-fired
+assert speed < 0.5      # a hook that finds nothing must not move the player
+
+hook right 1.0          # and the RIGHT one, independently
+wait 1.0
+mark f-001-right-fired
+assert speed < 0.5
+assert height > -0.1
+
+wait 5                  # keep the run alive: if it ends, the process ends before the image

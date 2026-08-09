@@ -3,60 +3,60 @@ name = "defeated_by_titan"
 version = "0.1.0"
 edition = "2024"
 
-# Bevys Sammelfeatures `3d`, `ui` und `2d` ziehen `default_platform` nach, und darin stecken
-# `wayland` und `bevy_gilrs` fest verdrahtet. Auf Maschine A (debian) gibt es fast keine
-# Entwicklungsbibliotheken und kein passwortloses sudo — vorhanden sind nur openssl, libuv
-# und libcrypt (`ls /usr/lib/x86_64-linux-gnu/pkgconfig/`). Gemessen [debian]:
-#   mit `default`                : bricht nach  9m22s in `wayland-sys` ab (wayland-client.pc)
-#   mit Liste, aber `audio`      : bricht nach 13m40s in `alsa-sys`    ab (alsa.pc)
-# Deshalb ist die Basisliste von Hand zusammengestellt und enthaelt **nichts, was eine
-# Systembibliothek zur Bauzeit braucht**. Alles Systemabhaengige steht unten in [features].
+# Bevy's umbrella features `3d`, `ui` and `2d` pull in `default_platform`, and that one has
+# `wayland` and `bevy_gilrs` hard-wired inside it. Machine A (debian) has almost no
+# development libraries and no passwordless sudo — what is there is openssl, libuv and
+# libcrypt (`ls /usr/lib/x86_64-linux-gnu/pkgconfig/`). Measured [debian]:
+#   with `default`               : breaks after  9m22s in `wayland-sys` (wayland-client.pc)
+#   with the list, but `audio`   : breaks after 13m40s in `alsa-sys`    (alsa.pc)
+# So the base list is assembled by hand and contains **nothing that needs a system library
+# at build time**. Everything system-dependent stands below in [features].
 #
-# Nicht dabei und mit Absicht:
-#   bevy_gilrs  — kein Gamepad. Die Bibel legt PC mit Tastatur und Maus als EINZIGES
-#                 Eingabegeraet fest (3.5); ein Gamepad-Stack braucht libudev und waere
-#                 Rechenzeit fuer etwas, das nie benutzt wird.
+# Deliberately not in it:
+#   bevy_gilrs  — no gamepad. The bible fixes PC with keyboard and mouse as the ONLY input
+#                 device (3.5); a gamepad stack needs libudev and would be compute time for
+#                 something nobody ever uses.
 [dependencies]
 bevy = { version = "0.19.0", default-features = false, features = [
     "default_app",          # async_executor, bevy_asset, bevy_log, bevy_state
     "std",
     "multi_threaded",
     "3d_bevy_render",       # bevy_render, core_pipeline, pbr, gltf, anti_alias, gizmos
-    "scene",                # .glb-Szenen
+    "scene",                # .glb scenes
     "ui_api",
-    "ui_bevy_render",       # das F3-Overlay und spaeter das HUD
-    "default_font",         # ohne das rendert Text nichts und meldet es nicht
+    "ui_bevy_render",       # the F3 overlay and later the HUD
+    "default_font",         # without it text renders nothing and does not say so
     "picking",
     "sysinfo_plugin",
 ] }
 ron = "0.12.2"
 serde = { version = "1.0.229", features = ["derive"] }
 
-# Physik. avian3d 0.7.0 verlangt exakt bevy 0.19.0 (avian3d-0.7.0/Cargo.toml,
-# [dependencies.bevy] version = "0.19.0") — passt zur Basisliste oben.
+# Physics. avian3d 0.7.0 demands exactly bevy 0.19.0 (avian3d-0.7.0/Cargo.toml,
+# [dependencies.bevy] version = "0.19.0") — which fits the base list above.
 #
-# `default` zieht neun Features. Vier davon brauchen wir nicht und drei davon kosten
-# Bauzeit fuer Code, den heute niemand aufruft:
-#   collider-from-mesh — zieht bevy_mesh + bevy_mikktspace. Die Stadt kommt aus maps.ron
-#                        als Quader; ein Collider aus einem glTF-Mesh ist erst ein Thema,
-#                        wenn Titanen echte Modelle haben. Nachtragen ist eine Zeile.
-#   bevy_scene         — zieht bevy_world_serialization, gehoert zu collider-from-mesh.
-#   bevy_picking       — avians Picking-Backend (Maus trifft Collider). Das Fadenkreuz
-#                        fragt ueber SpatialQuery, nicht ueber bevy_picking.
+# `default` pulls nine features. Four of them we do not need, and three of those cost build
+# time for code nobody calls today:
+#   collider-from-mesh — pulls bevy_mesh + bevy_mikktspace. The city comes out of maps.ron
+#                        as cuboids; a collider out of a glTF mesh is a topic once titans
+#                        have real models. Adding it later is one line.
+#   bevy_scene         — pulls bevy_world_serialization, belongs to collider-from-mesh.
+#   bevy_picking       — avian's picking backend (mouse hits collider). The crosshair asks
+#                        through SpatialQuery, not through bevy_picking.
 #
-# Bewusst DRIN, obwohl es Bauzeit kostet:
-#   xpbd_joints        — OHNE das gibt es keinen eingebauten Joint-Loeser
-#                        (dynamics/joints/mod.rs:242: „For a built-in joint solver,
-#                        enable the `xpbd_joints` feature"). Das Seil IST ein Joint.
-#   debug-plugin       — braucht bevy_gizmos + bevy_render, beides ist oben schon an.
-#                        Stufe 🟧 verlangt ein Bild; ohne PhysicsDebugPlugin gibt es
-#                        kein Bild von einem Collider.
-#   parallel           — bevy/multi_threaded ist oben schon an, dazu parry3d/parallel.
+# Deliberately IN, although it costs build time:
+#   xpbd_joints        — WITHOUT it there is no built-in joint solver
+#                        (dynamics/joints/mod.rs:242: "For a built-in joint solver,
+#                        enable the `xpbd_joints` feature"). The rope IS a joint.
+#   debug-plugin       — needs bevy_gizmos + bevy_render, both already on above.
+#                        Stage 🟧 demands a picture; without PhysicsDebugPlugin there is no
+#                        picture of a collider.
+#   parallel           — bevy/multi_threaded is already on above, plus parry3d/parallel.
 #
-# enhanced-determinism ist NICHT an. Es schaltet libm ein (dep:libm, bevy_math/libm,
-# bevy_heavy/libm, parry3d/enhanced-determinism) und ersetzt damit die
-# Hardware-Transzendenten durch Softwareimplementierungen — plattformgleich, aber
-# langsamer. Ueber `--features determinism` einschaltbar, siehe unten.
+# enhanced-determinism is NOT on. It switches libm on (dep:libm, bevy_math/libm,
+# bevy_heavy/libm, parry3d/enhanced-determinism) and thereby replaces the hardware
+# transcendentals with software implementations — identical across platforms, but slower.
+# Switchable through `--features determinism`, see below.
 avian3d = { version = "0.7.0", default-features = false, features = [
     "3d",
     "f32",
@@ -67,28 +67,28 @@ avian3d = { version = "0.7.0", default-features = false, features = [
 ] }
 
 [features]
-# Was die MASCHINE kann, entscheidet die Maschine — nicht der Code (docs/umgebung.md).
-#   Maschine A (debian, headless)  : `cargo build`                  — Vorgabe
-#   Maschine A ganz ohne Fenster   : `cargo build --no-default-features`  — braucht NICHTS
-#   Maschine B (offlinebot, niri)  : `cargo play`   = --features wayland,audio
+# What the MACHINE can do is decided by the machine — not by the code (docs/environment.md).
+#   Machine A (debian, headless)   : `cargo build`                        — the default
+#   Machine A with no window at all: `cargo build --no-default-features`  — needs NOTHING
+#   Machine B (offlinebot, niri)   : `cargo play`   = --features wayland,audio
 #
-# x11 ist die Vorgabe, weil winit dafuer `x11rb`/`x11-dl` benutzt und zur Laufzeit dlopen't:
-# es braucht keine Systembibliothek zur Bauzeit. wayland braucht `wayland-client.pc`,
-# audio braucht `alsa.pc` — beides gibt es auf A nicht.
+# x11 is the default because winit uses `x11rb`/`x11-dl` for it and dlopens at run time: it
+# needs no system library at build time. wayland needs `wayland-client.pc`, audio needs
+# `alsa.pc` — neither of them exists on A.
 default = ["x11"]
 x11 = ["bevy/bevy_winit", "bevy/x11"]
 wayland = ["bevy/bevy_winit", "bevy/wayland"]
-# Ohne `wav` laedt jede .wav fehlerfrei und spielt Stille (prompts/init.md §3).
+# Without `wav` every .wav loads without an error and plays silence (prompts/init.md §3).
 audio = ["bevy/audio", "bevy/wav"]
-# Plattformgleiche Transzendente (sin/cos/atan2 ueber libm statt ueber die FPU). Kandidat
-# fuer Rollback-Netcode; bis gemessen ist, was es kostet, ist es ein Schalter und keine
-# Vorgabe.
+# Transcendentals identical across platforms (sin/cos/atan2 through libm instead of the
+# FPU). A candidate for rollback netcode; until what it costs has been measured it stays a
+# switch and not the default.
 determinism = ["avian3d/enhanced-determinism"]
 
-# Ohne das ist ein Debug-Build UNSPIELBAR: Bevy selbst macht das Batching, die
-# Transform-Propagation und das Rendern. Der eigene Crate bleibt billig zu uebersetzen,
-# jede Dependency wird auf voller Stufe gebaut. Das ist der Unterschied zwischen 20 und
-# 200 fps (prompts/init.md §3).
+# Without this a debug build is UNPLAYABLE: Bevy itself does the batching, the transform
+# propagation and the rendering. Our own crate stays cheap to compile, every dependency is
+# built at full optimization. That is the difference between 20 and 200 fps
+# (prompts/init.md §3).
 [profile.dev]
 opt-level = 1
 

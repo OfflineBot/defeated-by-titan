@@ -1,0 +1,70 @@
+# f-007-boost — the gas boost, photographed from a height nothing else in this build reaches.
+#
+#   cargo run --features wayland,audio -- --offscreen --script scripts/f-007-boost.txt \
+#       --ticks 300 --screenshot docs/images/f-007-boost.png
+#
+# **The height IS the measurement.** `assets/data/game.ron` says it in so many words next to
+# `jump_speed_m_s`: 6.5 m/s against g = -20 give an apex of 1.056 m — "without gas you get on
+# top of nothing in this city". There is no second source of upward motion in this build, so
+# every meter above that one came out of the tank.
+#
+# Two seconds of `boost_m_s2 = 34` at 89 degrees (`camera.pitch_limit_deg`) give 33.99 m/s^2
+# upwards against 20 of gravity: 13.99 m/s^2 net. Straight up, so that the picture has no
+# horizontal unknown in it and every block in the frame can be projected from the one number
+# the asserts measure.
+#
+# `look 0 -89` before the picture turns the camera only (`render::camera::rotate_camera`) —
+# the boost is long over by then. Without it the image is 1280x720 pixels of dark gray
+# `ClearColor`, which is a true photograph of nothing.
+#
+# ---------------------------------------------------------------------------------------
+# The image is a MEASUREMENT, and this is how to re-check it `[offlinebot]`
+#
+# Camera at (0, 48.354 + 1.6, ~ -2.9), looking 89 degrees down, vertical FOV 60 degrees over
+# 720 rows. Project the three explicitly placed blocks of `assets/data/maps.ron` and compare
+# against the pixels — predicted before the run, then read out of the PNG:
+#
+#   block (maps.ron)                      predicted            measured in the PNG
+#   brick-red 8 m  (-12, 4, -20)          (463, 118), 118 px   (462.5, 117.5), 118 px
+#   sand-brown 4 m (  0, 2, -12)          (640, 247),  54 px   (639.5, 251.0),  54 px
+#   stone-gray 10 m wide (10, 5.75, -28)  col 800,    160 px   col 800.5,      160 px
+#
+# The 8 m cube's top face is 118 px wide. From 20 m up it would be 367 px, from 100 m up
+# 53 px — and from the 1.056 m a jump reaches, the camera at 2.66 m sits BELOW that roof and
+# the picture cannot exist at all. Height, and nothing else, sets that number.
+#
+# Also read off the file: 91.4 % of the frame is ground, and there are **zero** `ClearColor`
+# pixels — at 89 degrees down the horizon lies 30 degrees outside the top edge, so there is no
+# sky in the frame to mistake for one. Zero cyan and zero crimson pixels: the signal colours
+# stay reserved for gameplay (`docs/conventions.md`).
+# ---------------------------------------------------------------------------------------
+
+wait 1.5                 # 90 ticks: world, camera, meshes, pipelines — and the 2 m fall
+
+mark f-007-on-the-ground
+assert height < 0.05     # standing, not still falling
+assert height > -0.05    # and not sunk into the ground
+assert gas == 100        # full tank, nothing spent yet
+
+look 0 89                # straight up; 89 is camera.pitch_limit_deg
+key Shift 2.0            # BOOST is ShiftLeft (src/net/local.rs) — held, not tapped
+wait 2.0
+
+mark f-007-button-released
+assert height > 28.5     # a jump reaches 1.056 m. 28.9 m is gas, and nothing else.
+assert height < 29.5
+assert speed > 27.5      # 13.99 m/s^2 net over 121 ticks
+assert speed < 28.5
+assert gas > 63.5        # 121 ticks at gas_boost_per_s / 60 = 0.3 -> 36.3 out of 100
+assert gas < 64.0
+
+look 0 -89               # turn the camera down onto the spot he took off from
+wait 1.4                 # coast on: at 27.9 m/s the apex is 1.40 s away
+
+mark f-007-apex
+assert height > 48.0     # 45 times the height of a jump
+assert height < 48.7
+assert speed < 2.0       # apex: what is left is the 1.2 m/s of drift from the 1 degree tilt
+assert gas > 63.5        # the climb after the button is free — nothing is drawn while coasting
+
+wait 5                   # keep the run alive: it must not end before the image is read back

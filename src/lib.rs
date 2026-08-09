@@ -30,7 +30,8 @@ pub mod titan;
 pub mod vector;
 pub mod world;
 
-use bevy::app::ScheduleRunnerPlugin;
+use avian3d::prelude::{Gravity, PhysicsPlugins, PhysicsSystems, SubstepCount};
+use bevy::app::{PluginsState, ScheduleRunnerPlugin};
 use bevy::prelude::*;
 use bevy::render::settings::{RenderCreation, WgpuSettings};
 use bevy::render::RenderPlugin;
@@ -67,8 +68,8 @@ pub fn app(start: Cli) -> App {
     // is missing — instead of quietly running on a zero in the middle of the game (§4).
     app.add_plugins(data::DataPlugin);
 
-    let hz = app.world().resource::<data::GameData>().game.simulation_hz;
-    app.insert_resource(Time::<Fixed>::from_hz(hz));
+    let game = app.world().resource::<data::GameData>().game.clone();
+    app.insert_resource(Time::<Fixed>::from_hz(game.simulation_hz));
 
     app.init_resource::<Tick>()
         .init_resource::<IdCounter>()
@@ -108,6 +109,37 @@ pub fn app(start: Cli) -> App {
             .chain(),
     );
 
+    // ---- The physics world -------------------------------------------------------------
+    //
+    // avian runs in `FixedUpdate`, not in its own default `FixedPostUpdate`: the physics IS
+    // the simulation step, and everything the six stages above say about "who wins" is only
+    // true if the physics stands **inside** that chain and not behind it.
+    app.add_plugins(PhysicsPlugins::new(FixedUpdate));
+
+    // **All five stages, or none.** avian chains `First → Prepare → StepSimulation →
+    // Writeback → Last` itself (avian3d-0.7.0/src/schedule/mod.rs:73-83), but that chain
+    // says nothing about where the five sit inside OUR chain. Putting only one of them in
+    // `Integrate` does **not** panic and does not warn — it silently leaves `Prepare` and
+    // `Writeback` outside, and then the drive systems write into a velocity that was read
+    // one stage too early. Measured, not feared.
+    app.configure_sets(
+        FixedUpdate,
+        (
+            PhysicsSystems::First,
+            PhysicsSystems::Prepare,
+            PhysicsSystems::StepSimulation,
+            PhysicsSystems::Writeback,
+            PhysicsSystems::Last,
+        )
+            .in_set(SimulationSystems::Integrate),
+    );
+
+    // Gravity and substeps come out of `game.ron`, not out of avian's defaults (−9.81 and 6).
+    // Both are game values, and a game value that lives in two places is wrong in one of
+    // them by next week (§4).
+    app.insert_resource(Gravity(Vec3::Y * game.gravity_m_s2));
+    app.insert_resource(SubstepCount(game.substeps));
+
     // The order IS the dependency order (docs/architecture.md).
     // Nested, because `add_plugins` takes at most ~15 elements per tuple and above that
     // strikes as an unreadable trait error (docs/lessons/bevy.md).
@@ -143,6 +175,29 @@ pub fn app(start: Cli) -> App {
     if start.ticks > 0 && start.image.is_none() {
         app.add_systems(Last, exit_after_ticks);
     }
+
+    // ---- `Plugin::finish` — and why it stands HERE ---------------------------------------
+    //
+    // `App::update()` does **not** run `Plugin::finish` (`bevy_app-0.19.0/src/app.rs:165-171`;
+    // `finish` is at :268 and only a runner calls it). avian creates `SolverDiagnostics` in
+    // `Plugin::finish` and several of its systems take that resource as a plain, non-optional
+    // `ResMut` — so without these two lines **every** test that builds this app panics with
+    // "Resource does not exist" the moment avian is registered. `cargo run` was never
+    // affected; `cargo test` was affected always.
+    //
+    // The wait loop is not decoration. `RenderPlugin::finish` does
+    // `future_render_resources.0.lock().unwrap().take().unwrap()`
+    // (`bevy_render-0.19.0/src/lib.rs:452-465`) — call it while the wgpu adapter request is
+    // still in flight and it panics on a `None`. So we wait exactly the way
+    // `ScheduleRunnerPlugin`'s runner waits (`bevy_app-0.19.0/src/schedule_runner.rs:77-85`).
+    //
+    // Doing it twice is not a risk: every runner in play checks `plugins_state() != Cleaned`
+    // first and skips (schedule_runner.rs:78, `bevy_winit-0.19.0/src/state.rs:148`).
+    while app.plugins_state() == PluginsState::Adding {
+        bevy::tasks::tick_global_task_pools_on_main_thread();
+    }
+    app.finish();
+    app.cleanup();
 
     app
 }
