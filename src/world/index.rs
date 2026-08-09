@@ -18,6 +18,29 @@
 //! Deshalb: ein **Beobachter** auf `Remove`, der die Id in das Postfach des Index schiebt
 //! (`RaumIndex::abmelden`). Beobachter laufen sofort beim Entfernen und nicht am Frame-Ende
 //! — die Information ueberlebt beliebig viele Frames.
+//!
+//! ## Warum dieser Eigenbau noch steht, obwohl avian schneller ist
+//!
+//! Gemessen am 2026-08-09: avians `SpatialQuery` beantwortet einen 112-m-Strahl gegen 4000
+//! Quader in **0,21 us**. Gegen diese Zahl hat ein handgeschriebenes Gitter kein Argument
+//! mehr, und die ehrliche Richtung ist: **dieser Index verschwindet.**
+//!
+//! Er verschwindet heute trotzdem nicht, aus drei Gruenden, die alle nichts mit Geschmack
+//! zu tun haben:
+//!
+//! 1. **Der Nachfolger ist nicht angeschlossen.** `PhysicsPlugins` ist in `src/lib.rs` nicht
+//!    registriert; `SpatialQuery` beantwortet heute gar nichts. Den einzigen vorhandenen
+//!    Abfrageweg zu loeschen, bevor der Ersatz laeuft, hiesse auf 🟨 zu bauen (§6 Regel 1).
+//! 2. **Der Typ gehoert nicht dieser Domaene.** `RaumIndex` liegt in `shared::raum` und
+//!    wird von `vector` und `player` gefragt. Wer hier loescht, laesst dort toten Code
+//!    stehen — und das ist eine Entscheidung ueber fremde Dateien.
+//! 3. Was mit `T-036a` in `docs/features.ron` passiert, entscheidet der Hauptkopf. Solange
+//!    dort eine Zeile steht, die ein Gitter verlangt, ist das Loeschen kein Aufraeumen,
+//!    sondern ein stiller Widerspruch zur Sollliste.
+//!
+//! Die Reihenfolge ist damit vorgegeben: erst `PhysicsPlugins` registrieren und `vector`
+//! auf `SpatialQuery` umstellen, dann hier und in `shared::raum` loeschen, dann `T-036a`
+//! nachziehen. **Nicht umgekehrt.**
 
 use bevy::prelude::*;
 

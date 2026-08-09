@@ -1,0 +1,38 @@
+# f002-blick — Bild A des Paares: derselbe Ort, Blick geradeaus nach -Z.
+#
+#   cargo run --features wayland,klang -- --offscreen \
+#       --script scripts/f002-blick.txt --ticks 130 --bild docs/bilder/f002-blick.png
+#
+# Zusammen mit scripts/f002-blick-gedreht.txt ist das der BILDBELEG fuer
+# src/render/kamera.rs::kamera_drehen: zwei Bilder aus **derselben Position** mit
+# unterschiedlichem `look`. Sehen sie gleich aus, ist die Kameradrehung wirkungslos —
+# egal, was tests/render.rs sagt. Das eine Kriterium, das ein Unit-Test nicht ersetzt.
+#
+# ⚠️ Die 130 gehoeren zu DIESER Datei. `wait 1.5` sind 90 Ticks bei 60 Hz, `wait 0.3`
+# weitere 18; das Bild entsteht also rund 20 Ticks nach dem letzten `assert`. Wer die
+# Tickzahl aendert, aendert das Bild.
+#
+# ⚠️ `--offscreen`, nicht `--headless`: --headless schaltet den wgpu-Adapter ab
+# (backends: None) und liefert Exit 1 ohne Datei. Und nicht der Fensterweg: dort bestimmt
+# der Compositor die Bildgroesse, nicht der Befehl (docs/ABNAHME.md).
+
+wait 1.5                # Welt, Kamera, Meshes und die Renderpipelines aufbauen lassen
+look 0 0                # Blick nach -Z, der Achsen-Vertrag (docs/konventionen.md)
+
+# Auf dem Boden, vier Meter vor dem Ursprung — dieselbe Stelle wie in f002-blick-gedreht.txt.
+# Geradeaus steht der sandbraune 4-m-Wuerfel bei z = -12, links der ziegelrote 8-m-Klotz,
+# rechts die steingrauen (11,5 m und 12 m) — alle vier aus `kloetze` in
+# assets/data/maps.ron. Was dahinter steht, kommt aus dem `raster` derselben Datei.
+#
+# ⚠️ Damit haengt dieses Bild an maps.ron: wer die Stadt aendert, aendert es. Der TEIL, den
+# das Bild belegen soll, haengt nicht daran — dass Blickrichtung und Bild zusammengehoeren,
+# zeigt der Vergleich der beiden PNG, nicht ihr Inhalt.
+warp 0 0 4
+
+wait 0.3                # der warp wirkt einen Tick spaeter als er geschrieben wird
+assert hoehe < 0.5      # steht auf dem Boden und nicht darauf schwebend
+assert hoehe > -1       # und nicht durch den Boden gefallen
+assert titanen == 0     # die Welt ist am Anfang leer
+mark f002-blick-geradeaus
+
+wait 5                  # die Fahrt offen halten: endet sie, endet der Prozess vor dem Bild

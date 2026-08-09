@@ -1,0 +1,39 @@
+# f003-stadt — die Stadt aus assets/data/maps.ron, von oben und aus der Ferne.
+#
+#   cargo run -- --offscreen \
+#       --script scripts/f003-stadt.txt --ticks 110 --bild docs/bilder/f003-stadt.png
+#
+# Der Beleg fuer F-003 „die Karte kommt aus der Datei": bis 2026-08-09 standen im Bild die
+# vier hart verdrahteten Platzhalterkloetze aus src/world/mod.rs. Was hier zu sehen sein
+# muss, ist etwas anderes — ein Raster aus Bloecken und Gassen, die neun gesetzten Kloetze
+# darin, und die Vertikale aus den Sonderbauten (Kirche 35 m, Wachturm 12 m, Baum 12 m).
+#
+# ⚠️ Die 110 gehoeren zu DIESER Datei: `wait 1.5` sind 90 Ticks bei 60 Hz, `wait 0.3`
+# weitere 18. Wer die Tickzahl aendert, aendert das Bild.
+#
+# ⚠️ Der Spieler faellt. `warp` setzt Ort und Tempo, es gibt keinen Schwebemodus
+# (src/player/mod.rs::warpen_ausfuehren), und bei schwerkraft_m_s2 = -20 sind das in den
+# 0,3 s bis zum Bild rund 0,95 m. Die beiden `assert` klammern genau das ein — sie sind der
+# Grund, dass die Bildhoehe eine gemessene Zahl ist und keine behauptete.
+#
+# ⚠️ `look` wirkt seit 2026-08-09 wirklich (src/render/kamera.rs ist gefuellt). Ohne den
+# Blick nach unten laege die halbe Stadt unter dem Bildrand: die Kamera sieht ein senkrechtes
+# Feld von 60 Grad (game.ron: kamera.sicht_grad), und ohne Neigung ist der Horizont die
+# Bildmitte. -26 Grad kippen den Boden so weit herein, dass die Gassen als Linien lesbar
+# werden statt als Kanten.
+
+wait 1.5                # Welt, Kamera, Meshes und die Renderpipelines aufbauen lassen
+
+# 70 m ueber der Karte, 130 m suedlich des Ursprungs, Blick nach -Z und 26 Grad nach unten.
+# In dieser Richtung liegen alle drei Sonderbauten: Baum (-20, -58), Wachturm (24, -40),
+# Kirche (60, -60).
+look 0 -26
+warp 0 70 130
+
+wait 0.3                # der warp wirkt einen Tick spaeter als er geschrieben wird
+assert hoehe > 68       # der warp hat wirklich gewirkt
+assert hoehe < 71       # und der Spieler ist noch nicht weit gefallen
+assert titanen == 0     # die Welt ist am Anfang leer
+mark f003-stadt
+
+wait 5                  # die Fahrt offen halten: endet sie, endet der Prozess vor dem Bild

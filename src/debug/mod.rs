@@ -1,4 +1,4 @@
-//! debug — der `--script`-Fahrer, `--bild`, das F3-Overlay und die NaN-Wache.
+//! debug — der `--script`-Fahrer, `--bild`, die Gizmos, das F3-Overlay und die NaN-Wache.
 //!
 //! **Die Werkzeuge kommen vor den Features** (`prompts/init.md` §12). Ohne sie ist alles
 //! gebaut und nichts gesehen, weil jedes Feature hinter Maus und Tastatur liegt und niemand
@@ -31,9 +31,26 @@ impl Plugin for DebugPlugin {
 
         app.init_resource::<Fahrt>()
             .add_systems(FixedPreUpdate, fahren.in_set(EingabeSet::Quelle))
-            .add_systems(FixedPostUpdate, nan_wache)
-            // Gizmos sind Darstellung, also `Update` und nicht der feste Schritt.
-            .add_systems(Update, gizmo::gizmos_zeichnen);
+            .add_systems(FixedPostUpdate, nan_wache);
+
+        // Gizmos sind Darstellung, also `Update` und nicht der feste Schritt.
+        //
+        // Registriert wird **immer**, gezeichnet nur bei eingeschaltetem Schalter: ein
+        // `run_if` kostet nichts, ein nicht registriertes System dagegen laesst sich nicht
+        // pruefen — und ein Zeichensystem, das je nach Startmodus da ist oder nicht, ist
+        // genau die Sorte Schein-Schalter, die man erst im Bild vermisst
+        // (`docs/lessons/bevy.md`).
+        gizmo::einhaengen(app);
+        app.configure_sets(Update, gizmo::GizmoZeichnen.run_if(gizmo::gizmos_an));
+        app.add_systems(
+            Update,
+            (
+                gizmo::schalter_umschalten,
+                (gizmo::anker_zeichnen, gizmo::massstab_zeichnen, gizmo::spieler_zeichnen)
+                    .in_set(gizmo::GizmoZeichnen),
+            )
+                .chain(),
+        );
 
         if let Some(pfad) = start.script.clone() {
             let inhalt = std::fs::read_to_string(&pfad).unwrap_or_else(|e| {

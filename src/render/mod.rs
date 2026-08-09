@@ -11,11 +11,10 @@
 //! ⚠️ Nichts davon ist je **gesehen** worden — auf Maschine A gibt es kein Fenster
 //! (`docs/umgebung.md`). Alles hier bleibt 🟨, bis jemand auf Maschine B draufschaut.
 
-//! **Stand der Naht:** [`kamera::kamera_drehen`] und [`seil::seile_zeichnen`] sind
-//! registriert und leer. Bis `kamera_drehen` gefuellt ist, blickt die Kamera **immer nach
-//! −Z**, waehrend der Zielstrahl nach `intent.blick()` geht — jedes Bildkriterium ist bis
-//! dahin wertlos, und das ist der Grund, warum dieser Auftrag ganz vorn im Fahrplan steht
-//! (`docs/schnittstelle.md`).
+//! **Stand der Naht:** [`kamera::kamera_drehen`] ist seit 2026-08-09 gefuellt — Bild und
+//! Zielstrahl zeigen in dieselbe Richtung, festgenagelt in `tests/render.rs` und gesehen in
+//! `docs/bilder/f002-blick.png` / `docs/bilder/f002-blick-gedreht.png`.
+//! [`seil::seile_zeichnen`] ist weiter registriert und leer.
 
 pub mod kamera;
 pub mod seil;
