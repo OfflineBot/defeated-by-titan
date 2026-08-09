@@ -1,10 +1,16 @@
 //! world — the maps, anchor points, collision, the spatial index.
 //!
-//! **The spatial index belongs here** (grid cells -> entities, maintained through `Added`
-//! and `RemovedComponents` so that it cannot go stale). Hook impacts, blade hits, collision
-//! and titan target search **all** go through it: a city has thousands of houses, and
-//! nothing may walk every entity to answer a question about the ten meters in front of your
-//! nose (`prompts/init.md` §11).
+//! **The spatial index belongs here** (grid cells -> entities, kept current so that it cannot
+//! go stale). Hook impacts, blade hits, collision and titan target search **all** go through
+//! it: a city has thousands of houses, and nothing may walk every entity to answer a question
+//! about the ten meters in front of your nose (`prompts/init.md` §11).
+//!
+//! ⚠️ Not through `Added` and **not** through `RemovedComponents`, as this line claimed until
+//! 2026-08-09: a new body is found with `Without<BodyId>` (the id and the index entry are
+//! written in the same breath, so the filter is exactly "not taken in yet"), and a
+//! disappearing one through an **observer** on `Remove`. `RemovedComponents` loses three out
+//! of four reports at 240 Hz against 60 Hz fixed — the evidence, with file and line, stands in
+//! [`index`].
 //!
 //! **Where this stands:** [`map::build_map`] really builds the city since 2026-08-09 — out
 //! of `assets/data/maps.ron`, placed blocks 1:1 and the layout deterministically from the

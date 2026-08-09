@@ -11,11 +11,25 @@
 //! 4. Everything is anchorable — then "no hook on untagged surfaces" (`F-003`) checks nothing.
 //!
 //! So this test measures **against `assets/data/maps.ron`**, not against itself.
+//!
+//! ## And a fifth way, which is `B-001` — `T-036a`
+//!
+//! The city can be right in every one of those four ways and still be **unreachable**: a body
+//! without a [`BodyId`] cannot be hooked. A hook stores the stable id of its carrier and never
+//! an `Entity` (`docs/multiplayer.md` rule 5), and the only place that hands those ids out is
+//! `world::index::maintain_index`. While its body was empty, `vector::aim` reported
+//! `body: None` for every hit in the running game and every shot ended as
+//! `ReleaseReason::NoAnchor` — with all six tests above green. The four `t036a_*` tests at the
+//! bottom measure the index itself: id, count, mask, and the removal report.
 
 use avian3d::prelude::Collider;
 use bevy::prelude::*;
+use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
-use defeated_by_titan::shared::{AnchorSurface, Block, Body, BodyMask, Cli};
+use defeated_by_titan::shared::{
+    AnchorSurface, Block, Body, BodyGone, BodyId, BodyMask, Cli, IdCounter, SpatialIndex,
+};
+use defeated_by_titan::world::index::mask_from;
 use defeated_by_titan::world::map::{plan_blocks, BlockPlan};
 use std::path::PathBuf;
 
@@ -27,6 +41,55 @@ fn built_world() -> App {
     let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
     app.update();
     app
+}
+
+/// The same real app, but with **exactly one fixed step per `update()`** — from the second
+/// `update()` on.
+///
+/// Two things, both measured and neither obvious:
+///
+/// 1. [`built_world`] takes its step size from the wall clock. `FixedUpdate` — and with it
+///    `world::index::maintain_index` — then runs zero times or five, depending on how busy
+///    the machine is. Whoever measures the index without `TimeUpdateStrategy` measures the
+///    clock (same reasoning as in `tests/vector_aiming.rs`).
+/// 2. **The first `update()` runs no fixed step at all**, whatever the strategy says. The
+///    fixed loop lags the frame loop by one: bevy's own test spells it out —
+///    "Frame 0 / Fixed update should not have run yet"
+///    (`bevy_time-0.19.0/src/lib.rs:262-268`), and the counter there is still 0 after frame 1.
+///    So `Startup` alone leaves the index empty, and a test that measured after one `update()`
+///    would report "no body has an id" **whether or not the maintainer works**. Hence two.
+fn stepped_world() -> App {
+    let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    app.init_resource::<GoneLog>();
+    app.add_systems(Last, collect_gone);
+    app.update(); // Startup + PostStartup — and no fixed step yet
+    app.update(); // the first simulation step: the index takes the city in
+    app
+}
+
+/// Every [`BodyGone`] of the run, in order. Not state — a log.
+///
+/// A `MessageReader` in a test function would have its own cursor and find the buffer already
+/// consumed; the same pattern stands in `tests/vector_hooks.rs`.
+#[derive(Resource, Default)]
+struct GoneLog(Vec<BodyGone>);
+
+fn collect_gone(mut log: ResMut<GoneLog>, mut gone: MessageReader<BodyGone>) {
+    log.0.extend(gone.read().copied());
+}
+
+/// Every body of the world as `(name, entity, id)`, sorted by name — a stable order, because
+/// a test is a measurement and not a lottery.
+fn bodies_with_id(app: &mut App) -> Vec<(String, Entity, Option<BodyId>)> {
+    let world = app.world_mut();
+    let mut q = world.query_filtered::<(&Name, Entity, Option<&BodyId>), With<Body>>();
+    let mut all: Vec<(String, Entity, Option<BodyId>)> = q
+        .iter(world)
+        .map(|(n, e, id)| (n.to_string(), e, id.copied()))
+        .collect();
+    all.sort_by(|a, b| a.0.cmp(&b.0));
+    all
 }
 
 fn data() -> GameData {
@@ -316,4 +379,229 @@ fn f003_the_grid_houses_stay_in_the_height_window_from_the_file() {
         "{tall} of {} houses in the upper half of the window — the heights do not spread",
         houses.len()
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// T-036a / B-001 — the index, and the ids without which nothing can be hooked
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn t036a_every_body_gets_exactly_one_id() {
+    // ★ `B-001`. Red for exactly the state the game shipped in: `maintain_index` had an empty
+    // body, so **not one entity in the world carried a `BodyId`** — 0 instead of 79 — and
+    // `AimPoint.body` was `None` on every single hit.
+    //
+    // Everything here is read out of the plan and out of `IdCounter`, never out of a literal:
+    // the number of blocks is a question for `maps.ron`.
+    let planned = plan().len();
+    let mut app = stepped_world();
+
+    let all = bodies_with_id(&mut app);
+    assert_eq!(all.len(), planned, "{} bodies in the world, {planned} planned", all.len());
+
+    let missing: Vec<&String> = all.iter().filter(|(_, _, id)| id.is_none()).map(|(n, _, _)| n).collect();
+    assert!(
+        missing.is_empty(),
+        "{} of {planned} bodies carry no `BodyId`. `world::index::maintain_index` is the only \
+         place that hands them out, and a hook hangs on an id and never on an `Entity` — with \
+         none, every shot ends as `ReleaseReason::NoAnchor`. First: {:?}",
+        missing.len(),
+        &missing[..missing.len().min(3)]
+    );
+
+    // Consecutive out of the counter, not random: two machines have to arrive at the same
+    // numbering (`docs/multiplayer.md` rule 5), and a gap is a body that got its id twice.
+    let mut ids: Vec<u32> = all.iter().filter_map(|(_, _, id)| id.map(|b| b.0)).collect();
+    ids.sort_unstable();
+    let handed_out = ids.len();
+    ids.dedup();
+    assert_eq!(ids.len(), handed_out, "two bodies share one `BodyId`");
+    assert_eq!(
+        ids,
+        (1..=planned as u32).collect::<Vec<u32>>(),
+        "the ids are not the consecutive 1..={planned} out of `IdCounter`"
+    );
+    assert_eq!(
+        app.world().resource::<IdCounter>().body,
+        planned as u32,
+        "`IdCounter.body` and the number of bodies disagree"
+    );
+
+    // And the index knows exactly those bodies — not fewer (a body that nothing can find) and
+    // not more (an id inserted twice under two entries).
+    assert_eq!(
+        app.world().resource::<SpatialIndex>().len(),
+        planned,
+        "the index holds {} of {planned} bodies",
+        app.world().resource::<SpatialIndex>().len()
+    );
+
+    // Letting it keep running hands out nothing a second time. Red the day the `Without<BodyId>`
+    // filter or the `Commands` insert is dropped: then the counter climbs by 79 per tick.
+    for _ in 0..5 {
+        app.update();
+    }
+    assert_eq!(app.world().resource::<IdCounter>().body, planned as u32, "ids are handed out again every tick");
+    assert_eq!(app.world().resource::<SpatialIndex>().len(), planned, "the index grows every tick");
+}
+
+#[test]
+fn t036a_the_index_carries_the_anchorable_bit_from_the_file() {
+    // The hook asks the mask and nothing else (`vector::aim`: `mask.contains(ANCHORABLE)`).
+    // If the bit in the index does not come out of the same `anchorable:` in `maps.ron` that
+    // `AnchorSurface` comes out of, the cyan gizmo outlines one set of blocks and the hook
+    // catches on another — and you cannot see that in a screenshot.
+    //
+    // `mask_from` is used, not a second translation: one place, or one of the two goes stale.
+    let plan = plan();
+    let by_name: std::collections::BTreeMap<&str, &BlockPlan> =
+        plan.iter().map(|p| (p.name.as_str(), p)).collect();
+    let mut app = stepped_world();
+
+    let all = bodies_with_id(&mut app);
+    let index = app.world().resource::<SpatialIndex>();
+
+    let mut wrong: Vec<String> = Vec::new();
+    let mut anchorable = 0usize;
+    for (name, _, id) in &all {
+        let id = id.unwrap_or_else(|| panic!("{name} carries no BodyId — see t036a_every_body_gets_exactly_one_id"));
+        let entry = index
+            .body(id)
+            .unwrap_or_else(|| panic!("{name} (id {}) is not in the index", id.0));
+        let want = by_name
+            .get(name.as_str())
+            .unwrap_or_else(|| panic!("{name} stands in the world but not in the plan"));
+        let expected = mask_from(want.solid, want.anchorable);
+        if entry.mask != expected {
+            wrong.push(format!("{name}: mask {:?} in the index, {expected:?} from the file", entry.mask));
+        }
+        if entry.mask.contains(BodyMask::ANCHORABLE) {
+            anchorable += 1;
+            assert!(want.anchorable, "{name} is anchorable in the index and not in the file");
+        } else {
+            assert!(!want.anchorable, "{name} is anchorable in the file and not in the index");
+        }
+    }
+    assert!(wrong.is_empty(), "{} block(s) with the wrong mask: {wrong:#?}", wrong.len());
+
+    // Both kinds, and the numbers come out of the plan. In the graybox that is 63 of 79 —
+    // written nowhere here, because a map change must not turn into a test change.
+    let expected_anchorable = plan.iter().filter(|p| p.anchorable).count();
+    assert_eq!(anchorable, expected_anchorable, "anchorable bodies in the index vs. in the file");
+    assert!(anchorable > 0, "not a single anchorable body in the index");
+    assert!(
+        anchorable < all.len(),
+        "all {} bodies are anchorable — then the mask decides nothing",
+        all.len()
+    );
+
+    // The hull the index carries is the hull of the body, and it comes from the file's half
+    // edge. A factor of 2 here is a hook that catches in mid-air.
+    for (name, _, id) in &all {
+        let entry = index.body(id.expect("id")).expect("in the index");
+        let want = by_name[name.as_str()];
+        assert_eq!(entry.half_size_m, want.size_m * 0.5, "{name}: half size in the index");
+        assert_eq!(entry.center_m, want.center_m, "{name}: center in the index");
+    }
+}
+
+#[test]
+fn t036a_a_removed_body_is_struck_out_and_reported() {
+    // `vector::hook` releases every hook hanging on the carrier when `BodyGone` arrives, and
+    // falls back on `index.body(id) == None` if the message was lost. Both have to hold, or a
+    // rope stays taut on a house that no longer exists.
+    //
+    // Red when `on_body_removed` is empty (nothing lands in the mailbox) AND when
+    // `maintain_index` never collects it (the mailbox fills up and nobody hears).
+    let mut app = stepped_world();
+    let all = bodies_with_id(&mut app);
+    let (name, entity, id) = all.first().cloned().expect("the city has bodies");
+    let id = id.expect("every body carries an id — see t036a_every_body_gets_exactly_one_id");
+
+    let before = app.world().resource::<SpatialIndex>().len();
+    assert!(app.world().resource::<SpatialIndex>().body(id).is_some(), "{name} is not in the index");
+    app.world_mut().resource_mut::<GoneLog>().0.clear();
+
+    app.world_mut().entity_mut(entity).despawn();
+    app.update(); // the next fixed step: the maintainer empties the mailbox
+
+    let reported: Vec<BodyId> = app.world().resource::<GoneLog>().0.iter().map(|m| m.body).collect();
+    assert!(
+        reported.contains(&id),
+        "{name} (id {}) was despawned, and `BodyGone` reported {reported:?} — the hooks \
+         hanging on it never let go",
+        id.0
+    );
+    assert_eq!(
+        app.world().resource::<SpatialIndex>().body(id),
+        None,
+        "{name} was despawned and is still in the index — a hook would keep anchoring on it"
+    );
+    assert_eq!(
+        app.world().resource::<SpatialIndex>().len(),
+        before - 1,
+        "one body gone, {} still in the index (was {before})",
+        app.world().resource::<SpatialIndex>().len()
+    );
+
+    // And it is reported **once**, not once per tick from here on.
+    let after_first = app.world().resource::<GoneLog>().0.len();
+    for _ in 0..3 {
+        app.update();
+    }
+    assert_eq!(
+        app.world().resource::<GoneLog>().0.len(),
+        after_first,
+        "`BodyGone` is repeated every tick — the mailbox is not emptied"
+    );
+}
+
+#[test]
+fn t036a_a_body_spawned_late_is_taken_in_and_stands_right_one_tick_later() {
+    // The city is spawned in `Startup` and its `GlobalTransform` is propagated in
+    // `PostStartup` (`bevy_transform-0.19.0/src/plugins.rs:27-28`), so it is in the index at
+    // its true position from the first tick — `t036a_the_index_carries_the_anchorable_bit...`
+    // measures that centre by centre.
+    //
+    // A body spawned **later** is a different case, and this is the one `F-029` will walk
+    // into. `maintain_index` reads the `GlobalTransform` (it has to: for a child body the
+    // `Transform` is local), and that is only propagated in `PostUpdate` — one stage AFTER
+    // `RunFixedMainLoop`. So a body that comes into being between two updates is taken into
+    // the index in the next fixed step **at the origin**, and moves to its real place one tick
+    // later, when `Changed<GlobalTransform>` catches it.
+    //
+    // That is a measurement, not an excuse: whoever hangs an anchor on a limb spawned this
+    // frame has it at (0,0,0) for one tick. Written down here so the next person finds it as a
+    // number instead of as a hook that catches in mid-air.
+    let mut app = stepped_world();
+    let before = app.world().resource::<SpatialIndex>().len();
+    let place = Vec3::new(120.0, 6.0, 120.0);
+
+    let e = app
+        .world_mut()
+        .spawn((
+            Name::new("t036a_late_block"),
+            Body { half_size_m: Vec3::splat(3.0), mask: mask_from(true, true) },
+            Transform::from_translation(place),
+        ))
+        .id();
+    app.update();
+
+    // Taken in immediately, with an id and with its mask — that part is not deferred.
+    let id = *app.world().get::<BodyId>(e).expect("a body spawned late also gets an id");
+    let first = app
+        .world()
+        .resource::<SpatialIndex>()
+        .body(id)
+        .expect("and it is in the index in the very step it appears");
+    assert!(first.mask.contains(BodyMask::ANCHORABLE), "the mask is right from the first tick");
+    assert_eq!(app.world().resource::<SpatialIndex>().len(), before + 1, "exactly one body more");
+
+    // And at the latest one tick later it stands where it was spawned. Red the day the
+    // `Changed<GlobalTransform>` loop is dropped: then it stays at the origin forever.
+    app.update();
+    let settled = app.world().resource::<SpatialIndex>().body(id).expect("still there");
+    assert_eq!(settled.center_m, place, "the index never caught up with the world position");
+    assert_eq!(settled.half_size_m, Vec3::splat(3.0));
+    assert_eq!(app.world().resource::<SpatialIndex>().len(), before + 1, "and not inserted twice");
 }

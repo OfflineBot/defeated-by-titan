@@ -1,0 +1,46 @@
+# b001-anchor — the proof in the running game that a hook now HOLDS.
+#
+#   cargo run -q -- --headless --script scripts/b001-anchor.txt --ticks 800
+#
+# `B-001`: `world::index::maintain_index` was a stub, so not one of the 79 blocks carried a
+# `BodyId`, `vector::aim` reported `body: None` on every hit and `vector::hook::anchor_target`
+# turned every shot into `ReleaseReason::NoAnchor`. The line to look for is
+#
+#   hook Left of player 1 anchored on body <n> at <x> <y> <z> (t=...)
+#
+# and before the fix it read `found nothing anchorable` instead.
+#
+# ⚠️ **Why this file exists next to `scripts/f-001-hooks.txt` instead of inside it.** That
+# script aims with `look 0 -8`, and 8 degrees down from an eye at 1.6 m puts the ray on the
+# GROUND at z = -7.4 — 2.6 m short of the sand-brown block at z = -10, and the ground slab is
+# `anchorable: false` in `maps.ron`. So it reports `found nothing anchorable` for a second,
+# independent reason that has nothing to do with `B-001`, and it did so before the fix as well.
+# Measured, both runs at commit b0360a2+fix [debian]. `scripts/f-001-hooks.txt` belongs to
+# another job — the finding is reported, not fixed here.
+#
+# This file therefore aims the way that script's own header says it measured
+# (`point_m: Some((0, 1.5999689, -10))`, y = eye height): **horizontally**.
+
+wait 1.5                # world, camera, meshes and the render pipelines come up (90 ticks)
+
+# 4 m south of the origin, eye height, looking straight along -Z: the sand-brown 4 m block at
+# (0, 2, -12) fills the view. Its near face is z = -10, it spans y 0..4, and it carries
+# `anchorable: true` in `maps.ron`.
+look 0 0
+warp 0 0 4
+wait 0.3                # the warp takes effect one tick later than it is written
+
+assert height > -0.1    # standing on the ground, not sunk into it
+assert height < 0.5     # and not floating
+mark b001-aiming
+
+hook left 1.0           # hold the LEFT trigger for a full second
+wait 1.0
+mark b001-left-anchored
+
+hook right 1.0          # and the RIGHT one, independently
+wait 1.0
+mark b001-right-anchored
+assert height > -0.1
+
+wait 2

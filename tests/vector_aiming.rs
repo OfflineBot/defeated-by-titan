@@ -34,6 +34,18 @@
 //! (`docs/multiplayer.md`). It is also the honest shape of the rule: there is no such thing
 //! as *the* player.
 //!
+//! ## The fifth way, and it is the one that got through — `B-001`
+//!
+//! [`AimPoint`] has three fields and this file only ever measured two of them. A hit point
+//! that is correct to the centimetre and an `anchorable` that is correct to the block is
+//! **worth nothing to the only consumer there is**: `vector::hook::anchor_target` reads
+//! `aim.body`, and without it returns `None` — every shot in the running game ended as
+//! `ReleaseReason::NoAnchor` while all seven tests below stayed green. `grep -n '\.body'` over
+//! this file returned nothing until 2026-08-09.
+//!
+//! That is the shape of the gap: a test suite that measures what the system *computes*
+//! instead of what its consumer *needs*. `f002_the_aim_names_the_body_it_hit` closes it.
+//!
 //! The picture that belongs to these numbers is `docs/images/f-002-aiming.png`, taken with
 //! `scripts/f-002-aiming.txt`.
 
@@ -43,7 +55,8 @@ use defeated_by_titan::data::GameData;
 use defeated_by_titan::net::Inbox;
 use defeated_by_titan::player::spawn_player;
 use defeated_by_titan::shared::{
-    AimPoint, AnchorSurface, Body, BodyMask, Cli, IdCounter, Intent, PlayerId, Tick, WarpPlayer,
+    AimPoint, AnchorSurface, Body, BodyId, BodyMask, Cli, IdCounter, Intent, PlayerId, Tick,
+    WarpPlayer,
 };
 
 /// Builds the **real** app, headless, one simulation step per `update()`.
@@ -493,5 +506,116 @@ fn f002_the_anchor_tag_and_the_body_mask_say_the_same_thing_about_every_block() 
         anchorable > 0 && anchorable < total,
         "{anchorable} of {total} bodies anchorable — the criterion \"no hook on untagged \
          parts\" (F-003) is only checkable if the map has both kinds"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// 9. B-001 — the aim names the body, and that is the only field the hook can use
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn f002_the_aim_names_the_body_it_hit() {
+    // ★ `B-001`. This is the test whose absence let the bug live for a whole round: six tests
+    // above measure `point_m` and `anchorable` to the centimetre, and none of them ever looked
+    // at `body`. `vector::hook::anchor_target` needs exactly that field —
+    //
+    //     if !aim.anchorable { return None; }
+    //     Some((aim.point_m?, aim.body?))
+    //
+    // — so `body: None` turns every shot in the running game into `ReleaseReason::NoAnchor`,
+    // silently, with an exit code of 0.
+    //
+    // What is measured is not "some id came back" but **which** one: every tagged surface in
+    // the map is aimed at from straight above, and the id in `AimPoint` is compared against
+    // the `BodyId` that very entity carries. A constant, a counter or an off-by-one all go
+    // red here; `is_some()` alone would not.
+    let mut app = app();
+    let (e, id) = test_player(&mut app, Vec3::new(0.0, 4.0, 0.0));
+    let eye_height_m = data(&app).game.player.eye_height_m;
+
+    // Name, roof centre and id — out of the world, not out of a list in this file.
+    let mut targets: Vec<(String, Vec3, Option<BodyId>)> = {
+        let world = app.world_mut();
+        let mut q = world
+            .query_filtered::<(&Name, &Transform, &Body, Option<&BodyId>), With<AnchorSurface>>();
+        q.iter(world)
+            .map(|(name, t, body, id)| {
+                (name.to_string(), t.translation + Vec3::Y * body.half_size_m.y, id.copied())
+            })
+            .collect()
+    };
+    targets.sort_by(|a, b| a.0.cmp(&b.0)); // a stable order — a test is a measurement
+    assert!(
+        targets.len() > 20,
+        "only {} tagged surfaces in the map — is the city built at all?",
+        targets.len()
+    );
+
+    // First the world's side of it: without an id on the carrier there is nothing the ray
+    // could report, and the failure below would say "aim is broken" about the wrong file.
+    let nameless: Vec<&String> =
+        targets.iter().filter(|(_, _, id)| id.is_none()).map(|(n, _, _)| n).collect();
+    assert!(
+        nameless.is_empty(),
+        "{} of {} tagged blocks carry no `BodyId` — `world::index::maintain_index` (`T-036a`) \
+         hands none out, so `AimPoint.body` cannot be anything but `None`. First: {:?}",
+        nameless.len(),
+        targets.len(),
+        &nameless[..nameless.len().min(3)]
+    );
+
+    // The ids are distinct — otherwise "the id matches" would also be satisfied by a constant.
+    let mut distinct: Vec<BodyId> = targets.iter().filter_map(|(_, _, id)| *id).collect();
+    let handed_out = distinct.len();
+    distinct.sort();
+    distinct.dedup();
+    assert_eq!(distinct.len(), handed_out, "two blocks share one `BodyId`");
+
+    let mut wrong: Vec<String> = Vec::new();
+    for (name, roof, expected) in &targets {
+        // Feet 5 m above the roof centre, looking straight down: the one direction that is
+        // free for every block in this map, and the expected hit is the centre of the top
+        // face.
+        warp(&mut app, id, *roof + Vec3::Y * (5.0 - eye_height_m));
+        look(&mut app, id, 0.0, -90.0);
+
+        let a = aim_of(&app, e);
+        let point_ok = a.point_m.is_some_and(|hit| (hit - *roof).length() < 0.05);
+        if a.body != *expected || !a.anchorable || !point_ok {
+            wrong.push(format!(
+                "{name}: roof centre {roof:?} -> body {:?} (expected {expected:?}), \
+                 point {:?}, anchorable {}",
+                a.body, a.point_m, a.anchorable
+            ));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} of {} shots did not name the body they hit — that is `B-001`, and it is what \
+         `vector::hook::anchor_target` fails on: {wrong:#?}",
+        wrong.len(),
+        targets.len()
+    );
+
+    // And the converse, so that the field is a statement and not a shortcut through
+    // `anchorable`: an **untagged** body has to be named too, with `anchorable: false` beside
+    // it. "There is something there, but you cannot hook it" is a state and not a missing hit
+    // (`F-023`) — and a `body` that is only filled in when the hit is anchorable would pass
+    // everything above and still be wrong here.
+    //
+    // The target is the untagged wall `maps.ron` keeps for exactly this: centre (-30, 5, -34),
+    // near face z = -33.5. It is the same shot as test 1.
+    warp(&mut app, id, Vec3::new(-30.0, 0.0, -20.0));
+    look(&mut app, id, 0.0, 0.0);
+    let wall = aim_of(&app, e);
+    let hit = wall.point_m.expect("the untagged wall stands 13.5 m in front of him");
+    assert!((hit.z + 33.5).abs() < 0.05, "that is not the wall at z = -33.5 but {:?}", hit);
+    assert!(!wall.anchorable, "the wall is `anchorable: false` in maps.ron");
+    let named = wall
+        .body
+        .expect("an untagged body is a body — it has to be named, or `F-023` cannot be seen");
+    assert!(
+        !distinct.contains(&named),
+        "the untagged wall reports body {named:?}, which is one of the tagged blocks"
     );
 }
