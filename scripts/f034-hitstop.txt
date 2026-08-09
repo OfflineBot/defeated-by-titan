@@ -1,0 +1,47 @@
+# F-034 — hit stop: the bodies stop, the clock does not.
+#
+# cargo run -- --offscreen --script scripts/f034-hitstop.txt --ticks 161 \
+#              --screenshot docs/images/f034-hitstop.png
+#
+# **This is the same run as `scripts/f030-cortex.txt`, photographed six ticks later.** The
+# commands below are identical line for line, so the two runs are the same simulation and the
+# two PNGs are two ticks out of it:
+#
+# | tick | image | what it shows |
+# |---|---|---|
+# | 155 | `docs/images/f030-cortex.png` | the tick the cortex was cut on (tick 154) plus one — the freeze has just begun |
+# | 161 | `docs/images/f034-hitstop.png` | six ticks later — the LAST frozen tick |
+#
+# `gear.ron: feel.hit_stop_cortex_s` is 0.12 s = `round(0.12 x 60)` = **7 ticks**, so the
+# player does not advance on ticks 155..161 and moves again on 162. What the pair proves, and
+# no single frame can:
+#
+#   * the husk is visibly further into his dissolve — he is scaled by `1 - ticks/60`, so 0.983
+#     in the first image and 0.883 in the second: the clock kept running;
+#   * the player's position in the F3 overlay is **identical to the digit**: the body did not.
+#
+# That is the whole claim of `F-034`, and it is the claim the one-line
+# `Time::<Virtual>::set_relative_speed(0.05)` fails — there the tick stops with the body and
+# the husk would not have dissolved a millimetre further.
+#
+# ⚠️ `F-034`'s own acceptance in the backlog is a **blind test with human testers**. That is not
+# satisfiable by an agent, and **the blind test has not been run.**
+#
+# The header of `scripts/f030-cortex.txt` explains every number in the commands below.
+# 1.5 s of lead-in before anything happens: under `--offscreen` the render pipelines and the
+# block meshes are still coming up in the first second, and a screenshot taken into that is
+# evidence of nothing (`scripts/p1-overlay.txt` uses the same 1.5).
+wait 1.5
+spawn titan husk 17.5 0 0
+warp 15.75 18.5 0.8
+look 0 0
+key F3 0.05
+wait 0.90
+key E 0.40
+wait 0.08
+look -90 -6
+mark cortex-cut
+wait 0.10
+assert titans == 1
+wait 1.10
+assert titans == 0

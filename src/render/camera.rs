@@ -29,7 +29,43 @@
 use bevy::prelude::*;
 
 use crate::data::GameData;
-use crate::shared::{Intent, LocalPlayer};
+use crate::shared::{HitZone, Intent, LocalPlayer, Tick, TitanHit};
+
+/// `F-034`'s camera kick — **purely visual, and a pure function of the tick.**
+///
+/// Two things it is deliberately not. It is not a simulation value: nothing reads it back, and
+/// the aim ray keeps going by `intent.look_dir()` while the image is kicked, exactly the way
+/// `smoothing_half_life_s` is left unread above. And it does **not decay off a clock**: this
+/// system runs in `Update`, so a `Time`-driven decay would put a different pitch in the image
+/// on every frame rate — and with it a different `--offscreen` sha256, which is the one thing
+/// the whole evidence route rests on (`docs/PLAN-GAME.md` §11, risk 3). It decays over
+/// `round(camera_kick_s × simulation_hz)` **ticks**.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CameraKick {
+    /// The tick the hit landed on.
+    pub from_tick: u64,
+    /// How many ticks the kick lasts. Zero means there is no kick.
+    pub ticks: u32,
+    /// Full amplitude in radians, at `from_tick`.
+    pub amplitude_rad: f32,
+}
+
+impl CameraKick {
+    /// The extra pitch this tick, in radians. Linear from full to nothing and then exactly
+    /// zero — not an exponential that is "almost" zero forever, because "almost zero" means
+    /// the camera never returns to the angle the ray measures.
+    pub fn pitch_rad(&self, tick: u64) -> f32 {
+        if self.ticks == 0 {
+            return 0.0;
+        }
+        let elapsed = tick.saturating_sub(self.from_tick);
+        if elapsed >= self.ticks as u64 {
+            return 0.0;
+        }
+        let left = 1.0 - elapsed as f32 / self.ticks as f32;
+        self.amplitude_rad * left
+    }
+}
 
 /// Puts `yaw` and `pitch` out of the local player's [`Intent`] onto the camera.
 ///
@@ -49,9 +85,32 @@ use crate::shared::{Intent, LocalPlayer};
 ///   `Intent::look_dir()` (`src/shared/intent.rs:42`).
 pub fn rotate_camera(
     data: Res<GameData>,
+    tick: Res<Tick>,
+    mut hits: MessageReader<TitanHit>,
+    mut kick: Local<CameraKick>,
     players: Query<&Intent, With<LocalPlayer>>,
     mut camera: Query<&mut Transform, With<Camera3d>>,
 ) {
+    // `F-034`'s kick. A `Local` and not a component: it belongs to this system and to nobody
+    // else, nothing reads it back, and there is exactly one 3D camera (`attach_camera`).
+    // The message is drained even when there is no camera yet, so a hit cannot arrive twice.
+    for hit in hits.read() {
+        // Only the kill kicks. A kick on every scratch is a camera nobody can aim through,
+        // and `hit_stop_normal_s` already says a non-lethal hit is the small event.
+        if hit.zone != HitZone::Cortex {
+            continue;
+        }
+        let k = &data.gear.feel;
+        let ticks = (k.camera_kick_s as f64 * data.game.simulation_hz).round();
+        *kick = CameraKick {
+            from_tick: tick.0,
+            ticks: if ticks.is_finite() && ticks > 0.0 { ticks as u32 } else { 0 },
+            // Degrees in the file, radians in the code, converted at the boundary
+            // (`docs/conventions.md`). Downward, so the image dips into the cut.
+            amplitude_rad: -k.camera_kick_deg.to_radians(),
+        };
+    }
+
     // There is no "the player" — but exactly one who is ME (§6 rule 3). If he does not exist
     // (yet), that is not an error: the world is only just being built.
     let Some(intent) = players.iter().next() else {
@@ -68,6 +127,10 @@ pub fn rotate_camera(
     // Ry(yaw) * Rx(pitch), in exactly that order and without roll. Not via
     // `Quat::from_euler`: its axis order would have to be looked up, this one is written
     // out.
+    // The kick rides on the pitch and is clamped with it: a kick past the zenith would stand
+    // the image on its head, and the clamp is the same one the mouse path obeys.
+    let pitch = (pitch + kick.pitch_rad(tick.0)).clamp(-limit, limit);
+
     let rotation = Quat::from_rotation_y(intent.yaw) * Quat::from_rotation_x(pitch);
 
     // `With<Camera3d>` without a further filter is enough because there is **at most one**
