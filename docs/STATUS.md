@@ -11,7 +11,7 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 
 **🟧 needs three pieces of evidence:** a picture (screenshot path), a number (measured, with the machine `[debian]`/`[cachy]`) and code (a test that goes red when it breaks). If one is missing it is 🟨 — doubt moves the stage down, not up (prompts/init.md §8, §9).
 
-**Tally:** 239 ⬜ · 6 🟨 · 0 🟧 · 0 ✅ of 245 rows.
+**Tally:** 238 ⬜ · 6 🟨 · 1 🟧 · 0 ✅ of 245 rows.
 
 ## combat
 
@@ -256,10 +256,10 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 
 | Item | ID | Stage | Evidence (test / screenshot / number) | Note |
 |---|---|---|---|---|
+| Testumgebung | T-006 | 🟧 | cargo test: 151 green, 0 red · --offscreen writes a real PNG without a window and without a graphics session, two runs bit-identical (sha256 eb212dfe) · docs/images/t006-world-far.png · red-checked: --headless --screenshot exits 1 with no file | 2026-08-09 [cachy] — the ceiling on machine A stays 🟨 until a wgpu adapter is proven there (QUESTIONS.md Q-009) |
 | Rojo- und Git-Aufsetzung | T-001 | 🟨 | cargo build gruen · git-Repo steht · 62 Tests gruen [debian] | 2026-08-09 [debian] — cargo statt Rojo (docs/architektur.md), Pixel ungesehen |
 | Service-Framework | T-003 | 🟨 | tests/domaenen.rs (3 Faelle) · 18 Domaenen-Plugins in Abhaengigkeitsreihenfolge | 2026-08-09 [debian] — Service-Framework = Domaenen-Plugins, Erlaubnisliste leer |
 | Konfigurationsschicht | T-005 | 🟨 | tests/data.rs (10 Faelle) · 6 RON-Dateien laden, kein serde(default) | 2026-08-09 [debian] — Zahlen sind UNGETUNT, Pixel ungesehen |
-| Testumgebung | T-006 | 🟨 | cargo test: 62 gruen, 0 rot · --headless laeuft ohne Grafiksitzung | 2026-08-09 [debian] — Pixel ungesehen |
 | Automatisierte Smoke-Tests | T-007 | 🟨 | scripts/t007-erste-fahrt.txt: 6 assert gehalten, 180 Ticks, Exit 0 · rot geprueft: falscher assert -> Exit 1 | 2026-08-09 [debian] — Pixel ungesehen |
 | Branch- und Review-Prozess | T-002 | ⬜ | — | — |
 | Luau strict mode | T-004 | ⬜ | — | entfaellt: Luau gibt es hier nicht. Entsprechung ist der Rust-Compiler plus tools/normen.py |
@@ -290,9 +290,9 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 
 | Item | ID | Stage | Evidence (test / screenshot / number) | Note |
 |---|---|---|---|---|
+| Getaggte Ankerflaechen (Ebene 1) | F-003 | 🟨 | 79 blocks from maps.ron (9 placed, 70 seeded, 63 taggable) · docs/images/f003-city.png and f003-anchors.png · tests/world.rs, red-checked: half-edge collider reports 'factor 0.50 against the file' | 2026-08-09 [cachy] — surfaces are tagged, collidable and visible, but NOT 🟧: the acceptance criterion is 'no hook on untagged parts', and there is no hook yet |
 | Doppelhaken-Grundsystem | F-001 | ⬜ | — | — |
 | Freies Zielen per Raycast (Ebene 1) | F-002 | ⬜ | — | — |
-| Getaggte Ankerflaechen (Ebene 1) | F-003 | ⬜ | — | — |
 | Pendelphysik bei Zwei-Haken-Zustand | F-004 | ⬜ | — | — |
 | Reel-In / Seilverkuerzung | F-005 | ⬜ | — | — |
 | Swerve-Steuerung | F-006 | ⬜ | — | — |

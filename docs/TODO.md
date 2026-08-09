@@ -258,7 +258,7 @@ before `Could` is the order, not a recommendation (prompts/init.md §2).
 | 🟨 | T-003 | Service-Framework | 1 | — | Must, no prerequisite |
 | ⬜ | T-004 | Luau strict mode | 1 | — | Must, no prerequisite |
 | 🟨 | T-005 | Konfigurationsschicht | 1 | — | Must, no prerequisite |
-| 🟨 | T-006 | Testumgebung | 1 | — | Must, no prerequisite |
+| 🟧 | T-006 | Testumgebung | 1 | — | Must, no prerequisite |
 | ⬜ | T-030 | Blender-Exportvorgabe | 1 | — | Must, no prerequisite |
 | ⬜ | T-031 | Asset-Namenskonvention | 1 | — | Must, no prerequisite |
 | ⬜ | T-033 | Ankerflaechen-Werkzeug | 1 | — | Must, no prerequisite |
@@ -294,7 +294,7 @@ before `Could` is the order, not a recommendation (prompts/init.md §2).
 | ⬜ | F-007 | Gas-Boost | 1 | F-001 | needs F-001 |
 | ⬜ | F-009 | Flips (seitlich) | 1 | F-001 | needs F-001 |
 | ⬜ | F-011 | Hook-Break (Notbremse) | 2 | F-001 | needs F-001 |
-| ⬜ | F-003 | Getaggte Ankerflaechen (Ebene 1) | 1 | F-002 | needs F-002 |
+| 🟨 | F-003 | Getaggte Ankerflaechen (Ebene 1) | 1 | F-002 | needs F-002 |
 | ⬜ | F-005 | Reel-In / Seilverkuerzung | 1 | F-004 | needs F-004 |
 | ⬜ | F-006 | Swerve-Steuerung | 1 | F-004 | needs F-004 |
 | ⬜ | F-008 | Boost-Dash | 1 | F-007 | needs F-007 |
