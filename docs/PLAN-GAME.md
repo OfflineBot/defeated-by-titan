@@ -1,5 +1,7 @@
 # PLAN-GAME — the build order for a playable game
 
+Updated: 2026-08-09 · Stage: 🟨 (a plan, not a measurement)
+
 One document, executable round by round. Built out of the three surveys
 (`plan-titan.md`, `plan-combat.md`, `plan-game.md`) plus my own verification of the tree as it
 stands at `ca2a51e` with the vector round still uncommitted in the working copy.
