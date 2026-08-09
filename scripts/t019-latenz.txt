@@ -1,0 +1,17 @@
+# t019-latenz — dieselbe Fahrt bei 200 ms simulierter Latenz.
+# Bibel T-019: jedes Bewegungsfeature wird AUCH so geprueft, nicht nur lokal.
+# „Fuehlt sich lokal gut an" ist keine Abnahme.
+#
+#   cargo run -- --headless --lag 200 --script scripts/t019-latenz.txt --ticks 900
+
+mark start
+assert hoehe > -1
+
+look 0 0
+key W 1.0
+wait 1.5                       # 12 Ticks mehr als ohne Lag — deshalb laenger warten
+mark gelaufen
+assert hoehe > -1
+assert hoehe < 3
+
+mark ende

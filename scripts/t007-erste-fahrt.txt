@@ -1,0 +1,29 @@
+# t007-erste-fahrt — der Rauchtest: laeuft das Spiel ueberhaupt, und faellt niemand durch
+# den Boden? (T-007 „Automatisierte Smoke-Tests", docs/backlog/tech.ron)
+#
+#   cargo run -- --headless --script scripts/t007-erste-fahrt.txt --ticks 600
+#
+# Faellt ein `assert`, endet der Prozess mit einem Exit-Code ungleich 0. Genau das macht
+# aus einer Fahrt einen Test (prompts/init.md §12b).
+
+mark start
+assert hoehe > -1              # nicht durch den Boden gefallen
+assert titanen == 0            # die Welt ist am Anfang leer
+
+look 0 0                       # Blick nach -Z, der Achsen-Vertrag (docs/konventionen.md)
+key W 1.0                      # eine Sekunde vorwaerts laufen
+wait 1.2                       # Commands sind verzoegert: erst warten, dann messen
+mark gelaufen
+assert hoehe > -1
+assert hoehe < 3               # kein Abheben ohne Vector Gear
+
+key Space 0.1                  # springen
+wait 0.2
+mark gesprungen
+assert hoehe > 0.05            # der Sprung hat wirklich Hoehe erzeugt
+
+wait 1.5                       # wieder landen
+mark gelandet
+assert hoehe < 0.5
+
+mark ende
