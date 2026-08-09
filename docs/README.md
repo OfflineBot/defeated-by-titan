@@ -27,6 +27,7 @@ checks that.
 | [`BUGS.md`](BUGS.md) | every bug with repro, evidence, expectation, cause — and the fix doctrine (red test first) |
 | [`HANDOVER.md`](HANDOVER.md) | **read this first when picking the project up** — where the last session stopped, what is measured, what comes next |
 | [`PLAN-GAME.md`](PLAN-GAME.md) | the build order to a playable game — rounds, owners, criteria |
+| [`measurements/`](measurements/README.md) | the raw evidence behind the architecture decisions — do not re-run these |
 | [`QUESTIONS.md`](QUESTIONS.md) | decisions that do not belong to Claude. Eleven open ones, each with the `ASSUMPTION:` the work continues under |
 | [`FINDINGS.md`](FINDINGS.md) | mistakes that turned up *along the way* — with a measurement, **not quietly fixed on the side** |
 | [`ACCEPTANCE.md`](ACCEPTANCE.md) | what the user should look at, so that something can become ✅ |

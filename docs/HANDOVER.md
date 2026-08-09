@@ -43,15 +43,15 @@ copy, uncommitted:
   none of it is above 🟨**, whatever the individual reports claim.
 
 The full commissions are in
-`/tmp/claude-1000/-home-offlinebot-Documents-defeated-by-titan/*/scratchpad/wf-stufe3.js`
-if that scratchpad still exists; if it does not, §4 has everything needed to rewrite them.
+[`measurements/stage3-commissions.js`](measurements/stage3-commissions.js)
+— verbatim and re-runnable.
 
 ---
 
 ## 3. The architecture is measured. Do not re-litigate it.
 
 Three measurement rounds produced this. Every line carries the number that decided it, and
-the long form is in `scratchpad/arch-*.md` plus `examples/probe_avian.rs` (3192 lines of
+the long form is in [`measurements/`](measurements/README.md) plus `examples/probe_avian.rs` (3192 lines of
 runnable probes — that file is the memory of those rounds).
 
 ```
@@ -84,7 +84,7 @@ Plus: players need `SleepingDisabled`, or one hanging still on a rope falls asle
 
 ## 4. What comes next, in order
 
-The full plan is in the scratchpad as `PLAN-GAME.md`; its definition of "playable" is one
+The full plan is [`PLAN-GAME.md`](PLAN-GAME.md); its definition of "playable" is one
 mission, one enemy kind, one way to win, two ways to lose, three minutes.
 
 1. **Finish the vector round.** F-004 pendulum and F-005 reel-in on top of the hooks, then
