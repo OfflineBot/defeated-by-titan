@@ -34,7 +34,7 @@
                      turn_deg_per_s: 50.0, accel_m_s2: 3.0,
                      strike_s: 0.2, recover_s: 0.4,
                      attack_range_m: 6.0, attack_cooldown_s: 1.5,
-                     aggro_radius_m: 45.0, death_s: 1.0, health: 100.0,
+                     aggro_radius_m: 45.0, death_s: 1.0, health: 100.0, damage: 34.0,
                      model: "titan_husk"),
         // Unpredictable changes of direction -> leading your shots. Stays husk-sized:
         // the surprise lies in the movement, not in the bulk.
@@ -44,7 +44,7 @@
                      turn_deg_per_s: 100.0, accel_m_s2: 6.0,
                      strike_s: 0.18, recover_s: 0.37,
                      attack_range_m: 6.0, attack_cooldown_s: 1.2,
-                     aggro_radius_m: 50.0, death_s: 1.0, health: 100.0,
+                     aggro_radius_m: 50.0, death_s: 1.0, health: 100.0, damage: 30.0,
                      model: "titan_husk"),
         // Very fast, jump attack -> vertical evasion. **The fast small one.**
         // The smallest class is his role: small enough to fit between houses.
@@ -61,7 +61,7 @@
                      turn_deg_per_s: 150.0, accel_m_s2: 12.0,
                      strike_s: 0.2, recover_s: 0.4,
                      attack_range_m: 2.5, attack_cooldown_s: 0.9,
-                     aggro_radius_m: 60.0, death_s: 0.8, health: 60.0,
+                     aggro_radius_m: 60.0, death_s: 0.8, health: 60.0, damage: 18.0,
                      model: "titan_husk"),
         // Evasive roll with i-frames -> timing instead of spam. A roll needs a short
         // body; 4.5 m sat between `small` (4.2) and `medium` (10) — decided for
@@ -75,7 +75,7 @@
                      turn_deg_per_s: 120.0, accel_m_s2: 8.0,
                      strike_s: 0.18, recover_s: 0.37,
                      attack_range_m: 2.5, attack_cooldown_s: 1.1,
-                     aggro_radius_m: 50.0, death_s: 0.8, health: 70.0,
+                     aggro_radius_m: 50.0, death_s: 0.8, health: 70.0, damage: 22.0,
                      model: "titan_husk"),
         // Shields the cortex with his hand -> arms first, then cortex. The cover only works
         // when the hand really does hide the cortex: for that he needs arm length.
@@ -85,7 +85,7 @@
                      turn_deg_per_s: 40.0, accel_m_s2: 3.0,
                      strike_s: 0.22, recover_s: 0.48,
                      attack_range_m: 8.0, attack_cooldown_s: 2.0,
-                     aggro_radius_m: 40.0, death_s: 1.4, health: 220.0,
+                     aggro_radius_m: 40.0, death_s: 1.4, health: 220.0, damage: 55.0,
                      model: "titan_large"),
         // Motionless ambush, grab out of the air -> changes of height, attention.
         // "Out of the air" is a question of reach: at 10 m he grabs below the roof, at
@@ -96,7 +96,7 @@
                      turn_deg_per_s: 45.0, accel_m_s2: 2.0,
                      strike_s: 0.2, recover_s: 0.45,
                      attack_range_m: 8.0, attack_cooldown_s: 1.8,
-                     aggro_radius_m: 25.0, death_s: 1.4, health: 200.0,
+                     aggro_radius_m: 25.0, death_s: 1.4, health: 200.0, damage: 48.0,
                      model: "titan_large"),
         // Reacts to the sound of gas, calls in reinforcements -> resource discipline.
         // **The big loud one.** He was the largest kind so far and stays it: the largest
@@ -107,7 +107,7 @@
                      turn_deg_per_s: 30.0, accel_m_s2: 2.0,
                      strike_s: 0.25, recover_s: 0.55,
                      attack_range_m: 12.0, attack_cooldown_s: 2.5,
-                     aggro_radius_m: 70.0, death_s: 1.6, health: 320.0,
+                     aggro_radius_m: 70.0, death_s: 1.6, health: 320.0, damage: 70.0,
                      model: "titan_large"),
         // Pairs cover each other -> target prioritization, separation. Two equally large
         // standard titans; the task is the pair, not the single body.
@@ -117,7 +117,7 @@
                      turn_deg_per_s: 55.0, accel_m_s2: 4.0,
                      strike_s: 0.2, recover_s: 0.4,
                      attack_range_m: 6.0, attack_cooldown_s: 1.4,
-                     aggro_radius_m: 45.0, death_s: 1.0, health: 100.0,
+                     aggro_radius_m: 45.0, death_s: 1.0, health: 100.0, damage: 30.0,
                      model: "titan_husk"),
 
         // The class `boss` (28 m) is deliberately unused: its first representative is a

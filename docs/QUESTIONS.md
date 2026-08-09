@@ -757,6 +757,47 @@ Two of them are worth your eye specifically, because they are not arbitrary:
 back:** only file values. No code depends on any particular one of them; the code holds units
 and mechanics, which is rule 2.
 
+## Q-030 — The blade reaches exactly as far as the titan is wide, and not one centimetre further
+
+**Context:** measured on 2026-08-09 while building `F-030`, and this is a measurement, not a
+worry. `gear.ron: blades.reach_m` is **1.60 m**. A husk is 10 m tall at
+`scale.ron: titan.width_fraction 0.25`, so his body radius is **1.25 m**, and the player's
+capsule radius is **0.35 m**. `1.25 + 0.35 = 1.60`.
+
+**There is zero margin.** For the blade tip to touch the cortex the player's capsule has to be
+*exactly* on the titan's axis, and one centimetre closer is a collision instead of a pass. In
+the measurement a test player at 30 m/s was thrown off at `(−28.4, 0, −13.0)` m/s while still
+**1.7 m** from the cortex, and no pass ever landed against a solid body.
+
+It gets worse with size, not better, and it is not fixable by shrinking the titan: a `large`
+titan (14 m) has a body radius of 1.75 m, so `1.75 + 0.35 = 2.10 m` against a 1.60 m blade —
+**0.50 m short**. Lowering `width_fraction` to 0.18 fixes the husk and still fails at `large`.
+
+**Three ways out, and the third is the one I believe in:**
+
+1. **Raise `reach_m`.** One line. But a 2.4 m blade on a 1.8 m person is not a blade any more,
+   and it would have to keep growing with the largest titan you ever want to fight.
+2. **Lower `width_fraction`.** One line. Does not reach; fails at `large` and above, and makes
+   every titan skinnier for a reason that has nothing to do with how a titan should look.
+3. **The body collider should follow the rig instead of being one fat column.** The cortex sits
+   on the **nape**, at head height, and a head is `0.11 × height` — far narrower than the torso.
+   A player cutting the nape never has to clear the torso's radius at all. The reach only looks
+   impossible because the titan is currently one collider as wide at the neck as at the hips.
+
+**ASSUMPTION:** option 3, and **I have changed no number**. `reach_m` stays 1.60 m and
+`width_fraction` stays 0.25, because both are honest values and the defect is in the collider
+shape, not in them. Changing a number here would hide a geometry bug behind a tuning value —
+and it would still be wrong at `large`.
+
+**What would have to be rolled back:** nothing yet. The work is a follow-up job in `titan/`
+(per-part colliders, or a narrower capsule at head height), not a file edit. If you would rather
+have the cheap version now, it is one line in `gear.ron` and it says so above.
+
+**Why it matters today:** the cut works and is proven at 8, 30 and 75 m/s against the cortex —
+but those tests place the blade themselves. **A player flying past a solid husk cannot currently
+reach the nape**, which means the kill is proven as a mechanism and not yet as a thing a player
+can do.
+
 ---
 
 ## Answered

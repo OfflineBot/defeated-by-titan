@@ -290,11 +290,18 @@ fn every_living_titan_gets_a_line_in_a_stable_order() {
     app.world_mut().run_schedule(Update);
 
     let (text, _) = overlay(&mut app);
-    let lines: Vec<&str> = text.lines().skip(1).collect();
+    // Two header lines since `F-070`: the player line, then the mission line. The titan block
+    // is what this test is about, and it comes after both.
+    let lines: Vec<&str> = text.lines().skip(2).collect();
     assert_eq!(
         lines,
         vec!["titan#2 Idle", "titan#5 Death", "titan#7 Windup", "titan#9 (no state)"],
         "the overlay printed {text:?}"
+    );
+    assert_eq!(
+        text.lines().nth(1),
+        Some("mission BRIEFING"),
+        "the mission line is the second one, and without --mission it reads Briefing: {text:?}"
     );
 }
 
@@ -367,28 +374,48 @@ fn assert_health_without_a_health_component_fails_loudly() {
 }
 
 #[test]
-fn assert_kills_is_zero_until_a_mission_counts_them() {
-    // The vocabulary has to exist BEFORE the mission job, otherwise Round 2 has no instrument
-    // to write its criteria in. Today the answer is an honest zero — and `assert kills >= 3`
-    // therefore fails, which is the safe direction.
+fn assert_kills_without_a_mission_measures_nothing_and_fails() {
+    // Same reasoning as `assert health` above, and the answer changed with `F-071`: the counter
+    // is a component on the mission entity, so a run without `--mission` has nothing to read.
+    // `Some(0.0)` would let `assert kills == 0` pass on a run in which the counter was never
+    // wired up at all — a check that found nothing is not a check that passed (§9).
     let mut app = running_app();
     let (checked, failures) = run_line(&mut app, "assert kills == 0");
     assert_eq!(checked, 1);
-    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(failures.len(), 1, "there is no mission to count kills in");
+    assert!(
+        failures[0].contains("nothing"),
+        "the message has to say that nothing was measured: {:?}",
+        failures[0]
+    );
 
     let (_, failures) = run_line(&mut app, "assert kills >= 3");
     assert_eq!(failures.len(), 1, "nobody has killed anything — this must not pass");
 }
 
 #[test]
+fn assert_phase_without_a_mission_reads_briefing() {
+    // The state is registered in **every** launch mode (`MissionPlugin`), so this one is
+    // always measurable — and `Briefing` (0) is the honest reading of "no mission was
+    // started", not a missing measurement.
+    let mut app = running_app();
+    let (checked, failures) = run_line(&mut app, "assert phase == 0");
+    assert_eq!(checked, 1);
+    assert!(failures.is_empty(), "{failures:?}");
+
+    let (_, failures) = run_line(&mut app, "assert phase == 2");
+    assert_eq!(failures.len(), 1, "nothing is Active without --mission");
+}
+
+#[test]
 fn a_metric_that_does_not_exist_is_an_error_and_not_a_zero() {
-    // `phase` deliberately does NOT exist yet: the mission state machine it would read has
-    // not been built. A parser that silently accepted it would hand Round 2 a green run that
-    // measured nothing.
-    let f = parse("assert phase == 1\n").expect_err("`phase` is not measurable today");
+    // A parser that silently accepted an unknown word would hand back a green run that
+    // measured nothing. `phase` was refused this way until `F-070` built the state machine it
+    // reads; the word that stands in for it here is one that measures nothing at all.
+    let f = parse("assert cloud == 1\n").expect_err("`cloud` is not measurable");
     assert!(f[0].reason.contains("not measurable"), "{:?}", f[0].reason);
     assert!(
-        f[0].reason.contains("health") && f[0].reason.contains("kills"),
+        f[0].reason.contains("health") && f[0].reason.contains("kills") && f[0].reason.contains("phase"),
         "the error message has to list what IS known: {:?}",
         f[0].reason
     );

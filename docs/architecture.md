@@ -30,14 +30,17 @@ code that is not listed here. Format: `from -> to   # reason`. An edge without a
 a decision, it is an oversight with a colon in it.
 
 ```allowed
-# (still empty — every edge needs a reason, and a reason why it does NOT go
-#  through a message in shared/)
+debug -> mission   # the F3 overlay and `assert phase|kills` read the mission phase and the
+                   #  kill counter. A message will not do: both are STATE, not an event —
+                   #  a tool that has to show what the game is doing right now cannot be
+                   #  served by a TitanHit that fired three ticks ago, and mirroring the
+                   #  state into shared/ would give one field two writers.
 ```
 
-**It is deliberately empty.** `prompts/init.md` §5 names `render` reads `world` as an example
-of a possible exception — so far it is not needed: `world` spawns entities with components out
-of `shared/`, and `render` queries those components without knowing `world`. Whoever enters the
-first edge writes down why a message would not do.
+**One line as of 2026-08-09**, and it was empty until then. `prompts/init.md` §5 names `render`
+reads `world` as an example of a possible exception — that one is still not needed: `world`
+spawns entities with components out of `shared/`, and `render` queries those components without
+knowing `world`. Whoever enters the next edge writes down, as above, why a message would not do.
 
 ## The order in `main.rs` is the dependency order
 

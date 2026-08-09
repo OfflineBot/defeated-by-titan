@@ -191,6 +191,11 @@ pub struct Game {
 pub struct PlayerTuning {
     pub height_m: f32,
     pub radius_m: f32,
+    /// `P5`. **⚠️ UNTUNED.** The second of the two ways to lose. At zero the player is
+    /// [`MovementState::Downed`] — **a state with a timer, never a despawned entity.**
+    ///
+    /// [`MovementState::Downed`]: crate::shared::MovementState::Downed
+    pub health: f32,
     pub run_speed_m_s: f32,
     pub jump_speed_m_s: f32,
     pub eye_height_m: f32,
@@ -469,6 +474,12 @@ pub struct TitanKind {
     /// cortex kill, which is a rule and not a threshold; needed the moment anything else
     /// does damage.
     pub health: f32,
+    /// What one landed strike takes off the player. **⚠️ UNTUNED, and until 2026-08-09 it did
+    /// not exist** — so a titan could wind up, strike and land, and nothing happened.
+    ///
+    /// Calibrated against `game.ron: player.health` (100): a husk needs **three** strikes.
+    /// That is what makes reading a telegraphed wind-up worth more than tanking it.
+    pub damage: f32,
     pub model: String,
 }
 

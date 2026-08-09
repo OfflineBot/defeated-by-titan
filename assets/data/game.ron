@@ -33,6 +33,12 @@
         // — so EXACTLY, not roughly: every size comparison in the image hangs on this number.
         height_m: 1.8,
         radius_m: 0.35,
+        // P5. ⚠️ UNTUNED. Two ways to lose is the bar (docs/PLAN-GAME.md §1), and one of
+        // them is this number reaching zero. 100 against a husk's damage of 34 means
+        // **three strikes and you are down** — which is what makes a telegraphed wind-up
+        // worth reading instead of tanking. A downed player is a STATE with a timer, not a
+        // removed entity (shared::MovementState::Downed).
+        health: 100.0,
         run_speed_m_s: 6.0,
         // 6.5 m/s at g = −20 give 6.5²/(2·20) = **1.056 m of apex**. That is enough for
         // neither a door (2.10 m; that would take 9.17 m/s) nor the eaves of the small

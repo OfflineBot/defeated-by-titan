@@ -1,0 +1,31 @@
+# f070-lost — the mission clock runs out, and the run says so.
+#
+#   cargo run -- --offscreen --mission tutorial --script scripts/f070-lost.txt \
+#                --screenshot docs/images/f070-lost.png --ticks 19950
+#
+# 330 s x 60 Hz = 19 800 ticks (assets/data/missions.ron: tutorial.target_duration_s).
+# The verdict is decided at tick 19 800 and is readable as a phase from 19 801 on — a
+# `NextState` set in FixedUpdate is applied by the StateTransition schedule of the next
+# frame. The asserts therefore stand well past it and not on the edge.
+#
+# `phase == 4` is `Lost` (mission::MissionPhase::code): 0 Briefing, 1 Deploying, 2 Active,
+# 3 Won, 4 Lost.
+#
+# ⚠️ The run takes 5-6 REAL minutes: the fixed step is driven by real time, and the mission
+# is five and a half minutes long. That is not a hang.
+#
+# The camera stands where the player spawns and looks along +X (yaw 0 is -Z, so +X is -90;
+# docs/conventions.md), eight degrees up at a 10 m titan 24 m away — that is where the first
+# titan of the ring stands. The framing was arrived at by looking at the image, not by
+# reasoning about it.
+
+key F3 0.5        # the overlay carries the phase, the kills and the tick into the PNG
+look -90 8
+
+wait 332          # 19 920 ticks — 120 past the deadline
+
+assert phase == 4     # Lost, and not Won: nobody cut anything in this run
+assert kills == 0
+assert tick > 19800
+
+wait 10           # keep the run alive until the screenshot tick, then it exits by itself

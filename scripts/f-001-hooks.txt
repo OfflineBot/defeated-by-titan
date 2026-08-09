@@ -1,9 +1,10 @@
-# f-001-hooks — both triggers, through the real input path, in the real city.
+# f-001-hooks — both triggers, through the real input path, in the real city — and a hook
+# that HOLDS and moves the player.
 #
 # **Two runs, because one command cannot do both.** The picture:
 #
 #   env DBT_GIZMOS=1 cargo run --features wayland,audio -- --offscreen \
-#       --script scripts/f-001-hooks.txt --ticks 260 --screenshot docs/images/f-001-hooks.png
+#       --script scripts/f-001-hooks.txt --ticks 400 --screenshot docs/images/f-001-hooks.png
 #
 # and the test, which is a SEPARATE run:
 #
@@ -14,55 +15,105 @@
 # not finished by then, its assert summary never prints, and **a failed assert does not fail
 # the run**. Only the headless run reports "N asserts held" and returns a usable exit code.
 #
-# **What this run proves and what it does not.** It drives the two mouse buttons the way a
-# human does — `hook left` presses `MouseButton::Left`, `src/net/local.rs` turns it into
+# ---------------------------------------------------------------------------------------
+# ⚠️ WHAT THIS FILE USED TO ASSERT, AND WHY THAT WAS WORSE THAN NO TEST — repaired 2026-08-09
+#
+# Until today this script carried `assert speed < 0.5` **twice**, commented "a hook that finds
+# nothing must not move the player". That was written when no hook could anchor at all
+# (`B-001`: `world::index::maintain_index` was a stub, no block carried a `BodyId`,
+# `vector::hook::anchor_target` turned every shot into `ReleaseReason::NoAnchor`). The asserts
+# described the broken state — and so they **locked it in**: `B-001` was fixed this session,
+# and the run still printed "5 asserts held" and exited 0 while both hooks reported
+#
+#   hook Left of player 1 found nothing anchorable (t=112)
+#
+# It kept reporting that for a **second, independent** reason as well: the old aim was
+# `look 0 -8`, and 8 degrees down from an eye at 1.6 m puts the ray on the GROUND at z = -7.4,
+# 2.6 m short of the sand-brown block at z = -10 — and the ground slab is `anchorable: false`
+# in `maps.ron`. So the file was green, silent, and wrong twice over.
+#
+# What it asserts now is the opposite, and it goes red the day hooking breaks again:
+# the shot anchors, the reel pulls, and the player ends up on a roof he cannot reach any
+# other way.
+# ---------------------------------------------------------------------------------------
+#
+# **What this run proves.** It drives the two mouse buttons the way a human does —
+# `hook left` presses `MouseButton::Left`, `src/net/local.rs` turns it into
 # `Buttons::HOOK_LEFT`, the inbox delivers it as an `Intent`, and `vector::hook::update_hooks`
-# reads the edge. Every station of that chain reports in the log.
+# reads the edge. Every station of that chain reports in the log. Both buttons are held for a
+# full second, and the trigger reports exactly once per press — that is `just_pressed` against
+# `PrevButtons` doing its job in the real game, not in a test.
 #
-# What it does NOT prove is a hook that holds. `vector::aim::aim` (`F-002`) is built and its
-# ray does hit — measured here: `point_m: Some((0, 1.5999689, -10))`, `anchorable: true` — but
-# **`body: None`**, because `world::index::maintain_index` (`T-036a`) is a stub and not one
-# entity in this world carries a `BodyId`. A hook stores the stable id of its carrier and
-# never an `Entity`, so with no id there is nothing to hang on: every shot ends as
-# `ReleaseReason::NoAnchor`.
+# **Why the watchtower and not the 4 m block.** `assets/data/maps.ron` places a 12 m
+# `landmark` at (24, 6, -40), so its near face is z = -34 and its roof is y = 12. Standing 14 m
+# in front of it at 34 degrees up, the ray lands at (24, 11.04, -34) — near the top of a face
+# that carries `anchorable: true`.
 #
-# Which turns the miss into the evidence for the other half: **two lines in the log, not
-# sixty.** Both buttons are held for a full second each (60 ticks), and the trigger reports
-# exactly once per press — that is `just_pressed` against `PrevButtons` doing its job in the
-# real game, not in a test.
+# That height is the whole measurement. `assets/data/game.ron` gives `jump_speed_m_s` 6.5
+# against g = -20, so a jump reaches **1.056 m**, and `scripts/f-007-boost.txt` states the
+# other half: there is no second source of upward motion in this build except the gas boost,
+# and this script never presses Shift. **Every metre above 1.056 came out of the rope.**
 #
-# ⚠️ `DBT_GIZMOS=1` is part of the command, not decoration (`src/debug/gizmo.rs`). It outlines
-# every `AnchorSurface` in cyan — the 63 anchorable blocks of the graybox out of
-# `assets/data/maps.ron`. Without it the image shows a city and says nothing about F-001; with
-# it, it shows what a hook is allowed to take and, by the log line beside it, that nothing was
-# taken because the aim layer is missing. The rope itself is not in the image either:
-# `src/render/rope.rs::draw_ropes` is registered and empty.
-#
-# ⚠️ The 260 ticks belong to THIS file: both shots and all six `assert`s are past by tick 235.
-# Whoever changes a `wait` changes the image.
+# ⚠️ The 400 ticks belong to THIS file, and the number is **measured, not chosen**. At tick 400
+# the player stands still on the watchtower roof; three `--offscreen` runs then give one
+# sha256 (`231e7d86…`). At tick 200 he is in the air at 46 m/s and the same command gives
+# **two different files** — 38 828 of 921 600 pixels apart, the whole frame shifted. The
+# simulation is not what drifts: three `--headless` runs report 13.064 m and 46.414 m/s to the
+# last digit. What drifts is *which tick the shutter catches* under `--offscreen`, and one
+# tick at 46 m/s is 0.77 m of camera travel. **A picture of this game is only reproducible
+# where the state changes slowly** — reported as a finding, not fixed here.
 
 wait 1.5                # world, camera, meshes and the render pipelines come up (90 ticks)
 
-# 4 m south of the origin, eye height, looking along -Z and slightly down: the sand-brown
-# 4 m block at (0, 2, -12) and the blocks behind it fill the frame, and all of them carry
-# `anchorable: true` in maps.ron.
-look 0 -8
-warp 0 0 4
+# 14 m in front of the watchtower, eye height, looking 34 degrees up at its upper face.
+look 0 34
+warp 24 0 -20
 wait 0.3                # the warp takes effect one tick later than it is written
 
 assert height > -0.1    # standing on the ground, not sunk into it
 assert height < 0.5     # and not floating
+assert speed < 0.5      # and standing STILL — the baseline every number below is read against
 mark f-001-aiming
 
-hook left 1.0           # hold the LEFT trigger for a full second
+hook right 1.0          # the RIGHT trigger, on its own
 wait 1.0
-mark f-001-left-fired
-assert speed < 0.5      # a hook that finds nothing must not move the player
-
-hook right 1.0          # and the RIGHT one, independently
-wait 1.0
-mark f-001-right-fired
+mark f-001-right-anchored
+# A hook that has anchored but is not reeled in changes nothing — the rope is slack, and
+# `F-005` says in so many words that reel-in is a change of LENGTH, not a pulling force. This
+# is the one place `speed < 0.5` is still the right assertion, and now it means something.
 assert speed < 0.5
 assert height > -0.1
+assert height < 0.5
 
-wait 5                  # keep the run alive: if it ends, the process ends before the image
+hook left 6.0           # and the LEFT one — held, because the rope only exists while it is
+wait 0.4
+mark f-001-left-anchored
+
+key Ctrl 5.0            # REEL_IN: the rope gets shorter and the player goes with it
+wait 0.6
+mark f-001-reeled
+assert height > 12.0    # a jump reaches 1.056 m. Twelve metres is the rope, and nothing else.
+assert height < 14.0
+assert speed > 35.0     # measured 46.4 m/s [debian] — see the note below
+assert speed < 55.0
+assert gas < 100        # and the reel really was paid for out of the tank
+
+wait 1.2
+mark f-001-on-the-roof
+assert height > 11.5    # he ends up standing on the watchtower roof: maps.ron, y = 12
+assert height < 12.5
+assert speed < 1.0
+
+# The camera still points 34 degrees up, and from the roof that is 1280x720 pixels of sky —
+# a true photograph of nothing (`scripts/f-007-boost.txt` makes the same point). Turn it down
+# onto the roof he is standing on; the boost is long over, so this moves the camera only.
+look 0 -35
+wait 0.5
+mark f-001-roof-view
+
+# ⚠️ 46 m/s out of one reel is a FINDING, not an acceptance: `F-005`'s "change of length"
+# reads here as a yank, and the brackets above are wide on purpose so that this file measures
+# "the hook moves the player" and not somebody's tuning of `vector.reel_speed_m_s`. The tuning
+# belongs to the vector job.
+
+wait 3                  # keep the run alive: if it ends, the process ends before the image

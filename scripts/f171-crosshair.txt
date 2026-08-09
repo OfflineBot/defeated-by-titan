@@ -1,0 +1,67 @@
+# f171-crosshair — the three crosshair states, one after the other, in the real game.
+#
+# **Three runs of ONE file, because a screenshot is one frame.** `--ticks` is also the shutter
+# (`debug::screenshot`), so the state is chosen by the tick the shutter falls on:
+#
+#   cargo run -q -- --offscreen --script scripts/f171-crosshair.txt --ticks 126 \
+#       --screenshot <tmp>/f171-free.png       # nothing in range   -> 4 short ticks
+#   cargo run -q -- --offscreen --script scripts/f171-crosshair.txt --ticks 188 \
+#       --screenshot <tmp>/f171-anchor.png     # anchorable in range -> 4 long ticks, cyan
+#   cargo run -q -- --offscreen --script scripts/f171-crosshair.txt --ticks 238 \
+#       --screenshot <tmp>/f171-cortex.png     # cortex in range     -> 8 nodes, amber
+#
+# The three crops are laid side by side into `docs/images/f171-crosshair.png`. And the run
+# that returns a usable exit code is a fourth, separate one:
+#
+#   cargo run -q -- --headless --script scripts/f171-crosshair.txt --ticks 600
+#
+# ## The three viewpoints, and why each one really is its state
+#
+#   FREE   (24, 0, -20), `look 0 60` — 60 degrees up is sky. `vector::aim` finds nothing, so
+#          `AimPoint::anchorable` is false and no cortex ray hits: the neutral, short cross.
+#   ANCHOR (24, 0, -20), `look 0 34` — the watchtower at (24, 6, -40) in `maps.ron`, near face
+#          z = -34, roof y = 12, `anchorable: true`. The ray lands at (24, 11.04, -34); the
+#          same aim `scripts/f-001-hooks.txt` hooks with. Long ticks, cyan.
+#   CORTEX (17.5, 0.05, 76.5), `look 0 17` — a husk stands 24 m away. `titan.ron` puts his
+#          cortex at 8.9 m with a radius of 0.55 m; 17 degrees from an eye at 1.65 m reaches
+#          8.99 m at that distance, inside the sphere. Eight nodes, amber.
+#
+# ## Two placements that are not arbitrary
+#
+# **The husk stands at (17.5, 0, 52.5) and not next to the tower.** `titan.ron` gives the husk
+# `aggro_radius_m: 45`, and a husk inside that radius turns and walks — which would move the
+# cortex out from under an aim written down in advance. From the tower spot he is 72.8 m away
+# and stands still through the first two states.
+#
+# **Both x = 17.5 and z = 52.5 are street centre lines.** `maps.ron` puts lot centres on
+# multiples of `lot_m + street_m` = 35 m, so a lot reaches 14 m out and the street between two
+# of them is 14..21 m. A titan spawned on a lot stands inside a house.
+#
+# ⚠️ The three tick numbers belong to THIS file. Whoever changes a `wait` changes all three.
+
+warp 180 2 180             # park far away while the husk comes up: no aggro, no walking
+spawn titan husk 17.5 0 52.5
+
+wait 1.5                   # 90 ticks: world, camera, meshes and the render pipelines come up
+
+# ---- 1: nothing in range ---------------------------------------------------------------
+look 0 60
+warp 24 0 -20
+wait 0.5
+mark f171-free
+
+# ---- 2: an anchorable face in range -----------------------------------------------------
+wait 0.5
+look 0 34
+wait 0.5
+mark f171-anchor
+
+# ---- 3: a cortex in range ---------------------------------------------------------------
+wait 0.5
+warp 17.5 0.05 76.5
+look 0 17
+wait 0.3
+mark f171-cortex
+assert titans == 1         # the husk is really standing there, and it is exactly one
+
+wait 4                     # keep the run alive: if it ends, the process ends before the image

@@ -1,0 +1,40 @@
+# f071-won — the skirmish: the mission is running, the waves come, nobody has won yet.
+#
+#   cargo run -- --offscreen --mission tutorial --script scripts/f071-won.txt \
+#                --screenshot docs/images/f071-active.png --ticks 200
+#
+# ⚠️ **This script cannot reach `Won` today, and it does not pretend to.** A win needs three
+# `TitanHit { zone: Cortex }`, and the only thing that produces those in a real run is
+# `combat`/`blades` — built in the same round, by another job, and not landed when this file
+# was written. The script vocabulary has no `hit` command on purpose: a second, wrong way to
+# damage a titan would make every combat measurement meaningless.
+#
+# So what it checks is everything about `F-071` that is reachable without a blade:
+#   - `--mission tutorial` really starts a mission (phase 2 = Active),
+#   - the 0 s wave of `missions.ron` really puts a titan in the world,
+#   - and an empty-ish field does NOT win the mission.
+#
+# When `combat` writes `TitanHit`, this script gets a flight and a cut, and the two lines at
+# the bottom come out of their comments. The tick of `Won` then goes in the commit message.
+#
+# `phase` numbers (mission::MissionPhase::code): 0 Briefing, 1 Deploying, 2 Active, 3 Won,
+# 4 Lost.
+
+key F3 0.5        # the overlay carries phase and kills into the PNG
+look -90 8
+
+wait 1            # the 0 s wave is asked for in tick 1 and stands at the end of it
+
+assert phase == 2     # Active — a mission that is neither won nor lost
+assert kills == 0
+assert titans >= 1    # the wave out of missions.ron really arrived
+
+wait 2
+
+assert phase == 2     # and it is still not won by an almost empty field
+assert kills == 0
+
+# --- when combat lands, this is the rest of it ------------------------------------------
+# (three cortex cuts, then:)
+# assert kills >= 3
+# assert phase == 3

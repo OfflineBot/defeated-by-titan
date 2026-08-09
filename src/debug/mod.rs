@@ -18,6 +18,11 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::text::FontSize;
 
+// `debug -> mission`: the F3 overlay and `assert phase|kills` read the mission's phase and its
+// kill counter. There is no message to read them from — they are *state*, not an event, and a
+// tool that has to see the state of a running game cannot be served by a message that fired
+// three ticks ago. The edge has its line with this reason in `docs/architecture.md`.
+use crate::mission::{KillTally, MissionPhase};
 use crate::shared::{
     MovementState, LookOverride, IntentSystems, Gas, Health, LocalPlayer, Mark, PlayerId,
     WarpPlayer, Cli, Velocity, Tick, TitanId, TitanState, SpawnTitan,
@@ -144,6 +149,14 @@ pub struct DriverWorld<'w, 's> {
         With<LocalPlayer>,
     >,
     titans: Query<'w, 's, &'static TitanId>,
+    /// The mission's kill counter. A `Query` and not a resource, because the counter is a
+    /// component on the mission entity with one number per player (`F-096` wants that later).
+    /// Empty when no mission is running — and then `assert kills` measures **nothing**, which
+    /// counts as failed. That is the direction that cannot lie.
+    tally: Query<'w, 's, &'static KillTally>,
+    /// The mission phase. This one **always** exists: `MissionPlugin` registers the state in
+    /// every launch mode, and without `--mission` it reads `Briefing` forever.
+    phase: Res<'w, State<MissionPhase>>,
 }
 
 /// Runs the script — one instruction per tick, except at `wait`.
@@ -261,12 +274,17 @@ fn measure(metric: Metric, world: &DriverWorld, tick: u64) -> Option<f32> {
     match metric {
         Metric::Titans => Some(world.titans.iter().count() as f32),
         Metric::Tick => Some(tick as f32),
-        // ⚠️ **The one line the mission job replaces** (`F-070`/`F-071`, `docs/PLAN-GAME.md`
-        // §5): the kill counter becomes a component on the `Mission` entity with per-
-        // `PlayerId` counts, so read it off there and hand back that player's number. Until
-        // then this is an honest zero — `assert kills >= 3` therefore fails, which is the
-        // direction that cannot lie. **The parser does not have to be touched for it.**
-        Metric::Kills => Some(0.0),
+        // The line the mission job was left to fill in (`F-070`/`F-071`): the counter is a
+        // component on the mission entity with per-`PlayerId` counts, so this hands back the
+        // **local player's** number. `None` when there is no mission or no player — a check
+        // that found nothing is not a check that passed.
+        Metric::Kills => {
+            let (id, ..) = world.players.iter().next()?;
+            Some(world.tally.iter().next()?.of(*id) as f32)
+        }
+        // Always measurable: the state is registered in every launch mode, and "no mission" is
+        // the honest answer `Briefing` (0), not a missing one.
+        Metric::Phase => Some(world.phase.get().code() as f32),
         Metric::Speed | Metric::Height | Metric::Gas | Metric::Health => {
             let (_, transform, gas, tempo, health) = world.players.iter().next()?;
             match metric {
@@ -276,7 +294,9 @@ fn measure(metric: Metric, world: &DriverWorld, tick: u64) -> Option<f32> {
                 // `None` and not `0.0`: a player with no `Health` component is not a player
                 // at zero health, it is a player nobody has measured.
                 Metric::Health => health.map(|h| h.current),
-                Metric::Titans | Metric::Tick | Metric::Kills => unreachable!("handled above"),
+                Metric::Titans | Metric::Tick | Metric::Kills | Metric::Phase => {
+                    unreachable!("handled above")
+                }
             }
         }
     }
@@ -306,7 +326,8 @@ fn nan_guard(
     }
 }
 
-/// The F3 overlay: tick, position, gas, movement state — and one line per living titan.
+/// The F3 overlay: tick, position, gas, movement state, **the mission line** — and one line per
+/// living titan.
 ///
 /// That makes every report reproducible: the user sends a coordinate, and `warp` puts you
 /// exactly there (§12c). And it is what turns a screenshot into a **measurement**: the number
@@ -355,6 +376,11 @@ pub fn update_overlay(
     tick: Res<Tick>,
     players: Query<(&Transform, &Gas, &MovementState), With<LocalPlayer>>,
     titans: Query<(&TitanId, Option<&TitanState>)>,
+    // The mission phase and its counter. Until `hud` (`F-170`) draws the objective line and the
+    // word `WON`/`LOST`, **this is the only place a screenshot can show what the mission is
+    // doing** — and a picture without the verdict in it is not evidence for `F-070`.
+    phase: Res<State<MissionPhase>>,
+    tallies: Query<&KillTally>,
     mut lines: Query<(&mut Text, &mut Node), With<DebugOverlay>>,
     mut visible: Local<bool>,
 ) {
@@ -379,6 +405,18 @@ pub fn update_overlay(
             ),
             None => format!("t={}  (no local player)", tick.0),
         };
+
+        // The mission line. The counter is only there while a mission runs; the phase always
+        // is, and `BRIEFING` is the honest reading of "no mission was started".
+        content.push_str(&match tallies.iter().next() {
+            Some(tally) => format!(
+                "\nmission {}  kills {}/{}",
+                phase.get().label(),
+                tally.total(),
+                tally.target
+            ),
+            None => format!("\nmission {}", phase.get().label()),
+        });
 
         let mut bodies: Vec<(u32, Option<TitanState>)> =
             titans.iter().map(|(id, state)| (id.0, state.copied())).collect();

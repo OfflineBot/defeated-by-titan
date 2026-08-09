@@ -77,13 +77,20 @@ pub enum Metric {
     /// the safe direction: an `assert health > 0` that passed on a missing component would be
     /// the exact silent lie this whole file exists to prevent.
     Health,
-    /// Titans killed in the running mission.
+    /// Titans killed in the running mission, **for the local player**.
     ///
-    /// **Zero until there is a mission.** The vocabulary comes first on purpose: Round 2
-    /// writes its acceptance criteria in it (`docs/PLAN-GAME.md` §8, `F-071`), and a criterion
-    /// you cannot write down is a criterion nobody checks. Whoever builds the mission fills in
-    /// exactly one line in `debug::measure` — **the parser does not get touched again.**
+    /// The vocabulary came first on purpose: Round 2 wrote its acceptance criteria in it
+    /// (`docs/PLAN-GAME.md` §8, `F-071`), and a criterion you cannot write down is a criterion
+    /// nobody checks. Since `F-071` it reads the `KillTally` of the running mission; **without
+    /// a mission it measures nothing**, and nothing counts as failed.
     Kills,
+    /// Which phase the mission is in, as a number:
+    /// `0` Briefing · `1` Deploying · `2` Active · `3` Won · `4` Lost.
+    ///
+    /// The mapping lives with the enum (`mission::MissionPhase::code`), not here: a script that
+    /// means `Lost` and gets `Won` because somebody inserted a variant in the middle is a green
+    /// run that measured the opposite of what it says.
+    Phase,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -224,13 +231,15 @@ fn parse_line(line: &str) -> Result<ScriptCommand, String> {
                 "tick" => Metric::Tick,
                 "health" => Metric::Health,
                 "kills" => Metric::Kills,
-                // `phase` is deliberately NOT here: the mission state machine it would read
-                // does not exist (`F-070`). A parser that accepted it would hand the mission
-                // round a green run that measured nothing.
+                // `phase` became measurable with `F-070`: the mission state machine it reads
+                // exists since 2026-08-09. Until then it was refused on purpose — a parser
+                // that accepted it would have handed the mission round a green run that
+                // measured nothing.
+                "phase" => Metric::Phase,
                 other => {
                     return Err(format!(
                         "metric {other:?} is not measurable — known: \
-                         speed, height, gas, titans, tick, health, kills"
+                         speed, height, gas, titans, tick, health, kills, phase"
                     ));
                 }
             };
@@ -371,16 +380,30 @@ assert speed > 25
     }
 
     #[test]
-    fn phase_is_deliberately_not_a_metric_yet() {
-        // The mission state machine it would read does not exist. A parser that took the word
-        // anyway would report a green run that measured nothing (§9).
-        let f = parse("assert phase == 1").expect_err("`phase` must not parse today");
+    fn phase_became_a_metric_with_the_mission_state_machine() {
+        // It was refused until `F-070` existed. Now it parses — and the number it compares
+        // against is the one `mission::MissionPhase::code` writes down, not a fresh one.
+        let a = parse("assert phase == 4").expect("`phase` is measurable since F-070");
+        let ScriptCommand::Assert { metric, comparison, value } = a[0].command else {
+            panic!("`assert phase == 4` did not become an assert");
+        };
+        assert_eq!(metric, Metric::Phase);
+        assert_eq!(comparison, Comparison::Equal);
+        assert_eq!(value, 4.0);
+    }
+
+    #[test]
+    fn an_unknown_metric_still_lists_what_is_known() {
+        // The error message is the only place a script author finds the vocabulary.
+        let f = parse("assert cloud == 1").expect_err("`cloud` measures nothing");
         assert!(f[0].reason.contains("not measurable"));
-        assert!(
-            f[0].reason.contains("health") && f[0].reason.contains("kills"),
-            "the error has to list what IS known: {:?}",
-            f[0].reason
-        );
+        for known in ["health", "kills", "phase"] {
+            assert!(
+                f[0].reason.contains(known),
+                "the error has to list {known:?}: {:?}",
+                f[0].reason
+            );
+        }
     }
 
     #[test]
