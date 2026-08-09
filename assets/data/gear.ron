@@ -1,0 +1,17 @@
+// gear.ron — Klingen, Tanks, Nachschub. Wirtschaft statt Cooldowns (init.md §1).
+// ⚠️ UNGETUNT, siehe game.ron.
+(
+    klingen: (
+        paare_start: 5,
+        abnutzung_pro_treffer: 0.12,
+        // Schaden kommt aus GESCHWINDIGKEIT: ein Schnitt aus dem Stand kratzt,
+        // derselbe Schnitt aus 30 m/s toetet (init.md §1). Die Formel steht hier,
+        // nicht in Rust.
+        schaden_pro_m_s: 1.4,
+        mindesttempo_m_s: 8.0,
+    ),
+    nachschub: (
+        gas_pro_s: 40.0,
+        reichweite_m: 4.0,
+    ),
+)

@@ -1,0 +1,44 @@
+// game.ron — Tuning: Vector Gear, Kamera, Physik.
+//
+// Alle Laengen in METERN (1 Bevy-Einheit = 1 Meter, docs/konventionen.md).
+// Das Backlog rechnet in studs; umgerechnet wird HIER, einmal, mit 0,28 m/stud
+// (docs/FRAGEN.md Q-002) — im Code gibt es keine studs.
+//
+// ⚠️ UNGETUNT. Diese Zahlen sind Startwerte, kein Balancing. Genau dafuer ist die Datei da:
+// sie zu aendern kostet keinen Rebuild. Das P1-Gate ist ein Blindtest gegen die Referenz,
+// und bis der bestanden ist, ist hier nichts fertig (Bibel 6.2).
+(
+    // 60 Hz feste Simulation. Das Bild interpoliert dazwischen; im Netz ist ein
+    // frameabhaengiges Ergebnis kein Komfortproblem, sondern Desync (init.md §6 Regel 4).
+    simulation_hz: 60.0,
+    schwerkraft_m_s2: -20.0,   // haerter als 9,81: Schwungspiel, nicht Simulation
+
+    spieler: (
+        hoehe_m: 1.8,
+        radius_m: 0.35,
+        laufen_m_s: 6.0,
+        sprung_m_s: 6.5,
+        augenhoehe_m: 1.65,
+    ),
+
+    vector: (
+        // F-002: Reichweite = Range-Stat, Basis 400 studs -> 112 m
+        hakenreichweite_m: 112.0,
+        hakenflug_m_s: 90.0,
+        seilzug_m_s: 28.0,        // F-005 Reel-In
+        seil_min_m: 3.0,          // naeher heran wuerde die Kamera in die Wand ziehen
+        gas_tank: 100.0,
+        gas_boost_pro_s: 18.0,
+        gas_einholen_pro_s: 6.0,
+        boost_m_s2: 34.0,
+        // Velocity-Clamp ab Tag 1, nicht nachtraeglich (Bibel 6.4, Risiko Fling-Exploits)
+        tempo_max_m_s: 75.0,
+    ),
+
+    kamera: (
+        sicht_grad: 90.0,
+        maus_grad_pro_punkt: 0.08,
+        pitch_grenze_grad: 89.0,
+        glaetten_halbwertszeit_s: 0.05,
+    ),
+)

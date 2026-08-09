@@ -1,0 +1,19 @@
+// missions.ron — Einsatzvorlagen: Ziele, Phasen, Spawn-Wellen, Belohnung.
+// Eine neue Mission ist Datei-Arbeit, kein Rust (init.md §4).
+//
+// STAND: eine einzige Vorlage, damit `--mission tutorial` etwas zu laden hat.
+// Der Missionsbogen dauert 5–7 min (Bibel 5, Aenderung 10).
+(
+    vorlagen: {
+        "tutorial": (
+            name: "Erster Ausritt",
+            map: "ashgate",
+            dauer_ziel_s: 330.0,
+            wellen: [
+                (bei_s:   0.0, art: "husk",     anzahl: 1),
+                (bei_s:  90.0, art: "husk",     anzahl: 2),
+                (bei_s: 210.0, art: "scuttler", anzahl: 1),
+            ],
+        ),
+    },
+)

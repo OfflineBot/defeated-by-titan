@@ -1,0 +1,35 @@
+// titan.ron — die Titanen-Typen. Benannt nach dem Gattungsbegriff **Titan**
+// (Blatt 10_Namensschema: „Titan bleibt"), ohne Plural-s, wie der Projektname.
+//
+// Mindestens die HAELFTE aller Typen hat eine Anti-Autopilot-Eigenschaft (Bibel 4) —
+// sonst verkommt der Kampf zu Mausklicken auf Zielscheiben.
+// ausholphase_s ist ueberall >= 0,4 (Bibel, Pfeiler P4). tests/data.rs prueft das.
+// ⚠️ UNGETUNT, siehe game.ron.
+(
+    arten: {
+        // Grundlage: Anflugwinkel lernen
+        "husk":     (hoehe_m:  5.0, tempo_m_s:  3.0, cortex_radius_m: 0.55,
+                     regeneration_pro_s: 0.8, ausholphase_s: 0.60, modell: "titan_husk"),
+        // Unvorhersehbare Richtungswechsel -> Fuehrungsschuesse
+        "errant":   (hoehe_m:  5.0, tempo_m_s:  6.5, cortex_radius_m: 0.50,
+                     regeneration_pro_s: 0.8, ausholphase_s: 0.45, modell: "titan_husk"),
+        // Sehr schnell, Sprungangriff -> vertikales Ausweichen
+        "scuttler": (hoehe_m:  3.5, tempo_m_s: 11.0, cortex_radius_m: 0.40,
+                     regeneration_pro_s: 1.1, ausholphase_s: 0.40, modell: "titan_husk"),
+        // Ausweichrolle mit I-Frames -> Timing statt Spam
+        "weaver":   (hoehe_m:  4.5, tempo_m_s:  7.0, cortex_radius_m: 0.45,
+                     regeneration_pro_s: 1.0, ausholphase_s: 0.50, modell: "titan_husk"),
+        // Schuetzt den Cortex mit der Hand -> erst Arme, dann Cortex
+        "warden":   (hoehe_m:  8.0, tempo_m_s:  3.5, cortex_radius_m: 0.60,
+                     regeneration_pro_s: 0.6, ausholphase_s: 0.70, modell: "titan_gross"),
+        // Regloser Hinterhalt, Griff aus der Luft -> Hoehenwechsel, Aufmerksamkeit
+        "lurker":   (hoehe_m:  5.0, tempo_m_s:  2.0, cortex_radius_m: 0.50,
+                     regeneration_pro_s: 0.7, ausholphase_s: 0.40, modell: "titan_husk"),
+        // Reagiert auf Gas-Geraeusch, ruft Verstaerkung -> Ressourcendisziplin
+        "bellower": (hoehe_m: 10.0, tempo_m_s:  2.5, cortex_radius_m: 0.70,
+                     regeneration_pro_s: 0.5, ausholphase_s: 0.80, modell: "titan_gross"),
+        // Paare decken sich gegenseitig -> Zielpriorisierung, Trennung
+        "chorus":   (hoehe_m:  5.0, tempo_m_s:  5.0, cortex_radius_m: 0.50,
+                     regeneration_pro_s: 0.9, ausholphase_s: 0.55, modell: "titan_husk"),
+    },
+)
