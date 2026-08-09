@@ -119,6 +119,25 @@ The normal case in this project is that the user is **not** there. Then this hol
 - **At the end of every autonomous stretch stands one honest paragraph about what went
   unseen.**
 
+### The division of labour (user, 2026-08-09)
+
+> *„deine aufgabe ist es die agents so zu managen dass diese ein komplettes spiel fertig
+> bekommen in einer sitzung. auch wenn diese sitzung sehr lange geht!"*
+
+- **The supervisor does not stop while anything is left.** One round ends, the next one starts
+  in the same breath. Reporting is not a resting point — a report that is not followed by the
+  next commission has wasted the round.
+- **The user answers in the files, not in the chat.** He plays, and what he notices he writes
+  into `docs/QUESTIONS.md`, `docs/BUGS.md` or `docs/FINDINGS.md` — sometimes through another
+  agent. **Therefore every round begins by looking whether those three files changed**
+  (`git status`, `git log`, and read them). An answer that lies there unread is worse than no
+  answer, because the assumption keeps running on top of it.
+- **Ask for as little as possible.** Deciding under a documented `ASSUMPTION:` is the norm;
+  asking is the exception, and it never stops the work.
+- **The order is not free.** The design bible gates everything behind the Vector Gear: no
+  skill tree, economy, lineages, raids or cosmetics before the movement convinces. The build
+  order lives in `docs/TODO.md` and it is derived, not invented.
+
 ## Where things are
 
 | Question | File |
