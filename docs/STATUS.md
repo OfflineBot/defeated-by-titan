@@ -256,7 +256,7 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 
 | Item | ID | Stage | Evidence (test / screenshot / number) | Note |
 |---|---|---|---|---|
-| Testumgebung | T-006 | 🟧 | cargo test: 151 green, 0 red · --offscreen writes a real PNG without a window and without a graphics session, two runs bit-identical (sha256 eb212dfe) · docs/images/t006-world-far.png · red-checked: --headless --screenshot exits 1 with no file | 2026-08-09 [cachy] — the ceiling on machine A stays 🟨 until a wgpu adapter is proven there (QUESTIONS.md Q-009) |
+| Testumgebung | T-006 | 🟧 | cargo test: 151 green, 0 red · --offscreen writes a real PNG without a window and without a graphics session, two runs bit-identical (sha256 eb212dfe) · docs/images/t006-world-far.png · red-checked: --headless --screenshot exits 1 with no file | 2026-08-09 [debian] — Q-009 ANSWERED by measurement: machine A does find a wgpu adapter (Intel ADL-N, Vulkan, Mesa 25.0.7-2), and four PNGs were produced on A in one session, each bit-identical over repeated runs. The ceiling on machine A is no longer 🟨. A WINDOW run on A is still unproven — only --offscreen was measured |
 | Rojo- und Git-Aufsetzung | T-001 | 🟨 | cargo build gruen · git-Repo steht · 62 Tests gruen [debian] | 2026-08-09 [debian] — cargo statt Rojo (docs/architektur.md), Pixel ungesehen |
 | Service-Framework | T-003 | 🟨 | tests/domaenen.rs (3 Faelle) · 18 Domaenen-Plugins in Abhaengigkeitsreihenfolge | 2026-08-09 [debian] — Service-Framework = Domaenen-Plugins, Erlaubnisliste leer |
 | Konfigurationsschicht | T-005 | 🟨 | tests/data.rs (10 Faelle) · 6 RON-Dateien laden, kein serde(default) | 2026-08-09 [debian] — Zahlen sind UNGETUNT, Pixel ungesehen |

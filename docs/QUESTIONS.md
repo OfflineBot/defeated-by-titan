@@ -149,6 +149,30 @@ measurement on A: `cargo run -- --offscreen --script scripts/t006-shot-near.txt 
 --screenshot docs/images/t006-player-view.png`. If it comes out well, the ceiling on A rises
 from 🟨 to 🟧. Until then the assumption stands for **A**; for **B** it is settled.
 
+### ANSWERED 2026-08-09 — by measurement on A, not by a decision
+
+**Machine A finds an adapter.** Measured on `[debian]` by two independent jobs in the same
+session, each reporting it without knowing the other was looking:
+
+```
+AdapterInfo { name: "Intel(R) Graphics (ADL-N)", device_type: IntegratedGpu,
+              backend: Vulkan, driver: "Intel open-source Mesa driver",
+              driver_info: "Mesa 25.0.7-2" }
+```
+
+Four PNGs were produced on A in that session, every one of them **bit-identical over repeated
+runs**: `p1-overlay.png` (`sha256 054aaeff…`, three runs, 625 728 B), `b001-anchor.png`
+(`aaf52739…`), `f056-husk.png` (`ade7a6b7…`), `f050-states.png` (`8c20c551…`).
+
+**This is the question that gated everything.** Without an adapter on A, nothing built on A
+could ever have carried a picture, and 🟧 needs a picture — so the whole project would have been
+capped at 🟨 on its own main machine. **The ceiling on A is now 🟧.** The assumption above is
+withdrawn; the `T-006` note in `docs/features.ron` no longer applies and has been corrected.
+
+**What is still not proven:** that a **window** run works on A. Only `--offscreen` was measured.
+Nobody has seen this game in a window on this machine, and that is a different question
+(`docs/umgebung.md`).
+
 ## Q-010 — The anchor density needs a number
 
 **Context:** `prompts/init.md` §2 calls the anchor density „die wichtigste Zahl" (*the most
