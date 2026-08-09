@@ -545,6 +545,18 @@ moeglich, und sie fuehren zu voellig verschiedener Arbeit an **7815 Zeilen in 53
    *„filebenennung!"* das vorangehende *„alles in deutsch"*, und das *„aber"* markiert den
    Gegensatz fuer alles Uebrige.
 
+**Nachtrag 2026-08-09, kurz darauf — der User hat nachgeschaerft:**
+
+> „wenn nicht sicher dann eher englisch!"
+
+Damit ist Lesart 2 **bestaetigt** und die Frage im Kern beantwortet. Sie bleibt trotzdem
+hier stehen, weil sie einen Tiebreaker gesetzt hat, der ueber den Wortlaut hinausgeht:
+**Deutsch gilt nur noch dort, wo es ausdruecklich benannt ist** (Dateinamen, Commit-Messages,
+`docs/`); jeder Zweifelsfall geht nach Englisch. Zwei Faelle sind dadurch gewandert, die in
+der ersten Fassung dieser Frage noch auf Deutsch standen: Log- und HUD-Ausgaben, und die
+Messgroessen des Skript-Fahrers (`speed|tempo`, `height|hoehe`, `titans|titanen` — die
+deutschen Zweitnamen entfallen).
+
 **ANNAHME: Lesart 2.** Drei Gruende, jeder einzeln schwach, zusammen tragend: das Wort
 *„filebenennung!"* steht mit Ausrufezeichen **direkt hinter** „alles in deutsch" und liest
 sich als dessen Praezisierung; das *„aber"* vor „comments" ergibt nur bei einem

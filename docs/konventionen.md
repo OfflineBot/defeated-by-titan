@@ -114,9 +114,17 @@ und nirgends sonst. `tools/normen.py` laesst eine Message mit `Co-Authored-By`, 
 | Kommentare und Doc-Kommentare | **Englisch** | `/// Builds the map from maps.ron.` |
 | Testnamen | **Englisch** (die F-ID bleibt) | `f014_boost_consumes_gas` |
 | RON-Schluessel | **Englisch** — sie sind an die Feldnamen gebunden | `hook_range_m` |
-| Commit-Messages | **Deutsch** | `F-014 vector: Gas-Verbrauch beim Boost` |
+| Commit-Messages | **Deutsch** — eigene Norm, `tools/normen.py` prueft sie | `F-014 vector: Gas-Verbrauch beim Boost` |
 | Doku unter `docs/`, `CLAUDE.md` | **Deutsch** | dieses Dokument |
-| Spieltexte, HUD, Log-Ausgaben | **Deutsch** — der Spieler liest sie | `"Fahrt beendet: 6 assert gehalten"` |
+| Spieltexte, HUD, Log-Ausgaben, Skript-Messgroessen | **Englisch** | `"run finished: 6 asserts held"`, `assert speed > 25` |
+
+**Der Tiebreaker (User, 2026-08-09): „wenn nicht sicher dann eher englisch".**
+Deutsch bleibt nur, wo es ausdruecklich benannt ist — Dateinamen, Commit-Messages, `docs/`.
+Jeder Zweifelsfall geht nach Englisch, nicht in eine Diskussion. Das hat zwei Faelle bewegt,
+die vorher auf Deutsch standen: **Log- und HUD-Ausgaben** (ein Spiel mit dem Titel *Defeated
+by Titan* hat keinen sicher deutschsprachigen Spieler) und die **Messgroessen des
+Skript-Fahrers**, die bis heute gemischt waren (`speed|tempo`, `height|hoehe`,
+`titans|titanen`) — die deutschen Zweitnamen entfallen.
 
 **Warum die Grenze dort liegt:** Ein Dateiname ist ein Wegweiser im Projekt und gehoert zur
 Projektsprache; ein Bezeichner wird gelesen wie ein Satz und gehoert zur Sprache, in der die
