@@ -10,75 +10,62 @@ not.
 
 ## 1. Where we actually stand
 
+**Updated 2026-08-09, late. The four sections below replace what stood here before; almost
+every line of the previous version had become false.**
+
 | | |
 |---|---|
-| Engine | Bevy 0.19 + **avian3d 0.7.0** (the user chose it; it requires exactly bevy 0.19.0) |
-| Language | **English everywhere.** Only `prompts/`, `gameplay/`, quotes from them and the git history stay German |
-| Tests | see `cargo test` — the count before the vector round was **151 green** |
-| Stages | `docs/STATUS.md` — **1 🟧** (T-006), 6 🟨, the rest ⬜ of 245 rows |
-| Disk | ⚠️ **92 % full, `target/` alone is 75 G.** No `cargo clean` (75 G rebuild against an 80 G margin), no `--release` build, and **only one compiler at a time** |
+| Engine | Bevy 0.19 + **avian3d 0.7.0** |
+| Branch | **`session-2026-08-09`**, pushed. `main` is still the old, diverged history — see §7 |
+| Tests | **317 green, 0 red** (204 at the start of this session) |
+| Stages | 🟧 T-006, B-001/T-036a, P1, P2, F-030, F-034, F-070, F-171 · 🟨 F-001, F-002, F-003, F-004, F-005, F-007, F-018, F-050, F-056, F-064, F-071, F-170 |
+| Disk | ⚠️ **The old warning was wrong.** 372 G free, 14 % used, `target/` 34 G. `--release` and a rebuild are affordable. The one-compiler rule still holds — it is cargo's lock on `target/`, not a space problem |
+| Pictures | `--offscreen` **works on machine A** (Intel ADL-N, Vulkan, Mesa 25.0.7). Q-009 is answered. This is what let anything reach 🟧 here |
 
-**What runs today:** the city builds itself out of `assets/data/maps.ron` from a seed (79
-blocks, 63 of them taggable), the camera turns with the intent, gizmos show which surface is
-hookable, and `--offscreen` writes a real PNG without a window — bit-identical across runs.
-That last one is why anything can ever leave 🟨.
+**What runs today:** the city builds from a seed; a hook fires, **anchors on a real building**,
+and hangs an avian `DistanceJoint`; reeling in gains speed (62.73 m/s from v0 20); a husk stands
+in the street with an amber cortex on his nape, walks, winds up, strikes and dies to a cortex
+cut; the swept blade hits at 8, 30 and 75 m/s; the world stops for 7 ticks on a kill; a mission
+runs 19 800 ticks and says `LOST`, or `WON` on the third kill; and a HUD draws gas, blades and a
+three-shape crosshair.
 
-**What does not run yet:** the game. There is no hook, no rope, no gas, no titan, no combat,
-no HUD, no mission. `src/vector/` was empty until the round that just got interrupted.
+**What does not run yet:** the mouse is not captured and there is no window anybody has seen; a
+player flying past a *solid* husk **cannot reach the nape** (Q-030); and nothing is saved.
 
 ---
 
-## 2. The interrupted round — read this before you touch `src/`
+## 2. The three things that cost this session the most, so you do not repeat them
 
-The **Vector Gear round was stopped mid-flight** at the user's request. State in the working
-copy, uncommitted:
-
-- **Done and in the tree:** the seam (avian registered, player is a physics body), plus
-  F-001 hooks, F-002 aiming, F-018 gas, F-007 boost. `cargo check --all-targets` is clean.
-  Their pictures are in `docs/images/f-001-hooks.png` and the three next to it.
-- **Not started:** F-004 pendulum (`src/vector/rope.rs`) and F-005 reel-in
-  (`src/vector/reel.rs`) — both still stubs.
-- **Not run:** the counter-check that would have attacked all of it, taken the flight
-  pictures and judged the stages. **Nothing from this round is verified by a second head, so
-  none of it is above 🟨**, whatever the individual reports claim.
-
-The full commissions are in
-[`measurements/stage3-commissions.js`](measurements/stage3-commissions.js)
-— verbatim and re-runnable.
+1. **The whole vector round was unreachable in the real game and 41 tests were green.**
+   `world::index::maintain_index` was an empty stub, so no entity ever carried a `BodyId`, so
+   every hook reported `found nothing anchorable`. Every test injected the carrier by hand.
+   Written up as `B-001`. **The lesson is not "write more tests" — it is that a test which
+   builds its own world proves nothing about the world the player is in.** Every round since
+   ends with a `--script` run in the real game.
+2. **A script asserted the broken behaviour and locked it in.** `scripts/f-001-hooks.txt`
+   carried `assert speed < 0.5` with the comment *"a hook that finds nothing must not move the
+   player"*. It reported "5 asserts held", exit 0, for a completely dead feature. It now holds
+   14 asserts, and the old version goes red 4 of 14.
+3. **The handover you are reading was wrong about the disk, the test count and the state of the
+   vector round.** Check `git log` and run the ritual before believing any document here,
+   including this one.
 
 ---
 
 ## 3. The architecture is measured. Do not re-litigate it.
 
-Three measurement rounds produced this. Every line carries the number that decided it, and
-the long form is in [`measurements/`](measurements/README.md) plus `examples/probe_avian.rs` (3192 lines of
-runnable probes — that file is the memory of those rounds).
-
 ```
-ROPE:      avian DistanceJoint, limits = (0, L)
-           58.23 m/s from v0 20 when reeling (angular momentum preserved)
-           against exactly 20.000 for a hand-written clamp — the clamp eats the feeling
-REFEREE:   none needed. Worst wall penetration -0.0043 m of -0.01 allowed, 18 cases
-           BUT every world collider MUST carry a RigidBody (Static is enough), or a
-           referee added later is blind to it
-SUBSTEPS:  24. Holds swing loss (4.26 %/s vs 8.97 at 6) AND the wall.
-           0.72 ms/tick with 20 players in a 401-body city, budget 4 ms
-REEL-IN:   shorten limits.max PER SUBSTEP, never per tick (per tick injects
-           rate x SubstepCount = 677 m/s), plus MaxLinearSpeed(max_speed_m_s)
+ROPE:      avian DistanceJoint, limits = (0, L)     — built, F-004 🟨
+REFEREE:   none needed                              — every world collider carries a RigidBody
+SUBSTEPS:  24                                       — game.ron
+REEL-IN:   shorten limits.max PER SUBSTEP, never per tick, plus MaxLinearSpeed
 ```
 
-**Three blockers with their fixes** — all measured, do not rediscover them:
-
-1. `App::update()` does not call `Plugin::finish()`. avian creates `SolverDiagnostics` there
-   and takes it as a non-optional `ResMut`, so **every test panics** once avian is
-   registered. Fix: `app.finish(); app.cleanup();` at the end of `pub fn app()`.
-2. A ray hits the player's own collider and `with_excluded_entities([player])` does not help
-   — the filter matches the *collider* entity. Fix: `Collider::capsule_endpoints(...)` on the
-   **same** entity, no child collider.
-3. `CollisionEventsEnabled` on the body does nothing. For impact data use `Collisions` +
-   `ContactPoint::normal_speed` instead — no events needed.
-
-Plus: players need `SleepingDisabled`, or one hanging still on a rope falls asleep.
+Long form in [`measurements/`](measurements/README.md). Three avian traps, each a day if
+rediscovered, are in `measurements/avian-blockers.md` — and two more were measured this session:
+**`CustomPositionIntegration`** on a kinematic body (without it a titan moves 6.000 m where the
+file says 3.000), and **avian reserves collision-layer bit 0** for its default layer, so a layer
+placed there makes every untagged wall answer a cortex-filtered cast.
 
 ---
 
