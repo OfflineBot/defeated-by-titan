@@ -529,6 +529,40 @@ Vorgabe als Deko zu behandeln ist die schlechtere der beiden Annahmen.
 **Zurueckzunehmen waere:** ein `hakbar`-Feld an den Mauerkloetzen, sobald die Mauer als
 `kloetze`-Eintrag existiert. Heute steht sie in keiner Karte, also kostet die Annahme nichts.
 
+## Q-024 — Deutsch oder Englisch im Quelltext? Die Anweisung widerspricht sich
+
+**Kontext:** Der User hat am 2026-08-09 **woertlich** geschrieben:
+
+> „programmiere alles in deutsch. filebenennung! code aber auch comments alle auf englisch!"
+
+Der Satz enthaelt beides: *„alles in deutsch"* und *„alle auf englisch"*. Zwei Lesarten sind
+moeglich, und sie fuehren zu voellig verschiedener Arbeit an **7815 Zeilen in 53 Dateien**:
+
+1. **Alles bleibt deutsch.** Dann ist „code aber auch comments alle auf englisch" ein
+   Verschreiber, und es gibt nichts zu tun — `docs/konventionen.md` sagte das bis heute so
+   („Eine Sprache: Deutsch, durchgehend").
+2. **Dateinamen deutsch, Bezeichner und Kommentare englisch.** Dann praezisiert
+   *„filebenennung!"* das vorangehende *„alles in deutsch"*, und das *„aber"* markiert den
+   Gegensatz fuer alles Uebrige.
+
+**ANNAHME: Lesart 2.** Drei Gruende, jeder einzeln schwach, zusammen tragend: das Wort
+*„filebenennung!"* steht mit Ausrufezeichen **direkt hinter** „alles in deutsch" und liest
+sich als dessen Praezisierung; das *„aber"* vor „comments" ergibt nur bei einem
+Sprachwechsel Sinn; und Lesart 1 waere eine Anweisung, die nichts aendert — der User
+schreibt keine Anweisung, damit alles bleibt, wie es ist.
+
+Die Grenze steht ausgeschrieben in [`docs/konventionen.md`](konventionen.md) §4. Kurz:
+Dateien, Ordner und Modulnamen deutsch · Typen, Felder, Funktionen, Kommentare, Testnamen und
+RON-Schluessel englisch · Commit-Messages, `docs/` und alles, was ein **Spieler** liest
+(HUD, Logzeilen), deutsch.
+
+**Zurueckzunehmen waere:** genau ein Commit. Die Migration laeuft als **eine** Umstellung,
+nicht schrittweise — halbdeutscher Code waere schlechter als jede der beiden Antworten. Ein
+`git revert` dieses einen Commits stellt den deutschen Stand vollstaendig wieder her; danach
+ist nur `docs/konventionen.md` §4 und diese Frage zurueckzudrehen. Alles, was zwischen
+Migration und Antwort **neu** dazukommt, folgt Lesart 2 und muesste bei Lesart 1 nachgezogen
+werden — deshalb steht die Frage hier weit oben, nicht unten.
+
 ---
 
 ## Beantwortet

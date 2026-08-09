@@ -85,8 +85,7 @@ erkennt, was fuer ihn relevant ist (Bibel 3.4). **Sie gilt fuer Platzhalter gena
 | **Commit-Betreff** | `<F-ID\|bereich>: <eine Zeile, was jetzt anders ist>`, max 72 Zeichen, Deutsch, aktiv, kein Punkt, keine Emoji | `F-014 vector: Gas-Verbrauch beim Boost` |
 | **Commit-Bereiche** | genau fuenf, wenn es keine F-ID gibt | `docs:` `test:` `tool:` `fix:` `chore:` |
 | **Branch** | `<f-id>-<kurz>` bzw. `<bereich>/<kurz>` | `f014-gas-boost`, `fix/haken-kante` |
-| **Test-Name** | `<f_id>_<die Aussage, die gilt>` — nicht `test_gas` | `f014_boost_verbraucht_gas` |
-| **Test-Datei** | `tests/<domaene>.rs` | `tests/vector.rs` |
+| **Test-Datei** | `tests/<domaene>.rs` — Dateiname deutsch | `tests/vector.rs` |
 | **Screenshot** | `docs/bilder/<f-id>-<kurz>[-vorher\|-nachher].png` | `docs/bilder/f014-boost-nachher.png` |
 | **Skript** | `scripts/<f-id>-<kurz>.txt`, darin `mark <f-id>-<stichwort>` | `scripts/f014-boost.txt` |
 | **STATUS-Zeile** | `\| Sache \| ID \| Stufe \| Beleg \| Stand \|`, Datum **ISO** mit Maschine | `… \| 🟧 \| tests/vector.rs … \| 2026-08-09 [cachy] \|` |
@@ -94,8 +93,9 @@ erkennt, was fuer ihn relevant ist (Bibel 3.4). **Sie gilt fuer Platzhalter gena
 | **Frage** | `Q-003 <Frage>` + Kontext + `ANNAHME:` | |
 | **Fremdfund** | `FUND-005 <Symptom>` + Messung | |
 | **Doku-Kopf** | `# <name> — <ein Satz>`, darunter `Stand: <ISO> · Stufe: <marke>` | |
-| **RON-Schluessel** | `snake_case`, **deutsch**, eine Sprache pro Datei | `hakenreichweite_m` |
-| **Rust** | `snake_case` Dateien/Funktionen, `CamelCase` Typen, **Domaenenordner immer Einzahl** | `src/vector/hook.rs` |
+| **Test-Name** | `<f_id>_<the claim that holds>` — **englisch**, nicht `test_gas` | `f014_boost_consumes_gas` |
+| **RON-Schluessel** | `snake_case`, **englisch** (an die Feldnamen gebunden) | `hook_range_m` |
+| **Rust** | Dateien **deutsch**, Bezeichner **englisch**: `snake_case` Funktionen, `CamelCase` Typen, **Domaenenordner immer Einzahl** | Datei `src/vector/haken.rs`, darin `fn fire_hook()` |
 | **Subagenten-Bericht** | fest: `Aufgabe · Getan · Beleg · Stufe · Offen · Funde` | ein Freitext-Bericht ist nicht integrierbar |
 
 ⚠️ **Keine Werkzeug- oder Autorenspuren in Commit-Messages, PR-Beschreibungen oder Tags.**
@@ -104,9 +104,33 @@ Commit-Message beschreibt **die Aenderung**, nicht ihren Urheber — der steht i
 und nirgends sonst. `tools/normen.py` laesst eine Message mit `Co-Authored-By`, `Generated`,
 `Claude`, `AI` oder `🤖` durchfallen.
 
-**Eine Sprache: Deutsch, durchgehend.** Nicht heute `add gas drain`, morgen `Gas-Verbrauch`.
-Umlaute werden in Quelltext, RON-Schluesseln und Dateinamen **umschrieben** (`ae oe ue ss`);
-in Fliesstext (Markdown, UI-Text) stehen sie richtig.
+### Zwei Sprachen, und die Grenze laeuft **an der Dateikante** (User, 2026-08-09)
+
+| Was | Sprache | Beispiel |
+|---|---|---|
+| **Datei- und Ordnernamen** | **Deutsch** | `src/world/karte.rs`, `src/shared/zustand.rs` |
+| **Modulnamen** (`mod karte;`) | **Deutsch** — sie *sind* die Dateinamen | `crate::world::karte` |
+| Typen, Felder, Funktionen, Variablen | **Englisch** | `struct Block`, `fn build_map()` |
+| Kommentare und Doc-Kommentare | **Englisch** | `/// Builds the map from maps.ron.` |
+| Testnamen | **Englisch** (die F-ID bleibt) | `f014_boost_consumes_gas` |
+| RON-Schluessel | **Englisch** — sie sind an die Feldnamen gebunden | `hook_range_m` |
+| Commit-Messages | **Deutsch** | `F-014 vector: Gas-Verbrauch beim Boost` |
+| Doku unter `docs/`, `CLAUDE.md` | **Deutsch** | dieses Dokument |
+| Spieltexte, HUD, Log-Ausgaben | **Deutsch** — der Spieler liest sie | `"Fahrt beendet: 6 assert gehalten"` |
+
+**Warum die Grenze dort liegt:** Ein Dateiname ist ein Wegweiser im Projekt und gehoert zur
+Projektsprache; ein Bezeichner wird gelesen wie ein Satz und gehoert zur Sprache, in der die
+Werkzeuge, die Engine und ihre Doku sprechen. `Collider`, `RigidBody` und `LinearVelocity`
+kommen ohnehin auf Englisch herein — ein `Bauklotz` daneben ist ein Bruch mitten in einer
+Zeile.
+
+⚠️ **Innerhalb einer Kategorie wird nicht gemischt.** Nicht heute `add gas drain`, morgen
+`Gas-Verbrauch`. Umlaute werden in Quelltext, RON-Schluesseln und Dateinamen **umschrieben**
+(`ae oe ue ss`); in Fliesstext (Markdown, UI-Text) stehen sie richtig.
+
+Die Regel ersetzt die frueher hier stehende „Eine Sprache: Deutsch, durchgehend". Der Bestand
+wird migriert, nicht schrittweise vermischt — Stand und Ruecknahmestelle in
+[`docs/FRAGEN.md`](FRAGEN.md) Q-024.
 
 ## 5. Einheiten im Namen
 

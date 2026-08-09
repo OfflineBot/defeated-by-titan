@@ -41,6 +41,10 @@ ungesehen blieb.**
 2. **Zahlen gehoeren in RON, nicht in Rust.** Ein Titan-Typ, eine Klingenstufe, eine
    Gas-Kostenzahl: Datei-Arbeit. Im Code stehen nur Einheiten und Mechanik. **Kein
    `serde(default)` fuer Spielwerte** — ein fehlender Wert soll beim Laden krachen.
+   **Zwei Sprachen, Grenze an der Dateikante** (User, 2026-08-09): Datei-, Ordner- und
+   Modulnamen **deutsch**; Typen, Felder, Funktionen, Kommentare, Testnamen und RON-Schluessel
+   **englisch**; Commit-Messages, `docs/` und alles, was ein Spieler liest, **deutsch**.
+   → [`docs/konventionen.md`](docs/konventionen.md) §4, Ruecknahmestelle in `docs/FRAGEN.md` Q-024.
 3. **Eine Domaene = ein Ordner = ein Plugin = standalone.** Nur `shared`, `data` und Bevy
    sind frei; jede andere Kante braucht eine Zeile mit Begruendung in der Erlaubnisliste von
    [`docs/architektur.md`](docs/architektur.md), und `tests/domaenen.rs` faellt sonst um.
