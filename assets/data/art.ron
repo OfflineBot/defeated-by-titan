@@ -1,0 +1,22 @@
+// art.ron — die Registratur. EINE Zeile pro Asset, EINE Zeile zum Tauschen (init.md §7).
+//
+// Der Code fragt nie nach einer Datei, immer nach einem logischen Namen. Ein Asset
+// austauschen heisst: hier `nutzen` umlegen — nicht Rust anfassen.
+//
+// nutzen: false ⇒ der Platzhalter-Weg aus Bevy-Primitiven. Beide Wege muessen jederzeit
+// laufen und dieselbe Groesse, Hitbox und Skalierung haben.
+//
+// STAND: alles Platzhalter. Auf Maschine A gibt es kein Blender, also entstehen hier
+// vorerst nur die tools/blend/*.py (docs/umgebung.md, docs/modelle.md).
+(
+    models: {
+        "vanguard":     (blend: "vanguard",     nutzen: false, scale: 1.0, herkunft: None),
+        "titan_husk":   (blend: "titan_husk",   nutzen: false, scale: 1.0, herkunft: None),
+        "titan_gross":  (blend: "titan_gross",  nutzen: false, scale: 1.0, herkunft: None),
+        "vector_gear":  (blend: "vector_gear",  nutzen: false, scale: 1.0, herkunft: None),
+        "blade":        (blend: "blade",        nutzen: false, scale: 1.0, herkunft: None),
+        "haus_klein":   (blend: "haus_klein",   nutzen: false, scale: 1.0, herkunft: None),
+        "baum_riese":   (blend: "baum_riese",   nutzen: false, scale: 1.0, herkunft: None),
+        "kiste_nachschub": (blend: "kiste_nachschub", nutzen: false, scale: 1.0, herkunft: None),
+    },
+)

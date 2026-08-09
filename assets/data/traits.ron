@@ -1,0 +1,8 @@
+// traits.ron — Traits und Lineage-Passive (Relics, Echos).
+//
+// ⚠️ LEER MIT ABSICHT. Progression ist ein Meta-System und wird nicht angefangen, solange
+// das Vector-Gear-Gate nicht steht (Bibel 6.1, docs/ROADMAP.md). Die Datei existiert, damit
+// data/ sie laedt und die Struktur festliegt — nicht, damit hier jemand anfaengt.
+(
+    eintraege: {},
+)
