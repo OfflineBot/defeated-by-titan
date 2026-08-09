@@ -1,0 +1,61 @@
+# F-053 — the telegraph: the striking hand really moves, and it moves far enough to see.
+#
+# **Two runs of this one script, at two ticks, into two files:**
+#
+# cargo run -- --offscreen --script scripts/f053-windup.txt --ticks 420 \
+#              --screenshot docs/images/f053-windup-a.png
+# cargo run -- --offscreen --script scripts/f053-windup.txt --ticks 447 \
+#              --screenshot docs/images/f053-windup-b.png
+# python3 tools/two_panels.py docs/images/f053-windup-a.png docs/images/f053-windup-b.png \
+#                              docs/images/f053-windup.png
+#
+# Both panels come out **bit-identical on two runs** (`sha256sum`), which is what a frame at a
+# resting or slowly-changing moment buys — see the caveat in `docs/ACCEPTANCE.md` about
+# `--offscreen` at speed.
+#
+# ## Why two runs and not one
+#
+# Because the criterion is a **difference**, and a still frame cannot carry one
+# (`docs/PLAN-GAME.md` §8 F-053): a titan with his arm down is indistinguishable from a titan
+# with no telegraph at all. The pixel number lives in
+# `tests/titan.rs::f053_the_wind_up_moves_the_hand_far_enough_to_see` — 192 px at 40 m against
+# a criterion of 150 — and these two panels are what that number looks like.
+#
+# ## The ticks
+#
+# Measured in `tests/titan.rs::f050_the_husk_winds_up_for_as_long_as_the_file_says` and read
+# off the F3 overlay of this very run: `Windup` covers ticks **412..447**, and tick 448 already
+# says `Strike`.
+#
+#   tick 420 = tick  8 of 36 — the arm hangs 31 deg out, which is what "no telegraph" looks like
+#   tick 447 = tick 35 of 36 — the arm is 136 deg up, over the head, the torso leaning back
+#
+# Both frames read `titan#1 Windup` in the overlay, so the word and the pose can be checked
+# against each other in the same image — which is the whole reason the overlay is switched on.
+#
+# ⚠️ **Not 414 and 450, and that is a property of the game, not of the script.** `Windup` is
+# only ever entered when the player is inside `titan.ron: husk.attack_range_m` = 6.0 m — and
+# the camera *is* the player. A camera that stands where the wind-up starts is six metres from
+# a ten metre body and photographs a dark underside; that was measured, on the first attempt at
+# `f050-states.txt`. So the camera steps back at tick 417, five ticks into a wind-up that
+# **cannot be cancelled** (distance decides `Pursue -> Windup` and nothing after it), and both
+# panels are taken from the position it steps back to. The two frames are 27 ticks and 105 deg
+# of arm apart; the criterion asks for 36 ticks and gets 27 of them, from one camera.
+#
+# He spawns at +Z so that his spawn facing (Bevy's forward, −Z) already points at the player at
+# the origin, and the approach is a walk instead of a 180 deg turn at 50 deg/s.
+warp 0 0.05 0
+look 180 0
+spawn titan husk 0 0 25
+wait 6.95
+# 24 m to his flank, so the swing — which is a rotation about the body's +X axis, i.e. in the
+# Y/Z plane — lies in the image plane. From the front the same telegraph would be foreshortened
+# into almost nothing, for a reason that has nothing to do with the pose.
+warp 24 0.05 6
+look 90 10
+# The F3 overlay, so the state WORD and the POSE stand in the same frame and can be read
+# against each other.
+key F3 0.05
+mark windup
+wait 1.0
+assert titans == 1

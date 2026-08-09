@@ -14,7 +14,12 @@
 //! | file | what |
 //! |---|---|
 //! | [`hitstop`] | `F-034`: the bodies stop for `round(hit_stop_cortex_s × 60)` ticks, the tick does not |
-//! | [`health`] | `P5`: at zero the player is **downed**, never despawned |
+//! | [`health`] | `P5`: the player carries `game.ron: player.health`; at zero he is **downed**, never despawned |
+//! | [`strike`] | `P5`: a titan's `Strike` in reach takes `titan.ron: <kind>.damage` off — **once per strike, not once per tick** |
+//!
+//! **That is the second way to lose.** `mission::decide` already carried the "every player down
+//! ⇒ `Lost`" branch and it was inert, because nothing in the running game produced a
+//! [`Health`](crate::shared::Health). It is not duplicated here; it is fed.
 //!
 //! **The cut itself is not here.** `F-030` lives in `blades/` — the swing state machine and
 //! the cast that reads it have to be in one domain, and a `Swing` in `blades/` read every tick
@@ -31,12 +36,17 @@
 //! |---|---|
 //! | the numbers and the red tests | `tests/combat.rs`, `cargo test --test combat` |
 //! | the frozen player and the dissolving titan | `scripts/f034-hitstop.txt` → `docs/images/f034-hitstop.png` |
+//! | the health bar draining and the mission lost | `scripts/p5-downed.txt` → `docs/images/p5-downed.png` |
+//!
+//! `P5`, measured on debian: strikes at ticks 449 / 539 / 629, health `100 → 66 → 32 → 0`,
+//! `Downed` at 630, `MISSION LOST` at 629 against a deadline of 19 800.
 //!
 //! ⚠️ `F-034`'s own acceptance in the backlog is a **blind test with human testers**. That is
 //! not satisfiable by an agent, and **the blind test has not been run.**
 
 pub mod health;
 pub mod hitstop;
+pub mod strike;
 
 use bevy::prelude::*;
 
@@ -48,5 +58,6 @@ impl Plugin for CombatPlugin {
         // of one list here that has to repeat the reasoning in a comment.
         hitstop::register(app);
         health::register(app);
+        strike::register(app);
     }
 }

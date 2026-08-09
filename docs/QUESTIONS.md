@@ -784,6 +784,52 @@ titan (14 m) has a body radius of 1.75 m, so `1.75 + 0.35 = 2.10 m` against a 1.
    A player cutting the nape never has to clear the torso's radius at all. The reach only looks
    impossible because the titan is currently one collider as wide at the neck as at the hips.
 
+### REFUTED 2026-08-09, by measurement — and the mistake was mine
+
+**The question above is wrong, and it was wrong when I wrote it.** An independent job was sent
+to build option 3 and came back having measured that there is nothing to fix. Nothing in the
+tree was changed to achieve that; `reach_m` is still 1.60 and `width_fraction` is still 0.25.
+
+**My arithmetic left out two lengths that stand in the same two files.** The blade never has to
+touch the titan's axis — it has to touch a **sphere** with a **swept capsule**:
+
+| | husk (`medium`) | warden (`large`) |
+|---|---|---|
+| clearance the two capsules need | `1.25 + 0.35` = 1.60 m | `1.75 + 0.35` = 2.10 m |
+| `reach_m` + `cortex_radius_m` + `thickness_m` | `1.60 + 0.55 + 0.12` = **2.27 m** | `1.60 + 0.60 + 0.12` = **2.32 m** |
+| **margin** | **+0.67 m** | **+0.22 m** |
+
+**Measured against a real solid husk**, real player, real `Intent`, real blade, 30 m/s at nape
+height: cortex cut on tick 10, **0.484 m of air** at closest approach, **0.00 m/s** across the
+flight line, 30.00 m/s throughout — never thrown off. Then hardened against my own wishful
+reading with a 4 × 4 × 8 × 6 sweep (class × approach × offset × timing phase at 20/30/45/60 m/s):
+the husk lands **6 of 6 phases at every speed** from three of four cardinal approaches. The
+frontal approach never lands, which is correct — the cortex is on the back of the neck.
+
+**Where my `(−28.4, 0, −13.0)` came from:** `tests/combat.rs::fly_past` places the player at
+`cortex.x − 0.80` while the fixture's body capsule has radius 1.25 **centred on the cortex
+axis**. The player was started 0.80 m *inside* a 1.25 m body. **The ejection was the test
+fixture, not the titan** — I took a number out of a harness and reasoned about the game with it.
+
+And option 3 would have made it **worse**, also measured: at nape height the player's capsule
+spans `nape−1.6 … nape+0.2`, so it sits alongside the torso, whose box half-width is the same
+1.25 m — no gain — while giving the hanging arms colliders would raise the required clearance to
+2.225 m and close the windows above.
+
+**Nothing to roll back. Nothing was changed.** What this cost: one job that measured instead of
+building, which is the cheap outcome. What it would have cost unmeasured: per-part colliders
+built to fix a defect that does not exist, and a real regression shipped as a fix.
+
+**Still open, and it is a real one:** the **lurker**'s margin is **+0.120 m**, and measured, the
+widest gap between the two capsules that still lands a cut is **0.10 m** at 30 m/s. Reachable in
+arithmetic, not flyable in practice. The lever is `titan.ron: cortex_radius_m` — which
+**Q-019 already flags** as the one value that did not follow the size table — and not
+`width_fraction` or `reach_m`. That one is yours.
+
+---
+
+**The original assumption, kept for the record, and now withdrawn:**
+
 **ASSUMPTION:** option 3, and **I have changed no number**. `reach_m` stays 1.60 m and
 `width_fraction` stays 0.25, because both are honest values and the defect is in the collider
 shape, not in them. Changing a number here would hide a geometry bug behind a tuning value —

@@ -16,7 +16,9 @@
 //!    with the bodies ([`f034_the_hit_stop_freezes_the_bodies_and_not_the_clock`], whose
 //!    **first** assertion is the one that falls).
 //! 4. **A despawned player.** `Downed` is a state with a timer, not a removed entity
-//!    ([`p5_a_downed_player_is_a_state_and_not_a_removed_entity`]).
+//!    ([`p5_a_downed_player_is_a_state_and_not_a_removed_entity`]) — and a strike that lands
+//!    sixty times in one second, which is what [`p5_one_strike_subtracts_once_and_not_once_per_tick`]
+//!    exists to make impossible.
 //! 5. **The collider tree's AABBs are one tick old in `PostStep`** and the cut misses moving
 //!    targets. That is `docs/PLAN-GAME.md` §11 risk 2 and it is the **first** test in this
 //!    file, not the last ([`risk2_a_titan_crossing_at_speed_is_not_missed`]).
@@ -50,7 +52,7 @@ use defeated_by_titan::blades::swing::{BladeTiming, SweptFrom, Swings};
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::shared::{
     Cli, Health, HitStop, HitZone, LocalPlayer, MovementState, PlayerId, Side, SpawnTitan, Tick,
-    TitanHit, TitanId, Velocity, LAYER_PLAYER, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
+    TitanHit, TitanId, TitanState, Velocity, LAYER_PLAYER, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
 };
 use defeated_by_titan::titan::rig::TitanPart;
 
@@ -74,7 +76,20 @@ fn record_hits(mut log: ResMut<HitLog>, tick: Res<Tick>, mut hits: MessageReader
 /// only `run_fixed_main_schedule` switches that over to `Time<Fixed>`. With
 /// `FixedTimesteps(1)` one `update()` is exactly one simulation step, on every machine.
 fn app() -> App {
-    let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    build(Cli { headless: true, ..default() })
+}
+
+/// The same app **with a mission running**, so that `mission::decide` is switched on.
+///
+/// `P5`'s last claim is not about combat at all: the second way to lose already exists in
+/// `src/mission/` and was inert because nothing produced a [`Health`]. This app is what proves
+/// it fires — the branch is not rebuilt here, it is fed.
+fn mission_app() -> App {
+    build(Cli { headless: true, mission: Some("tutorial".into()), ..default() })
+}
+
+fn build(start: Cli) -> App {
+    let mut app = defeated_by_titan::app(start);
     app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
     app.init_resource::<HitLog>();
     // `Last`, so that a hit written in `PostStep` is logged with the tick it happened on.
@@ -154,6 +169,93 @@ fn place(app: &mut App, at_m: Vec3, velocity_m_s: Vec3) {
     if let Some(mut from) = world.get_mut::<SweptFrom>(p) {
         from.0 = at_m;
     }
+}
+
+// ---------------------------------------------------------------------------
+// P5 — the helpers: a real husk, a pinned player, health per tick
+// ---------------------------------------------------------------------------
+
+/// The **real** husk out of `titan.ron`, at `at_m`, and the tick it takes to appear.
+///
+/// Not the fixture below: `combat::strike` resolves a titan's kind off the rig's `Name`, and a
+/// fixture has no kind — so these tests measure the same body the game builds, on purpose. If
+/// `titan::rig` ever renames a titan, `p5_a_husk_needs_exactly_three_strikes` is what says so.
+fn spawn_husk(app: &mut App, at_m: Vec3) -> Entity {
+    let before: Vec<Entity> = titans(app);
+    app.world_mut().write_message(SpawnTitan {
+        kind: "husk".into(),
+        pos_x: at_m.x,
+        pos_y: at_m.y,
+        pos_z: at_m.z,
+    });
+    // `titan::spawn_titans` runs in `PostStep`, so the body stands at the end of the next tick.
+    ticks(app, 2);
+    let after = titans(app);
+    *after
+        .iter()
+        .find(|e| !before.contains(e))
+        .expect("the husk of titan.ron has to be in the world after two ticks")
+}
+
+fn titans(app: &mut App) -> Vec<Entity> {
+    let mut q = app.world_mut().query_filtered::<Entity, With<TitanId>>();
+    q.iter(app.world()).collect()
+}
+
+/// `None` means: this player has no [`Health`] **component**, which is not the same as zero.
+fn health(app: &App, who: Entity) -> Option<f32> {
+    app.world().get::<Health>(who).map(|h| h.current)
+}
+
+fn now(app: &App) -> u64 {
+    app.world().resource::<Tick>().0
+}
+
+fn any_titan_is_striking(app: &mut App) -> bool {
+    let mut q = app.world_mut().query::<&TitanState>();
+    q.iter(app.world()).any(|s| *s == TitanState::Strike)
+}
+
+/// What one run of `n` ticks did to the local player.
+#[derive(Debug)]
+struct Watch {
+    /// `(tick, health afterwards)` for every tick the number changed — **one entry per landed
+    /// strike**, which is the whole claim of `P5`.
+    drops: Vec<(u64, f32)>,
+    /// The first tick the player was [`MovementState::Downed`].
+    downed_at: Option<u64>,
+    /// How many strikes were *begun* in this run — the guard against a test that proves
+    /// nothing because the titan never swung at all.
+    strikes: u32,
+}
+
+fn watch(app: &mut App, n: u64) -> Watch {
+    let me = player(app);
+    let mut w = Watch { drops: Vec::new(), downed_at: None, strikes: 0 };
+    let mut last = health(app, me);
+    let mut was_striking = any_titan_is_striking(app);
+    for _ in 0..n {
+        app.update();
+        let t = now(app);
+        let current = health(app, me);
+        if let (Some(before), Some(after)) = (last, current)
+            && (before - after).abs() > 1e-4
+        {
+            w.drops.push((t, after));
+        }
+        last = current;
+        let striking = any_titan_is_striking(app);
+        if striking && !was_striking {
+            w.strikes += 1;
+        }
+        was_striking = striking;
+        if w.downed_at.is_none()
+            && app.world().get::<MovementState>(me) == Some(&MovementState::Downed)
+        {
+            w.downed_at = Some(t);
+        }
+    }
+    w
 }
 
 // ---------------------------------------------------------------------------
@@ -815,12 +917,17 @@ fn f034_the_camera_kick_is_a_function_of_the_tick_and_ends_at_exactly_zero() {
 fn p5_a_downed_player_is_a_state_and_not_a_removed_entity() {
     let mut app = app();
     let me = player(&mut app);
-    // ⚠️ The test inserts the `Health` itself, because **no RON file in the repository has a
-    // player health number** — see `src/combat/health.rs`. That is the finding, not a
-    // convenience: `game.ron: player.health` and `titan.ron: <kind>.damage` are missing, and
-    // rule 2 forbids inventing either of them in Rust.
-    app.world_mut().entity_mut(me).insert(Health::full(100.0));
+    // The test no longer inserts the `Health` itself: `game.ron: player.health` exists since
+    // 2026-08-09 and `combat::health::grant` puts the component on the player. That is what
+    // turns this test from a statement about a component the game never had into a statement
+    // about the running game.
     ticks(&mut app, 2);
+    assert_eq!(
+        health(&app, me),
+        Some(data(&app).game.player.health),
+        "the player does not carry `game.ron: player.health` — nothing produces health, and \
+         every assertion below measures a component the test put there itself"
+    );
     assert_ne!(
         app.world().get::<MovementState>(me),
         Some(&MovementState::Downed),
@@ -856,6 +963,347 @@ fn p5_a_downed_player_is_a_state_and_not_a_removed_entity() {
         "a downed player is still swinging his blades"
     );
     println!("P5: health 0 -> MovementState::Downed, entity alive, PlayerId kept");
+}
+
+/// The producer, on its own: a player who has never been touched carries the file's number.
+///
+/// Red when nothing installs [`Health`] — and that was the state of the repository until this
+/// job: the HUD's crimson bar hid itself, `assert health > 0` measured nothing, and
+/// `mission::decide`'s second loss branch queried an empty set.
+#[test]
+fn p5_the_player_carries_the_health_the_file_gives_him() {
+    let mut app = app();
+    let d = data(&app);
+    let me = player(&mut app);
+    // One tick, not zero: the player is spawned in `Startup` through `Commands` and `grant`
+    // runs in `FixedUpdate`, so the component exists at the end of the tick the player does —
+    // measured, not assumed.
+    ticks(&mut app, 1);
+    let h = app.world().get::<Health>(me).copied().expect(
+        "the local player has no `Health` — `game.ron: player.health` exists, so somebody has \
+         to install it (src/combat/health.rs::grant)",
+    );
+    assert_eq!(h.max, d.game.player.health, "the maximum is not the number in game.ron");
+    assert_eq!(h.current, h.max, "a player starts a sortie hurt");
+    assert!(h.max > 0.0, "a player with 0 max health is downed before the mission starts");
+    // And it is the local player's, not a global: twenty players, twenty numbers.
+    let mut q = app.world_mut().query_filtered::<&Health, With<PlayerId>>();
+    assert_eq!(q.iter(app.world()).count(), 1, "one player, one health component");
+    println!("P5: player health {} / {} out of game.ron", h.current, h.max);
+}
+
+/// ★ **The one the whole feature is calibrated for.**
+///
+/// `game.ron: player.health` (100) against `titan.ron: husk.damage` (34) is **three strikes**,
+/// and the quotient is computed out of the two files here — a `3` written into this test would
+/// survive any change to either number.
+///
+/// It goes red on both of the failure modes that matter:
+///
+/// 1. **A literal instead of the file.** `p5_the_damage_comes_out_of_the_file_and_not_out_of_rust`
+///    is the inversion of that one, in-process: it changes the number and the count moves.
+/// 2. **A subtraction per tick instead of per strike.** ⚠️ Counting the subtractions is *not*
+///    enough for that one and the first version of this test was wrong about it: three
+///    per-tick subtractions also read 100 → 66 → 32 → 0. What separates the two is **when**
+///    they land — one blow per `attack_cooldown_s`, 90 ticks apart, against three ticks in a
+///    row inside a single 12-tick `Strike`. Measured: the inversion produces
+///    `[(39, 66), (40, 32), (41, 0)]`, so the gap is what this test asserts.
+#[test]
+fn p5_a_husk_needs_exactly_three_strikes() {
+    let mut app = app();
+    let d = data(&app);
+    let husk = d.titan("husk").expect("titan.ron has a husk");
+    let start = d.game.player.health;
+    let damage = husk.damage;
+    assert!(damage > 0.0, "titan.ron husk.damage = {damage} — a strike that costs nothing");
+    let needed = (start / damage).ceil() as u32;
+    assert_eq!(
+        needed, 3,
+        "game.ron player.health = {start} against titan.ron husk.damage = {damage} is {needed} \
+         strikes. The criterion of this session is written against THREE — either the files were \
+         retuned (then this number is the new truth and the line above is what has to move) or \
+         one of the two is wrong."
+    );
+
+    // Five metres out: inside `attack_range_m` (6.0) so the husk commits, outside his own body
+    // (2.5 m wide) so avian never touches the player and the distance stays what it was set to.
+    let husk_at = Vec3::new(0.0, 0.0, -10.0);
+    spawn_husk(&mut app, husk_at);
+    place(&mut app, Vec3::new(0.0, 0.5, -5.0), Vec3::ZERO);
+
+    // 90 ticks per attack (`attack_cooldown_s` 1.5 s, longer than wind-up + strike + recover),
+    // so three of them fit inside 400 with room to spare.
+    let w = watch(&mut app, 400);
+
+    assert_eq!(
+        w.drops.len(),
+        3,
+        "the husk landed {} subtractions in 400 ticks, not 3 ({} strikes were begun): {:?}. \
+         Twelve in a row is the per-tick failure; zero is a strike that reaches nobody.",
+        w.drops.len(),
+        w.strikes,
+        w.drops
+    );
+    for (i, (tick, left)) in w.drops.iter().enumerate() {
+        let expected = (start - damage * (i + 1) as f32).max(0.0);
+        assert!(
+            (left - expected).abs() < 1e-3,
+            "after strike {} at tick {tick} the player has {left}, {start} − {} × {damage} is \
+             {expected}",
+            i + 1,
+            i + 1
+        );
+    }
+
+    // ★ One blow per attack, not three inside one. `attack_cooldown_s` is measured from one
+    // wind-up to the next and is longer than wind-up + strike + recover, so it *is* the period.
+    let cooldown = (husk.attack_cooldown_s as f64 * d.game.simulation_hz).round() as u64;
+    assert_eq!(cooldown, 90, "titan.ron husk.attack_cooldown_s = {}", husk.attack_cooldown_s);
+    for pair in w.drops.windows(2) {
+        let gap = pair[1].0 - pair[0].0;
+        assert_eq!(
+            gap, cooldown,
+            "two subtractions {gap} ticks apart, `attack_cooldown_s` is {cooldown} ticks: {:?}. \
+             A gap of one is three hits inside ONE 12-tick strike — the player never got to see \
+             a second wind-up, and the telegraph he was supposed to read never mattered.",
+            w.drops
+        );
+    }
+    assert!(w.strikes >= 3, "only {} strikes were begun in 400 ticks", w.strikes);
+
+    let downed = w.downed_at.expect("three strikes and the player is still on his feet");
+    assert!(
+        downed >= w.drops[1].0 + cooldown,
+        "the player was `Downed` at tick {downed}, only {} ticks after the SECOND strike at \
+         tick {} which left him {} health. He has to survive a whole attack cycle in between.",
+        downed - w.drops[1].0,
+        w.drops[1].0,
+        w.drops[1].1
+    );
+    assert!(
+        downed >= w.drops[2].0 && downed <= w.drops[2].0 + 2,
+        "the third strike landed at tick {} and the player went down at {downed} — \
+         `down_at_zero` runs in `Drive`, one tick after `strike::land` in `PostStep`, so the \
+         gap is 1 and never 40",
+        w.drops[2].0
+    );
+    println!(
+        "P5 three strikes: {start} -> {} -> {} -> {} · strikes at ticks {:?} · Downed at tick \
+         {downed}",
+        w.drops[0].1, w.drops[1].1, w.drops[2].1,
+        w.drops.iter().map(|(t, _)| *t).collect::<Vec<_>>()
+    );
+}
+
+/// ★ **The one that makes "sixty hits a second" impossible.**
+///
+/// A husk's `Strike` lasts `round(strike_s × simulation_hz)` = 12 ticks. Over that whole window
+/// there is **exactly one** subtraction. The obvious implementation — subtract while the state
+/// is `Strike` — passes every "the player takes damage" test there is and turns the impact
+/// frame into a damage multiplier.
+#[test]
+fn p5_one_strike_subtracts_once_and_not_once_per_tick() {
+    let mut app = app();
+    let d = data(&app);
+    let husk = d.titan("husk").expect("titan.ron has a husk");
+    let start = d.game.player.health;
+    let strike_ticks = (husk.strike_s as f64 * d.game.simulation_hz).round() as u64;
+    assert_eq!(
+        strike_ticks, 12,
+        "titan.ron husk.strike_s = {} at {} Hz — the criterion is written against 12 ticks",
+        husk.strike_s, d.game.simulation_hz
+    );
+
+    spawn_husk(&mut app, Vec3::new(0.0, 0.0, -10.0));
+    place(&mut app, Vec3::new(0.0, 0.5, -5.0), Vec3::ZERO);
+
+    // Only as far as the first blow plus its own length: a second attack is 90 ticks away, so
+    // anything counted inside this window belongs to strike number one.
+    let w = watch(&mut app, 40 + strike_ticks + 2);
+
+    assert_eq!(w.strikes, 1, "{} strikes were begun, the window is written for one", w.strikes);
+    assert_eq!(
+        w.drops.len(),
+        1,
+        "one strike of {strike_ticks} ticks produced {} subtractions: {:?}. That is the whole \
+         failure mode — the state is `Strike` on every one of those ticks and a system that \
+         reads the state instead of booking the blow subtracts on every one of them.",
+        w.drops.len(),
+        w.drops
+    );
+    let me = player(&mut app);
+    assert!(
+        (health(&app, me).expect("health") - (start - husk.damage)).abs() < 1e-3,
+        "after one strike the player has {:?}, {start} − {} is {}",
+        health(&app, me),
+        husk.damage,
+        start - husk.damage
+    );
+    println!(
+        "P5 one strike: {strike_ticks} ticks of `Strike`, {} subtraction at tick {} — \
+         {start} -> {}",
+        w.drops.len(),
+        w.drops[0].0,
+        w.drops[0].1
+    );
+}
+
+/// ★ **The inversion of "the number is a literal", run in-process.**
+///
+/// The same husk, the same code, one number changed: at 50 damage a player with 100 health goes
+/// down on the **second** strike. A `34.0` compiled into Rust keeps needing three, and this test
+/// is what says so out loud — without touching `assets/data/`, which belongs to the main head.
+#[test]
+fn p5_the_damage_comes_out_of_the_file_and_not_out_of_rust() {
+    let mut app = app();
+    let start = data(&app).game.player.health;
+    let retuned = start / 2.0;
+    {
+        let mut d = app.world_mut().resource_mut::<GameData>();
+        d.titans.kinds.get_mut("husk").expect("titan.ron has a husk").damage = retuned;
+    }
+
+    spawn_husk(&mut app, Vec3::new(0.0, 0.0, -10.0));
+    place(&mut app, Vec3::new(0.0, 0.5, -5.0), Vec3::ZERO);
+    let w = watch(&mut app, 300);
+
+    assert_eq!(
+        w.drops.len(),
+        2,
+        "with husk.damage retuned to {retuned} against {start} health the player takes 2 \
+         strikes, not {}: {:?}. A literal in Rust does not move when the file does.",
+        w.drops.len(),
+        w.drops
+    );
+    assert!((w.drops[0].1 - retuned).abs() < 1e-3, "first strike left {}", w.drops[0].1);
+    assert_eq!(w.drops[1].1, 0.0, "second strike left {}", w.drops[1].1);
+    assert!(w.downed_at.is_some(), "two strikes at half health and nobody is down");
+    println!(
+        "P5 the number is the file's: husk.damage {retuned} -> {} strikes instead of 3",
+        w.drops.len()
+    );
+}
+
+/// Out of reach is out of reach — on the ground plane **and** upwards.
+///
+/// Both halves let the husk really swing (`strikes >= 1`), or the test would prove nothing: a
+/// titan that never attacked also never took any health, and that passes.
+///
+/// * **Horizontal**: the player steps out to `attack_range_m + 2` while the wind-up is running.
+///   The titan is committed, he swings, and he hits air — a wind-up that could not be walked
+///   out of would make `windup_s` a countdown to a guaranteed hit instead of a telegraph.
+/// * **Vertical**: 60 m straight up is 0 m away on the ground plane. A reach that is only a
+///   ground distance hits a player who is flying over the titan's head.
+#[test]
+fn p5_a_strike_out_of_range_takes_nothing() {
+    let husk_at = Vec3::new(0.0, 0.0, -10.0);
+    let reach = {
+        let app = app();
+        data(&app).titan("husk").expect("titan.ron has a husk").attack_range_m
+    };
+
+    /// One half: put the husk into his wind-up with the player in reach, then move the player
+    /// to `escape_to` and watch the committed blow land on nothing.
+    fn swing_at(husk_at: Vec3, escape_to: Vec3) -> (Watch, f32) {
+        let mut app = app();
+        let start = data(&app).game.player.health;
+        let body = spawn_husk(&mut app, husk_at);
+        place(&mut app, Vec3::new(0.0, 0.5, -5.0), Vec3::ZERO);
+        // Run until he is committed: `Windup` is the point of no return (`titan::brain::decide`
+        // has no edge out of it except through `Strike`).
+        let mut committed = false;
+        for _ in 0..200 {
+            app.update();
+            if app.world().get::<TitanState>(body) == Some(&TitanState::Windup) {
+                committed = true;
+                break;
+            }
+        }
+        assert!(committed, "the husk never wound up — nothing is being measured");
+        // He does not walk during `Windup` or `Strike` (`titan::brain::walk` moves nothing that
+        // is not in `Pursue`), so the player stays where he is put.
+        place(&mut app, escape_to, Vec3::ZERO);
+        let w = watch(&mut app, 60);
+        let me = player(&mut app);
+        let left = health(&app, me).expect("the player has health");
+        assert!(w.strikes >= 1, "the committed wind-up never became a strike");
+        assert_eq!(left, start, "the player was hit: {:?}", w.drops);
+        (w, start)
+    }
+
+    // ---- horizontal: two metres past `attack_range_m`, still well inside `aggro_radius_m`
+    let (w, _) = swing_at(husk_at, Vec3::new(0.0, 0.5, husk_at.z + reach + 2.0));
+    assert!(
+        w.drops.is_empty(),
+        "a strike with a reach of {reach} m took health off a player standing at {} m: {:?}",
+        reach + 2.0,
+        w.drops
+    );
+
+    // ---- vertical: straight over his head — 0 m away on the ground plane, 60 m up
+    let (w, _) = swing_at(husk_at, Vec3::new(0.0, LANE_Y, husk_at.z));
+    assert!(
+        w.drops.is_empty(),
+        "the husk hit a player {LANE_Y} m over his head: {:?}. The reach is a ground distance \
+         with a ceiling, not a cylinder to the sky (src/combat/strike.rs).",
+        w.drops
+    );
+    println!(
+        "P5 out of reach: attack_range_m {reach} — nothing at {} m on the ground, nothing at \
+         {LANE_Y} m up",
+        reach + 2.0
+    );
+}
+
+/// ★ **The second way to lose, end to end — and none of it is built here.**
+///
+/// `mission::decide` has carried "every player down ⇒ `Lost`" since `F-070` and it was inert,
+/// because the query it reads was empty: nothing in the running game produced a [`Health`].
+/// This test does not rebuild that branch, it **feeds** it — which is the only honest way to
+/// find out whether a placeholder was ever right.
+#[test]
+fn p5_the_mission_is_lost_when_every_player_is_down() {
+    use defeated_by_titan::mission::MissionPhase;
+
+    let mut app = mission_app();
+    assert_eq!(
+        *app.world().resource::<State<MissionPhase>>().get(),
+        MissionPhase::Active,
+        "`--mission tutorial` has to be running, or `decide` never gets to run at all"
+    );
+
+    spawn_husk(&mut app, Vec3::new(0.0, 0.0, -10.0));
+    place(&mut app, Vec3::new(0.0, 0.5, -5.0), Vec3::ZERO);
+    let w = watch(&mut app, 400);
+
+    let downed = w.downed_at.expect("the player never went down — there is no loss to check");
+    let phase = *app.world().resource::<State<MissionPhase>>().get();
+    assert_eq!(
+        phase,
+        MissionPhase::Lost,
+        "the player is down at tick {downed} and the mission says {}. The tutorial's clock is \
+         330 s = 19 800 ticks, so this cannot be the timeout — it is the second way to lose",
+        phase.label()
+    );
+    // And it is not the clock and not a win: the verdict was spoken at the tick the player fell.
+    let mut q = app.world_mut().query::<&defeated_by_titan::mission::MissionClock>();
+    let clock = *q.iter(app.world()).next().expect("a running mission has a clock");
+    let decided = clock.decided_at_tick.expect("a decided mission records its tick");
+    assert!(
+        decided < clock.deadline_tick(),
+        "decided at {decided}, deadline at {} — this run measured the timeout, not the player",
+        clock.deadline_tick()
+    );
+    assert!(
+        decided.abs_diff(downed) <= 2,
+        "the player went down at tick {downed} and the mission was decided at {decided}"
+    );
+    println!(
+        "P5 second loss path: player down at tick {downed}, mission LOST at tick {decided} \
+         (deadline {}), drops {:?}",
+        clock.deadline_tick(),
+        w.drops
+    );
 }
 
 /// The freeze is avian's, not a zeroed velocity — and it is removed again.

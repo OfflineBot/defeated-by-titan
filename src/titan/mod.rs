@@ -20,6 +20,30 @@
 //! | [`brain`] | the reduced FSM, the straight-line walk, the death |
 //! | [`pose`] | the arm and the lean, as a pure function of `(state, ticks_in_state)` |
 //!
+//! ## What stands here since 2026-08-10 — `F-053`, the titan's half of `F-034`, and Q-030
+//!
+//! - **`F-053` is measured, not asserted.** The wind-up carries the striking hand **8.221 m**
+//!   over its 36 ticks, which is **192 px at 40 m** on a 1080-line screen against a criterion of
+//!   150 (`tests/titan.rs::f053_the_wind_up_moves_the_hand_far_enough_to_see`,
+//!   `docs/images/f053-windup.png`). The pose itself is unchanged — it was already a pure
+//!   function of `(state, ticks_in_state)` — what was missing was the number and the two-frame
+//!   picture, and a still frame cannot carry either.
+//! - **The hit stop reaches the titan.** [`brain::walk`] and [`brain::dissolve`] read
+//!   [`HitStop`](crate::shared::HitStop). `combat::hitstop::begin` freezes a titan by putting
+//!   the component on him and `RigidBodyDisabled` next to it — and that marker does *nothing*
+//!   to a body avian never integrates, which is trap 1 again from the other side. Measured
+//!   before the gate: 0.1000 m of walking during a 2-tick freeze the player spent standing
+//!   still.
+//! - **Q-030 is answered, and the answer is that the question's arithmetic is wrong.** The nape
+//!   of a **solid** husk is reachable and always was: the blade does not have to touch the
+//!   titan's axis, it has to touch a sphere of radius `cortex_radius_m` with a swept capsule of
+//!   radius `thickness_m`. That is `1.60 + 0.55 + 0.12 = 2.27 m` of reach against `1.25 + 0.35
+//!   = 1.60 m` of clearance — **0.67 m of margin**, not "zero". No length was changed anywhere;
+//!   what changed is that there is now a test that flies the pass
+//!   ([`tests/titan.rs::q030_a_flying_player_reaches_the_nape_of_a_solid_husk`]) and a script
+//!   that shows it (`scripts/q030-reach.txt`). The head of that section in `tests/titan.rs`
+//!   carries the whole table, per class, and names where Q-030's own measurement came from.
+//!
 //! ## The four traps that are paid for here
 //!
 //! 1. **`RigidBody::Kinematic` needs `CustomPositionIntegration`** — otherwise the titan moves
@@ -43,6 +67,8 @@
 //! | the numbers and the red tests | `tests/titan.rs`, `cargo test --test titan` |
 //! | the husk and his cortex | `scripts/f056-husk.txt` → `docs/images/f056-husk.png` |
 //! | the wind-up at tick 21 of 36 | `scripts/f050-states.txt` → `docs/images/f050-states.png` |
+//! | the telegraph, in **two** frames | `scripts/f053-windup.txt` → `docs/images/f053-windup.png` |
+//! | the cut, against a **solid** husk | `scripts/q030-reach.txt` → `docs/images/f030-solid-husk.png` |
 //!
 //! Both scripts are `--offscreen` runs and both PNGs come out bit-identical on two runs. The
 //! header of each script says why its camera stands where it stands — a framing that was

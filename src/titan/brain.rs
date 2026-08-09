@@ -17,6 +17,14 @@
 //! step is `1 / game.simulation_hz`, a constant out of the file, so two machines that reach
 //! tick *n* stand in the same place (`docs/multiplayer.md` rule 4).
 //!
+//! ## The one thing in here that is not the titan's own
+//!
+//! [`walk`] and [`dissolve`] read [`HitStop`](crate::shared::HitStop), which `combat` writes.
+//! That is not an edge into `combat` — the component lives in `shared/` precisely so that the
+//! two ends of an impact frame do not have to know each other — but it *is* the only place
+//! where something outside this domain stops a titan, and it is here because nothing else can:
+//! `RigidBodyDisabled` does nothing to a body avian never integrates. See [`walk`].
+//!
 //! ## Two arms of the enum are missing on purpose
 //!
 //! `Alerted` belongs to `F-051` and `Stagger` to `F-032`. Neither is built, and a variant
@@ -33,7 +41,7 @@ use bevy::prelude::*;
 
 use crate::data::{GameData, TitanKind};
 use crate::shared::{
-    HitZone, PlayerId, TitanHit, TitanId, TitanState, Velocity,
+    HitStop, HitZone, PlayerId, TitanHit, TitanId, TitanState, Velocity,
 };
 
 use super::rig::{TitanBody, TitanPart};
@@ -293,6 +301,16 @@ fn nearest_player(
 /// skips it (`avian3d-0.7.0/src/dynamics/integrator/mod.rs:503-504`). `LinearVelocity` is still
 /// written, because the broad phase enlarges a moving body's AABB from it and because `combat`
 /// computes the *closing* speed of a cut from it — it is information here, not a drive.
+///
+/// ## Why this system reads [`HitStop`]
+///
+/// Because nothing else can stop this titan. `combat::hitstop::begin` freezes the two bodies of
+/// a hit by putting `HitStop` on them and `RigidBodyDisabled` on the player — but disabling a
+/// rigid body does nothing to a titan, whose position avian never integrates
+/// (`RigidBody::Kinematic` + `CustomPositionIntegration`, see [`super::rig::build_rig`]). Its
+/// own comment says so and names this line. Without it a graze freezes the player and the titan
+/// walks on through his own impact frame, which is the one thing an impact frame must not do.
+#[allow(clippy::type_complexity)]
 pub(super) fn walk(
     data: Res<GameData>,
     mut bodies: Query<
@@ -300,6 +318,7 @@ pub(super) fn walk(
             &TitanState,
             &TitanTarget,
             &TitanTuning,
+            Option<&HitStop>,
             &mut TitanGait,
             &mut Transform,
             &mut LinearVelocity,
@@ -312,7 +331,20 @@ pub(super) fn walk(
     // make the titan's path depend on the frame rate, and with it the `--offscreen` sha256.
     let dt = (1.0 / data.game.simulation_hz) as f32;
 
-    for (state, target, tuning, mut gait, mut transform, mut linear, mut velocity) in &mut bodies {
+    for (state, target, tuning, stop, mut gait, mut transform, mut linear, mut velocity) in
+        &mut bodies
+    {
+        if stop.is_some_and(HitStop::is_frozen) {
+            // **The impact frame, on the body that was hit.** `gait.speed_m_s` is deliberately
+            // NOT reset: a hit stop is a frozen frame, not a stumble, and the titan carries on
+            // at the speed he had. The two velocities do go to zero, because they describe what
+            // this body does *this* tick and this tick it does nothing — `blades::cut` reads
+            // `Velocity` for the closing speed of the next cast.
+            linear.0 = Vec3::ZERO;
+            velocity.0 = Vec3::ZERO;
+            continue;
+        }
+
         let pursuing = *state == TitanState::Pursue
             && target.player.is_some()
             && target.distance_m > tuning.attack_range_m;
@@ -361,15 +393,22 @@ pub(super) fn walk(
 /// There is no authored collapse: machine A has no Blender, so `AN-081`'s "collapse, then
 /// vaporize" is a box scaled to zero (`docs/PLAN-GAME.md` §10). Scaling the **root** is safe
 /// because the collider left on tick one.
+///
+/// It reads [`HitStop`] for the same reason [`walk`] does, and the case is the loudest one there
+/// is: `hit_stop_cortex_s` is 0.12 s and the freeze begins on the very tick the titan dies. A
+/// corpse that keeps shrinking through the impact frame of its own kill is the one hit stop in
+/// the game the player is guaranteed to be looking at. **The death clock is not frozen** — that
+/// is [`advance`]'s accumulator — so the body still vanishes after `death_s`; only the shrink
+/// pauses.
 pub(super) fn dissolve(
     mut commands: Commands,
     mut bodies: Query<
-        (Entity, &TitanState, &TitanClock, &TitanTiming, &mut Transform),
+        (Entity, &TitanState, &TitanClock, &TitanTiming, Option<&HitStop>, &mut Transform),
         With<TitanBody>,
     >,
 ) {
-    for (entity, state, clock, timing, mut transform) in &mut bodies {
-        if *state != TitanState::Death {
+    for (entity, state, clock, timing, stop, mut transform) in &mut bodies {
+        if *state != TitanState::Death || stop.is_some_and(HitStop::is_frozen) {
             continue;
         }
         if clock.ticks_in_state >= timing.death_ticks {

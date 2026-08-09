@@ -19,13 +19,15 @@ use crate::shared::{LookOverride, Intent, LocalPlayer, PlayerId, Buttons, Tick};
 /// Reads the real input and posts an [`Intent`] built from it into the inbox.
 ///
 /// Runs in `FixedPreUpdate`, in the set `IntentSystems::Collect` — so **once per simulation
-/// tick** and guaranteed **after** the script driver (`IntentSystems::Source`). Mouse
-/// motion gathered between two ticks is not lost in the process: `AccumulatedMouseMotion`
-/// sums it up across the frames.
+/// tick** and guaranteed **after** the script driver (`IntentSystems::Source`).
+///
+/// The mouse comes out of [`MouseSinceTick`] and **not** out of `AccumulatedMouseMotion`.
+/// Why, and what it cost to find out, is in the header of [`gather_mouse_motion`] and in
+/// `docs/BUGS.md` `B-002`.
 pub fn read_input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    mouse_motion: Res<AccumulatedMouseMotion>,
+    mut mouse_motion: ResMut<MouseSinceTick>,
     tick: Res<Tick>,
     data: Res<GameData>,
     mut inbox: ResMut<Inbox>,
@@ -40,13 +42,16 @@ pub fn read_input(
     };
 
     let k = &data.game.camera;
+    // Taken **unconditionally**, before the branch: an absolute `look` must not be dragged
+    // off its angle one tick later by motion that was buffered before it. `tests/input.rs::
+    // p3_a_script_look_still_overrides_the_mouse` is that sentence as a test.
+    let d = std::mem::take(&mut mouse_motion.delta);
     if let Some((yaw, pitch)) = look_override.0.take() {
         // The script driver's "pretend" look vector (§12b). A mouse knows no absolute
         // angle — `look 0 -10` does, and that is exactly what a reproducible run needs.
         look.yaw = yaw;
         look.pitch = pitch;
     } else {
-        let d = mouse_motion.delta;
         look.yaw -= d.x * k.mouse_deg_per_px.to_radians();
         look.pitch = (look.pitch - d.y * k.mouse_deg_per_px.to_radians())
             .clamp(-k.pitch_limit_deg.to_radians(), k.pitch_limit_deg.to_radians());
@@ -87,4 +92,47 @@ pub fn read_input(
 pub struct Look {
     pub yaw: f32,
     pub pitch: f32,
+}
+
+/// The mouse motion of every **frame** since the last simulation **tick**.
+///
+/// A `Resource` and not a component: this is the state of a *device*, not of a player. There
+/// is exactly one mouse on this machine the same way there is exactly one
+/// `ButtonInput<KeyCode>` — and it stops being read the moment [`read_input`] has turned it
+/// into an `Intent`. Nothing behind that seam ever sees it, so §6 rule 3 ("no player state in
+/// a `Resource`") is untouched: an `Intent` is still what the simulation reads, and it still
+/// hangs on a player.
+#[derive(Resource, Debug, Default)]
+pub struct MouseSinceTick {
+    pub delta: Vec2,
+}
+
+/// Sums the frame's mouse motion into [`MouseSinceTick`] — **once per frame**, before the
+/// fixed loop.
+///
+/// ## The bug this exists for (`B-002`, `docs/PLAN-GAME.md` §8 `P3`)
+///
+/// `AccumulatedMouseMotion` is **assigned** in `PreUpdate`, once per frame
+/// (`bevy_input-0.19.0/src/mouse.rs:257-267` — the last line is `= delta`, not `+= delta`).
+/// The fixed loop runs the entire `FixedMain` schedule **0..n times per frame**
+/// (`bevy_time-0.19.0/src/fixed.rs:249-255`, `while ...expend()`). Reading a per-frame
+/// resource from `FixedPreUpdate` therefore
+///
+/// - **throws motion away** on every frame in which no fixed step is due — measured
+///   **58.7 %** at 144 fps and **88.4 %** at 500 fps, and
+/// - **applies it again** on every catch-up frame — measured **+198.3 %** at 20 fps.
+///
+/// At exactly 60 fps, and only there, the two rates cancel and the ratio is 1.000. That is why
+/// nobody saw it: the one rate this game was ever run at is the one rate at which it is right.
+///
+/// `RunFixedMainLoopSystems::BeforeFixedMainLoop` is the set that runs **exactly once per
+/// frame regardless of the number of fixed updates**
+/// (`bevy_app-0.19.0/src/main_schedule.rs:401-403`), and it sits after `PreUpdate` in the main
+/// schedule order (`:224-232`) — so Bevy's own accumulation has already happened when this
+/// runs.
+pub fn gather_mouse_motion(
+    motion: Res<AccumulatedMouseMotion>,
+    mut pending: ResMut<MouseSinceTick>,
+) {
+    pending.delta += motion.delta;
 }

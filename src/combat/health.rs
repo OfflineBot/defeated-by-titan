@@ -1,4 +1,4 @@
-//! `P5` — **a downed player is a state, not a removed entity.**
+//! `P5` — **the player has health, and at zero he is downed, not removed.**
 //!
 //! [`MovementState::Downed`] documents itself as *"out of the fight instead of dead: a state
 //! with a timer, not a removed entity"* — team mates revive you (bible 3.6, `squad/`). A
@@ -6,28 +6,50 @@
 //! the `Gas`, the hooks and the seat that a dropped connection is supposed to hold for 120 s.
 //! `tests/combat.rs::p5_a_downed_player_is_a_state_and_not_a_removed_entity` goes red on it.
 //!
-//! ## ⚠️ What is NOT here, and why it is not a decision of this file
+//! ## The number comes out of `game.ron`, and it did not exist until 2026-08-09
 //!
-//! **Two numbers this feature needs do not exist in any RON file**, and rule 2 forbids
-//! inventing them in Rust — a game value in Rust never gets tuned:
+//! `game.ron: player.health = 100.0`, read through [`GameData`] and never a literal. It is
+//! calibrated against `titan.ron: husk.damage = 34.0`: **three strikes and you are down** —
+//! see [`super::strike`], which is the half that subtracts.
 //!
-//! | number | where it belongs | what is missing without it |
-//! |---|---|---|
-//! | `game.ron: player.health` | `PlayerTuning` in `src/data/mod.rs` | nothing can spawn a player [`Health`], so `assert health > 0` still measures *nothing* |
-//! | `titan.ron: <kind>.damage` | `TitanKind` in `src/data/mod.rs` | a `Strike` in range has no amount to subtract |
+//! Until that number was in the file this whole feature was inert: nothing produced a
+//! [`Health`], so `assert health > 0` measured *nothing*, the HUD's crimson bar hid itself, and
+//! `mission::decide`'s "every player down ⇒ `Lost`" branch queried an empty set. All three come
+//! alive with [`grant`] and not one of them needed a line changed.
 //!
-//! `docs/PLAN-GAME.md` §0.3 lists ten blocking RON values and **neither of these two is on the
-//! list** — the hole was not seen when the plan was written. Both files and `src/data/mod.rs`
-//! belong to the main head (`CLAUDE.md`), so this file carries the mechanism and the finding,
-//! not a made-up 100.0.
+//! ## Why `combat` installs the component and not `player::spawn_player`
 //!
-//! What *is* here is the half that needs no number: at zero the player goes to
-//! [`MovementState::Downed`] and stays in the world. It works today for anybody who has a
-//! [`Health`] — and it is the half that is easy to get wrong for good.
+//! Because `src/player/` belongs to another domain, and **the components a domain writes are
+//! the components it may also install** — `blades::swing::equip` says the same sentence about
+//! `Swings` and settles the precedent. A player without a [`Health`] is then not a player at
+//! zero health but a player nobody has measured, and every reader in the repository already
+//! makes exactly that distinction with `Option<&Health>` (`hud::health_bar`, `debug::measure`).
 
 use bevy::prelude::*;
 
+use crate::data::GameData;
 use crate::shared::{Health, MovementState, PlayerId, SimulationSystems};
+
+/// Hangs `Health::full(game.ron: player.health)` on every player that does not have one.
+///
+/// A system and not an observer, so that a player who arrives over the wire one day
+/// (`net::LocalOnly` is a seam, `docs/multiplayer.md`) is served by the same line as the local
+/// one, and so that the mechanism is visible in the schedule rather than in a callback. The
+/// query is archetype-filtered and empty on all but one tick of the run.
+///
+/// `SimulationSystems::Intent`: the sets are `.chain()`ed in `src/lib.rs`, so the insert is
+/// flushed before `Drive` ([`down_at_zero`]) and before `PostStep`
+/// ([`super::strike::land`]) — a player cannot be hit in the same tick he was equipped and
+/// have the hit fall on a component that is not there yet.
+pub fn grant(
+    mut commands: Commands,
+    data: Res<GameData>,
+    fresh: Query<Entity, (With<PlayerId>, Without<Health>)>,
+) {
+    for entity in &fresh {
+        commands.entity(entity).insert(Health::full(data.game.player.health));
+    }
+}
 
 /// At zero health the player is **downed**, never despawned.
 ///
@@ -49,7 +71,8 @@ pub fn down_at_zero(mut players: Query<(&Health, &mut MovementState), With<Playe
 /// [`MovementState`] before every avian system in `Integrate`, so a player who goes down this
 /// tick stops running in the same tick and not in the next one.
 pub fn register(app: &mut App) {
-    app.add_systems(FixedUpdate, down_at_zero.in_set(SimulationSystems::Drive));
+    app.add_systems(FixedUpdate, grant.in_set(SimulationSystems::Intent))
+        .add_systems(FixedUpdate, down_at_zero.in_set(SimulationSystems::Drive));
 }
 
 #[cfg(test)]

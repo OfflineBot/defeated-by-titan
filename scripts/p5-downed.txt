@@ -1,0 +1,55 @@
+# p5-downed — the second way to lose: a husk walks up, hits three times, the run says LOST.
+#
+#   the picture:  cargo run -- --offscreen --mission tutorial --script scripts/p5-downed.txt \
+#                              --screenshot docs/images/p5-downed.png --ticks 590
+#   the verdict:  cargo run -- --headless  --mission tutorial --script scripts/p5-downed.txt \
+#                              --ticks 1200
+#
+# MEASURED on debian, 2026-08-09:
+#   tick 449  strike 1   100 -> 66
+#   tick 539  strike 2    66 -> 32
+#   tick 629  strike 3    32 ->  0   -> MovementState::Downed
+#   tick 629  MISSION LOST (decided_at_tick 629, deadline 19 800) — 0/3 kills
+#   headless: 5 asserts held, 934 ticks, exit 0
+#   offscreen at tick 590: the bar stands at 32/100 between the second blow and the third,
+#   the husk is planted (`Pursue` inside his own reach moves nobody), and the PNG is
+#   bit-identical over two runs — sha256 bd0a45d41e4d4508f9e15e8e828a7519ef036ada180316c331bfb519209d4493
+#
+# ⚠️ TWO runs, not one. `--screenshot` takes the exit over (`debug::screenshot`) and writes
+# `AppExit::Success` as soon as the PNG is on disk — an `assert` that falls over after the shot
+# tick never reaches the exit code. So the image comes from the `--offscreen` run and the
+# VERDICT comes from the `--headless` one. Measured this session, not assumed.
+#
+# NOTHING IS SPAWNED HERE. The husk is the tutorial's own first wave
+# (`missions.ron: tutorial.waves[0]`, at_s 0.0, one husk on the ring at
+# `maps.ron: clear_radius_m` = 24 m). That is the point: this is the mission as it is played,
+# not a rig built to make a number come out.
+#
+# The arithmetic, out of the files and nowhere else:
+#   game.ron  player.health      = 100
+#   titan.ron husk.damage        =  34   -> 100 / 34 = three strikes: 100 -> 66 -> 32 -> 0
+#   titan.ron husk.attack_range_m=   6   -> he stops walking there and winds up
+#   titan.ron husk.windup_s      = 0.6   -> 36 ticks of telegraph before every blow
+#   titan.ron husk.attack_cooldown_s = 1.5 -> 90 ticks from one wind-up to the next
+#
+# The player does NOT move. That is the whole content of the run: standing still and tanking a
+# telegraphed attack is the losing play, and the health bar draining is what says so.
+
+key F3 0.5        # the overlay carries health, phase and tick into the PNG
+look -90 2        # titan i of n stands at `i/n` of the ring (`mission::run::ring_position`),
+                  # so the first one is at +X. Yaw 0 is -Z, so +X is -90
+                  # (docs/conventions.md). Two degrees up: a 10 m husk at 6 m is above the
+                  # eye line, and the HUD's health bar sits at the bottom of the same frame.
+
+wait 8.5          # he covers 24 m -> 6 m at 3 m/s off 3 m/s2, then winds up 0.6 s
+
+assert health < 100     # a blow has landed — the crimson bar is draining
+assert phase == 2       # and the mission is still running: this is not the clock
+
+wait 5.0          # the rest of the three, 90 ticks apart
+
+assert health < 1       # 100 - 3 x 34 saturates at 0
+assert phase == 4       # LOST — mission::decide's second branch, fed for the first time
+assert tick < 19800     # and NOT by the clock: the tutorial's deadline is 330 s = 19 800 ticks
+
+wait 2            # keep the run alive past the screenshot tick

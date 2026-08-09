@@ -1,0 +1,73 @@
+# Q-030 — the nape of a SOLID husk is reachable, with air to spare.
+#
+# cargo run -- --offscreen --script scripts/q030-reach.txt --ticks 168 \
+#              --screenshot docs/images/f030-solid-husk.png
+#
+# It logs `tick 154: cut titan 1 Cortex at 20.67 m/s (player 1)` and the F3 overlay of the
+# screenshot reads `pos -11.0 …` and `titan#1 Death`.
+#
+# ⚠️ The picture is called `f030-solid-husk.png` and not `q030-…`: `tools/norms.py` §10 knows
+# f/t/b/p ids and a **question** has no letter of its own. The evidence belongs to `F-030` — it
+# is the cut, against the real body instead of against the fixture in `tests/combat.rs`.
+#
+# `docs/QUESTIONS.md` Q-030 says this run cannot happen: `gear.ron: blades.reach_m` is 1.60 m
+# and a husk's body radius plus the player's is `1.25 + 0.35 = 1.60 m`, so "there is zero
+# margin". **The arithmetic leaves out two lengths that stand in the same two files.**
+#
+#   reach_m 1.60  +  titan.ron husk.cortex_radius_m 0.55  +  blades.thickness_m 0.12  =  2.27 m
+#   against a clearance of                                    1.25 + 0.35             =  1.60 m
+#                                                                            margin  = +0.67 m
+#
+# The blade never has to touch the titan's axis. It has to touch a **sphere** of radius 0.55 m
+# that sits half a head's depth behind the neck, with a swept capsule of radius 0.12 m.
+#
+# This run flies the pass at **x = −1.80**, i.e. with **0.20 m of air** between the two
+# capsules — a margin a player can hold, not the last centimetre of the clearance. The whole
+# measured window and the same pass at `large` are in
+# `tests/titan.rs::q030_a_flying_player_reaches_the_nape_of_a_solid_husk`.
+#
+# ## Why the player falls instead of flying
+#
+# The same reason as `scripts/f030-cortex.txt`: hooking, reeling and boosting cannot be aimed
+# from a script accurately enough to pass a 1.10 m sphere, and gravity can. At −20 m/s² a fall
+# of 11.2 m is 21 m/s and it is reproducible to the tick. What this run is evidence **of** is
+# the geometry — how much air is left beside a solid body — and that does not care which way
+# the player is travelling. The horizontal pass at 30 m/s is measured in the test.
+#
+# ## Why z = 0.55 and x = −1.80
+#
+# The cortex sits at `(0, 8.9, +0.55)`: `head_m / 2` **behind** the neck
+# (`src/titan/rig.rs: cortex_in_head`). Standing at z = 0.55 the blade's line runs straight
+# through its centre, so the only thing being measured is the lateral offset. Looking at yaw 0
+# (Bevy's forward, −Z) the **right** blade lies on +X (`src/blades/cut.rs: blade_segment`), so
+# the player stands on −X and the blade points inward: from x = −1.80 to x = −0.20, and −0.20
+# is 0.35 m inside a cortex sphere of radius 0.55.
+#
+# ## Why the cut lands in `Recover`
+#
+# Identical to `scripts/f030-cortex.txt`: the husk is 1.88 m away on the ground plane, inside
+# `attack_range_m` = 6.0, so he goes `Idle → Pursue → Windup` at once and his torso leans 12°
+# over the next 36 ticks — which carries the cortex almost a metre. `Windup` 36 + `Strike` 12
+# put `Recover` at tick 141..165 of this run and the crossing at ~154, against an upright body.
+#
+# 1.5 s of lead-in before anything happens: under `--offscreen` the render pipelines and the
+# block meshes are still coming up in the first second.
+wait 1.5
+spawn titan husk 0 0 0
+warp -1.80 18.5 0.55
+look 0 0
+key F3 0.05
+wait 0.90
+key E 0.40
+wait 0.08
+mark cortex-pass
+wait 0.10
+assert titans == 1
+# **Only now** does the camera turn, and it steps back with it. The blade hangs at the player's
+# side, perpendicular to the look direction — you cut what you fly past, not what you look at
+# (`src/blades/cut.rs: blade_segment`) — so the look has to stay at yaw 0 until the blade is
+# through. 17 m out and level with the nape: from 1.8 m the picture is a grey wall.
+warp -11 5.5 8
+look -56 -6
+wait 1.10
+assert titans == 0

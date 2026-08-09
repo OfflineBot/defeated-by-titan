@@ -1,0 +1,52 @@
+# p3-mouse — the look path still steers after `B-002` (docs/BUGS.md).
+#
+#   cargo run -q -- --headless --script scripts/p3-mouse.txt --ticks 600
+#
+# ⚠️ **This run is NOT the evidence for P3.** It cannot be. `src/debug/script.rs` has no
+# `mouse` verb (`parse_line`: spawn, warp, look, key, hook, wait, mark, assert, end), so a
+# script can dictate an ABSOLUTE angle with `look` but can never report a mouse DELTA — and
+# a delta is the entire subject of the bug. `assert` has no metric for a look angle either
+# (speed, height, gas, titans, tick, health, kills, phase).
+#
+# The number that proves P3 is in `tests/input.rs`:
+#   144 fps, before: 300 frames, 124 ticks, applied 41.3 % of the device motion.
+#   144 fps, after : ratio 1.000.
+#
+# What this run IS for: the fix rewired the mouse in `net::local::read_input`, and every
+# `--script` run in the repository goes through that same system. So this is the regression
+# run for the OTHER half — that an absolute `look` still wins over the buffered motion and
+# still steers the walk. It is meant to stay green and boring; the day it is not, the
+# override branch of `read_input` was broken by whoever touched the mouse.
+#
+# Two directions, one criterion: pressing W after `look 0 0` and after `look 90 0` has to
+# move the player, and both times he has to still be on the ground. If the look override
+# had stopped arriving, `look 90 0` would leave the yaw where the previous line put it —
+# and the player would be walking somewhere else. That is not measurable from here (see
+# above), which is why this file says so instead of pretending it is.
+
+mark p3-start
+assert height > -1              # has not fallen through the ground
+assert titans == 0              # empty world: nothing walks into the player
+
+look 0 0                        # along -Z, the axis contract (docs/conventions.md)
+key W 2.0                       # `key` is not blocking — it holds for 2 s and the script
+wait 0.8                        # runs on. So measure DURING the hold, not after it.
+mark p3-walked-forward
+assert speed > 0.5              # the look path produced a movement direction at all
+assert height > -1
+assert height < 3               # no taking off without Vector Gear
+
+wait 2.0                        # let go and come to a stop before the second leg
+mark p3-standing
+assert speed < 0.5
+
+look 90 0                       # a quarter turn — the override has to arrive again
+key W 2.0
+wait 0.8
+mark p3-walked-turned
+assert speed > 0.5              # and it still steers after the fix
+assert height > -1
+assert height < 3
+
+mark p3-end
+end

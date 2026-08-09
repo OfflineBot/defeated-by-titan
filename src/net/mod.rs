@@ -42,9 +42,18 @@ impl Plugin for NetPlugin {
         app.insert_resource(Transport::LocalOnly)
             .insert_resource(Inbox::with_lag(lag_ticks))
             .init_resource::<crate::shared::LookOverride>()
+            .init_resource::<local::MouseSinceTick>()
             .configure_sets(
                 FixedPreUpdate,
                 (IntentSystems::Source, IntentSystems::Collect, IntentSystems::Deliver).chain(),
+            )
+            // **Per frame, not per tick** — and that is the entire point of this line.
+            // `AccumulatedMouseMotion` is refreshed once per frame; `FixedPreUpdate` runs
+            // 0..n times in one. Whoever moves this system into a fixed schedule brings
+            // `B-002` back, and `tests/input.rs` says so with a number.
+            .add_systems(
+                RunFixedMainLoop,
+                local::gather_mouse_motion.in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
             )
             .add_systems(FixedPreUpdate, local::read_input.in_set(IntentSystems::Collect))
             .add_systems(

@@ -168,6 +168,62 @@ fn spawn_titan(app: &mut App, kind: &str, pos: Vec3) {
     ticks(app, 2);
 }
 
+/// Puts every player so far outside every titan's `aggro_radius_m` that no wave can walk to
+/// him, and hands back the distance it used.
+///
+/// **Why the long tests need this.** Since `P5` a husk's `Strike` really does subtract
+/// `titan.ron: husk.damage` (34) from `game.ron: player.health` (100), and `mission::decide`'s
+/// second loss path ("every player down ⇒ `Lost`") is no longer inert. A test player who stands
+/// still in the middle of the spawn ring is down after three blows, and every test whose
+/// subject is a **tick far in the future** — the 19 800 of the deadline, the 5 400 of the second
+/// wave — would then measure the walking speed of a husk instead of the thing it was written
+/// for. Parking him is not a weakening: the criterion below is unchanged, it is the *premise*
+/// ("nothing else decides this mission") that is being made true instead of assumed.
+///
+/// Every number here comes out of `assets/data/`: the spawn ring is `maps.ron:
+/// layout.clear_radius_m` (the same one `mission::open_the_field` reads), and the reach of the
+/// widest pair of eyes in the game is the largest `aggro_radius_m` of `titan.ron` — the maximum
+/// over **all** kinds and not over the tutorial's two, so that a new wave in `missions.ron`
+/// cannot quietly bring a titan that sees further. `titan::brain::decide` sends a titan outside
+/// that radius to `Idle`, and `titan::brain::walk` moves nothing that is not in `Pursue`, so a
+/// parked player is not chased at all — he is not merely out of reach for a while.
+fn park_players_out_of_aggro(app: &mut App) -> f32 {
+    let d = data(app);
+    let ring_m = d
+        .current_map()
+        .expect("maps.ron: `current` names a map — the wave ring has no radius without it")
+        .layout
+        .clear_radius_m;
+    let widest_aggro_m =
+        d.titans.kinds.values().map(|k| k.aggro_radius_m).fold(0.0f32, f32::max);
+    // Twenty metres of air on top of the largest aggro radius in the file, measured from the
+    // far side of the spawn ring.
+    let park_m = ring_m + widest_aggro_m + 20.0;
+    // Still on the 400 x 400 m ground slab of `maps.ron`, or the player would fall out of the
+    // world for 330 s and this would stop being "parked" and start being "falling".
+    assert!(park_m < 200.0, "{park_m} m is off the ground slab — this is no longer a parking spot");
+
+    let mut q = app.world_mut().query_filtered::<Entity, With<PlayerId>>();
+    let players: Vec<Entity> = q.iter(app.world()).collect();
+    assert!(!players.is_empty(), "no player to park");
+    for player in players {
+        // The `Transform`, not `Position`: avian's `transform_to_position` is on by default
+        // (`avian3d-0.7.0/src/physics_transform/mod.rs:161`) and takes the teleport over in
+        // `PhysicsSystems::Prepare` — the same move `tests/combat.rs::place` makes.
+        app.world_mut().entity_mut(player).insert(Transform::from_xyz(0.0, 2.0, park_m));
+    }
+    park_m
+}
+
+/// What every player has left of `game.ron: player.health`, lowest first. Empty when nobody
+/// carries the component — which is a different answer from "nobody was hit".
+fn healths(app: &mut App) -> Vec<f32> {
+    let mut q = app.world_mut().query_filtered::<&Health, With<PlayerId>>();
+    let mut left: Vec<f32> = q.iter(app.world()).map(|h| h.current).collect();
+    left.sort_by(f32::total_cmp);
+    left
+}
+
 fn hit(app: &mut App, titan: TitanId, by: PlayerId, zone: HitZone) {
     app.world_mut().write_message(TitanHit { titan, by, zone, speed_m_s: 30.0 });
     app.update();
@@ -278,14 +334,29 @@ fn f070_the_timeout_loses_the_mission_at_the_tick_the_file_says() {
     // The window is one tick wide and no wider, and it is an offset rather than a tolerance:
     // `NextState` is applied by the `StateTransition` schedule of the next frame — pinned down
     // exactly in the 600-tick test above.
+    //
+    // The player is parked outside every aggro radius first (`park_players_out_of_aggro`).
+    // Since `P5` the tutorial's first husk walks over and downs a standing test player in three
+    // strikes, and the mission is then lost at tick 630 — by the *other* loss path. That is the
+    // second way to lose working, not the clock: its own test is
+    // `f070_every_player_out_of_the_fight_is_the_second_way_to_lose`. The criterion here is
+    // untouched, only its premise is now established instead of assumed — and the assertion
+    // that nobody lost a single point of health says so out loud.
     let mut app = started(Some("tutorial"));
     let d = data(&app);
     let deadline =
         (d.missions.templates["tutorial"].target_duration_s as f64 * d.game.simulation_hz).round()
             as u64;
     assert_eq!(deadline, 19_800, "330 s at 60 Hz — if this moved, the file moved");
+    park_players_out_of_aggro(&mut app);
 
     ticks(&mut app, deadline + 4);
+
+    assert_eq!(
+        healths(&mut app),
+        vec![d.game.player.health],
+        "somebody was hit — the parking failed and this run measures a husk, not the clock"
+    );
 
     let left = first_tick_leaving(&app, MissionPhase::Active)
         .expect("the mission never left Active — the clock does not run");
@@ -306,9 +377,11 @@ fn f070_the_timeout_loses_the_mission_at_the_tick_the_file_says() {
 
 #[test]
 fn f070_every_player_out_of_the_fight_is_the_second_way_to_lose() {
-    // `docs/PLAN-GAME.md` §1: one way to win, **two** ways to lose. Nothing writes player
-    // `Health` yet (`P5`), so the branch is inert in a normal run — this test writes the
-    // component itself and shows that the branch is wired, not decoration.
+    // `docs/PLAN-GAME.md` §1: one way to win, **two** ways to lose. The test writes the
+    // component itself and takes it to zero in one step, so that the branch is measured on its
+    // own rather than through a husk's three strikes — `tests/combat.rs::
+    // p5_the_mission_is_lost_when_every_player_is_down` is the end-to-end half. (Until `P5`
+    // nothing wrote player `Health` at all and this was the only test the branch had.)
     let mut app = started(Some("tutorial"));
     let mut q = app.world_mut().query_filtered::<Entity, With<PlayerId>>();
     let players: Vec<Entity> = q.iter(app.world()).collect();
@@ -494,7 +567,16 @@ fn f071_the_waves_come_out_of_the_file_at_the_ticks_the_file_says() {
     // The waves are file work: three rows in `missions.ron` become titans at 0 s, 90 s and
     // 210 s. Only the first two are checked here — 210 s is 12 600 ticks, and this test does
     // not need to be four minutes long to show that the conversion is real.
+    //
+    // The player is parked outside every aggro radius, for the same reason as in the deadline
+    // test above and with a sharper consequence here: since `P5` the first husk downs a
+    // standing test player at tick 630, the mission is `Lost`, and `WaveSchedule` carries
+    // `DespawnOnExit(MissionPhase::Active)` — so the 5 400-tick wave has no schedule left to
+    // come out of and this test would report "the second wave did not come" for a reason that
+    // has nothing to do with the file. That the schedule may not survive a verdict is a claim
+    // of its own and keeps its own test (`f071_no_wave_walks_into_a_decided_mission`).
     let mut app = started(Some("tutorial"));
+    park_players_out_of_aggro(&mut app);
     let d = data(&app);
     let template = &d.missions.templates["tutorial"];
     let hz = d.game.simulation_hz;
@@ -508,6 +590,14 @@ fn f071_the_waves_come_out_of_the_file_at_the_ticks_the_file_says() {
     ticks(&mut app, second_at - 10);
     let before = titan_ids(&mut app).len();
     assert_eq!(before, first as usize, "the second wave came early");
+    // The premise of the second half: the mission is still running, so there is still a
+    // schedule to release from. Without it a decided mission would read as "the wave did not
+    // come out of the file" three assertions later.
+    assert_eq!(
+        phase(&app),
+        MissionPhase::Active,
+        "the mission was decided before its second wave — this test then measures nothing"
+    );
     ticks(&mut app, 20);
     assert_eq!(
         titan_ids(&mut app).len(),

@@ -1,6 +1,6 @@
 # BUGS — every bug with repro, evidence, cause, fix and test
 
-Updated: 2026-08-09
+Updated: 2026-08-10
 
 > **A bug without evidence is a rumour — and uncertainty is a defect.**
 > No "should work now", no "should be fine", no "probably fixed". Either you have it
@@ -68,6 +68,78 @@ it works. That costs nothing. A stage that is too high costs the next person hal
 *(none)*
 
 ## Closed bugs
+
+### `B-002` — the mouse only turned the view correctly at exactly 60 fps
+
+**Fixed on 2026-08-10**, test `p3_the_applied_yaw_equals_the_device_motion` was red, is green.
+
+| Field | |
+|---|---|
+| **Repro** | `cargo test --test input -- --nocapture` at commit `7cf7f4b`, `[debian]`. The frame rate is set by `TimeUpdateStrategy::ManualDuration` (`bevy_time-0.19.0/src/lib.rs:118-119`), not by the machine, so the numbers below are the same on every box. **There is no `--script` repro and there cannot be one:** `src/debug/script.rs::parse_line` has no `mouse` verb, so a script can dictate an absolute `look` but never a device *delta* — and the delta is the whole subject. |
+| **Evidence** | A run of *n* frames with a known mouse delta in every one of them, against the yaw that arrived on the player's `Intent`. Measured before the fix: <br>`60 fps: 300 frames, 300 ticks — raw -1.2566 rad, applied -1.2566 rad, ratio 1.000` <br>`144 fps: 300 frames, 124 ticks — raw -1.2566 rad, applied -0.5194 rad, ratio 0.413 (-58.7 %)` <br>`500 fps: 250 frames, 29 ticks — raw -1.0472 rad, applied -0.1215 rad, ratio 0.116 (-88.4 %)` <br>`20 fps: 60 frames, 179 ticks — raw -0.2513 rad, applied -0.7498 rad, ratio 2.983 (+198.3 %)` <br>`mixed 250/25 fps: 60 frames, 40 ticks — ratio 0.667 (-33.3 %)` <br>**58.7 % of the mouse motion was thrown away at 144 fps** — 124 of 300 frames reached a tick, i.e. one frame in 2.42, which is what `docs/PLAN-GAME.md` §8 predicted before anything was measured. At 20 fps every frame's motion was applied **three** times. After the fix all five runs read `ratio 1.000`. |
+| **Expectation** | `docs/PLAN-GAME.md` §8, `P3`: *"applied yaw over a run equals raw device motion ± 1 % at any frame rate."* A mouse is a relative device — the sum of what it reported is the angle you turned. Nothing else in the game is allowed to depend on the frame rate either (§6 rule 6: nothing per frame, everything per second). |
+| **Cause** | `src/net/local.rs:28` (before the fix) — `read_input` took `Res<AccumulatedMouseMotion>` while being registered in `FixedPreUpdate` (`src/net/mod.rs:49`). `AccumulatedMouseMotion.delta` is **assigned** once per frame in `PreUpdate` (`bevy_input-0.19.0/src/mouse.rs:257-267`; the last line of `accumulate_mouse_motion_system` is `accumulated_mouse_motion.delta = delta`, an `=`, not a `+=`). The fixed loop runs the whole `FixedMain` schedule **0..n times per frame** (`bevy_time-0.19.0/src/fixed.rs:249-255`: `while world.resource_mut::<Time<Fixed>>().expend() { schedule.run(world) }`). A per-frame value read from a schedule that runs a different number of times is dropped when the count is 0 and re-read when it is 2. |
+
+**Why nobody saw it.** At exactly 60 fps, and only there, the two rates cancel: one frame, one
+tick, `ratio 1.000`. The simulation is 60 Hz (`assets/data/game.ron:20`) and every run this
+project has ever done is `--headless` or `--offscreen`, where there is no mouse at all. **The
+one rate the game was ever run at is the one rate at which this code is right.**
+
+**Why the prose said the opposite.** `src/net/local.rs:22-24` claimed *"mouse motion gathered
+between two ticks is not lost in the process: `AccumulatedMouseMotion` sums it up across the
+frames."* That sentence describes `MouseMotion` **messages**, which do accumulate between
+readers; the resource named after them does not. The comment was not a slip of the pen — it was
+the reason nobody looked.
+
+**Fix.** `src/net/local.rs`: new resource `MouseSinceTick` and a system `gather_mouse_motion`
+that adds `AccumulatedMouseMotion.delta` into it **once per frame**, registered in
+`RunFixedMainLoop` in `RunFixedMainLoopSystems::BeforeFixedMainLoop` — the set that runs
+"exactly once per frame, regardless of the number of fixed updates"
+(`bevy_app-0.19.0/src/main_schedule.rs:401-403`) and sits after `PreUpdate` in the main schedule
+order (`:224-232`). `read_input` now **takes** that buffer (`std::mem::take`) instead of reading
+the per-frame resource: a frame with no tick keeps its motion for the next one, and a tick that
+follows another in the same frame finds the buffer empty. The take happens **before** the
+`LookOverride` branch, so a scripted absolute `look` is not dragged off its angle one tick later
+by motion buffered before it. Two files changed, `src/net/local.rs` and `src/net/mod.rs`; no
+other domain was touched.
+
+*The road not taken:* moving `read_input` out of `FixedPreUpdate` into `Update`. That would have
+fixed the mouse and broken the tick stamp on every `Intent` — `Intent.tick` is what the server
+will discard stale input by (`src/shared/intent.rs:32-33`), and `docs/multiplayer.md` requires
+the simulation to be driven from `FixedUpdate`. The buffer is the smaller change and the one that
+keeps rule 4.
+
+**Tests** — all four seen red before the fix and red again with the fix taken back out (rule 5,
+step 3, with identical numbers both times):
+
+| Test | what it pins |
+|---|---|
+| ★ `tests/input.rs::p3_the_applied_yaw_equals_the_device_motion` | three runs in one test — a mixed 250/25 fps pattern with frames carrying **0** and frames carrying **3** fixed steps, plus 144 fps and 60 fps. Applied yaw within 1 % of the device motion in all three. Red before: `ratio 0.667`, `0.413`, `1.000`. |
+| `tests/input.rs::p3_a_frame_without_a_fixed_step_keeps_its_motion` | 250 frames of 2 ms, 31 ticks. Red before: *"88.4 % of the mouse motion was thrown away"*. |
+| `tests/input.rs::p3_a_catch_up_frame_does_not_apply_its_motion_twice` | 60 frames of 50 ms, 181 ticks. Red before: *"198.3 % more yaw was applied than the mouse moved"*. |
+| `tests/input.rs::p3_a_script_look_still_overrides_the_mouse` | an absolute `look` in a frame that also carries 500 px of motion wins, and the mouse has the wheel back the frame after. The guard on the fix's own failure mode — this one was **green before and had to stay green**. |
+
+Each run ends with **one settling frame with the mouse still**, so that motion which is merely
+buffered and whose tick is not yet due is not counted as lost. It hides nothing: with the defect
+in place the 144 fps run is still 58.7 % short *after* the settling frame, because one extra tick
+cannot give back 176 frames.
+
+**Regression run:** `cargo run -q -- --headless --script scripts/p3-mouse.txt --ticks 600` —
+`script run finished: 9 asserts held, 293 ticks`, exit 0 `[debian]`. It proves the *other* half
+(the `look` override still steers the walk), not P3. No picture: **P3 is a number, and the plan
+says so** (`docs/PLAN-GAME.md` §8, P3: *"— (a number, not a picture)"*).
+
+**Two things to learn from it**, neither of which is "read the Bevy docs more carefully":
+
+1. **A resource's name says what it accumulates, never over which schedule.**
+   `AccumulatedMouseMotion` accumulates *within a frame*. Every per-frame resource read from a
+   fixed schedule is this same bug — the cheapest check for the whole class is one `grep` for
+   the schedule a system is registered in, next to the schedule its inputs are written in.
+   `ButtonInput<KeyCode>` in the same function is the *reverse* case and is fine: a held key is
+   a level, not a delta, so reading it twice or skipping it costs nothing.
+2. **A test at one frame rate is a test at no frame rate.** The 60 fps case passed before and
+   after the fix and would have "protected" this code forever. The rate has to be a *parameter*
+   of the test, and `TimeUpdateStrategy::ManualDuration` makes it one for the price of two lines.
 
 ### `B-001` — no body in the world had an id, so no hook could hold
 

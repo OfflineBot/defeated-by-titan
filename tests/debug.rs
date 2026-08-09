@@ -18,6 +18,7 @@
 //! lives as a unit test in `src/debug/gizmo.rs`. Only what needs a real app lives here.
 
 use bevy::prelude::*;
+use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::debug::gizmo::{GizmoToggle, GizmoCounts, GizmoSystems};
 use defeated_by_titan::debug::script::parse;
@@ -358,11 +359,38 @@ fn assert_health_reads_the_players_health_component() {
 
 #[test]
 fn assert_health_without_a_health_component_fails_loudly() {
-    // **The half that matters.** Nothing spawns player health yet (that is P5). A metric that
-    // answered `0.0` for "there is nothing to measure" would turn `assert health > 0` into a
-    // silent lie the day somebody forgets the component — and `measure()` documents exactly
-    // this: not measurable counts as failed (§9).
+    // **The half that matters.** A metric that answered `0.0` for "there is nothing to measure"
+    // would turn `assert health > 0` into a silent lie the day somebody forgets the component —
+    // and `measure()` documents exactly this: not measurable counts as failed (§9).
+    //
+    // Until `P5` nothing spawned player health and the case built itself. Since
+    // `combat::health::grant` hangs `Health::full(game.ron: player.health)` on every player, the
+    // test has to build it: the component is taken **off** again, and that is the same claim as
+    // before — "a player nobody has measured" is what the un-measurable case *is*, and it is
+    // the case that arrives the day a player comes over the wire without one.
+    //
+    // The removal sits directly in front of the measured line and nothing runs in between.
+    // `grant` is registered in `FixedUpdate` (`SimulationSystems::Intent`), so a single
+    // `app.update()` here would put the component straight back and this test would be green
+    // for the wrong reason. `run_line` runs `FixedPreUpdate` and nothing else.
+    //
+    // `TimeUpdateStrategy::FixedTimesteps(1)` for the one step that hands out the health, and it
+    // is not decoration: `running_app()` calls `app.update()` three times with the **automatic**
+    // clock, so whether a fixed step runs at all depends on how much wall time those three
+    // frames happened to take. Measured on this machine: under load (13 tests in the binary at
+    // once) `grant` had run and the player carried `Health`, alone it had not. The premise
+    // below would have been a coin toss.
     let mut app = running_app();
+    app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    app.update();
+    let player = local_player(&mut app);
+    assert!(
+        app.world().get::<Health>(player).is_some(),
+        "the premise is inverted: since P5 a player HAS health, and this test takes it away — \
+         if `combat::health::grant` no longer grants any, the loud one to fix is that"
+    );
+    app.world_mut().entity_mut(player).remove::<Health>();
+
     let (checked, failures) = run_line(&mut app, "assert health > 0");
     assert_eq!(checked, 1);
     assert_eq!(failures.len(), 1, "a player without health must not pass a health check");
