@@ -35,8 +35,12 @@ fn licht_aufbauen(mut commands: Commands) {
         DirectionalLight {
             illuminance: 10_000.0,
             // Schatten sind der teuerste Schalter im Spiel — erst am Ende, mit Zahl.
+            // `shadow_maps_enabled` ist der Schalter, der wirklich etwas kostet.
+            // (`contact_shadows_enabled` steht hier bewusst NICHT: es wirkt allein gar
+            // nicht — Kontaktschatten brauchen zusaetzlich eine `ContactShadows`-Komponente
+            // an der Kamera. Ein Feld, das man fuer einen Schalter haelt, obwohl es keiner
+            // ist, ist schlimmer als kein Feld.)
             shadow_maps_enabled: false,
-            contact_shadows_enabled: false,
             ..default()
         },
         Transform::from_xyz(50.0, 100.0, 60.0).looking_at(Vec3::ZERO, Vec3::Y),

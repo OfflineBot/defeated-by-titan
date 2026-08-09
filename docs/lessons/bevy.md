@@ -55,6 +55,30 @@ schreibt.
 `ExitCondition::DontExit` ist noetig, **weil ohne Fenster sonst sofort beendet wird**: die
 Vorgabe `OnAllClosed` sieht null Fenster und faehrt herunter (`bevy_window/src/lib.rs:72-74`).
 
+### Drei Fallen genau an dieser Stelle
+
+1. **`primary_window: None` allein reicht nicht.** `WinitPlugin::build` baut den Event-Loop
+   **unbedingt** und mit `.expect("Failed to build event loop")`
+   (`bevy_winit/src/lib.rs:90-128`); winit liefert unter Linux ohne `WAYLAND_DISPLAY` und ohne
+   `DISPLAY` einen Fehler (`winit-0.30.13/src/platform_impl/linux/mod.rs:754-766`). Es panikt
+   also, **bevor ein einziges System laeuft**. Einziger Ausweg: `disable::<WinitPlugin>()`.
+2. **`ScheduleRunnerPlugin` ist NICHT in `DefaultPlugins`**, solange das Feature `bevy_window`
+   an ist (`bevy_internal/src/default_plugins.rs:19-20`). Nach `disable::<WinitPlugin>()`
+   treibt sonst **niemand** die App an: `App::run()` faellt auf `run_once` zurueck und macht
+   genau **ein** Update (`bevy_app/src/app.rs:159`, `1539-1550`). Also `.add(...)` — und
+   **nicht** `.set(...)`, denn `set` und `disable` **paniken**, wenn der Plugin gar nicht in
+   der Gruppe ist (`bevy_app/src/plugin_group.rs:312-319`, `496-508`).
+3. **`disable::<WinitPlugin>()` selbst braucht einen `cfg`-Riegel.** Baut jemand mit
+   `--no-default-features`, gibt es weder den Modulpfad `bevy::winit` noch den Eintrag in der
+   Gruppe — der Aufruf waere ein Compilerfehler bzw. eine Panik. Deshalb steht er in
+   `src/lib.rs` hinter `#[cfg(any(feature = "x11", feature = "wayland"))]`.
+
+### Und ein Feld, das nur wie ein Schalter aussieht
+
+`DirectionalLight::contact_shadows_enabled` bewirkt **allein nichts**. Kontaktschatten sind ein
+Screenspace-Verfahren und brauchen zusaetzlich eine `ContactShadows`-Komponente an der Kamera.
+Der Schalter, der wirklich Rechenzeit kostet, heisst `shadow_maps_enabled`.
+
 ## Der Skript-Fahrer schreibt in **echte** Eingaben
 
 `ButtonInput::press` und `::release` sind **oeffentlich**
