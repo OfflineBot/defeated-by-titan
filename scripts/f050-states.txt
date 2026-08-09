@@ -1,0 +1,41 @@
+# F-050 — the states of a husk at 25 m, and the frame in the middle of his wind-up.
+#
+# cargo run -- --offscreen --script scripts/f050-states.txt --ticks 435 \
+#              --screenshot docs/images/f050-states.png
+#
+# Measured in tests/titan.rs::f050_the_husk_winds_up_for_as_long_as_the_file_says:
+#   Idle 1 · Pursue 410 · Windup 36 · Strike 12 · Recover 24 · Pursue 18 ticks.
+#
+# The arithmetic behind `--ticks 435`: the husk comes into being at tick 3 and stands one
+# tick in `Idle`; `Pursue` runs ticks 4..413; `Windup` starts at tick 414. 435 is therefore
+# tick 21 of 36 — the frame the criterion names, with the F3 overlay reading
+# `husk#1 Windup 21/36` and the arm visibly up in the same image.
+#
+# He spawns at +Z so that his spawn facing (Bevy's forward, −Z) already points at the player,
+# and the whole approach is a walk instead of a 180-degree turn at 50 deg/s. The camera turns
+# round to him instead.
+#
+# ## Why the player steps back the moment the wind-up starts
+#
+# `titan.ron: husk.attack_range_m` is 6.0 m, so a wind-up happens **six metres from a ten
+# metre body**: at the 60-degree vertical field of view out of game.ron the image is then a
+# dark underside and nothing else — measured, that was the first attempt at this picture.
+#
+# Once `Windup` is entered, the state runs on its tick accumulator alone; distance decides
+# `Pursue -> Windup` and nothing after it. **A committed attack does not abort** — that is
+# what makes a telegraph an opportunity rather than a warning, and it is why stepping back at
+# tick 420 photographs the same wind-up from 24 m instead of cancelling it.
+warp 0 0.05 0
+look 180 0
+spawn titan husk 0 0 25
+wait 6.95
+warp 24 0.05 6
+look 90 10
+# The F3 overlay, so that the state WORD and the POSE stand in the same frame and can be
+# checked against each other. It prints `titan#1 Windup`; the `21/36` the criterion asks for
+# needs `ticks_in_state`, which lives in `titan` and which `debug` may not read without a
+# line in the allow list (docs/FINDINGS.md).
+key F3 0.05
+mark windup
+wait 1.0
+assert titans == 1

@@ -1,0 +1,30 @@
+# F-056 — the husk: nine boxes, 10.0 m tall, the amber cortex at 8.9 m on the nape.
+#
+# cargo run -- --offscreen --script scripts/f056-husk.txt --ticks 240 \
+#              --screenshot docs/images/f056-husk.png
+#
+# ## Why the player stands on the far side of the map for the first 3.8 s
+#
+# `titan.ron: husk.aggro_radius_m` is 45 m. A husk closer than that turns to face the player
+# and walks at him — and then the picture shows his front, while the cortex is on his NAPE.
+# A husk further away than that is still and keeps his back turned, but at 46 m he is 140 px
+# tall in a 720-line image and the cortex is eight of them.
+#
+# So: park the player 240 m away, let the husk stand, and warp in behind him ~10 ticks before
+# the shutter. He is then 24 m away, has had a sixth of a second to react, and has turned
+# eight degrees. Standing, back turned, close.
+#
+# ## Why both of them stand on x = 17.5
+#
+# That is the centre line of a street. The grid puts lot centres on multiples of
+# `maps.ron: layout.lot_m + street_m` = 35 m, so a lot reaches to x = 14 and the street
+# between two of them is 14..21 m. A shot straight across the lots is a shot of a wall — the
+# first attempt at this picture photographed three houses and no titan at all.
+warp 180 2 180
+spawn titan husk 17.5 0 0
+wait 3.8
+warp 17.5 0.05 24
+look 0 10
+mark husk-steht
+wait 1.0
+assert titans == 1

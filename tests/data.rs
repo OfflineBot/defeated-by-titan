@@ -8,7 +8,7 @@
 //! **what has to be consistent with itself** (every reference points at something that
 //! exists).
 
-use defeated_by_titan::data::{GameData, GasConsumer};
+use defeated_by_titan::data::{GameData, GasConsumer, TitanScale};
 use std::path::PathBuf;
 
 fn data() -> GameData {
@@ -955,6 +955,155 @@ fn t005_the_size_table_in_the_docs_shows_the_same_numbers() {
             text.contains(&wanted),
             "docs/models.md does not contain {wanted:?} — the doc deviates at {source} from \
              assets/data/scale.ron. Both change together or not at all"
+        );
+    }
+}
+
+// ===========================================================================
+// The box rig — six fractions that only mean anything against each other
+// ===========================================================================
+//
+// `width_fraction`, `leg_fraction`, `torso_fraction`, `shoulder_height_fraction` and
+// `arm_fraction` came into scale.ron on 2026-08-09 as ⚠️ UNTUNED, and unlike everything above
+// them they were **invented, not laid down**. They were chosen to add up against numbers that
+// are laid down — and until now nothing said so. That is the dangerous kind of arithmetic:
+// it is right today, it costs nothing to move one of the six, and when the cortex ends up in
+// the belly the screenshot still shows a titan.
+
+/// Where the head starts, as a fraction of the body height, out of the rig's own stack.
+fn rig_seam(t: &TitanScale) -> f32 {
+    t.leg_fraction + t.torso_fraction
+}
+
+/// What is left over above the seam — the head.
+fn rig_head_fraction(t: &TitanScale) -> f32 {
+    1.0 - rig_seam(t)
+}
+
+#[test]
+fn t005_the_box_rig_seams_exactly_at_the_cortex() {
+    // Catches: a leg or torso fraction that has been moved without moving the other one.
+    // Without this test: the cortex is a sphere at 89 % of the height while the seam between
+    // torso and head is somewhere else, and the amber ball sits in the middle of a box
+    // instead of on the nape. In a screenshot that is a titan; in the game it is a weak point
+    // that is no longer a neck.
+    let d = data();
+    let t = &d.scale.titan;
+    let seam = rig_seam(t);
+    assert!(
+        (seam - t.cortex_fraction).abs() <= 0.001,
+        "leg_fraction {} + torso_fraction {} = {seam}, but cortex_fraction = {} — the cortex \
+         is the seam between torso and head, or it is not a nape",
+        t.leg_fraction, t.torso_fraction, t.cortex_fraction
+    );
+}
+
+#[test]
+fn t005_the_box_rigs_head_stays_inside_the_users_head_rule() {
+    // Catches: a rig whose leftover head falls outside the 1/10..1/9 window the user laid
+    // down — the rule that makes a titan read as huge instead of as a doll.
+    // Without this test: the head fraction is a SUBTRACTION of two invented numbers and is
+    // therefore checked by nobody, while the window right next to it in the same file is
+    // checked by t005_the_titan_head_stays_smaller_than_the_human_head.
+    let d = data();
+    let t = &d.scale.titan;
+    let head = rig_head_fraction(t);
+    assert!(
+        (t.min_head_fraction..=t.max_head_fraction).contains(&head),
+        "the rig leaves {head} of the body height for the head (1 − {} − {}), outside the \
+         user's window {}..{}",
+        t.leg_fraction, t.torso_fraction, t.min_head_fraction, t.max_head_fraction
+    );
+}
+
+#[test]
+fn t005_the_shoulders_sit_below_the_cortex_and_the_hands_above_the_ground() {
+    // Catches: an arm that hinges at the nape (it can then not swing in front of the body,
+    // and F-053's telegraph has nowhere to go), and an arm so long that the hand hangs
+    // through the floor.
+    // Without this test: both are one digit away and neither crashes.
+    let d = data();
+    let t = &d.scale.titan;
+    assert!(
+        t.shoulder_height_fraction < t.cortex_fraction,
+        "shoulder_height_fraction = {} is not below cortex_fraction = {} — the arm hinges at \
+         the nape and cannot swing in front of the body",
+        t.shoulder_height_fraction, t.cortex_fraction
+    );
+    assert!(
+        t.arm_fraction < t.shoulder_height_fraction,
+        "arm_fraction = {} is not shorter than the shoulder height {} — the hand hangs \
+         through the ground",
+        t.arm_fraction, t.shoulder_height_fraction
+    );
+    assert!(
+        t.width_fraction > 0.0 && t.width_fraction < 1.0,
+        "width_fraction = {} — a titan is neither flat nor square", t.width_fraction
+    );
+}
+
+#[test]
+fn t005_the_rig_guard_really_notices_a_moved_fraction() {
+    // **The guard over the two guards above.** They are green today, and a green assertion
+    // that has never been seen red is a claim, not a check (CLAUDE.md rule 5). scale.ron is
+    // the user's file and does not get edited to prove a point, so the mutation happens on a
+    // copy: move one fraction and both guards have to fall over.
+    let d = data();
+    let mut broken = d.scale.titan.clone();
+
+    broken.leg_fraction += 0.02;
+    assert!(
+        (rig_seam(&broken) - broken.cortex_fraction).abs() > 0.001,
+        "a leg 2 % longer does not move the seam — the seam guard checks nothing"
+    );
+    assert!(
+        !(broken.min_head_fraction..=broken.max_head_fraction).contains(&rig_head_fraction(&broken)),
+        "a leg 2 % longer leaves the head inside the window — the head guard checks nothing"
+    );
+
+    let mut shrunk = d.scale.titan.clone();
+    shrunk.torso_fraction -= 0.02;
+    assert!((rig_seam(&shrunk) - shrunk.cortex_fraction).abs() > 0.001);
+    assert!(
+        !(shrunk.min_head_fraction..=shrunk.max_head_fraction).contains(&rig_head_fraction(&shrunk))
+    );
+}
+
+#[test]
+fn t005_the_class_cap_names_a_class_that_exists_and_leaves_something_out() {
+    // Catches: a `max_spawnable_class` with a typo in it (nothing would then be spawnable at
+    // all), and a cap raised to `boss`, which would put a 7.00 m body into a 7.00 m street.
+    // The cap is a USER DECISION taken in his absence (docs/QUESTIONS.md Q-028) — this test
+    // is what makes taking it back a visible change rather than a quiet one.
+    let d = data();
+    let name = &d.scale.titan.max_spawnable_class;
+    let cap = d.scale.titan.classes.get(name).unwrap_or_else(|| {
+        panic!(
+            "titan.max_spawnable_class = {name:?} is not one of {:?}",
+            d.scale.titan.classes.keys().collect::<Vec<_>>()
+        )
+    });
+    let above = d
+        .scale
+        .titan
+        .classes
+        .values()
+        .filter(|c| c.height_m > cap.height_m)
+        .count();
+    assert!(
+        above > 0,
+        "the cap {name:?} is the tallest class — then F-064's refusal path is never taken and \
+         the test that covers it proves nothing"
+    );
+    // And the cap has to leave the street usable: width_fraction × height against
+    // maps.ron layout.street_m.
+    let width = cap.height_m * d.scale.titan.width_fraction;
+    for (id, map) in &d.maps.maps {
+        assert!(
+            width < map.layout.street_m,
+            "{id}: a {name} titan is {width} m wide in a {} m street — that is not a tight \
+             alley, it is a wall",
+            map.layout.street_m
         );
     }
 }
