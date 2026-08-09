@@ -11,7 +11,7 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 
 **🟧 needs three pieces of evidence:** a picture (screenshot path), a number (measured, with the machine `[debian]`/`[cachy]`) and code (a test that goes red when it breaks). If one is missing it is 🟨 — doubt moves the stage down, not up (prompts/init.md §8, §9).
 
-**Tally:** 238 ⬜ · 6 🟨 · 1 🟧 · 0 ✅ of 245 rows.
+**Tally:** 232 ⬜ · 12 🟨 · 1 🟧 · 0 ✅ of 245 rows.
 
 ## combat
 
@@ -290,13 +290,14 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 
 | Item | ID | Stage | Evidence (test / screenshot / number) | Note |
 |---|---|---|---|---|
+| Doppelhaken-Grundsystem | F-001 | 🟨 | tests/vector_hooks.rs 10 green · counter-check drove 5 source mutations through the suites [debian] | 2026-08-09 [debian] — counter-check verdict: HOLDS PARTLY. State machine, edge detection and the same-tick NoAnchor are real and verified in the running game. But B-001: the hook cannot anchor in the game at all, and the documented rule 'a shot only leaves from Idle' has no guard (FIND-005). Acceptance also demands HUD states that do not exist |
+| Freies Zielen per Raycast (Ebene 1) | F-002 | 🟨 | tests/vector_aiming.rs 8 green · filtered-cast mutation goes red 3 of 8: the ray lands at z = -41 where anything past -34 means it went THROUGH the wall · all 63 tagged surfaces covered [debian] | 2026-08-09 [debian] — counter-check verdict: HOLDS, the strongest of the five. Every header claim that was attacked went red as advertised. Stays 🟨 only because it never writes the BodyId its consumer needs (B-001) and no test looks at that field |
 | Getaggte Ankerflaechen (Ebene 1) | F-003 | 🟨 | 79 blocks from maps.ron (9 placed, 70 seeded, 63 taggable) · docs/images/f003-city.png and f003-anchors.png · tests/world.rs, red-checked: half-edge collider reports 'factor 0.50 against the file' | 2026-08-09 [cachy] — surfaces are tagged, collidable and visible, but NOT 🟧: the acceptance criterion is 'no hook on untagged parts', and there is no hook yet |
-| Doppelhaken-Grundsystem | F-001 | ⬜ | — | — |
-| Freies Zielen per Raycast (Ebene 1) | F-002 | ⬜ | — | — |
-| Pendelphysik bei Zwei-Haken-Zustand | F-004 | ⬜ | — | — |
-| Reel-In / Seilverkuerzung | F-005 | ⬜ | — | — |
+| Pendelphysik bei Zwei-Haken-Zustand | F-004 | 🟨 | tests/vector_rope.rs 6 green, all 6 seen red first · swing loss 0.43 %/s over 60 ticks (measurement predicted 4.26) · the rope pulls but does not push: 6.000 m stays 6.000 m under a 12 m rope [debian] | 2026-08-09 [debian] — an avian DistanceJoint with limits = (0, L), per docs/measurements/rope-decision.md. NOT 🟧: no picture, and nothing here has been seen moving on a screen. Two ropes at once is unmeasured, and boost against a wall with the rope on was never run |
+| Reel-In / Seilverkuerzung | F-005 | 🟨 | reel-in from v0 20.00 at L 9.00 to 3.00 m reaches 62.73 m/s (measurement predicted 58.23; the retired clamp gives 18.17) · shortening 0.46667 m per tick = 28.0/60, red-checked against the per-tick bug which moves the rope 9.00 m in one tick · floor holds at 3.00000 m over 300 ticks [debian] | 2026-08-09 [debian] — shortening runs in the SubstepSchedule and never in FixedUpdate. NOT 🟧: no picture. The MaxLinearSpeed clamp never fired in these runs (peak 62.73 against 75.0), so one of the two lines the measurement says everything hangs on is present but untested |
+| Gas-Boost | F-007 | 🟨 | tests/vector_boost.rs 5 green · the free-boost mutation goes red with left Vec3(-0.0, 0.0, -34.0) against right Vec3(0.0, 0.0, 0.0), so the boost does not fire without gas · f-007-boost.png re-measured independently: 118 px centred on 462.5 against the script prediction of 118 px on 463 [debian] | 2026-08-09 [debian] — counter-check verdict: HOLDS PARTLY. Acceleration-not-force and grant-not-button are both guarded and measured; two other documented decisions are not (FIND-007). The acceptance 'Gasleiste sinkt sichtbar' cannot be met: there is no gas bar, 0 cyan pixels of 921600 in the image |
+| Gas-Ressource | F-018 | 🟨 | tests/vector_gas.rs 11 green · 0 cyan pixels of 921600 in f-018-gas.png [debian] | 2026-08-09 [debian] — counter-check verdict: HOLDS PARTLY. Rates and the per-player tank are well measured. But gas_priority is a fall-through attempt order nobody agreed to, and its degenerate case (a tank smaller than one consumer's tick cost) is untested (FIND-006). 'Im HUD ablesbar' cannot be met |
 | Swerve-Steuerung | F-006 | ⬜ | — | — |
-| Gas-Boost | F-007 | ⬜ | — | — |
 | Boost-Dash | F-008 | ⬜ | — | — |
 | Flips (seitlich) | F-009 | ⬜ | — | — |
 | Slide-Dodge am Boden | F-010 | ⬜ | — | — |
@@ -304,7 +305,6 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 | Kollisionsdaempfung | F-013 | ⬜ | — | — |
 | Momentum-Chaining | F-014 | ⬜ | — | — |
 | Geschwindigkeits-Feedback | F-017 | ⬜ | — | — |
-| Gas-Ressource | F-018 | ⬜ | — | — |
 | Nachschub-Stationen | F-019 | ⬜ | — | — |
 | Hook-Break (Notbremse) | F-011 | ⬜ | — | — |
 | Ziel-Assist-Regler | F-016 | ⬜ | — | — |
