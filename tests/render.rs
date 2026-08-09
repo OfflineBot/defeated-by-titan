@@ -15,7 +15,11 @@
 //! `Intent` just set with the look direction of the (nonexistent) mouse. A test whose result
 //! depends on the machine's mood that day measures the machine.
 
+use bevy::camera::RenderTarget;
+use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
+use bevy::ui::DefaultUiCamera;
+use bevy::window::PrimaryWindow;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::shared::{Intent, LocalPlayer, Cli};
 
@@ -191,4 +195,76 @@ fn f002_rotating_does_not_move_the_eye_height() {
         (position - Vec3::new(0.0, eye_height, 0.0)).length() < 1e-6,
         "the camera sits at {position:?} instead of {eye_height} m eye height above the player"
     );
+}
+
+#[test]
+fn the_camera_is_the_default_ui_camera() {
+    // **P1 — the prerequisite the whole evidence route hangs on.**
+    //
+    // `DefaultUiCamera::get()` asks two questions, in this order
+    // (`bevy_ui-0.19.0/src/ui_node.rs:2991-3006`):
+    //
+    //   1. is there exactly one camera carrying `IsDefaultUiCamera`?  → take it
+    //   2. otherwise: which camera renders into the PRIMARY WINDOW?
+    //
+    // An `--offscreen` run has no window at all — its camera's `RenderTarget` is an `Image`
+    // (`src/debug/screenshot.rs:218-222`). Question 2 therefore finds nothing, every UI root
+    // keeps `ComputedUiTargetCamera::default()` = `Entity::PLACEHOLDER` and
+    // `ComputedUiRenderTargetInfo::physical_size` stays `UVec2::ZERO`
+    // (`bevy_ui-0.19.0/src/ui_node.rs:3019-3051`) — the HUD lays out into a zero-sized
+    // viewport and **the PNG comes out without a single pixel of UI while the run reports
+    // success.** That is the trap: not a crash, an empty picture that looks like evidence
+    // (`docs/PLAN-GAME.md` §11, risk 3).
+    //
+    // So the answer has to come out of question 1, and this test is what keeps it there.
+    //
+    // **Measured, because the first version of this test was green without the fix and proved
+    // nothing:** the fallback's first arm is `RenderTarget::Window(WindowRef::Primary) =>
+    // true` — *unconditionally*, it never asks whether a primary window exists (`:2997-3003`).
+    // A camera with its default target therefore answers even in a windowless app. Only the
+    // swap to `RenderTarget::Image` — which is exactly what `--offscreen` does — drops it into
+    // the `_ => false` arm. So the test has to make that swap itself.
+    let mut app = app();
+
+    let camera = {
+        let mut q = app.world_mut().query_filtered::<Entity, With<Camera3d>>();
+        q.iter(app.world()).next().expect("there must be a 3D camera")
+    };
+
+    let default_ui_camera = |app: &mut App| {
+        app.world_mut()
+            .run_system_once(|default: DefaultUiCamera| default.get())
+            .expect("the one-shot system runs")
+    };
+
+    // The state of affairs a window run shows — and the reason nobody notices the hole:
+    // with the default target the fallback answers, with or without the component.
+    assert_eq!(
+        default_ui_camera(&mut app),
+        Some(camera),
+        "not even with the default render target does a camera answer for the UI"
+    );
+
+    // What `debug::screenshot::attach_offscreen_target` does at `:218-222`, verbatim. Not a
+    // real GPU texture — `DefaultUiCamera` looks at the enum variant, not at the pixels.
+    let target = app.world_mut().resource_mut::<Assets<Image>>().reserve_handle();
+    app.world_mut()
+        .entity_mut(camera)
+        .insert(RenderTarget::Image(target.into()));
+
+    assert_eq!(
+        default_ui_camera(&mut app),
+        Some(camera),
+        "the camera renders into an `Image`, as under `--offscreen`, and now NO camera answers \
+         for the UI. Every UI root then keeps `Entity::PLACEHOLDER` and a physical size of \
+         0x0 — every HUD screenshot from here on comes out empty and still exits 0. \
+         `IsDefaultUiCamera` belongs on the camera in `render::attach_camera`"
+    );
+
+    // And the window fallback must not be what saved it: no window here, no primary camera.
+    let windows = {
+        let mut q = app.world_mut().query_filtered::<Entity, With<PrimaryWindow>>();
+        q.iter(app.world()).count()
+    };
+    assert_eq!(windows, 0, "this app has a window — then the assertion above proves nothing");
 }

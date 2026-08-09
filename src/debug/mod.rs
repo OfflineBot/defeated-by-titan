@@ -19,8 +19,8 @@ use bevy::prelude::*;
 use bevy::text::FontSize;
 
 use crate::shared::{
-    MovementState, LookOverride, IntentSystems, Gas, LocalPlayer, Mark, PlayerId,
-    WarpPlayer, Cli, Velocity, Tick, TitanId, SpawnTitan,
+    MovementState, LookOverride, IntentSystems, Gas, Health, LocalPlayer, Mark, PlayerId,
+    WarpPlayer, Cli, Velocity, Tick, TitanId, TitanState, SpawnTitan,
 };
 use script::{Instruction, ScriptCommand, Metric};
 
@@ -33,6 +33,16 @@ impl Plugin for DebugPlugin {
         app.init_resource::<ScriptRun>()
             .add_systems(FixedPreUpdate, run_script.in_set(IntentSystems::Source))
             .add_systems(FixedPostUpdate, nan_guard);
+
+        // The F3 overlay. It is registered **always**, exactly like the gizmos below and for
+        // the same reason: it draws nothing until F3 is pressed, and a system that is not
+        // registered cannot be checked at all. It compiled for weeks and hung in no schedule
+        // — which is the quietest kind of dead code there is, because everything about it
+        // looks finished (`tests/debug.rs::the_overlay_is_spawned_exactly_once`).
+        //
+        // `Update` and not `FixedUpdate`: this is presentation. It reads, it never writes a
+        // simulation value.
+        app.add_systems(Startup, spawn_overlay).add_systems(Update, update_overlay);
 
         // Gizmos are presentation, so `Update` and not the fixed step.
         //
@@ -120,7 +130,17 @@ pub struct DriverWorld<'w, 's> {
     players: Query<
         'w,
         's,
-        (&'static PlayerId, &'static Transform, &'static Gas, &'static Velocity),
+        (
+            &'static PlayerId,
+            &'static Transform,
+            &'static Gas,
+            &'static Velocity,
+            // `Option`, because nothing spawns player health yet (`P5`). Without the `Option`
+            // a missing `Health` would silently drop the player out of THIS query — and
+            // `warp`, `assert speed` and `assert gas` would all stop working at once, for a
+            // reason nobody would look for here.
+            Option<&'static Health>,
+        ),
         With<LocalPlayer>,
     >,
     titans: Query<'w, 's, &'static TitanId>,
@@ -164,7 +184,7 @@ fn run_script(mut run: ResMut<ScriptRun>, tick: Res<Tick>, time: Res<Time<Fixed>
                 });
             }
             ScriptCommand::Warp(pos) => {
-                if let Some((id, _, _, _)) = world.players.iter().next() {
+                if let Some((id, _, _, _, _)) = world.players.iter().next() {
                     world.warp.write(WarpPlayer {
                         player: *id,
                         pos_x: pos.x,
@@ -241,14 +261,23 @@ fn measure(metric: Metric, world: &DriverWorld, tick: u64) -> Option<f32> {
     match metric {
         Metric::Titans => Some(world.titans.iter().count() as f32),
         Metric::Tick => Some(tick as f32),
-        _ => {
-            let (_, transform, gas, tempo) = world.players.iter().next()?;
-            Some(match metric {
-                Metric::Height => transform.translation.y,
-                Metric::Gas => gas.current,
-                Metric::Speed => tempo.speed_m_s(),
-                Metric::Titans | Metric::Tick => unreachable!("high behandelt"),
-            })
+        // ⚠️ **The one line the mission job replaces** (`F-070`/`F-071`, `docs/PLAN-GAME.md`
+        // §5): the kill counter becomes a component on the `Mission` entity with per-
+        // `PlayerId` counts, so read it off there and hand back that player's number. Until
+        // then this is an honest zero — `assert kills >= 3` therefore fails, which is the
+        // direction that cannot lie. **The parser does not have to be touched for it.**
+        Metric::Kills => Some(0.0),
+        Metric::Speed | Metric::Height | Metric::Gas | Metric::Health => {
+            let (_, transform, gas, tempo, health) = world.players.iter().next()?;
+            match metric {
+                Metric::Height => Some(transform.translation.y),
+                Metric::Gas => Some(gas.current),
+                Metric::Speed => Some(tempo.speed_m_s()),
+                // `None` and not `0.0`: a player with no `Health` component is not a player
+                // at zero health, it is a player nobody has measured.
+                Metric::Health => health.map(|h| h.current),
+                Metric::Titans | Metric::Tick | Metric::Kills => unreachable!("handled above"),
+            }
         }
     }
 }
@@ -277,31 +306,55 @@ fn nan_guard(
     }
 }
 
-/// The F3 overlay: position, look, speed, gas, state, tick — **in the image**.
+/// The F3 overlay: tick, position, gas, movement state — and one line per living titan.
 ///
 /// That makes every report reproducible: the user sends a coordinate, and `warp` puts you
-/// exactly there (§12c). Without a window there is no overlay — then the log does the job.
+/// exactly there (§12c). And it is what turns a screenshot into a **measurement**: the number
+/// stands next to the thing it describes, in the same PNG, at the same tick.
+///
+/// It hangs on the camera that carries [`IsDefaultUiCamera`](bevy::ui::IsDefaultUiCamera)
+/// (`render::attach_camera`) — without that it is invisible in exactly the `--offscreen`
+/// images it exists for.
 #[derive(Component)]
 pub struct DebugOverlay;
 
+/// No font asset and no `Camera2d`.
+///
+/// `default_font` is on in `Cargo.toml`, so `FontSource::Handle(Handle::default())` — the
+/// default of [`TextFont`] — resolves to the built-in `FiraMono-subset.ttf`
+/// (`bevy_text-0.19.0/src/text.rs:284-291`). Two field types changed in 0.19 and will bite
+/// anyone writing this from memory: `font_size` is a [`FontSize`] (`:392`, enum `:487-500`)
+/// and `font` is a `FontSource` (`:383`, enum `:282-307`).
 pub fn spawn_overlay(mut commands: Commands) {
     commands.spawn((
         DebugOverlay,
         Text::new("F3"),
         TextFont { font_size: FontSize::Px(14.0), ..default() },
+        // White on a dark plate. Not decoration: the overlay stands over sky, over asphalt
+        // and over a grey titan, and white-on-white is a number nobody can read off the
+        // image — which makes the image stop being evidence.
+        TextColor(Color::WHITE),
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.65)),
         Node {
             position_type: PositionType::Absolute,
             top: Val::Px(8.0),
             left: Val::Px(8.0),
+            padding: UiRect::all(Val::Px(4.0)),
             ..default()
         },
     ));
 }
 
+/// Writes the overlay's text — **reads only**, one line per frame, never per entity.
+///
+/// The titan lines are sorted by [`TitanId`]: query iteration follows archetype order, and an
+/// image whose lines swap places between two runs breaks the bit-identity that is this
+/// project's only evidence route (`docs/ACCEPTANCE.md`).
 pub fn update_overlay(
     keys: Res<ButtonInput<KeyCode>>,
     tick: Res<Tick>,
     players: Query<(&Transform, &Gas, &MovementState), With<LocalPlayer>>,
+    titans: Query<(&TitanId, Option<&TitanState>)>,
     mut lines: Query<(&mut Text, &mut Node), With<DebugOverlay>>,
     mut visible: Local<bool>,
 ) {
@@ -313,7 +366,7 @@ pub fn update_overlay(
         if !*visible {
             continue;
         }
-        let content = match players.iter().next() {
+        let mut content = match players.iter().next() {
             Some((t, gas, state)) => format!(
                 "t={}  pos {:.1} {:.1} {:.1}  gas {:.0}/{:.0}  {:?}",
                 tick.0,
@@ -326,6 +379,20 @@ pub fn update_overlay(
             ),
             None => format!("t={}  (no local player)", tick.0),
         };
+
+        let mut bodies: Vec<(u32, Option<TitanState>)> =
+            titans.iter().map(|(id, state)| (id.0, state.copied())).collect();
+        bodies.sort_unstable_by_key(|(id, _)| *id);
+        for (id, state) in bodies {
+            // `None` is printed and not skipped: a titan without a `TitanState` is a hole in
+            // the FSM (`F-050`), and a line that quietly disappears is the reason nobody
+            // finds it.
+            content.push_str(&match state {
+                Some(s) => format!("\ntitan#{id} {s:?}"),
+                None => format!("\ntitan#{id} (no state)"),
+            });
+        }
+
         **text = content;
     }
 }

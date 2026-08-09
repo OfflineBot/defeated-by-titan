@@ -70,6 +70,20 @@ pub enum Metric {
     Titans,
     /// The simulation tick
     Tick,
+    /// Health of the local player, absolute (`shared::Health.current`).
+    ///
+    /// Nothing spawns player health yet (that is `P5`). Until then the metric measures
+    /// **nothing**, and "nothing" counts as failed — see [`crate::debug`]`::measure`. That is
+    /// the safe direction: an `assert health > 0` that passed on a missing component would be
+    /// the exact silent lie this whole file exists to prevent.
+    Health,
+    /// Titans killed in the running mission.
+    ///
+    /// **Zero until there is a mission.** The vocabulary comes first on purpose: Round 2
+    /// writes its acceptance criteria in it (`docs/PLAN-GAME.md` §8, `F-071`), and a criterion
+    /// you cannot write down is a criterion nobody checks. Whoever builds the mission fills in
+    /// exactly one line in `debug::measure` — **the parser does not get touched again.**
+    Kills,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -208,10 +222,15 @@ fn parse_line(line: &str) -> Result<ScriptCommand, String> {
                 "gas" => Metric::Gas,
                 "titans" => Metric::Titans,
                 "tick" => Metric::Tick,
+                "health" => Metric::Health,
+                "kills" => Metric::Kills,
+                // `phase` is deliberately NOT here: the mission state machine it would read
+                // does not exist (`F-070`). A parser that accepted it would hand the mission
+                // round a green run that measured nothing.
                 other => {
                     return Err(format!(
                         "metric {other:?} is not measurable — known: \
-                         speed, height, gas, titans, tick"
+                         speed, height, gas, titans, tick, health, kills"
                     ));
                 }
             };
@@ -247,11 +266,14 @@ fn parse_key(name: &str) -> Result<KeyCode, String> {
         "C" | "c" => KeyCode::KeyC,
         "F" | "f" => KeyCode::KeyF,
         "Space" | "space" => KeyCode::Space,
+        // The overlay toggle. Without it a script cannot switch the numbers into its own
+        // screenshot — and a HUD nobody can photograph cannot reach 🟧.
+        "F3" | "f3" => KeyCode::F3,
         "Shift" | "shift" => KeyCode::ShiftLeft,
         "Ctrl" | "ctrl" => KeyCode::ControlLeft,
         other => {
             return Err(format!(
-                "key {other:?} is unknown — known: W A S D Q E C F Space Shift Ctrl"
+                "key {other:?} is unknown — known: W A S D Q E C F F3 Space Shift Ctrl"
             ));
         }
     })
@@ -329,6 +351,43 @@ assert speed > 25
     fn mark_without_text_is_not_a_mark() {
         assert!(parse("mark").is_err());
         assert!(parse("mark   # just a comment").is_err());
+    }
+
+    #[test]
+    fn the_metrics_the_mission_rounds_need_are_already_in_the_vocabulary() {
+        // `health` and `kills` parse today, long before anything writes them — otherwise
+        // Round 2 would have to change the parser and its own feature in the same breath, and
+        // nobody would be able to tell afterwards which of the two the run was measuring.
+        for (line, expected) in [
+            ("assert health > 0", Metric::Health),
+            ("assert kills >= 3", Metric::Kills),
+        ] {
+            let a = parse(line).unwrap_or_else(|e| panic!("{line:?}: {e:?}"));
+            let ScriptCommand::Assert { metric, .. } = a[0].command else {
+                panic!("{line:?} did not become an assert");
+            };
+            assert_eq!(metric, expected);
+        }
+    }
+
+    #[test]
+    fn phase_is_deliberately_not_a_metric_yet() {
+        // The mission state machine it would read does not exist. A parser that took the word
+        // anyway would report a green run that measured nothing (§9).
+        let f = parse("assert phase == 1").expect_err("`phase` must not parse today");
+        assert!(f[0].reason.contains("not measurable"));
+        assert!(
+            f[0].reason.contains("health") && f[0].reason.contains("kills"),
+            "the error has to list what IS known: {:?}",
+            f[0].reason
+        );
+    }
+
+    #[test]
+    fn f3_is_a_key_a_script_can_press() {
+        // Without it a script cannot switch the overlay into its own screenshot.
+        assert_eq!(parse_key("F3"), Ok(KeyCode::F3));
+        assert_eq!(parse_key("f3"), Ok(KeyCode::F3));
     }
 
     #[test]

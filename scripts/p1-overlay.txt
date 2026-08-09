@@ -1,0 +1,35 @@
+# p1-overlay — the proof that UI lands in an `--offscreen` image at all (P1 + P2).
+#
+#   cargo run -q -- --offscreen \
+#       --script scripts/p1-overlay.txt --ticks 140 --screenshot docs/images/p1-overlay.png
+#
+# This is not a feature script. It is the evidence route itself: `--offscreen` renders into
+# an `Image`, and `DefaultUiCamera` answers `None` for an image target unless the camera
+# carries `IsDefaultUiCamera` (bevy_ui-0.19.0/src/ui_node.rs:2991-3003). Without that
+# component the run exits 0, writes a perfectly good PNG of the city — and every pixel of
+# HUD is missing from it. **An empty image that looks like evidence** is the trap this file
+# exists to catch (docs/PLAN-GAME.md §11, risk 3).
+#
+# Its twin `scripts/p1-no-overlay.txt` is the same run without the F3 line. The two PNGs
+# must differ, and they must differ ONLY in the top-left corner — that difference is what
+# proves the overlay is drawn, rather than the file merely having been written.
+#
+# ⚠️ The 140 belong to THIS file: wait 1.5 = 90 ticks at 60 Hz, then 18 + 18. Whoever
+# changes a wait changes the image.
+
+wait 1.5                # world, camera, meshes and the render pipelines come up
+
+# The same viewpoint as scripts/f003-city.txt: 70 m up, 130 m south, 26 degrees down. A
+# populated frame, so that "the overlay is on top of something" is a real statement.
+look 0 -26
+warp 0 70 130
+wait 0.3                # the warp takes effect one tick after it is written
+
+key F3 0.05             # switch the overlay on — a real key, through ButtonInput
+wait 0.3                # one frame is enough; the extra ticks make the tick number settle
+
+assert height > 65       # the warp really did take effect (measured 65.98 at tick 130)
+assert height < 67       # and the player has not fallen further than one wait
+assert kills == 0        # the new vocabulary, exercised in a real run
+mark p1-overlay
+wait 5                  # keep the run alive: if it ends, the process ends before the image

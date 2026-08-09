@@ -20,8 +20,10 @@
 use bevy::prelude::*;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::debug::gizmo::{GizmoToggle, GizmoCounts, GizmoSystems};
+use defeated_by_titan::debug::script::parse;
+use defeated_by_titan::debug::{DebugOverlay, ScriptRun};
 use defeated_by_titan::player::spawn_player;
-use defeated_by_titan::shared::{AnchorSurface, Block, IdCounter, Cli};
+use defeated_by_titan::shared::{AnchorSurface, Block, Health, IdCounter, LocalPlayer, TitanId, TitanState, Cli};
 
 /// Builds the **real** app, headless — not a second, similar one.
 ///
@@ -164,6 +166,231 @@ fn the_hull_holding_the_camera_stays_empty_a_team_mate_does_not() {
         1,
         "a team mate without a camera stayed unmarked — exactly the case the marker \
          exists for (docs/multiplayer.md rule 3)"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// P2 — the F3 overlay. Two systems that compiled for weeks and were registered nowhere.
+// ---------------------------------------------------------------------------------------
+
+/// The app after the deferred commands of `Startup` have really landed.
+fn running_app() -> App {
+    let mut app = app(false);
+    // Player in `Startup`, camera one pass later (`render::attach_camera`), overlay entity at
+    // the end of the `Startup` in which it was spawned.
+    for _ in 0..3 {
+        app.update();
+    }
+    app
+}
+
+/// The overlay entity's text and whether it is displayed at all.
+fn overlay(app: &mut App) -> (String, Display) {
+    let mut q = app.world_mut().query_filtered::<(&Text, &Node), With<DebugOverlay>>();
+    let (text, node) = q
+        .iter(app.world())
+        .next()
+        .expect(
+            "no entity with `DebugOverlay` — `debug::spawn_overlay` is not registered in \
+             `DebugPlugin`, and then no screenshot in this project can ever show a number",
+        );
+    (text.0.clone(), node.display)
+}
+
+#[test]
+fn the_overlay_is_spawned_exactly_once() {
+    // The literal half: `spawn_overlay` runs. Take the `add_systems(Startup, ...)` line out of
+    // `src/debug/mod.rs` and this falls over — instead of the next job noticing three rounds
+    // later that its HUD screenshots are all empty.
+    let mut app = running_app();
+    let mut q = app.world_mut().query_filtered::<Entity, With<DebugOverlay>>();
+    assert_eq!(
+        q.iter(app.world()).count(),
+        1,
+        "there must be exactly one overlay — none means it is not registered, two mean it is \
+         in `Update` instead of `Startup` and grows by one per frame"
+    );
+}
+
+/// One press of F3, the way a keyboard delivers it — released first, then pressed.
+///
+/// Not `press()` on its own: `ButtonInput::press` only arms `just_pressed` when the key was
+/// **not** held before (`bevy_input-0.19.0/src/button_input.rs`). A second `press()` without a
+/// release in between does nothing at all — which is also why `key F3` twice in a script
+/// really does toggle twice: the driver releases the key after its duration.
+fn tap_f3(app: &mut App) {
+    let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+    keys.reset(KeyCode::F3);
+    keys.clear();
+    keys.press(KeyCode::F3);
+}
+
+#[test]
+fn the_overlay_is_off_until_f3_and_then_carries_the_numbers() {
+    // The other half: registered AND doing something. `update_overlay` writes the text; the
+    // pair falls over whether somebody removes the registration or leaves it standing and
+    // empties the body.
+    //
+    // `run_schedule(Update)` and not `app.update()`: `ButtonInput` is cleared in `PreUpdate`
+    // (`bevy_input-0.19.0/src/keyboard.rs`), so a press followed by `app.update()` would be
+    // gone before `update_overlay` ever sees it.
+    let mut app = running_app();
+
+    let (_, display) = overlay(&mut app);
+    assert_eq!(
+        display,
+        Display::None,
+        "the overlay stands in the picture unasked — it lies over every in-game screenshot"
+    );
+
+    tap_f3(&mut app);
+    app.world_mut().run_schedule(Update);
+
+    let (text, display) = overlay(&mut app);
+    assert_eq!(display, Display::Flex, "F3 did not switch the overlay on");
+    // Not "is not empty": an overlay that prints its placeholder "F3" forever would pass that.
+    // What has to be in there is the tick — the number that makes a screenshot line up with a
+    // log line at all (`prompts/init.md` §12c).
+    assert!(
+        text.contains("t=") && text.contains("gas "),
+        "the overlay shows {text:?} — tick and gas are what a report is reconstructed from"
+    );
+
+    tap_f3(&mut app);
+    app.world_mut().run_schedule(Update);
+    assert_eq!(
+        overlay(&mut app).1,
+        Display::None,
+        "F3 is a toggle — a switch that only goes on is a switch you have to restart the game \
+         to undo"
+    );
+}
+
+#[test]
+fn every_living_titan_gets_a_line_in_a_stable_order() {
+    // `docs/PLAN-GAME.md` §4: one line per titan, so that `F-050`'s state machine can be READ
+    // OFF a screenshot instead of being believed.
+    //
+    // The fixture is built out of `shared` types only and does not wait for `titan/` — the
+    // overlay's job is to print what it is given, and that is what is checked here.
+    //
+    // The **order** is the part that is easy to lose: query iteration follows archetype order,
+    // so two runs of the same script could print the same titans in a different order and the
+    // `sha256` of the screenshot would stop matching — the one property `docs/ACCEPTANCE.md`
+    // rests on, broken with nothing erroring.
+    let mut app = running_app();
+    for (id, state) in [(7u32, TitanState::Windup), (2, TitanState::Idle), (5, TitanState::Death)] {
+        app.world_mut().spawn((TitanId(id), state));
+    }
+    // One without a state: the FSM has a hole, and a line that quietly vanishes is the reason
+    // nobody finds it.
+    app.world_mut().spawn(TitanId(9));
+
+    tap_f3(&mut app);
+    app.world_mut().run_schedule(Update);
+
+    let (text, _) = overlay(&mut app);
+    let lines: Vec<&str> = text.lines().skip(1).collect();
+    assert_eq!(
+        lines,
+        vec!["titan#2 Idle", "titan#5 Death", "titan#7 Windup", "titan#9 (no state)"],
+        "the overlay printed {text:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// The script vocabulary — `assert health` and `assert kills`.
+// ---------------------------------------------------------------------------------------
+
+/// Puts a single script line into the running app and lets the **real** driver execute it.
+///
+/// Returns `(how many asserts were checked, which of them failed)`.
+fn run_line(app: &mut App, line: &str) -> (u32, Vec<String>) {
+    {
+        let plan = parse(line).unwrap_or_else(|e| {
+            let list: Vec<String> = e.iter().map(|f| f.to_string()).collect();
+            panic!("{line:?} does not parse: {}", list.join("; "))
+        });
+        let mut run = app.world_mut().resource_mut::<ScriptRun>();
+        run.plan = plan;
+        run.at = 0;
+        run.done = false;
+        run.checked = 0;
+        run.failures.clear();
+    }
+    app.world_mut().run_schedule(FixedPreUpdate);
+    let run = app.world().resource::<ScriptRun>();
+    (run.checked, run.failures.clone())
+}
+
+fn local_player(app: &mut App) -> Entity {
+    let mut q = app.world_mut().query_filtered::<Entity, With<LocalPlayer>>();
+    q.iter(app.world()).next().expect("there must be a local player")
+}
+
+#[test]
+fn assert_health_reads_the_players_health_component() {
+    // The metric the mission rounds write their criteria in. It reads `shared::Health`, and
+    // it reads it off the LOCAL PLAYER — not off a resource, not off `.single()`
+    // (`docs/multiplayer.md` rule 3).
+    let mut app = running_app();
+    let player = local_player(&mut app);
+    app.world_mut().entity_mut(player).insert(Health::full(100.0));
+
+    let (checked, failures) = run_line(&mut app, "assert health > 0");
+    assert_eq!(checked, 1, "the assert did not run at all");
+    assert!(failures.is_empty(), "100 of 100 health is not > 0? {failures:?}");
+
+    let (_, failures) = run_line(&mut app, "assert health == 100");
+    assert!(failures.is_empty(), "{failures:?}");
+
+    app.world_mut().entity_mut(player).get_mut::<Health>().unwrap().damage(40.0);
+    let (_, failures) = run_line(&mut app, "assert health == 60");
+    assert!(failures.is_empty(), "the metric does not follow the component: {failures:?}");
+}
+
+#[test]
+fn assert_health_without_a_health_component_fails_loudly() {
+    // **The half that matters.** Nothing spawns player health yet (that is P5). A metric that
+    // answered `0.0` for "there is nothing to measure" would turn `assert health > 0` into a
+    // silent lie the day somebody forgets the component — and `measure()` documents exactly
+    // this: not measurable counts as failed (§9).
+    let mut app = running_app();
+    let (checked, failures) = run_line(&mut app, "assert health > 0");
+    assert_eq!(checked, 1);
+    assert_eq!(failures.len(), 1, "a player without health must not pass a health check");
+    assert!(
+        failures[0].contains("nothing"),
+        "the message has to say that nothing was measured, not print a number: {:?}",
+        failures[0]
+    );
+}
+
+#[test]
+fn assert_kills_is_zero_until_a_mission_counts_them() {
+    // The vocabulary has to exist BEFORE the mission job, otherwise Round 2 has no instrument
+    // to write its criteria in. Today the answer is an honest zero — and `assert kills >= 3`
+    // therefore fails, which is the safe direction.
+    let mut app = running_app();
+    let (checked, failures) = run_line(&mut app, "assert kills == 0");
+    assert_eq!(checked, 1);
+    assert!(failures.is_empty(), "{failures:?}");
+
+    let (_, failures) = run_line(&mut app, "assert kills >= 3");
+    assert_eq!(failures.len(), 1, "nobody has killed anything — this must not pass");
+}
+
+#[test]
+fn a_metric_that_does_not_exist_is_an_error_and_not_a_zero() {
+    // `phase` deliberately does NOT exist yet: the mission state machine it would read has
+    // not been built. A parser that silently accepted it would hand Round 2 a green run that
+    // measured nothing.
+    let f = parse("assert phase == 1\n").expect_err("`phase` is not measurable today");
+    assert!(f[0].reason.contains("not measurable"), "{:?}", f[0].reason);
+    assert!(
+        f[0].reason.contains("health") && f[0].reason.contains("kills"),
+        "the error message has to list what IS known: {:?}",
+        f[0].reason
     );
 }
 

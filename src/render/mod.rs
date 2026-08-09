@@ -64,6 +64,43 @@ fn setup_light(mut commands: Commands) {
 ///
 /// In Bevy 0.19 `AmbientLight` hangs on the **camera**, not on the world — it is a component
 /// with `#[require(Camera)]` and no longer a `Resource` (`docs/lessons/bevy.md`).
+///
+/// # Why [`IsDefaultUiCamera`] hangs here — the whole evidence route depends on it
+///
+/// This is one component, and without it **every HUD screenshot in this project comes out
+/// empty while the run exits 0** (`docs/PLAN-GAME.md` §11, risk 3). Read from the installed
+/// source, not from memory:
+///
+/// `DefaultUiCamera::get()` (`bevy_ui-0.19.0/src/ui_node.rs:2990-3009`) asks two questions.
+/// First `default_cameras.single()` — the query over `With<IsDefaultUiCamera>`, `:2991`.
+/// Only if that finds nothing does it fall back to filtering by render target, `:2997-3003`:
+///
+/// ```text
+/// RenderTarget::Window(WindowRef::Primary)   => true      // ← unconditional
+/// RenderTarget::Window(WindowRef::Entity(w)) => w is the primary window
+/// _                                         => false     // ← Image lands here
+/// ```
+///
+/// Under `--offscreen` the camera's target is an `Image`
+/// (`debug::screenshot::attach_offscreen_target`) — so the fallback answers `None`, every UI
+/// root keeps `ComputedUiTargetCamera::default()` = `Entity::PLACEHOLDER` and
+/// `ComputedUiRenderTargetInfo::physical_size` = `UVec2::ZERO` (`:3019-3051`). The UI lays
+/// out into a zero-sized viewport: no crash, no warning, just no pixels.
+///
+/// **And it is invisible in a window run**, because there the first arm of the fallback fires
+/// — which is exactly why this is worth a paragraph instead of a word.
+/// `tests/render.rs::the_camera_is_the_default_ui_camera` swaps the target the way
+/// `--offscreen` does and falls over when the component goes.
+///
+/// **Measured `[debian]`, not reasoned** (`scripts/p1-overlay.txt`, 1280x720, tick 140):
+///
+/// | run | UI camera | UI root size | PNG |
+/// |---|---|---|---|
+/// | with the component | `Some(camera)` | 1280x720 | `docs/images/p1-overlay.png`, 625 728 B |
+/// | component taken out | `None` | **0x0** | 617 554 B, **bit-identical to the run in which the overlay was never switched on** (`docs/images/p1-no-overlay.png`) |
+///
+/// Both runs exited 0 and both wrote a perfectly good picture of the city. That is the whole
+/// point: the failure has no symptom except a missing overlay.
 fn attach_camera(
     mut commands: Commands,
     data: Res<GameData>,
@@ -86,6 +123,8 @@ fn attach_camera(
                 ..default()
             }),
             AmbientLight { brightness: 220.0, ..default() },
+            // The one component that keeps the UI in an `--offscreen` image — see above.
+            IsDefaultUiCamera,
             // Eye height above the player's origin — which lies between the feet
             // (docs/conventions.md).
             Transform::from_xyz(0.0, data.game.player.eye_height_m, 0.0),
