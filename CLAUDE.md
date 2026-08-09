@@ -92,6 +92,27 @@ Subagenten — **breit parallel und wissenschaftlich**. Das ist verbindlich, nic
   **`Aufgabe · Getan · Beleg · Stufe · Offen · Funde`** — ein Freitext-Bericht ist nicht
   integrierbar.
 
+## Autonomer Betrieb — wenn niemand danebensteht
+
+Der Regelfall in diesem Projekt ist, dass der User **nicht** da ist. Dann gilt zusaetzlich:
+
+- **Blockieren ist verboten.** Eine offene Frage haelt die Arbeit nicht an. Wer wartet,
+  verbraucht die Sitzung und liefert nichts.
+- **Eine Entscheidung, die dem User gehoert, wird trotzdem getroffen** — aber sichtbar, nach
+  [`docs/FRAGEN.md`](docs/FRAGEN.md), und dort stehen **die `ANNAHME:`, unter der
+  weitergearbeitet wurde, und die Stelle, die zurueckzunehmen waere**, wenn er anders
+  entscheidet. Eine Frage ohne Annahme und ohne Ruecknahmestelle ist unbrauchbar: sie kostet
+  ihn Zeit und gibt ihm nichts zurueck.
+- **Ein Problem, das die Arbeit wirklich anhaelt**, geht nach `docs/BUGS.md` (mit Repro) oder
+  `docs/FUNDE.md` (Fremdgebiet) — und die Arbeit laeuft an einer **anderen** Stelle weiter.
+- **✅ bleibt dem User vorbehalten, 🟧 ist die Obergrenze** — ausnahmslos. Ohne jemanden, der
+  widerspricht, ist die Versuchung groesser, eine Stufe zu hoch zu setzen.
+- **Die unabhaengige Gegenprobe ersetzt den User.** Was niemand angegriffen hat, ist 🟨 — und
+  angreifen muss ein Agent, der das Ergebnis nicht selbst gebaut hat.
+- **Kein Fortschritt wird behauptet, der nicht belegt ist.** „Sollte jetzt gehen" ist hier
+  weniger wert als sonst, weil es niemand sofort bemerkt.
+- **Am Ende jedes autonomen Abschnitts steht ein ehrlicher Absatz, was ungesehen blieb.**
+
 ## Wo was steht
 
 | Frage | Datei |

@@ -118,6 +118,46 @@ landet in `assets/data/maps.ron`. Der Bezug zur qualitativen Spalte bleibt in
 **ANNAHME:** Kein Termin, also faellt nichts. Die MoSCoW-Reihenfolge bestimmt nur die
 **Reihenfolge** in `docs/TODO.md`: 139 Must vor 81 Should vor 25 Could.
 
+## Q-012 — Was heisst `avian3d` fuer spaeteres Rollback im Multiplayer?
+
+**Kontext:** Der User hat am 2026-08-09 entschieden: **`avian3d` wird benutzt.** Vorher war
+eine Eigenbau-Loesung aus achsenparallelen Kaesten geplant. Die Entscheidung ist gefallen und
+steht nicht zur Debatte — offen ist ihre **Folge**: `docs/multiplayer.md` verlangt eine
+Architektur, die spaeteres Rollback nicht teuer macht. Eine fremde Physik-Engine haelt aber
+Zustand, den wir nicht selbst schreiben (Kontaktcaches, Warmstart-Impulse, Schlafzustaende) —
+und was davon fuer einen Schnappschuss gesichert werden muss, entscheidet, ob Rollback
+spaeter eine Woche oder einen Monat kostet.
+
+`avian3d 0.7.0` verlangt exakt `bevy 0.19.0` (gepruefte Fundstelle:
+`~/.cargo/registry/src/*/avian3d-0.7.0/Cargo.toml`) und bringt ein Feature
+`enhanced-determinism` mit, das `libm` einschaltet.
+
+**ANNAHME:** `avian3d 0.7.0` mit `enhanced-determinism`. Der Physikzustand wird als
+**wiederherstellbar** behandelt, bis das Gegenteil gemessen ist; die Simulation laeuft
+weiterhin in `FixedUpdate`, und Eingabe bleibt ein `Intent` (§6 Regel 2).
+
+**Zurueckzunehmen waere:** die Zeile in `Cargo.toml`, die Autoritaetstabelle in
+`docs/architektur.md` (avian schreibt `Transform`/`Position` und `LinearVelocity` selbst), und
+jede Stelle, die einen avian-Typ statt eines eigenen benutzt. Die Domaenenstruktur, der
+`Intent`-Kanal und die RON-Werte bleiben davon unberuehrt — das war der Zweck des Schnitts.
+
+## Q-013 — Wie lang darf ein Seil hoechstens sein?
+
+**Kontext:** Belegt in dieser Sitzung durch eine vollstaendige Suche: **keine Quelle nennt eine
+maximale Seillaenge.** Nicht die Design-Bibel, nicht `docs/features.ron` (F-001, F-004, F-005),
+nicht `assets/data/game.ron`. Es gibt nur `vector.seil_min_m` (3,0 m) und
+`vector.hakenreichweite_m` (112 m — die Reichweite des *Hakens*, nicht die des *Seils*). Ohne
+eine Obergrenze ist F-004 nicht vollstaendig spezifiziert: es entscheidet, ob man an einem
+Turm haengend noch 200 m weit pendeln kann.
+
+**ANNAHME:** Die Seillaenge ist der **Abstand im Moment des Verankerns**, gedeckelt auf
+`vector.hakenreichweite_m` (112 m). Danach wird sie nur noch **verkuerzt** (F-005), nie
+verlaengert — ausser die Kollision draengt den Spieler heraus, dann wird sie nachgezogen und
+der Haken loest bei Ueberdehnung.
+
+**Zurueckzunehmen waere:** ein einziger neuer RON-Wert (`vector.seil_max_m`) und die Stelle,
+die beim Verankern die Laenge setzt. Kein Strukturbruch.
+
 ---
 
 ## Beantwortet

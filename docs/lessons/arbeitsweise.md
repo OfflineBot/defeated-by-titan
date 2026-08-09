@@ -186,14 +186,44 @@ ist die ehrliche Restliste. Das Format steht so wörtlich in der Normtabelle des
 **Und quer über alles:** `docs/STATUS.md` ist die einzige Wahrheit über den Fortschritt. Ein
 Workflow, der etwas gebaut hat, ist **nicht fertig, solange die Zeile fehlt**.
 
+## h) Autonomer Betrieb — der Normalfall, nicht die Ausnahme
+
+Der User ist meistens nicht da. Das ändert nichts an der Arbeitsweise, aber es entfernt die
+Instanz, die sonst widerspricht — und genau dagegen muss die Runde gebaut sein.
+
+**Eine Runde ohne User** ist dieselbe wie mit: Ist-Zustand messen → Hypothese und
+**Abnahmekriterium vorab** hinschreiben → parallel delegieren → Ergebnisse **gegen die vorher
+notierten Kriterien** prüfen → integrieren → über die nächste Runde entscheiden. Der einzige
+Unterschied liegt am Ende: es gibt kein „ich frag mal kurz".
+
+| Situation | was zu tun ist | was verboten ist |
+|---|---|---|
+| Offene Entscheidung, die dem User gehört | `docs/FRAGEN.md` mit `ANNAHME:` **und** der Stelle, die zurückzunehmen wäre — dann weiterbauen | warten; oder still entscheiden, ohne es aufzuschreiben |
+| Etwas ist kaputt und reproduzierbar | `docs/BUGS.md` mit Repro, dann Fix nach Regel 5 | „Fix auf Verdacht" ohne roten Test |
+| Etwas ist kaputt, aber **kein Repro** | `docs/BUGS.md` als Gerücht markieren, an anderer Stelle weiterarbeiten | raten, bis es zufällig weggeht |
+| Fremdgebiet fällt auf | `docs/FUNDE.md` | still mitfixen |
+| Zweimal dieselbe Hypothese gescheitert | Zählstand in `docs/BUGS.md` beim Eintrag führen, dann nach `docs/FRAGEN.md` | ein dritter Versuch mit derselben Annahme |
+
+**Die Gegenprobe ist im autonomen Betrieb kein Luxus, sondern der Ersatz für den User.** Wäre
+er da, würde er widersprechen — jetzt muss das ein Agent tun, der das Ergebnis nicht selbst
+gebaut hat. Regel 6 aus e) wird damit zur Pflicht nach *jeder* Baustufe, nicht nur nach
+Findungsstufen. Diese Sitzung hat das belegt: zwei sorgfältig gebaute Schnittstellenentwürfe
+wurden von zwei unabhängigen Angreifern mit 30 belegten Funden gekippt, darunter ein Pendel,
+das bei kurzem Seil 99,2 % Tempo pro Sekunde verloren hätte, und ein Bildkriterium, das nicht
+belegbar war, weil sich die Kamera in diesem Projekt gar nicht dreht. Beides hätte niemand
+bemerkt, bis es im Spiel auffällt.
+
+**Und die Obergrenze:** ✅ setzt nur der User. Autonom ist **🟧 das Maximum**, auch wenn alles
+grün ist. Unsicherheit setzt die Stufe herunter, nicht hinauf.
+
 ## Lücken
 
 | Lücke | was fehlt |
 |---|---|
-| „bei erreichtem **Limit**" | §17 nennt die Abbruchbedingung, aber keine Zahl — kein Iterations-, Zeit- oder Token-Limit ist beziffert. Muss festgelegt werden, sonst ist der Abbruch nicht prüfbar. |
-| „zweimal dieselbe Hypothese gescheitert" | wo die gescheiterten Hypothesen mitgezählt werden, steht nicht da. Ohne Ablage kann niemand das zweite Mal erkennen; `docs/FRAGEN.md` ist nur das Ziel danach. |
+| ~~„bei erreichtem **Limit**"~~ | **geschlossen 2026-08-09:** pro `F-ID` höchstens **zwei** Bauversuche und eine Gegenprobe; danach ist nicht die Ausführung falsch, sondern die Annahme → `docs/FRAGEN.md`. Pro Runde höchstens **vier bauende** Aufträge (siehe d). |
+| ~~„zweimal dieselbe Hypothese gescheitert"~~ | **geschlossen 2026-08-09:** der Zählstand steht beim Eintrag in `docs/BUGS.md`. Ohne Eintrag gibt es kein „zweites Mal", also auch keinen zweiten Versuch. |
 | Fachbereiche | die Liste der Senior-Experten ist mit „…" offen — welche Domänen tatsächlich angelegt werden, ist eine Entscheidung, die noch niemand getroffen hat. |
 | Querverweis | §17 verweist beim seriellen Arbeiten auf „die Liste oben"; die Tabelle der Hauptkopf-Dateien steht im Quelltext weiter **unten**. Gemeint ist dieselbe Liste. |
-| Gemessen ist nichts | die 2–3 Agenten auf Maschine A stammen aus der Quelle, nicht aus einem Lauf in diesem Repo. Bis jemand mit `nproc` und einer Zeitmessung gegenhält, bleibt der Wert 🟨. |
+| Gemessen ist nichts | **teilweise geschlossen 2026-08-09:** auf Maschine B (`offlinebot`) sind es `nproc` = 16, aber die Breite hängt nicht daran — **`cargo` nimmt einen Lock auf `target/`**, also warten bauende Agenten aufeinander. Vier gleichzeitig ist die brauchbare Grenze, nicht sechzehn. Für Maschine A ist der Wert weiterhin 🟨. |
 
 Verwandt: [workflow](workflow.md) · [performance](performance.md) · [STATUS](../STATUS.md) · [TODO](../TODO.md) · [FRAGEN](../FRAGEN.md) · [FUNDE](../FUNDE.md) · [BUGS](../BUGS.md) · [ABNAHME](../ABNAHME.md) · [ROADMAP](../ROADMAP.md) · [architektur](../architektur.md) · [konventionen](../konventionen.md) · [umgebung](../umgebung.md) · [README](../README.md)
