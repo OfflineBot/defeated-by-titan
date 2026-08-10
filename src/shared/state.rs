@@ -256,6 +256,55 @@ pub enum TitanState {
     Death,
 }
 
+/// **How far through its current [`TitanState`] a body is** — in simulation ticks, as
+/// `ticks_in_state` out of `state_ticks`.
+///
+/// ## Why the number lives here and not next to the state machine
+///
+/// The same argument as [`TitanState`]'s, one step further. `husk#1 Windup` in the F3 overlay
+/// is equally true on tick 1 and on tick 35, so it cannot show whether the wind-up really
+/// lasts as long as `titan.ron` says — and that is the *only* thing `F-050`'s picture
+/// criterion asks a screenshot to prove (`docs/PLAN-GAME.md` §8: the overlay reads
+/// `husk#1 Windup 21/36` while the arm is visibly up in the same frame). With the counter
+/// private to `titan/`, `debug` would need a line in the allow list of `docs/architecture.md`
+/// purely so that an overlay can print a number, and an allow list that grows for reasons like
+/// that stops being a rule.
+///
+/// ## Both numbers, or the picture proves nothing
+///
+/// `ticks_in_state` alone is a number without a scale, and a `state_ticks` typed next to the
+/// place that prints it is a constant that keeps reading `n/36` after somebody has changed
+/// `windup_s`. So both are written **together, by the one system that owns the state edge**
+/// (`titan::brain::advance` — the authority table in `docs/architecture.md`, not this type),
+/// out of the timings resolved from `titan.ron` at spawn.
+///
+/// **`state_ticks == 0` means open-ended.** `Idle` and `Pursue` last as long as the world makes
+/// them last; a fraction over a total of zero is not a reading, so whoever prints this leaves
+/// it off rather than showing `17/0`.
+///
+/// It is a tick counter and never a clock, for the reason [`HitStop`] spells out: the pose is a
+/// pure function of `(TitanState, ticks_in_state)`, which is what makes an `--offscreen` run
+/// bit-identical.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StateClock {
+    /// Ticks already completed in the current state. **The entry tick of a state is 0.**
+    pub ticks_in_state: u32,
+    /// How long the current state lasts in total. **0 = open-ended**, see the type's doc.
+    pub state_ticks: u32,
+}
+
+impl StateClock {
+    /// A state that begins **now** and runs for `state_ticks` (0 = open-ended).
+    pub fn entering(state_ticks: u32) -> Self {
+        StateClock { ticks_in_state: 0, state_ticks }
+    }
+
+    /// Does this state have a length that can be printed as a fraction at all?
+    pub fn is_timed(&self) -> bool {
+        self.state_ticks > 0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,5 +431,30 @@ mod tests {
     fn titan_state_starts_idle() {
         // `Default` is what a freshly spawned titan gets before its FSM has run once.
         assert_eq!(TitanState::default(), TitanState::Idle);
+    }
+
+    #[test]
+    fn a_state_clock_starts_at_zero_and_knows_when_it_has_no_length() {
+        let fresh = StateClock::default();
+        assert_eq!(fresh.ticks_in_state, 0, "the entry tick of a state is 0");
+        assert!(!fresh.is_timed(), "a state with no length must not be printed as `n/0`");
+        // `Idle` and `Pursue` end when the world ends them, not when a counter runs out.
+        assert!(!StateClock::entering(0).is_timed());
+        assert!(StateClock::entering(36).is_timed());
+        assert_eq!(StateClock::entering(36).ticks_in_state, 0);
+    }
+
+    #[test]
+    fn a_state_clock_survives_a_snapshot() {
+        // It hangs on a body, so it goes into a save and one day down a wire
+        // (`docs/multiplayer.md` rule 8) — and the pair has to arrive together, or the
+        // receiving side prints a fraction out of two different ticks.
+        let c = StateClock { ticks_in_state: 21, state_ticks: 36 };
+        let copied = c;
+        assert_eq!(copied, c, "StateClock must be Copy, not moved");
+
+        let text = ron::to_string(&c).expect("StateClock must serialize");
+        let back: StateClock = ron::de::from_str(&text).expect("StateClock must deserialize");
+        assert_eq!(back, c);
     }
 }

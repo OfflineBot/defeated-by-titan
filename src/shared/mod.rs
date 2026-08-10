@@ -32,7 +32,7 @@ pub use gear::{
     ReelSpeed, RunAccel, BoostAccel, GasGrant, Hook, HookArm, HookState,
     RopeLength, Side, PrevButtons, AimPoint,
 };
-pub use ids::{IdCounter, BodyId, LocalPlayer, PlayerId, TitanId};
+pub use ids::{IdCounter, BodyId, LocalPlayer, PlayerId, TitanId, TitanKindName};
 pub use intent::{LookOverride, Intent, Buttons};
 pub use message::{
     Impact, HookReleased, HookAnchored, BodyGone, HitZone, ReleaseReason, Mark,
@@ -42,7 +42,7 @@ pub use spatial::{IndexEntry, SpatialIndex, RayResult, RayHit};
 pub use rope::{rope_reel_in, rope_step, RopeConstraint, ConstraintResult};
 pub use cli::Cli;
 pub use rng::Rng;
-pub use state::{MovementState, Gas, Blades, Velocity, Health, HitStop, TitanState};
+pub use state::{MovementState, Gas, Blades, Velocity, Health, HitStop, TitanState, StateClock};
 pub use layers::{
     GameLayer, LAYER_WORLD, LAYER_PLAYER, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
 };

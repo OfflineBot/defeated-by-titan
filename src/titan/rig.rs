@@ -51,7 +51,10 @@ use avian3d::prelude::CustomPositionIntegration;
 use bevy::prelude::*;
 
 use crate::data::{GameData, TitanKind};
-use crate::shared::{Health, TitanId, TitanState, Velocity, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX};
+use crate::shared::{
+    Health, StateClock, TitanId, TitanKindName, TitanState, Velocity, LAYER_TITAN_BODY,
+    LAYER_TITAN_CORTEX,
+};
 
 /// Which box of the rig this is. Its own type instead of eight marker components, so that a
 /// test can walk the whole rig with one query.
@@ -273,11 +276,21 @@ pub fn build_rig(
 
     let root = commands
         .spawn((
+            // The `Name` is for the inspector and the log. **The contract is the component
+            // below it**: until `TitanKindName` existed, `combat` and `debug` had to parse
+            // `titan_<kind>_<id>` back out of this string, which made a debugging convenience
+            // into an unwritten cross-domain interface (`src/combat/strike.rs:50-58` reported
+            // it as a defect). The name stays because a titan you cannot recognise in a dump is
+            // its own kind of cost — but nothing reads a fact out of it any more.
             Name::new(format!("titan_{kind_name}_{}", id.0)),
+            TitanKindName::new(kind_name),
             TitanBody,
             id,
             *rig,
             TitanState::default(),
+            // Idle has no length, so the pair starts open-ended. `brain::advance` owns it from
+            // the next tick on — this is only what the body is born with.
+            StateClock::default(),
             Health::full(kind.health),
             Velocity::default(),
             Transform::from_translation(pos),

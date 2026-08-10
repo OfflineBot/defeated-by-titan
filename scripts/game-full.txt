@@ -1,0 +1,198 @@
+# game-full — THE WHOLE GAME, ONCE, END TO END: fly, cut, cut, cut, WON.
+#
+#   the verdict:  cargo run -q -- --headless  --mission tutorial \
+#                     --script scripts/game-full.txt --ticks 1600
+#   the picture:  cargo run -q -- --offscreen --mission tutorial \
+#                     --script scripts/game-full.txt --ticks 1100 \
+#                     --screenshot docs/images/f071-won.png
+#
+# MEASURED on debian, 2026-08-10 — two headless runs agreed to the tick and to the digit:
+#
+#   t=235   reel:  speed 46.414 m/s, height 13.064 m   -> `assert speed > 25` HOLDS
+#   t=653   cut titan 2 Torso  at 30.00 m/s
+#   t=656   cut titan 2 Cortex at 30.33 m/s   -> kill: player 1 cut titan 2 — 1/3
+#   t=777   cut titan 3 Cortex at 30.33 m/s   -> 2/3
+#   t=898   cut titan 4 Cortex at 30.33 m/s   -> 3/3
+#   t=898   MISSION WON (decided_at_tick 898, deadline 19 800) — 3/3 kills, health 100
+#   headless: 23 asserts held, 1200 ticks, exit 0
+#   offscreen at tick 1100: the overlay reads `mission WON  kills 3/3`, and the PNG is
+#   bit-identical over two runs —
+#   sha256 5a4d359b28517882cd8c81ceab88f9d7577e54ca365c664c15f5344623488579
+#
+# 46.414 m/s is `scripts/f-001-hooks.txt`'s number to the last digit, out of a different file
+# with a mission running and four titans in the world. The flight does not care.
+#
+# ⚠️ TWO RUNS, NOT ONE. `--screenshot` takes the exit over
+# (`debug::screenshot::exit_when_written`) and writes `AppExit::Success` the moment the PNG is
+# on disk — an `assert` after the shot tick never reaches the exit code. The VERDICT comes from
+# the `--headless` run, the IMAGE from the `--offscreen` one.
+#
+# Every piece in here was proven separately before this file existed. This is the first run in
+# which they are proven TOGETHER, which is the only thing this file is for.
+#
+# ACT 1 is `scripts/f-001-hooks.txt`'s flight, verbatim: aim at the watchtower, anchor, reel,
+# land on the roof. It carries the one assert this session was told to check and never had:
+# `assert speed > 25` — `docs/PLAN-GAME.md` §3.1 Risk 1, "the whole combat design assumes a
+# player who moves at 30 m/s".
+#
+# ACTS 2-4 are `scripts/q030-reach.txt`'s cortex pass, three times, against three husks — with
+# one change: the player is dropped from higher, and the husk is spawned 27 ticks INTO the
+# fall instead of at its start. That keeps the husk's pose at the cut identical to the proven
+# one (his `Recover`, lean 0) while the player arrives at the nape roughly nine metres per
+# second faster.
+#
+#   fall of n ticks at g = -20 m/s^2, semi-implicit:  v = 20 n / 60,  drop = n(n+1)/360
+#   n = 62  ->  20.7 m/s, 10.85 m   (q030, measured: `cut ... at 20.67 m/s`)
+#   n = 91  ->  30.3 m/s, 23.26 m
+#
+# so the drop height goes from 18.5 m to 30.8 m and the cut lands at the same nape.
+#
+# The geometry of the pass is q030's and unchanged: the cortex sits at (x, 8.9, z+0.55) —
+# `head_m / 2` behind the neck (`src/titan/rig.rs: cortex_in_head`) — the player stands
+# 1.80 m to -X of the titan's axis (0.20 m of air between the two capsules) and looks at
+# yaw 0, because the RIGHT blade lies on +X for yaw 0 (`src/blades/cut.rs: blade_segment`)
+# and you cut what you fly PAST, not what you look at.
+#
+# Why the husk is spawned by the script and not waited for: `missions.ron: tutorial` puts its
+# second wave at 90 s = 5 400 ticks and its third at 210 s. `spawn titan` writes exactly the
+# same `SpawnTitan` message `mission::release_due_waves` writes (`src/mission/mod.rs`) — it is
+# the mission's own spawner, addressed by hand. The mission's OWN first wave stands on the
+# 24 m ring from tick 1 and is left alone: it is `husk#1`, and the three that get cut are
+# `titan 2`, `3` and `4`.
+#
+# ⚠️ FINDING, not a decision of this file: `husk#1` reads `Idle` at tick 1100 — the one titan
+# the MISSION put in the world never engaged over 18 seconds, while the player was on a roof
+# and then 40 m away. The kills in this run are all off script-spawned bodies, so the run says
+# nothing about whether the tutorial's own waves are a fight. -> docs/FINDINGS.md
+#
+# Nothing here injects a `TitanHit`. The script vocabulary has no verb for it on purpose. Every
+# kill in this run comes out of `blades::cut`, off a real swing, at a real closing speed.
+
+wait 1.5          # world, camera, meshes and the render pipelines come up (90 ticks)
+key F3 0.05       # the overlay carries pos, tick, phase and kills into the PNG
+
+# =========================================================================================
+# ACT 1 — the flight. Hook a landmark, reel, and be moving faster than the design assumes.
+# =========================================================================================
+#
+# `maps.ron` puts a 12 m watchtower at (24, 6, -40), so its near face is z = -34 and its roof
+# is y = 12. Standing 14 m in front of it at 34 degrees up, the ray lands at (24, 11.04, -34),
+# near the top of a face that carries `anchorable: true`.
+
+look 0 34
+warp 24 0 -20
+wait 0.3          # the warp takes effect one tick later than it is written
+
+assert height > -0.1    # standing on the ground, not sunk into it
+assert height < 0.5
+assert speed < 0.5      # and standing STILL — the baseline every number below is read against
+mark game-aim
+
+hook right 1.0          # the right trigger on its own: a rope that is not reeled is slack
+wait 1.0
+mark game-right-anchored
+assert speed < 0.5
+
+hook left 6.0           # and the left one — held, because the rope only exists while it is
+wait 0.4
+mark game-left-anchored
+
+key Ctrl 5.0            # REEL_IN: the rope gets shorter and the player goes with it
+wait 0.6
+mark game-reeled
+
+# ***** docs/PLAN-GAME.md §3.1, Risk 1 — the tripwire, checked for the first time *****
+assert speed > 25       # "the rest of this plan is designed for a player who moves at 30 m/s"
+assert height > 12.0    # a jump reaches 1.056 m. Twelve metres is the rope and nothing else.
+assert gas < 100        # and the reel really was paid for out of the tank
+
+wait 1.2
+mark game-on-the-roof
+assert height > 11.5    # he ends up standing on the watchtower roof: maps.ron, y = 12
+assert speed < 1.0
+assert phase == 2       # Active — the mission has been running the whole time
+assert kills == 0
+
+# ⚠️ **LET GO OF THE ROPE BEFORE FIGHTING.** This is the one thing that only shows up when the
+# pieces run together, and it cost this file its first two kills.
+#
+# `hook left 6.0` holds the button for 360 ticks from t=173, so the rope is alive until t=533;
+# `key Ctrl 5.0` reels until t=498. In the first version of this file ACTS 2 and 3 warped 55 m
+# away while that `DistanceJoint` was still attached — the player was not falling, he was being
+# yanked, and the blade never came near a nape. **Not one line of the log said so**: no assert
+# fired, no hook message, nothing. Only the third cut landed, and it landed because it was the
+# first one after t=533.
+#
+# So: Act 1 stays verbatim (its numbers are `scripts/f-001-hooks.txt`'s measured ones) and the
+# fight waits the rope out. The husk of the mission's own first wave is 38 m away on the ground
+# and cannot reach a roof at y = 12 anyway (`combat::strike`'s ceiling is the shoulder,
+# 0.82 x 10 m).
+wait 4.2                # past t=533: both buttons released, the joint is gone
+mark game-rope-released
+assert speed < 1.0      # standing on the roof, attached to nothing
+assert height > 11.5
+
+# =========================================================================================
+# ACT 2 — the first husk. 0/3 -> 1/3.
+# =========================================================================================
+
+warp -1.80 30.8 18.55   # 1.80 m to -X of the axis, on the plane of the cortex's centre
+look 0 0
+wait 0.45               # 27 ticks of fall BEFORE the husk exists — that is what puts the
+spawn titan husk 0 0 18 # player 9 m/s faster at a nape in the same pose as q030's
+wait 0.90
+key E 0.40              # SLASH_RIGHT (`src/net/local.rs`): the right blade, on +X
+wait 0.60
+mark game-cut-1
+assert kills == 1
+assert phase == 2       # one kill of three does not win it
+
+# =========================================================================================
+# ACT 3 — the second husk. 1/3 -> 2/3.
+# =========================================================================================
+
+warp 14.20 30.8 12.55
+look 0 0
+wait 0.45
+spawn titan husk 16 0 12
+wait 0.90
+key E 0.40
+wait 0.60
+mark game-cut-2
+assert kills == 2
+assert phase == 2       # two of three, still not won
+
+# =========================================================================================
+# ACT 4 — the third husk, and the verdict.
+# =========================================================================================
+
+warp -17.80 30.8 12.55
+look 0 0
+wait 0.45
+spawn titan husk -16 0 12
+wait 0.90
+key E 0.40
+wait 0.60
+mark game-cut-3
+
+# ***** the whole point of the session *****
+assert kills == 3
+assert phase == 3       # WON (mission::MissionPhase::code: 0 Briefing 1 Deploying 2 Active
+                        # 3 Won 4 Lost) — decided by mission::decide off three cortex cuts
+assert tick < 19800     # and NOT by the clock: the tutorial's deadline is 330 s
+assert health > 0       # nor by going down: this is the winning half, not the losing one
+
+# The picture. The player has landed and stands still; the camera turns off the empty sky and
+# back over the field he just cleared. A resting moment on purpose — `--offscreen` is only
+# bit-reproducible where the state changes slowly (`scripts/f-001-hooks.txt`).
+#
+# yaw -55: `forward = (-sin yaw, 0, -cos yaw)`, so from (-17.8, ., 12.55) that points back at
+# the origin and the grey city. The three cut husks have dissolved by then (`death_s` 1.0 s)
+# and `husk#1` is out of frame — what the PNG carries is the overlay's `mission WON  kills 3/3`
+# over the field, plus the whole HUD: gas bar, five blade pips, a full health bar, crosshair.
+wait 1.5
+look -55 2
+mark game-won
+assert kills == 3       # still 3/3 at the shot tick, and still won
+assert phase == 3
+wait 3

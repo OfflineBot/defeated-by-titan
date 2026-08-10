@@ -41,7 +41,7 @@ use bevy::prelude::*;
 
 use crate::data::{GameData, TitanKind};
 use crate::shared::{
-    HitStop, HitZone, PlayerId, TitanHit, TitanId, TitanState, Velocity,
+    HitStop, HitZone, PlayerId, StateClock, TitanHit, TitanId, TitanState, Velocity,
 };
 
 use super::rig::{TitanBody, TitanPart};
@@ -77,13 +77,41 @@ pub fn ticks(seconds: f32, simulation_hz: f64) -> u32 {
     if n.is_finite() && n > 0.0 { n as u32 } else { 0 }
 }
 
-/// The explicit tick accumulator. **Not a clock, and not a `Timer`.**
+/// The part of the accumulator that is **this domain's own business**: the attack cooldown.
+///
+/// "How far into the current state" is *not* in here — it is
+/// [`StateClock`](crate::shared::StateClock) in `shared/`, because `debug` has to print it and
+/// `combat` may one day gate on it, and neither may reach into `titan/`. It was moved rather
+/// than mirrored: two fields holding the same number are two fields that disagree the first
+/// time somebody adds an edge and updates one of them (§5 rule 4, one writer per field).
+///
+/// `cooldown_left` stays because nothing outside `titan/` has any business with it — it is the
+/// gap between two attacks, not a readable state of the body.
+///
+/// Still the explicit tick accumulator, **not a clock and not a `Timer`.**
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TitanClock {
-    /// Ticks already completed in the current state. The entry tick of a state is 0.
-    pub ticks_in_state: u32,
     /// Ticks before the next `Pursue → Windup` is allowed.
     pub cooldown_left: u32,
+}
+
+/// How long a state lasts, out of the timings resolved from `titan.ron` at spawn.
+///
+/// **The single source of `StateClock::state_ticks`.** It stands here, next to
+/// [`decide`], because the number a state is compared against and the number that is printed
+/// under it have to be the same number — a total computed a second time next to the overlay is
+/// how `n/36` survives somebody changing `windup_s`.
+///
+/// `Idle` and `Pursue` have no length: they end when the world ends them, and 0 is what
+/// [`StateClock`](crate::shared::StateClock) reads as "open-ended".
+pub fn duration_ticks(state: TitanState, timing: &TitanTiming) -> u32 {
+    match state {
+        TitanState::Idle | TitanState::Pursue => 0,
+        TitanState::Windup => timing.windup_ticks,
+        TitanState::Strike => timing.strike_ticks,
+        TitanState::Recover => timing.recover_ticks,
+        TitanState::Death => timing.death_ticks,
+    }
 }
 
 /// The numbers of one kind that the FSM and the walk need each tick, resolved once at spawn.
@@ -141,7 +169,10 @@ pub struct TitanGait {
 pub(super) fn receive_hits(
     mut commands: Commands,
     mut hits: MessageReader<TitanHit>,
-    mut bodies: Query<(Entity, &TitanId, &mut TitanState, &mut TitanClock), With<TitanBody>>,
+    mut bodies: Query<
+        (Entity, &TitanId, &mut TitanState, &mut StateClock, &TitanTiming),
+        With<TitanBody>,
+    >,
     children: Query<&Children>,
     parts: Query<&TitanPart>,
 ) {
@@ -149,12 +180,15 @@ pub(super) fn receive_hits(
         if hit.zone != HitZone::Cortex {
             continue;
         }
-        for (root, id, mut state, mut clock) in &mut bodies {
+        for (root, id, mut state, mut clock, timing) in &mut bodies {
             if *id != hit.titan || *state == TitanState::Death {
                 continue;
             }
             *state = TitanState::Death;
-            clock.ticks_in_state = 0;
+            // The same pair as every other edge, from the same place: the dissolve reads
+            // `ticks_in_state` and the overlay reads both, so `Death 0/60` is readable on the
+            // very tick the cortex was cut.
+            *clock = StateClock::entering(duration_ticks(TitanState::Death, timing));
             // **A corpse is never a wall.** The body collider goes now, not when the dissolve
             // is over — a player who cut this titan is flying at 30 m/s and is inside its
             // silhouette on the next tick.
@@ -174,6 +208,17 @@ pub(super) fn receive_hits(
 }
 
 /// One tick of the state machine: pick the target, count the accumulator up, decide the edge.
+///
+/// **The one writer of [`StateClock`](crate::shared::StateClock)**, and it writes both of its
+/// fields on the same line as the state they belong to. That is what lets the F3 overlay print
+/// `husk#1 Windup 21/36` and have the fraction mean the pose in the same frame: `pose::apply_pose`
+/// runs right after this system in `SimulationSystems::Drive`, off the same component, in the
+/// same tick.
+///
+/// It runs in `FixedUpdate` and nowhere else. In `Update` the count would follow the frame rate
+/// instead of the tick, the pose would go with it, and
+/// `tests/titan.rs::f050_the_pose_does_not_depend_on_the_clock` is what falls over when it does.
+#[allow(clippy::type_complexity)]
 pub(super) fn advance(
     data: Res<GameData>,
     players: Query<(&PlayerId, &Transform), Without<TitanBody>>,
@@ -181,6 +226,7 @@ pub(super) fn advance(
         (
             &Transform,
             &mut TitanState,
+            &mut StateClock,
             &mut TitanClock,
             &mut TitanTarget,
             &TitanTiming,
@@ -190,9 +236,9 @@ pub(super) fn advance(
     >,
 ) {
     let _ = &data; // the numbers are baked; the resource stays so a reload is one line
-    for (transform, mut state, mut clock, mut target, timing, tuning) in &mut bodies {
+    for (transform, mut state, mut clock, mut cooldown, mut target, timing, tuning) in &mut bodies {
         clock.ticks_in_state = clock.ticks_in_state.saturating_add(1);
-        clock.cooldown_left = clock.cooldown_left.saturating_sub(1);
+        cooldown.cooldown_left = cooldown.cooldown_left.saturating_sub(1);
 
         // Dead bodies do not think. The dissolve reads the same accumulator.
         if *state == TitanState::Death {
@@ -201,15 +247,18 @@ pub(super) fn advance(
 
         *target = nearest_player(&players, transform.translation);
 
-        let next = decide(*state, &clock, timing, tuning, &target);
+        let next = decide(*state, &clock, cooldown.cooldown_left, timing, tuning, &target);
         if next != *state {
             // Every attack starts the cooldown, not every recovery: `attack_cooldown_s` is the
             // gap between two attacks, and it is shorter than one full attack for no kind.
             if next == TitanState::Windup {
-                clock.cooldown_left = timing.cooldown_ticks;
+                cooldown.cooldown_left = timing.cooldown_ticks;
             }
             *state = next;
-            clock.ticks_in_state = 0;
+            // Counter and total together, out of the same timings the edge above was decided
+            // on. Setting only the counter is how an overlay ends up printing `0/36` under a
+            // `Strike` that lasts twelve ticks.
+            *clock = StateClock::entering(duration_ticks(next, timing));
         }
     }
 }
@@ -221,7 +270,8 @@ pub(super) fn advance(
 /// the tick-count test protects.
 pub fn decide(
     state: TitanState,
-    clock: &TitanClock,
+    clock: &StateClock,
+    cooldown_left: u32,
     timing: &TitanTiming,
     tuning: &TitanTuning,
     target: &TitanTarget,
@@ -238,7 +288,7 @@ pub fn decide(
         TitanState::Pursue => {
             if !seen || target.distance_m > tuning.aggro_radius_m {
                 TitanState::Idle
-            } else if target.distance_m <= tuning.attack_range_m && clock.cooldown_left == 0 {
+            } else if target.distance_m <= tuning.attack_range_m && cooldown_left == 0 {
                 TitanState::Windup
             } else {
                 TitanState::Pursue
@@ -403,7 +453,7 @@ pub(super) fn walk(
 pub(super) fn dissolve(
     mut commands: Commands,
     mut bodies: Query<
-        (Entity, &TitanState, &TitanClock, &TitanTiming, Option<&HitStop>, &mut Transform),
+        (Entity, &TitanState, &StateClock, &TitanTiming, Option<&HitStop>, &mut Transform),
         With<TitanBody>,
     >,
 ) {
@@ -460,32 +510,32 @@ mod tests {
     fn there_is_no_edge_from_pursue_to_strike() {
         // The edge `F-050` exists to forbid. An attack is only ever reachable through its own
         // telegraph, or the wind-up is a decoration nobody has to respect.
-        let clock = TitanClock::default();
+        let clock = StateClock::default();
         assert_eq!(
-            decide(TitanState::Pursue, &clock, &timing(), &tuning(), &at(1.0)),
+            decide(TitanState::Pursue, &clock, 0, &timing(), &tuning(), &at(1.0)),
             TitanState::Windup
         );
     }
 
     #[test]
     fn a_cooldown_holds_the_titan_in_pursue_even_inside_reach() {
-        let clock = TitanClock { ticks_in_state: 0, cooldown_left: 7 };
+        let clock = StateClock::default();
         assert_eq!(
-            decide(TitanState::Pursue, &clock, &timing(), &tuning(), &at(1.0)),
+            decide(TitanState::Pursue, &clock, 7, &timing(), &tuning(), &at(1.0)),
             TitanState::Pursue
         );
     }
 
     #[test]
     fn losing_the_target_falls_back_to_idle() {
-        let clock = TitanClock::default();
+        let clock = StateClock::default();
         let nobody = TitanTarget::default();
         assert_eq!(
-            decide(TitanState::Pursue, &clock, &timing(), &tuning(), &nobody),
+            decide(TitanState::Pursue, &clock, 0, &timing(), &tuning(), &nobody),
             TitanState::Idle
         );
         assert_eq!(
-            decide(TitanState::Idle, &clock, &timing(), &tuning(), &at(99.0)),
+            decide(TitanState::Idle, &clock, 0, &timing(), &tuning(), &at(99.0)),
             TitanState::Idle
         );
     }
@@ -502,17 +552,61 @@ mod tests {
             (TitanState::Recover, 23, TitanState::Recover),
             (TitanState::Recover, 24, TitanState::Pursue),
         ] {
-            let clock = TitanClock { ticks_in_state, cooldown_left: 0 };
-            assert_eq!(decide(state, &clock, &t, &u, &at(1.0)), wanted, "{state:?} @ {ticks_in_state}");
+            let clock = StateClock { ticks_in_state, state_ticks: duration_ticks(state, &t) };
+            assert_eq!(
+                decide(state, &clock, 0, &t, &u, &at(1.0)),
+                wanted,
+                "{state:?} @ {ticks_in_state}"
+            );
         }
     }
 
     #[test]
     fn death_is_a_one_way_street() {
-        let clock = TitanClock { ticks_in_state: 9999, cooldown_left: 0 };
+        let clock = StateClock { ticks_in_state: 9999, state_ticks: 60 };
         assert_eq!(
-            decide(TitanState::Death, &clock, &timing(), &tuning(), &at(1.0)),
+            decide(TitanState::Death, &clock, 0, &timing(), &tuning(), &at(1.0)),
             TitanState::Death
         );
+    }
+
+    /// **The total the overlay prints is the total the FSM compares against.**
+    ///
+    /// `duration_ticks` is the one place `StateClock::state_ticks` comes from, and every state
+    /// with a length in `titan.ron` is exactly the number [`decide`] ends that state on. Goes
+    /// red the moment somebody adds a state with a duration and forgets it here — which would
+    /// show up in a picture as `Strike 4/0`, a fraction the overlay then quietly leaves off.
+    #[test]
+    fn every_timed_state_reports_the_length_it_is_ended_on() {
+        let t = timing();
+        for (state, wanted) in [
+            (TitanState::Idle, 0),
+            (TitanState::Pursue, 0),
+            (TitanState::Windup, t.windup_ticks),
+            (TitanState::Strike, t.strike_ticks),
+            (TitanState::Recover, t.recover_ticks),
+            (TitanState::Death, t.death_ticks),
+        ] {
+            assert_eq!(duration_ticks(state, &t), wanted, "{state:?}");
+        }
+
+        // The two-sided half: for every state that HAS a length, that length is where `decide`
+        // hands over. A constant typed into `duration_ticks` would pass the loop above.
+        let u = tuning();
+        for state in [TitanState::Windup, TitanState::Strike, TitanState::Recover] {
+            let total = duration_ticks(state, &t);
+            let last_inside = StateClock { ticks_in_state: total - 1, state_ticks: total };
+            let first_after = StateClock { ticks_in_state: total, state_ticks: total };
+            assert_eq!(
+                decide(state, &last_inside, 0, &t, &u, &at(1.0)),
+                state,
+                "{state:?} ended one tick before its own `state_ticks`"
+            );
+            assert_ne!(
+                decide(state, &first_after, 0, &t, &u, &at(1.0)),
+                state,
+                "{state:?} ran past the `state_ticks` the overlay prints under it"
+            );
+        }
     }
 }

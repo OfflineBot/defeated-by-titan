@@ -22,7 +22,7 @@
 
 use bevy::prelude::*;
 
-use crate::shared::TitanState;
+use crate::shared::{StateClock, TitanState};
 
 use super::brain::TitanTiming;
 use super::rig::{arm_transform, torso_transform, TitanPart, TitanRig};
@@ -108,7 +108,10 @@ pub(super) fn apply_pose(
         (
             Entity,
             &TitanState,
-            &super::brain::TitanClock,
+            // The counter moved to `shared/` so that the F3 overlay can print the same
+            // fraction this pose is built from (`StateClock`). Same number, same tick, same
+            // writer — `brain::advance`, one system earlier in `SimulationSystems::Drive`.
+            &StateClock,
             &TitanTiming,
             &PoseAngles,
             &TitanRig,

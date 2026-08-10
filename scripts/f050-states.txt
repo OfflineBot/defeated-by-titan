@@ -1,15 +1,21 @@
 # F-050 — the states of a husk at 25 m, and the frame in the middle of his wind-up.
 #
-# cargo run -- --offscreen --script scripts/f050-states.txt --ticks 435 \
+# cargo run -- --offscreen --script scripts/f050-states.txt --ticks 433 \
 #              --screenshot docs/images/f050-states.png
 #
 # Measured in tests/titan.rs::f050_the_husk_winds_up_for_as_long_as_the_file_says:
 #   Idle 1 · Pursue 410 · Windup 36 · Strike 12 · Recover 24 · Pursue 18 ticks.
 #
-# The arithmetic behind `--ticks 435`: the husk comes into being at tick 3 and stands one
-# tick in `Idle`; `Pursue` runs ticks 4..413; `Windup` starts at tick 414. 435 is therefore
-# tick 21 of 36 — the frame the criterion names, with the F3 overlay reading
-# `husk#1 Windup 21/36` and the arm visibly up in the same image.
+# `--ticks 433`, and the number is READ OFF THE IMAGE rather than derived: the overlay in
+# docs/images/f050-states.png says `t=433` and `husk#1 Windup 21/36` in the same three lines.
+# The header used to say 435 out of an arithmetic that started `Windup` at tick 414; the real
+# entry tick is 412, and 435 photographed `23/36`. The overlay now prints the fraction, so this
+# is a number that can be checked against the picture instead of recomputed — which is exactly
+# what the fraction was added for.
+#
+# Two runs of this script give a bit-identical PNG (sha256
+# c4d4681cfbd014df40229d9474389dc65bd2678158a487c664e389484e19869e on debian): a wind-up is a
+# slow moment and the pose is a pure function of `(state, ticks_in_state)`.
 #
 # He spawns at +Z so that his spawn facing (Bevy's forward, −Z) already points at the player,
 # and the whole approach is a walk instead of a 180-degree turn at 50 deg/s. The camera turns
@@ -31,10 +37,12 @@ spawn titan husk 0 0 25
 wait 6.95
 warp 24 0.05 6
 look 90 10
-# The F3 overlay, so that the state WORD and the POSE stand in the same frame and can be
-# checked against each other. It prints `titan#1 Windup`; the `21/36` the criterion asks for
-# needs `ticks_in_state`, which lives in `titan` and which `debug` may not read without a
-# line in the allow list (docs/FINDINGS.md).
+# The F3 overlay, so that the KIND, the state WORD, the TICK FRACTION and the POSE stand in
+# the same frame and can be checked against each other. It reads `husk#1 Windup 21/36`: the
+# kind off `shared::TitanKindName`, the pair off `shared::StateClock`, both written by
+# `titan::brain::advance` one system before the pose is built from the same number. Nothing
+# here needed an edge from `debug` into `titan` — the two components live in shared/, which is
+# why `tests/domains.rs` still passes with the allow list unchanged.
 key F3 0.05
 mark windup
 wait 1.0

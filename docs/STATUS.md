@@ -11,7 +11,7 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 
 **🟧 needs three pieces of evidence:** a picture (screenshot path), a number (measured, with the machine `[debian]`/`[cachy]`) and code (a test that goes red when it breaks). If one is missing it is 🟨 — doubt moves the stage down, not up (prompts/init.md §8, §9).
 
-**Tally:** 225 ⬜ · 14 🟨 · 6 🟧 · 0 ✅ of 245 rows.
+**Tally:** 225 ⬜ · 13 🟨 · 7 🟧 · 0 ✅ of 245 rows.
 
 ## combat
 
@@ -234,8 +234,8 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 
 | Item | ID | Stage | Evidence (test / screenshot / number) | Note |
 |---|---|---|---|---|
+| Zustandsmaschine | F-050 | 🟧 | ticks per state for a husk at 25 m: Idle 1, Pursue 410, Windup 36, Strike 12, Recover 24, Pursue 18; the 36 is round(windup_s 0.60 * 60) computed from GameData · red-checked with a Pursue->Strike edge: Windup vanishes from the sequence · red-checked a second way after the first draft was fooled by a hardcoded 36 (the husk's windup really is 36): the test now drives on to Strike and demands 5/12, which the constant reads as 5/36 · docs/images/f050-states.png, overlay 'husk#1 Windup 21/36' with the striking arm horizontal in the same frame, sha256 c4d4681c over three runs [debian] | 2026-08-09 [debian] — the pose is a pure function of (state, ticks_in_state), proven bitwise independent of the clock. StateClock and TitanKindName live in shared/, so the overlay reads them with NO new allow-list edge - tests/domains.rs green and the block still empty |
 | Telegraphierte Angriffe | F-053 | 🟧 | hand travel 8.221 m over 36 ticks = 384 px at 20 m, 192 px at 40 m, 77 px at 100 m, against a criterion of 150 px at 40 m and predictions of 412/206/82 (6.1-6.8 % below, inside the 10 % window) · red-checked with the pose angles set to zero: 0.0000 m, 0.0 px · docs/images/f053-windup.png, two panels at t=420 and t=447, one camera, bit-identical over two runs [debian] | 2026-08-09 [debian] — a single screenshot cannot catch a missing telegraph: a still frame of a titan with its arm down is indistinguishable from one with no telegraph. Only the two-sample pixel delta catches it, which is why the picture is two panels |
-| Zustandsmaschine | F-050 | 🟨 | ticks per state for a husk at 25 m: Idle 1, Pursue 410, Windup 36, Strike 12, Recover 24, Pursue 18; the 36 is round(windup_s 0.60 * 60) computed from GameData · red-checked with a Pursue->Strike edge: Windup vanishes from the sequence · pose proven bitwise independent of the clock · docs/images/f050-states.png sha256 8c20c551 twice [debian] | 2026-08-09 [debian] — 🟨 and not 🟧 only because the picture criterion asks for an overlay reading 'husk#1 Windup 21/36' and the overlay can print 'titan#1 Windup': ticks_in_state lives in titan/ and the kind name only in Name. The exact five lines needed are recorded in the round report |
 | Gegnertyp: Husk (Standard) | F-056 | 🟨 | nine entities, cortex at 8.900 m against GameData 8.900 and scale.ron 8.9, with its parent asserted to be the head · red-checked by re-parenting the cortex to the pelvis · collider gone on tick one after a cortex hit, TitanId 1 -> 0 after death_s · CustomPositionIntegration measured: 3.000 m in 60 ticks with the marker, 6.000 m without, exactly twice · docs/images/f056-husk.png sha256 ade7a6b7 twice [debian] | 2026-08-09 [debian] — 🟨 and not 🟧 because two parts of the picture clause are missing: no PhysicsDebugPlugin wireframe (the plugin is registered nowhere) and no 1.8 m player capsule in frame for scale, which a first-person camera cannot produce |
 | Pathfinding mit Groessenlogik | F-052 | ⬜ | — | — |
 | KI-Level-of-Detail | F-054 | ⬜ | — | — |

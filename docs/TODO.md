@@ -231,7 +231,7 @@ before `Could` is the order, not a recommendation (prompts/init.md §2).
 
 | Stage | ID | Item | Prio | Depends on | Why here |
 |---|---|---|---|---|---|
-| 🟨 | F-050 | Zustandsmaschine | 1 | — | Must, no prerequisite |
+| 🟧 | F-050 | Zustandsmaschine | 1 | — | Must, no prerequisite |
 | ⬜ | F-052 | Pathfinding mit Groessenlogik | 1 | F-050 | needs F-050 |
 | 🟧 | F-053 | Telegraphierte Angriffe | 1 | F-050 | needs F-050 |
 | ⬜ | F-054 | KI-Level-of-Detail | 1 | F-050 | needs F-050 |

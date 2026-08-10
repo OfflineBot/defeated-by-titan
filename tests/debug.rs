@@ -24,7 +24,10 @@ use defeated_by_titan::debug::gizmo::{GizmoToggle, GizmoCounts, GizmoSystems};
 use defeated_by_titan::debug::script::parse;
 use defeated_by_titan::debug::{DebugOverlay, ScriptRun};
 use defeated_by_titan::player::spawn_player;
-use defeated_by_titan::shared::{AnchorSurface, Block, Health, IdCounter, LocalPlayer, TitanId, TitanState, Cli};
+use defeated_by_titan::shared::{
+    AnchorSurface, Block, Health, IdCounter, LocalPlayer, StateClock, TitanId, TitanKindName,
+    TitanState, Cli,
+};
 
 /// Builds the **real** app, headless — not a second, similar one.
 ///
@@ -286,6 +289,25 @@ fn every_living_titan_gets_a_line_in_a_stable_order() {
     // One without a state: the FSM has a hole, and a line that quietly vanishes is the reason
     // nobody finds it.
     app.world_mut().spawn(TitanId(9));
+    // The full line `F-050`'s picture criterion asks for: kind, state and the tick fraction.
+    // Assembled out of `shared` components alone, exactly like the four above — what is
+    // checked here is that the overlay prints what it is handed, in the shape the criterion
+    // names. That the numbers on a **real** husk are the file's is
+    // `tests/titan.rs::f050_the_overlay_agrees_with_the_pose`.
+    app.world_mut().spawn((
+        TitanId(3),
+        TitanKindName::new("husk"),
+        TitanState::Windup,
+        StateClock { ticks_in_state: 21, state_ticks: 36 },
+    ));
+    // And one whose state has no length at all: `Pursue` ends when the world ends it, so
+    // `4/0` would be a fraction nobody can read.
+    app.world_mut().spawn((
+        TitanId(4),
+        TitanKindName::new("husk"),
+        TitanState::Pursue,
+        StateClock { ticks_in_state: 4, state_ticks: 0 },
+    ));
 
     tap_f3(&mut app);
     app.world_mut().run_schedule(Update);
@@ -296,7 +318,14 @@ fn every_living_titan_gets_a_line_in_a_stable_order() {
     let lines: Vec<&str> = text.lines().skip(2).collect();
     assert_eq!(
         lines,
-        vec!["titan#2 Idle", "titan#5 Death", "titan#7 Windup", "titan#9 (no state)"],
+        vec![
+            "titan#2 Idle",
+            "husk#3 Windup 21/36",
+            "husk#4 Pursue",
+            "titan#5 Death",
+            "titan#7 Windup",
+            "titan#9 (no state)",
+        ],
         "the overlay printed {text:?}"
     );
     assert_eq!(

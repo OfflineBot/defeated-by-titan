@@ -25,7 +25,7 @@ use bevy::text::FontSize;
 use crate::mission::{KillTally, MissionPhase};
 use crate::shared::{
     MovementState, LookOverride, IntentSystems, Gas, Health, LocalPlayer, Mark, PlayerId,
-    WarpPlayer, Cli, Velocity, Tick, TitanId, TitanState, SpawnTitan,
+    StateClock, WarpPlayer, Cli, Velocity, Tick, TitanId, TitanKindName, TitanState, SpawnTitan,
 };
 use script::{Instruction, ScriptCommand, Metric};
 
@@ -371,11 +371,26 @@ pub fn spawn_overlay(mut commands: Commands) {
 /// The titan lines are sorted by [`TitanId`]: query iteration follows archetype order, and an
 /// image whose lines swap places between two runs breaks the bit-identity that is this
 /// project's only evidence route (`docs/ACCEPTANCE.md`).
+///
+/// ## Why a titan line is `husk#1 Windup 21/36` and not `titan#1 Windup`
+///
+/// Because `titan#1 Windup` is equally true on tick 1 and on tick 35 of a wind-up, and `F-050`'s
+/// picture criterion (`docs/PLAN-GAME.md` §8) asks the image to prove that the wind-up lasts as
+/// long as `titan.ron` says **while the arm is up in the same frame**. The word alone cannot
+/// carry that; the fraction can, and the kind is what says which row of `titan.ron` the 36 is
+/// supposed to have come from.
+///
+/// Both come off components in `shared/`
+/// ([`TitanKindName`], [`StateClock`]) — **not** out of `titan/`, which `debug` may not read,
+/// and **not** out of the entity's `Name`, which is a debugging convenience and not an
+/// interface. Nothing here computes a total of its own: `titan::brain` writes both numbers on
+/// the same line as the state edge, so a fraction printed here cannot be a tick out of step
+/// with the pose that was built from it.
 pub fn update_overlay(
     keys: Res<ButtonInput<KeyCode>>,
     tick: Res<Tick>,
     players: Query<(&Transform, &Gas, &MovementState), With<LocalPlayer>>,
-    titans: Query<(&TitanId, Option<&TitanState>)>,
+    titans: Query<(&TitanId, Option<&TitanKindName>, Option<&TitanState>, Option<&StateClock>)>,
     // The mission phase and its counter. Until `hud` (`F-170`) draws the objective line and the
     // word `WON`/`LOST`, **this is the only place a screenshot can show what the mission is
     // doing** — and a picture without the verdict in it is not evidence for `F-070`.
@@ -418,16 +433,30 @@ pub fn update_overlay(
             None => format!("\nmission {}", phase.get().label()),
         });
 
-        let mut bodies: Vec<(u32, Option<TitanState>)> =
-            titans.iter().map(|(id, state)| (id.0, state.copied())).collect();
-        bodies.sort_unstable_by_key(|(id, _)| *id);
-        for (id, state) in bodies {
+        // Borrowed, not cloned: this runs every frame the overlay is on, and a `String` per
+        // titan per frame is exactly the kind of allocation §6 rule 6 is about.
+        let mut bodies: Vec<(u32, &str, Option<TitanState>, Option<StateClock>)> = titans
+            .iter()
+            .map(|(id, kind, state, clock)| {
+                // `titan` is the honest fallback for a body that carries a `TitanId` and no
+                // kind — a test fixture, or a spawner that forgot. Printing a guessed kind
+                // would be worse than printing none.
+                (id.0, kind.map_or("titan", TitanKindName::as_str), state.copied(), clock.copied())
+            })
+            .collect();
+        bodies.sort_unstable_by_key(|(id, ..)| *id);
+        for (id, kind, state, clock) in bodies {
             // `None` is printed and not skipped: a titan without a `TitanState` is a hole in
             // the FSM (`F-050`), and a line that quietly disappears is the reason nobody
             // finds it.
-            content.push_str(&match state {
-                Some(s) => format!("\ntitan#{id} {s:?}"),
-                None => format!("\ntitan#{id} (no state)"),
+            content.push_str(&match (state, clock) {
+                // `Idle` and `Pursue` have no length, and `21/0` is not a reading — so the
+                // fraction is left off rather than faked.
+                (Some(s), Some(c)) if c.is_timed() => {
+                    format!("\n{kind}#{id} {s:?} {}/{}", c.ticks_in_state, c.state_ticks)
+                }
+                (Some(s), _) => format!("\n{kind}#{id} {s:?}"),
+                (None, _) => format!("\n{kind}#{id} (no state)"),
             });
         }
 

@@ -35,7 +35,10 @@ use avian3d::prelude::{Collider, CustomPositionIntegration, RigidBody, Sensor};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
-use defeated_by_titan::shared::{Cli, HitZone, PlayerId, SpawnTitan, TitanHit, TitanId, TitanState};
+use defeated_by_titan::debug::DebugOverlay;
+use defeated_by_titan::shared::{
+    Cli, HitZone, PlayerId, SpawnTitan, StateClock, TitanHit, TitanId, TitanKindName, TitanState,
+};
 use defeated_by_titan::titan::rig::{PartExtent, TitanPart};
 use defeated_by_titan::titan::{spawnable, SpawnRefused};
 
@@ -325,6 +328,181 @@ fn f050_the_kinematic_titan_moves_exactly_once_per_tick() {
     println!("F-050 husk gait: {travelled:.3} m in 60 ticks, file says {expected:.3} m");
 }
 
+/// ★ **The one that turns `F-050`'s screenshot from a caption into a measurement.**
+///
+/// The picture criterion (`docs/PLAN-GAME.md` §8) asks for one frame in which the F3 overlay
+/// reads `husk#1 Windup 21/36` **and** the arm is visibly up. Three separate claims live in
+/// that one line, and each of them has a way of being quietly false:
+///
+/// - **the kind.** `titan#1` names no row of `titan.ron`, so nobody can check the 36 against a
+///   file. Read off [`TitanKindName`] and not off the entity's `Name`, which is a debugging
+///   convenience, not an interface.
+/// - **the total.** Computed here as `round(windup_s × simulation_hz)` out of [`GameData`], so
+///   a `36` typed next to the overlay fails; and asserted against
+///   [`StateClock::state_ticks`](StateClock), so a `36` typed into `titan/` fails too.
+/// - **the fraction and the pose belong to the same tick.** Everything below is read out of one
+///   world without a simulation step in between, and the overlay is driven with a bare
+///   `run_schedule(Update)` for exactly that reason. An overlay that lagged the FSM by a tick —
+///   or a pose that lagged the number — would look perfect in a still frame and be wrong.
+///
+/// It goes red when the fraction is faked, when the total is a constant, when the arm is not in
+/// the pose that goes with the printed tick, and when the kind disappears from the line.
+#[test]
+fn f050_the_overlay_agrees_with_the_pose() {
+    // Tick 21 of 36 — the frame `docs/PLAN-GAME.md` §8 names, well inside the ramp and nowhere
+    // near an edge, so the picture is a slow moment and reproduces.
+    const AT_TICK: u32 = 21;
+
+    let mut app = app();
+    let d = data(&app);
+    let husk = d.titan("husk").expect("titan.ron has a husk");
+    let total = expected_ticks(husk.windup_s, d.game.simulation_hz) as u32;
+    assert_eq!(
+        total, 36,
+        "titan.ron husk.windup_s = {} at {} Hz — the criterion pins 36 ticks",
+        husk.windup_s, d.game.simulation_hz
+    );
+
+    let rig = TitanRig::of(&d, husk).expect("husk rig");
+    spawn(&mut app, "husk", Vec3::new(0.0, 0.0, 25.0));
+    let root = the_titan(&mut app);
+
+    // Up to the named tick, and not one step further.
+    let mut reached = false;
+    for _ in 0..900 {
+        app.update();
+        let clock = app.world().get::<StateClock>(root).copied().expect(
+            "the husk carries no StateClock — then `ticks_in_state` lives only inside `titan/` \
+             and no overlay can print it without an entry in the allow list",
+        );
+        if app.world().get::<TitanState>(root) == Some(&TitanState::Windup)
+            && clock.ticks_in_state == AT_TICK
+        {
+            reached = true;
+            break;
+        }
+    }
+    assert!(reached, "the husk never reached tick {AT_TICK} of his wind-up");
+
+    let clock = app.world().get::<StateClock>(root).copied().expect("StateClock");
+    assert_eq!(
+        clock.state_ticks, total,
+        "the total the overlay is about to print is {} — titan.ron says {total}",
+        clock.state_ticks
+    );
+    let id = app.world().get::<TitanId>(root).expect("TitanId").0;
+    let kind = app
+        .world()
+        .get::<TitanKindName>(root)
+        .expect(
+            "the husk carries no TitanKindName — then the overlay can say `titan#1` at best, and \
+             the picture cannot name the row of titan.ron the 36 came from",
+        )
+        .0
+        .clone();
+    assert_eq!(kind, "husk");
+
+    // ---- the pose, in this same tick --------------------------------------------------
+    // The arm the fraction claims, out of the pure function, against what is really drawn.
+    let angles = PoseAngles {
+        windup_arm_deg: d.scale.titan.windup_arm_deg,
+        windup_lean_deg: d.scale.titan.windup_lean_deg,
+        strike_arm_deg: d.scale.titan.strike_arm_deg,
+    };
+    let timing = TitanTiming::of(husk, d.game.simulation_hz);
+    let pose = pose_of(TitanState::Windup, clock.ticks_in_state, &timing, &angles);
+    let arm = part_entity(&app, root, TitanPart::ArmRight).expect("the rig has a right arm");
+    assert_eq!(
+        *app.world().get::<Transform>(arm).expect("the arm has a Transform"),
+        arm_transform(&rig, true, pose.arm_deg),
+        "the drawn arm is not in the pose that belongs to tick {AT_TICK} of the wind-up — the \
+         overlay would then be printing a number about a body that is somewhere else"
+    );
+    // "Visibly raised" as a number and not as an impression: 21 of 36 is 58 % of the ramp.
+    assert!(
+        pose.arm_deg > 0.5 * d.scale.titan.windup_arm_deg,
+        "at tick {AT_TICK} of {total} the arm stands at {:.1} deg of {} deg — that is not a \
+         raised arm, and the picture would show a wind-up nobody can see",
+        pose.arm_deg,
+        d.scale.titan.windup_arm_deg
+    );
+
+    // ---- the overlay, in this same tick -----------------------------------------------
+    // F3, then ONE `Update` pass and no simulation step. `app.update()` would do two wrong
+    // things at once: `ButtonInput` is cleared in `PreUpdate` so the press would be eaten, and
+    // the tick would advance — which is precisely the "read a tick apart" this test forbids.
+    {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.reset(KeyCode::F3);
+        keys.clear();
+        keys.press(KeyCode::F3);
+    }
+    app.world_mut().run_schedule(Update);
+
+    let text = {
+        let mut q = app.world_mut().query_filtered::<&Text, With<DebugOverlay>>();
+        q.iter(app.world())
+            .next()
+            .expect("no entity with `DebugOverlay` — then no screenshot can carry a number")
+            .0
+            .clone()
+    };
+    let wanted = format!("{kind}#{id} {:?} {}/{}", TitanState::Windup, AT_TICK, total);
+    assert!(
+        text.lines().any(|line| line == wanted),
+        "the F3 overlay reads:\n{text}\n\n`F-050` needs the line {wanted:?} — kind, state and \
+         the tick fraction, so that the word in the picture can be checked against the pose in \
+         the same picture"
+    );
+
+    // The world really did not move while the overlay was written; otherwise the agreement
+    // above would be between two different ticks.
+    assert_eq!(
+        app.world().get::<StateClock>(root).copied(),
+        Some(clock),
+        "the simulation advanced while the overlay was being read"
+    );
+
+    // ---- and the same line under a state of a DIFFERENT length ------------------------
+    // Found by falsification: with only the wind-up checked, a `{}/36` typed into the overlay
+    // passes everything above, because the husk's wind-up really is 36 ticks. `Strike` is 12,
+    // so a constant — wherever it were typed, in `debug` or in `titan` — cannot survive both.
+    // The overlay is already on and `update_overlay` runs in `Update`, i.e. after this tick's
+    // `FixedUpdate`: the line below is written from the very tick that is asserted.
+    let strike_total = expected_ticks(husk.strike_s, d.game.simulation_hz) as u32;
+    assert_ne!(strike_total, total, "Strike and Windup are the same length — pick another state");
+    const AT_STRIKE_TICK: u32 = 5;
+    let mut struck = false;
+    for _ in 0..200 {
+        app.update();
+        let c = app.world().get::<StateClock>(root).copied().expect("StateClock");
+        if app.world().get::<TitanState>(root) == Some(&TitanState::Strike)
+            && c.ticks_in_state == AT_STRIKE_TICK
+        {
+            struck = true;
+            break;
+        }
+    }
+    assert!(struck, "the husk never reached tick {AT_STRIKE_TICK} of his strike");
+    let text = {
+        let mut q = app.world_mut().query_filtered::<&Text, With<DebugOverlay>>();
+        q.iter(app.world()).next().expect("DebugOverlay").0.clone()
+    };
+    let wanted_strike =
+        format!("{kind}#{id} {:?} {AT_STRIKE_TICK}/{strike_total}", TitanState::Strike);
+    assert!(
+        text.lines().any(|line| line == wanted_strike),
+        "the F3 overlay reads:\n{text}\n\nexpected {wanted_strike:?} — the total under a titan \
+         line has to come out of titan.ron per state, not out of one number that happens to fit \
+         the wind-up"
+    );
+
+    println!(
+        "F-050 overlay: {wanted:?} with the striking arm at {:.1} deg, then {wanted_strike:?}",
+        pose.arm_deg
+    );
+}
+
 // ---------------------------------------------------------------------------
 // F-056 — the husk
 // ---------------------------------------------------------------------------
@@ -606,7 +784,6 @@ use avian3d::prelude::{GravityScale, LinearVelocity};
 use defeated_by_titan::blades::cut::blade_segment;
 use defeated_by_titan::blades::swing::{BladeTiming, SweptFrom, Swings};
 use defeated_by_titan::shared::{LocalPlayer, LookOverride, Side, Tick};
-use defeated_by_titan::titan::brain::TitanClock;
 use defeated_by_titan::titan::brain::TitanTiming;
 use defeated_by_titan::titan::pose::{pose_of, Pose, PoseAngles};
 use defeated_by_titan::titan::rig::{arm_transform, torso_transform, TitanRig};
@@ -1075,7 +1252,7 @@ fn windup_hand(angles: Option<(f32, f32)>) -> (Vec3, Vec3, usize, TitanRig) {
     }
     let start = start.expect("the husk never wound up");
     let planted_at = app.world().get::<Transform>(root).expect("transform").translation;
-    let entry_clock = app.world().get::<TitanClock>(root).expect("clock").ticks_in_state;
+    let entry_clock = app.world().get::<StateClock>(root).expect("clock").ticks_in_state;
     assert_eq!(entry_clock, 0, "the first Windup sample was taken {entry_clock} ticks in");
 
     // ... and to the LAST tick of it. Tick `windup_ticks` is already `Strike`, so the sample

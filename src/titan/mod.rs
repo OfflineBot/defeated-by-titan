@@ -28,6 +28,17 @@
 //!   `docs/images/f053-windup.png`). The pose itself is unchanged — it was already a pure
 //!   function of `(state, ticks_in_state)` — what was missing was the number and the two-frame
 //!   picture, and a still frame cannot carry either.
+//! - **The wind-up can now be READ OFF the picture, not just believed.** `ticks_in_state` and
+//!   the length of the state it counts against left [`brain::TitanClock`] for
+//!   [`StateClock`](crate::shared::StateClock) in `shared/`, and the kind key left the entity's
+//!   `Name` for [`TitanKindName`](crate::shared::TitanKindName), written by [`rig::build_rig`].
+//!   The F3 overlay therefore reads `husk#1 Windup 21/36` (`docs/images/f050-states.png`,
+//!   tick 433) **without a new edge in the allow list** — that was the whole reason both types
+//!   went to `shared/` rather than `debug` being allowed to read `titan/` for one line of text.
+//!   Moved and not mirrored: two components holding the same counter are two components that
+//!   disagree the first time somebody adds a state edge.
+//!   `tests/titan.rs::f050_the_overlay_agrees_with_the_pose` holds the word, the fraction and
+//!   the drawn arm to one and the same tick.
 //! - **The hit stop reaches the titan.** [`brain::walk`] and [`brain::dissolve`] read
 //!   [`HitStop`](crate::shared::HitStop). `combat::hitstop::begin` freezes a titan by putting
 //!   the component on him and `RigidBodyDisabled` next to it — and that marker does *nothing*
