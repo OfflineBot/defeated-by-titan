@@ -36,11 +36,44 @@ cargo run -- --headless --mission tutorial --script scripts/game-full.txt --tick
 Identical over three runs, to the tick and the digit. `docs/images/f071-won.png` shows it with
 all five HUD elements and the amber `WON`.
 
-**What does not run yet:** **nobody has ever seen this in a window** — and on machine A nobody
-can (`no WAYLAND_DISPLAY and no DISPLAY`); the mouse capture, the pause screen and the *feel* of
-flying are unprovable here and wait for machine B. **A cortex cut has never been landed out of
-hook flight** — only out of a fall; `scripts/game-full.txt` flies first and then drops onto three
-napes, and its header says so. And nothing is saved.
+### 2026-08-10, machine B (`offlinebot`, niri/Wayland) — the two things above are now done, and doing them broke three others
+
+**The game has been seen in a window.** `cargo build --features wayland,audio` is green in 27 s
+here; the binary really links `libwayland-client` and `libasound`. RTX 3080, Vulkan, **180.1 fps**
+on a 180 Hz output. `docs/images/p4-first-light.png` (2560×1440) is the first frame of this game
+ever captured outside an offscreen buffer.
+
+- **P4 (mouse capture) and the pause screen were proven from OUTSIDE the process** — `grim`
+  reading the real compositor, `ydotool` injecting real evdev events. A real 400 px mouse motion
+  rotates the view by 918 426 / 3 686 400 px while captured and by **0 px** while paused; the OS
+  cursor is **0 px** while captured and a **165 px** blob at screen centre while paused. Four
+  toggles. **Both rows are still 🟨** — the third leg, a test in `tests/` that goes red, was
+  still being written when this was typed. Two of three pieces is 🟨.
+- **A cortex cut has been landed out of hook flight** — `scripts/f-flight-cut.txt`, cut at
+  tick 152 while climbing an anchored 30.37 m rope, 21 asserts, exit 0, reproduced to the tick.
+- **And that immediately found `B-004`: cutting while roped PANICS the process.** `RigidBodyDisabled`
+  from the hit stop against a live `DistanceJoint` trips `island.joint_count > 0` inside avian.
+  `game-full.txt` could never have found this — all three of its cuts are drops onto a nape with
+  no rope attached. **F-034 went 🟧 → 🟨** because of it.
+- **🔴 The rope is not rendered.** `src/render/rope.rs` is an empty stub. Proven from the pixels
+  first (11 cyan components in the evidence frame, all axis-aligned HUD furniture, **zero
+  diagonals**), then from the source. **Every picture in this repo captioned "hook" or "rope" is
+  mis-captioned**, and the core mechanic of the game is invisible to the player. `FIND-022`.
+  Related: `MovementState::Tethered` is never written by anything, so the overlay says `Airborne`
+  on a rope (`FIND-023`). Between them, **no pixel in this build says a rope is attached.**
+- **Two of the tuning questions are answered and neither answer is a number.** The reel *assigns*
+  velocity rather than accelerating it — `speed := reel_speed_m_s`, `0.000 → 28.000` m/s in one
+  tick, exact across nine rungs (`FIND-013`, `Q-032`). And the titan's strike is a cylinder with
+  no forward vector, so the approach angle has no consequence and `turn_deg_per_s` governs
+  nothing (`FIND-012`, `Q-031`).
+- **Two standing rules turned out to be wrong.** `--offscreen` **is** bit-identical at 74.70 m/s
+  (0 of 921 600 px, twice) because `render/camera.rs` does no inter-step interpolation — the
+  "only bit-identical at slow moments" rule is void and the old 38 828-px difference needs
+  re-opening (`FIND-025`). And `--novsync` is a **no-op in a window** on niri (`FIND-020`).
+
+**What still does not run:** nothing is saved. Nobody has *played* this — every claim above rests
+on captures decoded by an agent, not on a human at a monitor, and not one of them says anything
+about how the movement **feels**. And `scripts/game-full.txt`'s three cuts are still drops.
 
 ---
 
