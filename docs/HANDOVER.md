@@ -17,20 +17,30 @@ every line of the previous version had become false.**
 |---|---|
 | Engine | Bevy 0.19 + **avian3d 0.7.0** |
 | Branch | **`session-2026-08-09`**, pushed. `main` is still the old, diverged history — see §7 |
-| Tests | **317 green, 0 red** (204 at the start of this session) |
-| Stages | 🟧 T-006, B-001/T-036a, P1, P2, F-030, F-034, F-070, F-171 · 🟨 F-001, F-002, F-003, F-004, F-005, F-007, F-018, F-050, F-056, F-064, F-071, F-170 |
+| Tests | **356 green, 0 red** (204 at the start of this session) |
+| Stages | **223 ⬜ · 14 🟨 · 8 🟧 · 0 ✅ of 245.** 🟧: T-006, F-030, F-034, F-050, F-053, F-070, F-170, F-171 (plus B-001/T-036a, P1, P2, P5, B-003, which have no row) |
 | Disk | ⚠️ **The old warning was wrong.** 372 G free, 14 % used, `target/` 34 G. `--release` and a rebuild are affordable. The one-compiler rule still holds — it is cargo's lock on `target/`, not a space problem |
 | Pictures | `--offscreen` **works on machine A** (Intel ADL-N, Vulkan, Mesa 25.0.7). Q-009 is answered. This is what let anything reach 🟧 here |
 
-**What runs today:** the city builds from a seed; a hook fires, **anchors on a real building**,
-and hangs an avian `DistanceJoint`; reeling in gains speed (62.73 m/s from v0 20); a husk stands
-in the street with an amber cortex on his nape, walks, winds up, strikes and dies to a cortex
-cut; the swept blade hits at 8, 30 and 75 m/s; the world stops for 7 ticks on a kill; a mission
-runs 19 800 ticks and says `LOST`, or `WON` on the third kill; and a HUD draws gas, blades and a
-three-shape crosshair.
+**What runs today — proven in ONE run, not five:**
 
-**What does not run yet:** the mouse is not captured and there is no window anybody has seen; a
-player flying past a *solid* husk **cannot reach the nape** (Q-030); and nothing is saved.
+```
+cargo run -- --headless --mission tutorial --script scripts/game-full.txt --ticks 1200
+  t=235  reel: speed 46.414 m/s, height 13.064 m     <- Risk 1's tripwire, assert speed > 25
+  t=656  cut titan 2 Cortex at 30.33 m/s   -> 1/3
+  t=777  cut titan 3 Cortex at 30.33 m/s   -> 2/3
+  t=898  cut titan 4 Cortex at 30.33 m/s   -> 3/3
+  t=898  MISSION WON (deadline 19800) — 23 asserts held, exit 0
+```
+
+Identical over three runs, to the tick and the digit. `docs/images/f071-won.png` shows it with
+all five HUD elements and the amber `WON`.
+
+**What does not run yet:** **nobody has ever seen this in a window** — and on machine A nobody
+can (`no WAYLAND_DISPLAY and no DISPLAY`); the mouse capture, the pause screen and the *feel* of
+flying are unprovable here and wait for machine B. **A cortex cut has never been landed out of
+hook flight** — only out of a fall; `scripts/game-full.txt` flies first and then drops onto three
+napes, and its header says so. And nothing is saved.
 
 ---
 
