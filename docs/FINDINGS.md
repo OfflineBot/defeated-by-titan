@@ -533,6 +533,82 @@ not 60.
    player `Downed`, by t≈941. Not a bug — but every unattended windowed mission run ends in
    `LOST` unless something moves.
 
+## FIND-022 — 🔴 The rope is not rendered, and no picture in this repository has ever shown one
+
+**Symptom:** found while decoding the evidence images for `scripts/f-flight-cut.txt` — not looked
+for, and the single most consequential finding of 2026-08-10.
+
+**Measurement, from the pixels and not from the source:** `docs/images/f030-flightcut.png`, taken at
+the tick of a cortex cut landed under rope momentum, contains exactly **11 cyan connected
+components**, and every one of them is an axis-aligned HUD rectangle — gas fill 274×12, pip
+underline 86×6, five pips 14×18, four crosshair ticks 22×3 and 3×22. **Not one diagonal
+segment.** Then, and only then, the source: `src/render/rope.rs` is
+
+```rust
+pub fn draw_ropes(_spieler: Query<(&Hook, &Transform)>, mut _gizmos: Gizmos) {}
+```
+
+registered at `src/render/mod.rs:33` and marked "to be filled by assignment S — F-001, screenshot
+required". It never was.
+
+**Why it counts, and it counts more than anything else found today:**
+
+1. **Every screenshot in this repository captioned "hook" or "rope" is mis-captioned** —
+   `docs/images/f-001-hooks.png` and `docs/images/f003-anchors.png` among them. They cannot be
+   showing a rope. Any evidence line that leans on them has to be re-read.
+2. **The core mechanic of this game is invisible.** The Vector Gear is two hooks; a player cannot
+   see either of them. Whatever the movement feels like, it currently cannot be *read*.
+3. It makes a picture-based 🟧 impossible for F-001, F-004 and F-005 by construction, which is
+   probably why those three have sat at 🟨 through two sessions with good numbers behind them.
+
+**Confidence:** 🟧 as a finding — measured in the image, then confirmed in the source, then
+confirmed a third way (a control run with the blade swing removed produced **byte-identical**
+files, so the blade is not drawn either).
+
+## FIND-023 — `MovementState::Tethered` is never written, so the overlay says `Airborne` on a rope
+
+**Measurement:** `src/player/integrator.rs:100` writes only `Grounded` and `Airborne`;
+`src/combat/health.rs:63` writes `Downed`. Nothing anywhere writes `Tethered`. The F3 overlay at
+t=148 and t=152 of `scripts/f-flight-cut.txt` reads **`Airborne`** while an arm is anchored and
+the gas ledger is being debited for it.
+
+**Why it counts:** together with FIND-022 it means **there is no pixel in this build — world or
+HUD — that says a rope is attached.** The only proxy is the gas bar draining by 2.79 px per gas
+unit, which is indirect and needs decoding to read at all.
+
+## FIND-024 — `--offscreen` segfaults at teardown after writing the PNG, in about 1 run in 6
+
+**Measurement [cachy]:** 3 of ~19 `--offscreen --screenshot` runs exited **139**
+(`Segmentation fault (core dumped)`), preceded by `NVVM compilation failed: 3`. In every case
+`image written: … (478081 bytes)` and `Screenshot saved to …` were logged **first**, and the
+identical command exited 0 on retry.
+
+**Why it counts:** any harness that reads a screenshot run's exit code as a verdict will flake
+about one time in six, and it will look like a failing test. It is a second, independent reason
+for the rule that was already in force for a different reason: **run every script twice — once
+`--headless` for the exit code, once `--offscreen` for the image.** No repro line yet beyond
+"run it about six times".
+
+## FIND-025 — `--offscreen` IS bit-identical at speed; the "only at slow moments" rule is wrong
+
+**Symptom:** the project has been operating on the rule *"`--offscreen` is only bit-identical at
+slow moments; at 46 m/s two identical runs differ in 38 828 of 921 600 pixels — the simulation
+does not drift, the shutter catches a different tick."* That rule is not right.
+
+**Measurement [cachy] 2026-08-10:** two runs of `scripts/f-flight-cut.txt` at `--ticks 152`,
+where the cut lands at **74.70 m/s** — considerably faster than 46 — are **bit-identical**:
+`sha256 a490e4d9…` twice, **0 differing pixels of 921 600**. The t=148 pair is likewise identical
+(`sha256 eaca46d9…`).
+
+**Cause:** `src/render/camera.rs` deliberately does **no interpolation between simulation
+steps**, so a rendered frame is a pure function of the tick number. Speed cannot move the
+shutter, because there is no shutter to move.
+
+**Why it counts:** the 38 828-pixel difference measured for `f-001-hooks` is real and now has no
+explanation. It should be **re-opened** rather than carried forward as a law — the current rule
+tells future sessions to expect nondeterminism where the renderer provides determinism, and it
+would excuse a genuine nondeterminism bug as expected behaviour.
+
 *(Append further findings here. A finding without a measurement is an opinion.)*
 
 Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUESTIONS.md)
