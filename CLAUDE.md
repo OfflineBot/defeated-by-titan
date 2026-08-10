@@ -196,3 +196,8 @@ change**, not its author. `tools/norms.py --commit-msg` checks that.
 **Measure first, then claim.** Almost every expensive mistake in a project like this one is a
 place where something reasonable was *explained* instead of being *measured* in a minute.
 Write what you know: "built, untested — 🟨" is a good sentence, "should work now" is not.
+
+# EXTRA
+look at the user-messages.md. 
+its what the player feels about the game. stuff that has to change.
+the next time you see this EXTRA tab. rewrite it so it makes more sense for you! its for the players notes. when play testing the game. 
