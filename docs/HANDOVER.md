@@ -24,6 +24,20 @@ every line of the previous version had become false.**
 
 **What runs today — proven in ONE run, not five:**
 
+> ⚠️ **2026-08-10: two things in this block are false, and they are instructive.**
+> **(1) `--ticks 1200` truncates this script** — it cuts inside the trailing `wait 3`; the real end
+> is **1205**. A truncated run used to exit **0 without ever printing its summary**, so the
+> `exit 0` quoted below was the silent-green bug now filed as `FINDINGS.md` FIND-032 and fixed
+> (`tests/debug.rs::a_failed_assert_survives_the_tick_limit_that_cuts_the_script_off`). Use
+> `--ticks 1600`.
+> **(2) The 46.414 m/s was never a rope number.** Isolated in FIND-033: with the rope untouched and
+> only `src/player/locomotion.rs` reverted it is 46.414; with today's locomotion and **four
+> different rope behaviours** it is **19.344** every time. The old figure came from
+> `ground_locomotion` deleting the player's horizontal velocity each tick while he was still
+> `Grounded` on the rope, so only the joint's vertical work accumulated and threw him past his own
+> anchor. **`assert speed > 25` — Risk 1's only tripwire — is red today, and honestly so.**
+> `MISSION WON at tick 898` and the three cuts below are real and still reproduce.
+
 ```
 cargo run -- --headless --mission tutorial --script scripts/game-full.txt --ticks 1200
   t=235  reel: speed 46.414 m/s, height 13.064 m     <- Risk 1's tripwire, assert speed > 25
@@ -71,9 +85,70 @@ ever captured outside an offscreen buffer.
   "only bit-identical at slow moments" rule is void and the old 38 828-px difference needs
   re-opening (`FIND-025`). And `--novsync` is a **no-op in a window** on niri (`FIND-020`).
 
-**What still does not run:** nothing is saved. Nobody has *played* this — every claim above rests
-on captures decoded by an agent, not on a human at a monitor, and not one of them says anything
-about how the movement **feels**. And `scripts/game-full.txt`'s three cuts are still drops.
+### THE USER PLAYED IT — and four sentences from him were worth more than the whole measurement day
+
+He played it twice on 2026-08-10 and wrote (in German, verbatim): the boost does not last long
+enough · ropes without boost achieve nothing · the rope side has to get much better · make it
+steerable with Q and E · the gas tank should have a lot more · once the rope has got shorter it
+should not get longer again · **and: hook, fly in fast, and you can overshoot, because the rope is
+not taken in fast enough.**
+
+Every one of those was right, and three of them found holes no test in this repository could have
+found:
+
+- **Gas never refilled.** `Gas` was written at spawn and by `gas_budget`, which only subtracts.
+  5.6 s of boost for a 330 s mission, then the gear was dead. Now `gas_tank` 100 → **300** plus
+  `gas_regen_per_s: 10` after a 0.5 s pause (Q-033). **16.67 s** per tank, refill 30 s from empty.
+  ⚠️ The regeneration does **not** lengthen a single held boost — the tripled tank is the whole
+  answer. (The supervisor first claimed 37.5 s; that was wrong and is corrected in Q-033.)
+- **`B-005`, the overshoot.** Measured: without the reel held the enforced length never shrank at
+  all, so the player flew **the entire rope length — 50.000 m — past his own anchor at every speed
+  from 20 m/s up**. Fixed with a slack take-up ratchet (`limits.max` follows the true distance
+  down, per substep, no rate cap, floored at `min_rope_m`): **3.000 m at every speed.** The swing
+  survives — 0.0003 m of length lost over 4 s, and the dip was 0.0000 m in 9 of 10 arcs, so no
+  tolerance and no new RON key were needed.
+- **Hooks are on Q/E now**, blades on the mouse, MARK on Tab. Hold-to-keep and release-to-drop were
+  already true. ⚠️ **That rebinding silently broke every script in the repo** — the driver's
+  `hook left|right` pressed a mouse button, which had just become a blade. Repaired (`hook` presses
+  Q/E, new `slash left|right` verb, `Tab` in `parse_key`), nine scripts re-run.
+
+### The three numbers this project believed that turned out to be artefacts
+
+1. **46.414 m/s was never rope work** (FIND-033, FIND-036). With the rope untouched and only
+   `locomotion.rs` reverted it is 46.414; with today's locomotion and **four different rope
+   behaviours** it is 19.344 every time. `ground_locomotion` deleted the horizontal component on the
+   handover tick, leaving almost pure tangent, which the reel multiplied into the 75 m/s clamp and
+   threw the player past his own anchor. **It must not be restored.**
+2. **"23 asserts held, exit 0" was a truncated run** (FIND-032). `--ticks 1200` cuts `game-full`
+   inside its trailing `wait 3`; the script ends at 1205. A truncated run used to **exit 0 without
+   printing its summary at all**. Fixed and red-checked.
+3. **"the rope contributes exactly nothing in the city" was one input direction** (FIND-026, then
+   refuted). The city swings; it lacks *usable arcs*, because the arc bottom is underground for any
+   rope longer than the anchor height and only the church is tall enough.
+
+### Where the rope actually stands, per tick, and what to fix next
+
+`MovementState::Tethered` was declared, documented, and **written by nobody** until today
+(FIND-037). Now it is real, and the honest flight is:
+
+```
+t=199   28.000 m/s   the reel hands the body over (Tethered from this tick)
+t=230   38.684 m/s   THE PEAK  -> PLAN-GAME §3.1 Risk 1 (30 m/s) IS MET
+t=231   21.480 m/s   the length reaches min_rope_m: -17.2 m/s IN ONE TICK
+t=235   20.147 m/s   where `assert speed > 25` samples, and is red
+```
+
+**`min_rope_m` is a cliff and it is the next thing to fix** (FIND-035): at the floor the constraint
+annihilates the whole radial component at once, and since `B-005`'s take-up the floor is reached on
+every fast approach, not only on a deliberate reel. **No assert was loosened** — `game-full` and
+`f-001-hooks` are red at 20.147, honestly, and the repair is the cliff plus a second sample at the
+peak, not a smaller number.
+
+**What still does not run:** nothing is saved. `B-004` — **cutting a titan while a rope is attached
+panics the process** — is open, and it is the game's core loop. The rope is drawn but reads as a
+vertical stroke through the crosshair, because the simulation's hand is bit-identical to the camera
+position (a `player.hand_offset_m` would fix it and does not exist). And `scripts/game-full.txt`'s
+three cuts are still drops.
 
 ---
 

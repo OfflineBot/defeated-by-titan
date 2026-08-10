@@ -43,9 +43,11 @@ use avian3d::prelude::{
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
+use defeated_by_titan::player::integrator::movement_state;
 use defeated_by_titan::player::spawn_player;
 use defeated_by_titan::shared::{
-    Block, Cli, IdCounter, LocalPlayer, MovementState, PlayerId, Velocity,
+    Block, BodyId, Cli, Hook, HookState, IdCounter, LocalPlayer, MovementState, PlayerId, Side,
+    SpatialIndex, Velocity,
 };
 
 /// Builds the **real** app, headless, one simulation step per `update()`.
@@ -329,6 +331,392 @@ fn t007_a_jump_reaches_exactly_the_height_the_file_allows() {
     let landed = at(&app, e).y;
     assert!(landed.abs() < 0.01, "after landing he is at {landed} m instead of at 0");
     assert_eq!(state(&app, e), MovementState::Grounded);
+}
+
+// ---------------------------------------------------------------------------------------
+// 3b. F-014 — the ground stopped deleting horizontal momentum
+//
+// The user's verdict after his first session was "seile ohne boost bringen gar nichts", and
+// the largest single cause was here: `ground_locomotion` **assigned** `velocity.x/z` on every
+// grounded tick. Measured [cachy], 27 headless runs: released at the bottom of a pendulum arc
+// the player lands at 39.717 m/s and is at 0.000 m/s two ticks later with no key held, at
+// 6.000 m/s with W held. A clean swing that covers 48.02 m in 2.83 s — 2.83× running speed —
+// ends at walking pace the moment a toe touches the ground.
+//
+// **All six tests below drive along +Z on purpose.** Every explicitly placed block of
+// `maps.ron: graybox` sits at negative Z, and `layout.clear_radius_m` is 24 m, so a slide of
+// up to ~22 m along +Z from the origin meets nothing. A test that measures deceleration must
+// not accidentally be measuring a wall.
+// ---------------------------------------------------------------------------------------
+
+/// Puts the landed local player at `speed` m/s along +Z, the way a swing hands him over.
+fn launch_on_the_ground(app: &mut App, e: Entity, speed_m_s: f32) {
+    ticks(app, 120); // land first — `MovementState::Grounded` comes out of real contacts
+    assert_eq!(state(app, e), MovementState::Grounded, "he has to be standing before the launch");
+    app.world_mut().get_mut::<LinearVelocity>(e).unwrap().0 = Vec3::new(0.0, 0.0, speed_m_s);
+}
+
+fn ground_speed(app: &App, e: Entity) -> f32 {
+    app.world().get::<LinearVelocity>(e).unwrap().0.xz().length()
+}
+
+#[test]
+fn f014_a_landing_at_speed_keeps_its_momentum() {
+    // THE test. Before F-014 this reported 0.0000 m/s: the assignment with an empty intent.
+    let mut app = app();
+    let d = data(&app);
+    let e = me(&mut app);
+    launch_on_the_ground(&mut app, e, 30.0);
+
+    ticks(&mut app, 1);
+    let v = ground_speed(&app, e);
+    // One tick of ground deceleration is `-gravity_m_s2 / simulation_hz` = 0.333 m/s.
+    let expected = 30.0 + d.game.gravity_m_s2 / d.game.simulation_hz as f32;
+    assert!(
+        (v - expected).abs() < 0.05,
+        "he arrived at 30 m/s and one tick later he is at {v:.4} m/s; expected {expected:.4} \
+         — the ground is deleting momentum instead of chaining it (F-014)"
+    );
+}
+
+#[test]
+fn f014_a_held_key_does_not_pull_a_landing_back_to_the_run_speed() {
+    // The A/B whose only difference is the held key: before F-014 the no-key case reported
+    // 0.0000 and this one reported exactly `run_speed_m_s`, because W is worth an assignment
+    // of 6 m/s no matter what the player brought with him.
+    let mut app = app();
+    let d = data(&app);
+    let e = me(&mut app);
+    launch_on_the_ground(&mut app, e, 30.0);
+
+    // W is forward, that is −Z; the momentum runs along +Z. Whether the key agrees with the
+    // direction must not decide whether the speed survives.
+    hold(&mut app, KeyCode::KeyW);
+    ticks(&mut app, 1);
+    release(&mut app, KeyCode::KeyW);
+
+    let v = ground_speed(&app, e);
+    assert!(
+        v > 29.0,
+        "with W held he is at {v:.4} m/s one tick after arriving at 30 — {} m/s would be the \
+         old assignment (game.ron: run_speed_m_s)",
+        d.game.player.run_speed_m_s
+    );
+}
+
+#[test]
+fn f014_a_slide_comes_to_a_full_stop_without_input() {
+    // Momentum that never ends is not a chain, it is ice. At `-gravity_m_s2` = 20 m/s² a
+    // 20 m/s slide needs 20/20 = 1.00 s and 10.0 m — inside `clear_radius_m`.
+    let mut app = app();
+    let d = data(&app);
+    let e = me(&mut app);
+    let decel = -d.game.gravity_m_s2;
+    launch_on_the_ground(&mut app, e, 20.0);
+
+    // It must not be instant — that is exactly the bug this feature is about.
+    ticks(&mut app, 2);
+    assert!(
+        ground_speed(&app, e) > 19.0,
+        "two ticks after arriving at 20 m/s he is already at {:.4} m/s",
+        ground_speed(&app, e)
+    );
+
+    // Halfway: 20 − 20·0.5 = 10 m/s.
+    ticks(&mut app, 28); // 30 ticks = 0.5 s in total
+    let halfway = ground_speed(&app, e);
+    assert!(
+        (halfway - 10.0).abs() < 1.0,
+        "0.5 s into the slide he is at {halfway:.4} m/s; at {decel} m/s² it has to be 10 m/s"
+    );
+
+    // And 20/20 = 1.00 s in he is standing. 90 ticks = 1.5 s leaves half a second of slack.
+    ticks(&mut app, 60);
+    let end = ground_speed(&app, e);
+    assert!(
+        end < 0.01,
+        "1.5 s after a 20 m/s slide he still moves at {end:.4} m/s — at {decel} m/s² the stop \
+         is due after 1.00 s"
+    );
+}
+
+#[test]
+fn f014_from_rest_the_run_speed_is_still_reached_at_once() {
+    // The floor must not have cost the ground its snap. From a standstill, one tick of W is
+    // still the whole run speed — no ramp, no acceleration number, exactly as before.
+    let mut app = app();
+    let d = data(&app);
+    let e = me(&mut app);
+    ticks(&mut app, 120);
+    assert!(ground_speed(&app, e) < 1e-3, "he has to be standing still before this");
+
+    hold(&mut app, KeyCode::KeyW);
+    ticks(&mut app, 1);
+    release(&mut app, KeyCode::KeyW);
+
+    let v = ground_speed(&app, e);
+    assert!(
+        (v - d.game.player.run_speed_m_s).abs() < 1e-3,
+        "one tick of W from a standstill gives {v:.4} m/s instead of {} (game.ron: \
+         run_speed_m_s)",
+        d.game.player.run_speed_m_s
+    );
+}
+
+#[test]
+fn f014_below_the_run_speed_the_ground_is_still_an_assignment() {
+    // **A deliberate decision, written down as a test.** Arriving at 2 m/s and holding W
+    // *does* become 6 m/s in one tick. Below `run_speed_m_s` the rule is unchanged: the
+    // ground is a target, ground combat stays crisp, and there is no second acceleration
+    // number to tune. The floor only ever reaches upward from the run speed, never below it —
+    // so this is not "the landing conjures speed", it is "walking is walking".
+    let mut app = app();
+    let d = data(&app);
+    let e = me(&mut app);
+    launch_on_the_ground(&mut app, e, 2.0);
+
+    hold(&mut app, KeyCode::KeyW);
+    ticks(&mut app, 1);
+    release(&mut app, KeyCode::KeyW);
+
+    let v = ground_speed(&app, e);
+    assert!(
+        (v - d.game.player.run_speed_m_s).abs() < 1e-3,
+        "arriving at 2 m/s and holding W gives {v:.4} m/s; below the run speed the ground is \
+         still an assignment and that is {}",
+        d.game.player.run_speed_m_s
+    );
+}
+
+#[test]
+fn f014_the_input_still_steers_the_carried_momentum() {
+    // Carrying momentum must not mean being a passenger. A player who arrives fast and holds
+    // A curves; he does not keep the old vector forever, and he does not stop dead either.
+    let mut app = app();
+    let e = me(&mut app);
+    launch_on_the_ground(&mut app, e, 30.0);
+
+    hold(&mut app, KeyCode::KeyA); // yaw = 0 ⇒ A is −X, perpendicular to the +Z momentum
+    ticks(&mut app, 30); // 0.5 s
+    release(&mut app, KeyCode::KeyA);
+
+    let v = app.world().get::<LinearVelocity>(e).unwrap().0.xz();
+    let turned_deg = v.x.atan2(v.y).to_degrees().abs(); // Vec3::xz() ⇒ (x, z)
+    assert!(
+        turned_deg > 10.0,
+        "half a second of A turned the momentum by {turned_deg:.2}° — the input does not steer \
+         at speed, the player is a passenger"
+    );
+    assert!(
+        v.y > 5.0,
+        "after half a second of A he moves at {:?}; A is meant to curve the +Z momentum, not \
+         to brake it into nothing",
+        v
+    );
+    // And the turn cost him only the ordinary deceleration: 30 − 20·0.5 = 20 m/s.
+    let speed = v.length();
+    assert!(
+        (speed - 20.0).abs() < 1.5,
+        "steering left him at {speed:.4} m/s instead of the 20 m/s the plain deceleration \
+         allows — turning must not be a second brake"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// 3c. F-004 — `MovementState::Tethered`: whose velocity is it while a hook holds?
+//
+// `MovementState::Tethered` was declared in `src/shared/state.rs` on the first day and written
+// by NOBODY until 2026-08-10. What that cost is one tick, and it is measurable to the digit:
+// in `scripts/f-001-hooks.txt` the reel starts at t=199 and hands the player over to t=200 at
+// v = (0.000, 17.143, −22.138) — 28 m/s straight along the rope, which is
+// `vector.reel_speed_m_s` exactly. On that one tick `MovementState` still reads `Grounded`,
+// because contact data is one step old (the narrow phase runs before the solver,
+// `player::integrator`), and so `ground_locomotion` wrote his horizontal velocity while the
+// rope was carrying him.
+//
+// It was worth the whole headline number of this project. Deleting the −22.138 left
+// (0, 17.143, 0), which is almost pure TANGENT to the rope — and `shared::rope::rope_reel_in`
+// multiplies the tangent by `length_prev/length_new`, so the reel whipped it up to the 75 m/s
+// clamp and ACT 1 reported 46.414 m/s. Keeping it leaves 28 m/s pointing almost straight AT
+// the anchor, which a reel cannot amplify at all.
+//
+// ⚠️ **Anchored is not the same as off the ground.** A player standing on a roof with a hook
+// in it walks and jumps like anybody else — `f004_a_hook_in_the_wall_does_not_glue_the_player`
+// below is the guard, and it goes red for the obvious version of this feature ("skip a player
+// who carries an anchored hook").
+// ---------------------------------------------------------------------------------------
+
+/// Puts an anchored hook on the left arm **without** flying the tip there first.
+///
+/// A test may write `Hook` directly; a system may not (`vector::hook::update_hooks` is its one
+/// writer). What is under test here is the reader, not the state machine — but the writer keeps
+/// running, so the trigger has to stay held (`Q` = `Buttons::HOOK_LEFT`, `src/net/local.rs`) or
+/// the arm lets go with `ReleaseReason::Released` on the very next tick, and the carrier has to
+/// be a body that really stands in the `SpatialIndex` or it lets go with `BodyGone`.
+fn anchor_the_left_hook(app: &mut App, e: Entity) {
+    let body = a_real_body(app);
+    hold(app, KeyCode::KeyQ);
+    let mut hook = app.world_mut().get_mut::<Hook>(e).expect("the player carries a Hook");
+    hook.arms[Side::Left.index()].state = HookState::Anchored { body, local_m: Vec3::ZERO };
+}
+
+fn let_go_of_the_left_hook(app: &mut App, e: Entity) {
+    release(app, KeyCode::KeyQ);
+    let mut hook = app.world_mut().get_mut::<Hook>(e).expect("the player carries a Hook");
+    hook.arms[Side::Left.index()].state = HookState::Idle;
+}
+
+/// A `BodyId` the spatial index really knows — an arm anchored on nothing is let go of as
+/// `BodyGone` in the next tick, and the test would then be measuring an unhooked player.
+fn a_real_body(app: &mut App) -> BodyId {
+    let index = app.world().resource::<SpatialIndex>();
+    let body = (1..200)
+        .map(BodyId)
+        .find(|id| index.body(*id).is_some())
+        .expect("the map has to put at least one body into the index");
+    body
+}
+
+#[test]
+fn f004_a_rope_takes_the_body_over_only_when_the_ground_is_not_moving_it() {
+    // The rule as a function of nothing but its arguments. The whole argument is one sentence:
+    // the legs cannot produce more than the ground's top speed, so a roped body that is faster
+    // than that is being moved by the rope and not by the ground.
+    //
+    // `top` is `run_speed_m_s` + one tick of `-gravity_m_s2` — `6.0 + 20.0/60`, both out of
+    // `game.ron`. Why it is not plain 6.0 is the fourth block below.
+    let top = 6.0 + 20.0 / 60.0;
+
+    // No rope: the ground and the air, exactly as before.
+    assert_eq!(movement_state(false, true, 0.0, top), MovementState::Grounded);
+    assert_eq!(movement_state(false, true, 30.0, top), MovementState::Grounded);
+    assert_eq!(movement_state(false, false, 30.0, top), MovementState::Airborne);
+
+    // A rope and no ground under the feet — the swing. It read `Airborne` until today, which
+    // is what the F3 overlay printed while the player hung on a rope.
+    assert_eq!(movement_state(true, false, 0.0, top), MovementState::Tethered);
+    assert_eq!(movement_state(true, false, 40.0, top), MovementState::Tethered);
+
+    // A rope AND the ground, at walking pace: he is standing there. The ground keeps him, and
+    // that is the half of the rule that lets a player walk on a roof with a hook in the wall.
+    assert_eq!(movement_state(true, true, 0.0, top), MovementState::Grounded);
+    assert_eq!(movement_state(true, true, 6.0, top), MovementState::Grounded);
+
+    // **The measured knife edge.** Held `W` does not come back as exactly 6.0: over 60 ticks
+    // on `[offlinebot]` it alternates between 5.999977112 and 6.000022888. On a bare
+    // `> run_speed_m_s` the second of those flips a walking player to `Tethered` mid-stride.
+    assert_eq!(movement_state(true, true, 6.000022888, top), MovementState::Grounded);
+    assert_eq!(movement_state(true, true, 5.999977112, top), MovementState::Grounded);
+
+    // A rope AND the ground, faster than any leg: it is the rope's. This is t=200 of
+    // `scripts/f-001-hooks.txt`, where the reel hands the body over at 28 m/s along the rope.
+    assert_eq!(movement_state(true, true, 22.138, top), MovementState::Tethered);
+}
+
+#[test]
+fn f004_the_ground_does_not_write_the_velocity_of_a_player_the_rope_drags() {
+    // The behavioural half of the same claim, in the real app. `game.ron: player.friction` is
+    // 0.0, so `ground_locomotion` is the ONLY thing that can brake a horizontal velocity on
+    // the ground — whatever is left after 30 ticks is its doing and nobody else's.
+    let mut app = app();
+    let d = data(&app);
+    let e = me(&mut app);
+    launch_on_the_ground(&mut app, e, 30.0);
+    anchor_the_left_hook(&mut app, e);
+
+    // Tick 1 still runs under the state of the tick before (`MovementState` is derived after
+    // the physics step and read at the start of the next one) — one tick of ground is the
+    // price of that lag and it is deterministic.
+    ticks(&mut app, 1);
+    let handover = ground_speed(&app, e);
+
+    ticks(&mut app, 29);
+    let v = ground_speed(&app, e);
+    assert!(
+        (v - handover).abs() < 0.05,
+        "half a second later the roped player is at {v:.4} m/s instead of the {handover:.4} \
+         he was handed over at — the ground is still writing the horizontal velocity of a \
+         body the rope is carrying (F-004, MovementState::Tethered)"
+    );
+    // And the counter-check, so that this test cannot pass by measuring nothing: without the
+    // hook the same 30 m/s is down to 30 − 20·0.5 = 20 m/s after the same half second.
+    assert!(
+        v > 25.0,
+        "{v:.4} m/s after half a second is the ordinary ground deceleration — the hook \
+         changed nothing"
+    );
+}
+
+#[test]
+fn f004_tethered_is_written_when_an_arm_anchors_and_cleared_when_it_lets_go() {
+    let mut app = app();
+    let e = me(&mut app);
+    launch_on_the_ground(&mut app, e, 30.0);
+    assert_eq!(state(&app, e), MovementState::Grounded);
+
+    anchor_the_left_hook(&mut app, e);
+    ticks(&mut app, 1);
+    assert_eq!(
+        state(&app, e),
+        MovementState::Tethered,
+        "an arm is anchored and the body is moving at rope speed, and nobody wrote \
+         MovementState::Tethered — the variant is declared in src/shared/state.rs and dead"
+    );
+
+    let_go_of_the_left_hook(&mut app, e);
+    ticks(&mut app, 2);
+    assert_ne!(
+        state(&app, e),
+        MovementState::Tethered,
+        "the hook let go and the body is still tethered — a state that is entered and never \
+         left is worse than one that is never entered"
+    );
+}
+
+#[test]
+fn f004_a_hook_in_the_wall_does_not_glue_the_player() {
+    // **The guard against the obvious version of this feature.** "Skip a player who carries an
+    // anchored hook" and "write `Tethered` whenever an arm holds" both go red here: being
+    // anchored is not the same as being off the ground, and a player standing on a roof with a
+    // hook in it walks and jumps like anybody else.
+    let mut app = app();
+    let d = data(&app);
+    let e = me(&mut app);
+    ticks(&mut app, 120); // land
+    anchor_the_left_hook(&mut app, e);
+    ticks(&mut app, 2);
+    assert_eq!(
+        state(&app, e),
+        MovementState::Grounded,
+        "he is standing on the ground with a hook in a wall — that is standing, not hanging"
+    );
+
+    // Walking.
+    hold(&mut app, KeyCode::KeyW);
+    ticks(&mut app, 1);
+    let v = ground_speed(&app, e);
+    assert!(
+        (v - d.game.player.run_speed_m_s).abs() < 1e-3,
+        "one tick of W with a hook in the wall gives {v:.4} m/s instead of {} — the rope took \
+         his legs away (game.ron: run_speed_m_s)",
+        d.game.player.run_speed_m_s
+    );
+    ticks(&mut app, 59);
+    release(&mut app, KeyCode::KeyW);
+    assert_eq!(state(&app, e), MovementState::Grounded, "a second of walking is not a swing");
+
+    // And jumping.
+    ticks(&mut app, 60); // come to a stop again
+    let before = at(&app, e).y;
+    hold(&mut app, KeyCode::Space);
+    ticks(&mut app, 12); // 0.2 s: v0·0.2 − 10·0.04 = 0.90 m
+    release(&mut app, KeyCode::Space);
+    let risen = at(&app, e).y - before;
+    assert!(
+        (risen - 0.9).abs() < 0.05,
+        "0.2 s after a jump with a hook in the wall he has risen {risen:.4} m instead of 0.90 \
+         — an anchored hook must not cost the player his jump"
+    );
 }
 
 // ---------------------------------------------------------------------------------------

@@ -81,7 +81,7 @@ look 0 0
 wait 0.45         # 27 ticks of fall BEFORE the husk exists
 spawn titan husk 0 0 18
 wait 0.90
-key E 0.40        # SLASH_RIGHT (`src/net/local.rs`): the right blade, on +X
+slash right 0.40  # SLASH_RIGHT (`src/net/local.rs`): the right blade, on +X
 wait 0.60
 mark f170-cut
 

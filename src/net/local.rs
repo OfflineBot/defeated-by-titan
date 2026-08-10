@@ -8,6 +8,20 @@
 //! balancing number but a UI setting, and **rebindable keys are a requirement of the
 //! bible** (3.5, accessibility) — they move into the options once `menu/` gets them. Until
 //! then they are a default, not a design.
+//!
+//! ## The scheme (user, 2026-08-10, after the first human play session)
+//!
+//! `Q` `HOOK_LEFT` · `E` `HOOK_RIGHT` · `LMB` `SLASH_LEFT` · `RMB` `SLASH_RIGHT` ·
+//! `F` `SLASH_LEFT` (second binding) · `Shift` `BOOST` · `Ctrl` `REEL_IN` · `Space` `JUMP` ·
+//! `C` `DODGE` · `Tab` `MARK` · `WASD` movement.
+//!
+//! The ropes moved from the mouse to the keyboard because the user asked for them to be
+//! **steerable**: a hand holds `Q` and `E` and still aims, and it cannot hold two mouse
+//! buttons and still aim. `MARK` had to leave `Q` for that, and `Tab` was free.
+//!
+//! ⚠️ **`Q` and `E` no longer mean what a `--script` written before 2026-08-10 thinks they
+//! mean**, and `hook left|right` presses a *mouse* button (`src/debug/mod.rs:220-224`) — which
+//! is now a blade. Which scripts that touches is a finding, not a thing this file fixes.
 
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
@@ -62,11 +76,21 @@ pub fn read_input(
     t.set(Buttons::BOOST, keys.pressed(KeyCode::ShiftLeft));
     t.set(Buttons::REEL_IN, keys.pressed(KeyCode::ControlLeft));
     t.set(Buttons::DODGE, keys.pressed(KeyCode::KeyC));
-    t.set(Buttons::MARK, keys.pressed(KeyCode::KeyQ));
-    t.set(Buttons::HOOK_LEFT, mouse_buttons.pressed(MouseButton::Left));
-    t.set(Buttons::HOOK_RIGHT, mouse_buttons.pressed(MouseButton::Right));
-    t.set(Buttons::SLASH_LEFT, keys.pressed(KeyCode::KeyF));
-    t.set(Buttons::SLASH_RIGHT, keys.pressed(KeyCode::KeyE));
+    // The ropes are on the keyboard and the blades are on the mouse (user, 2026-08-10, after
+    // the first time a human played this: the ropes have to be **steerable**). A hand can hold
+    // `Q` and `E` and still aim; it cannot hold both mouse buttons and still aim. `MARK` had to
+    // move off `Q` for that and went to `Tab`, which nothing else uses.
+    t.set(Buttons::MARK, keys.pressed(KeyCode::Tab));
+    t.set(Buttons::HOOK_LEFT, keys.pressed(KeyCode::KeyQ));
+    t.set(Buttons::HOOK_RIGHT, keys.pressed(KeyCode::KeyE));
+    // `F` stays on the left blade next to the left mouse button — a second binding, not a
+    // leftover. It is the only route to `SLASH_LEFT` that `debug::script::parse_key` can
+    // reach, because a script has no way to press a mouse button except `hook left|right`.
+    t.set(
+        Buttons::SLASH_LEFT,
+        mouse_buttons.pressed(MouseButton::Left) || keys.pressed(KeyCode::KeyF),
+    );
+    t.set(Buttons::SLASH_RIGHT, mouse_buttons.pressed(MouseButton::Right));
 
     let forward = f32::from(keys.pressed(KeyCode::KeyW)) - f32::from(keys.pressed(KeyCode::KeyS));
     let strafe = f32::from(keys.pressed(KeyCode::KeyD)) - f32::from(keys.pressed(KeyCode::KeyA));

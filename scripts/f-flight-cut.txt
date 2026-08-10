@@ -40,17 +40,26 @@
 #      `intent.pressed(REEL_IN) && hook.anchored_count() > 0` — the cost follows the effect,
 #      not the button — and `gas_budget` is the **only** writer of `Gas`, so nothing refills it.
 #      The tank is therefore a counter of anchored reeling ticks at 0.1/tick, and three ticks
-#      after the cut it reads **98.200**: eighteen consecutive paid ticks, t=137..154, with the
+#      after the cut it reads **298.200**: eighteen consecutive paid ticks, t=137..154, with the
 #      cut at t=152 inside them. A rope that let go early stops that ledger and turns
-#      `assert gas < 98.7` red.
+#      `assert gas < 298.7` red.
+#      ⚠️ The tank is **300** since 2026-08-10 (`game.ron: gas_tank`, docs/QUESTIONS.md Q-033);
+#      the five gas brackets in this file were shifted by +200 and their WIDTHS are untouched.
+#      The eighteen paid ticks still measure 1.8, exactly as they did against a 100 tank. The
+#      refill (`gas_regen_per_s` 10, after `gas_regen_delay_s` 0.5) cannot reach any of them:
+#      `key Ctrl 3.0` spends without a gap across every one.
 #   3. **He is higher after the cut than before it, and still fast.** 5.663 m at t=149,
 #      8.243 m at t=155, 31.546 m at t=180 — at 66.585 m/s. Gravity moves nothing upward.
 #
-# ⚠️ **There is no verb in the script vocabulary that observes a hook.** The eight metrics are
-# speed, height, gas, titans, tick, health, kills, phase (`src/debug/script.rs:226-245`) and
-# not one of them reads `Hook` or `RopeLength`. The gas ledger is the closest thing that
-# exists, and it is a **proxy**. The smallest fix is a ninth metric; it is in this job's report
-# and it is not this file's to make.
+# ⚠️ **The gas ledger above is a PROXY, and since 2026-08-10 it no longer has to be.** When
+# this file was written the vocabulary had eight metrics — speed, height, gas, titans, tick,
+# health, kills, phase — and not one of them read `Hook`. `assert rope` is the ninth
+# (`src/debug/script.rs: Metric::Rope`, `tests/debug.rs::assert_rope_counts_the_anchored_arms
+# _and_is_not_a_constant`): it counts the ANCHORED arms, so `assert rope >= 1` next to the two
+# brackets above would say "the rope was on him **on this tick**" instead of inferring it from
+# a falling tank with about five ticks of resolution. **It is deliberately not added here** —
+# swapping this file's central claim onto a new metric is a separate change with its own
+# evidence, and it does not ride along in a repair of the input bindings.
 #
 # ---------------------------------------------------------------------------------------
 # WHAT THIS FILE DOES **NOT** CLAIM
@@ -92,7 +101,7 @@
 #   rope released t=157  (INSIDE the impact frame)   -> exit 0, 21 asserts held
 #   rope released t=161, 173, 203, 263, 353 (after)  -> panic, exit 101
 #
-# and the trigger needs both halves: with `key Ctrl` deleted (no rope tension) or `key E`
+# and the trigger needs both halves: with `key Ctrl` deleted (no rope tension) or `slash right`
 # deleted (no hit) the same release at t=353 is clean. `scripts/game-full.txt` never meets it,
 # because every one of its three cuts is landed out of a FALL with no rope attached — **this is
 # the first file in the repository that cuts while roped, and it panics the game.**
@@ -179,7 +188,7 @@
 # `assert Titans == 0 — measured 1.000`.** Height, speed and gas all stayed green, because the
 # flight was right and only the last metre was wrong. If that shape comes back, the fault is
 # the husk's position, not the timing: check z first (it is the axis this file already got
-# wrong once), then x, then the `wait 0.09` before `key E`.
+# wrong once), then x, then the `wait 0.09` before `slash right`.
 #
 # A shot that finds nothing (`hook Right ... found nothing anchorable`) is the other shape:
 # three of the five asserts at t=149 go red in the same tick with `measured 0.000`,
@@ -206,7 +215,7 @@ wait 0.3                        # the warp takes effect one tick later than it i
 assert height > -0.1    # standing on the ground, not sunk into it and not inside a house
 assert height < 0.5
 assert speed < 0.5      # and standing STILL — every number below is read against this zero
-assert gas > 99.9       # a full tank: nothing has been paid for yet
+assert gas > 299.9      # a full tank: nothing has been paid for yet
 assert titans == 1      # the husk exists, and he is the only one (no `--mission`)
 assert health > 99      # he has not been hit yet
 mark flight-aim
@@ -215,7 +224,8 @@ mark flight-aim
 # ACT 1 — the hook. One rope, and it bites at t=132.
 # =========================================================================================
 #
-# ⚠️ 0.74 s = 45 ticks, so `MouseButton::Right` is released at **t=157**, inside the impact
+# ⚠️ 0.74 s = 45 ticks, so `KeyE` — `HOOK_RIGHT` since the rebinding of 2026-08-10, and
+# `MouseButton::Right` before it — is released at **t=157**, inside the impact
 # frame of the cut. That is not a design choice, it is the dodge documented at the top of this
 # file: at 0.80 the release falls at t=161 and avian panics. **This number goes back to 4.0
 # when that bug is fixed**, and the three asserts in ACT 3 go back to describing a rope.
@@ -235,7 +245,7 @@ wait 0.09               # 7 ticks
 
 # The slash goes out **before** he is at the nape: `active_from_s` 0.08 = swing tick 5, so the
 # blade begins cutting at t=149 and the pass is at t=152.
-key E 0.20              # SLASH_RIGHT (`src/net/local.rs:69`)
+slash right 0.20        # SLASH_RIGHT: the right mouse button (`src/net/local.rs`)
 wait 0.06               # 5 ticks
 
 # ***** the three numbers the whole claim stands on, read one tick before the blade bites *****
@@ -243,16 +253,16 @@ assert speed > 25       # measured 28.397. A jump gives 6.5, gravity from y = 0 
                         # `Shift` is pressed nowhere in this file.
 assert height > 4.5     # measured 5.663 m. A jump reaches 1.056 m.
 assert height < 6.5
-assert gas < 99.2       # measured 98.8: twelve ticks of reeling PAID, and `src/vector/gas.rs:69`
-assert gas > 98.4       # only debits reel gas while a hook is anchored.
+assert gas < 299.2      # measured 298.8: twelve ticks of reeling PAID, and `src/vector/gas.rs`
+assert gas > 298.4      # only debits reel gas while a hook is anchored.
 mark flight-fast
 wait 0.07               # 6 ticks — across the cut at t=152
 
 # ***** the cut has landed: the player is frozen in his own impact frame *****
 assert height > 6.0     # measured 8.243 m — HIGHER than six ticks ago, at 74.700 m/s
 assert height < 11.0
-assert gas < 98.7       # measured 98.200: eighteen anchored reeling ticks paid, t=137..154,
-assert gas > 97.6       # with the cut at t=152 inside them. The rope was on him.
+assert gas < 298.7      # measured 298.200: eighteen anchored reeling ticks paid, t=137..154,
+assert gas > 297.6      # with the cut at t=152 inside them. The rope was on him.
 mark flight-cut
 wait 0.4
 

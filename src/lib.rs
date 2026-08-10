@@ -263,9 +263,19 @@ fn base_plugins(start: &Cli) -> bevy::app::PluginGroupBuilder {
 ///
 /// That gives a run without a window an ending **always** — even when a script hangs in a loop
 /// or none was given at all. A test run that never comes back is worse than one that fails.
-fn exit_after_ticks(tick: Res<Tick>, start: Res<Cli>, mut exit: MessageWriter<AppExit>) {
+///
+/// **The exit code is not free.** This wrote `AppExit::Success` unconditionally until
+/// 2026-08-10, so a limit that fell before the script's end ended a run with red asserts at
+/// exit 0 — the quietest way to lose a test in this repository. What the run has actually
+/// demonstrated is decided in exactly one place, [`debug::cutoff_verdict`], next to the state
+/// it reads; here stands only the trigger.
+fn exit_after_ticks(
+    tick: Res<Tick>,
+    start: Res<Cli>,
+    run: Res<debug::ScriptRun>,
+    mut exit: MessageWriter<AppExit>,
+) {
     if tick.0 >= start.ticks {
-        info!("--ticks {} reached, exiting", start.ticks);
-        exit.write(AppExit::Success);
+        exit.write(debug::cutoff_verdict(&run, tick.0));
     }
 }

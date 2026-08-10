@@ -1,62 +1,119 @@
-# f-018-gas — the tank empties at exactly the rate the file names, and then stops.
+# f-018-gas — the tank empties at exactly the rate the file names, then stops, then fills back.
 #
-#   cargo run -- --offscreen --script scripts/f-018-gas.txt --ticks 600 \
-#       --screenshot docs/images/f-018-gas.png
+#   the verdict:  cargo run -q -- --headless --script scripts/f-018-gas.txt --ticks 1500
+#   the picture:  cargo run -q -- --offscreen --script scripts/f-018-gas.txt --ticks 1118 \
+#                     --screenshot docs/images/f-018-gas.png
+#
+# ⚠️ **TWO DIFFERENT TICK COUNTS, and neither is free to choose.** The verdict needs a number
+# ABOVE the script's own end (measured: it finishes at t=1362) or the run is cut off and
+# `--ticks` exits 0 without the assert summary ever printing. The picture needs the exact tick
+# of `f018-dry`, **1118**, because `--screenshot` fires at `--ticks` and the tank does not stay
+# empty: the closing `wait 3` puts 30 gas back at 10/s. Shooting at 1500 writes nothing at all
+# (the process is already gone) and shooting at 1362 photographs a tank that has refilled.
+#
+# ⚠️ WHAT THE IMAGE SHOWS NOW: `src/hud/gas_bar.rs` is no longer a stub, so at t=1118 the bar
+# in the bottom left is drawn EMPTY — the same claim as `assert gas < 0.3`, in pixels. That
+# sentence used to read "this image does not show the gas level"; it did not since the HUD job.
+# The camera is against a house wall: seventeen seconds of boost at `look 0 -10` carry the
+# player into the city, and this file measures a tank, not a view.
 #
 # The point of this run is the ARITHMETIC, and the arithmetic is done by the `assert` lines,
 # not by a human reading a bar. `assert gas` measures `Gas::current` of the local player
 # (src/debug/mod.rs), and every value below is computed from assets/data/game.ron alone:
 #
-#   gas_tank         = 100
-#   gas_boost_per_s  =  18   -> 0.3 per tick at 60 Hz
-#   gas_reel_per_s   =   6   -> 0.1 per tick at 60 Hz
+#   gas_tank          = 300   (was 100 until 2026-08-10 — docs/QUESTIONS.md Q-033)
+#   gas_boost_per_s   =  18   -> 0.3    per tick at 60 Hz
+#   gas_reel_per_s    =   6   -> 0.1    per tick at 60 Hz
+#   gas_regen_per_s   =  10   -> 0.1667 per tick at 60 Hz      NEW
+#   gas_regen_delay_s = 0.5   -> 30 ticks after the last WANT  NEW
 #
 # A `key Shift <s>` holds the key for <s> seconds of FIXED time, so 1.0 is 60 ticks and 60
 # ticks are 18 gas. If somebody multiplies by dt a second time, one tick costs 18/3600 =
-# 0.005 instead of 0.3, the second assert below measures 99.7 instead of 82, and the run
+# 0.005 instead of 0.3, the second assert below measures 299.7 instead of 282, and the run
 # exits 1.
 #
-# ⚠️ The brackets are 0.35 wide, and that is not sloppiness — it is exactly ONE TICK of boost
+# ⚠️ **A `wait` IS NO LONGER FREE, and that is the trap this file walks into first.**
+# `vector::gas::refill_tank` puts 10/s back during any tick in which **nothing wants gas**,
+# starting 30 ticks after the last tick that did. Every `wait` line below therefore has to be
+# accounted for:
+#
+#   - ACTS 2, 3 and 4 are covered by their own held key: the `key Shift <s>` and the
+#     `wait <s>` next to it are the SAME seconds, so the button is down for every tick of the
+#     wait and `arm_pause` re-arms the 30 ticks on each of them. Not one drop goes back.
+#     That is `gas_budget`'s documented rule "the pause follows the WANT, not the spend" —
+#     it holds even in ACT 4, where the tank is empty and the held button buys nothing.
+#   - ACT 5 is the opposite on purpose: nothing wants gas there, so the refill runs and the
+#     assert measures it. See the act.
+#
+# ⚠️ The brackets are ~0.35 wide, and that is not sloppiness — it is exactly ONE TICK of boost
 # (0.3) plus a little. The driver counts a held key down in f32 (`run.held` in
 # src/debug/mod.rs), and sixty subtractions of 1/60 do not land on exactly 0.0: measured
 # [offlinebot], `key Shift 1.0` holds for 61 ticks and costs 18.300, not 18.000. A script
 # that asserts to the tick is therefore flaky by construction; one that asserts to the tick
 # +-1 measures the rate and nothing else.
-#
-# ⚠️ WHAT THIS IMAGE DOES NOT SHOW: the gas level. `src/hud/gas_bar.rs` is an empty stub, and
-# the F3 overlay that prints "gas 82/100" is never registered in any schedule
-# (`debug::spawn_overlay` has no caller), so the tank is on no pixel of any image today.
-# Until one of the two is fixed, F-018 is "measured, not seen": the numbers here are real,
-# the picture only proves that the same game they were measured in still stands and renders.
 
 wait 1.5                 # world, camera, meshes and the render pipelines come up
 look 0 -10               # yaw along -Z (the axis contract), a little down: ground and houses
 
 mark f018-tank-full
-assert gas == 100        # game.ron: vector.gas_tank
+assert gas == 300        # game.ron: vector.gas_tank
+
+# =========================================================================================
+# ACT 2 — the rate. One second of boost is 18 gas and nothing else.
+# =========================================================================================
 
 key Shift 1.0            # one second of boost = 60 ticks x 0.3
 wait 1.0
 mark f018-one-second-of-boost
-assert gas < 82.35       # 100 - 18, plus/minus the one tick above
-assert gas > 81.65
+assert gas < 282.35      # 300 - 18, plus/minus the one tick above
+assert gas > 281.65
 
 key Shift 4.0            # four more seconds = 4 x 18 = 72
 wait 4.0
 mark f018-four-more-seconds
-assert gas < 10.7        # 82 - 72, plus/minus one tick per `key` line so far
-assert gas > 9.3
+assert gas < 210.7       # 282 - 72, plus/minus one tick per `key` line so far
+assert gas > 209.3
 
-key Shift 1.0            # ten gas is not enough for a whole second of boost
-wait 1.0
+# =========================================================================================
+# ACT 3 — and then it stops. **This act is twelve seconds long because the tank is 300.**
+# =========================================================================================
+#
+# It was `key Shift 1.0` while the tank held 100: ten gas was not enough for a whole second
+# and the act ran dry inside its own second. On a 300-tank the same line leaves 191 in the
+# tank and asserts nothing at all — so the DURATION moved and the claim did not.
+# 209.4 remaining / 18 per s = 11.63 s, and 12.0 s empties it with 0.37 s to spare.
+
+key Shift 12.0
+wait 12.0
 mark f018-dry
 assert gas >= 0          # a tank never goes negative
 assert gas < 0.3         # and what is left over is less than one tick's cost: no half boost
 
+# =========================================================================================
+# ACT 4 — the refill, and the proof that reel-in without a hook still wants nothing.
+# =========================================================================================
+#
+# Both claims are in the same number, and that is why they are asserted together:
+#
+#   - `key Ctrl` with no anchored hook does NOT want gas (`gas_budget`: `wants_reel_in =
+#     pressed(REEL_IN) && hook.anchored_count() > 0`). So the tank is in the "nobody wants
+#     anything" branch for all 60 ticks and the refill is free to run.
+#   - The refill spends the first ~30 of those ticks counting the 0.5 s pause down and the
+#     rest putting 0.1667 back each.
+#
+# **MEASURED: 5.800**, twice, to the digit — 34 refilled ticks on top of the 0.133 the dry
+# tank had left over. Predicted 4.833 (30 pause + 30 refill) and it is not that, because the
+# pause is armed on the last tick that WANTED gas and the driver's f32 key countdown does not
+# land on the same tick as its `wait` (the note at the top of this file). The bracket below is
+# therefore drawn around the measurement, ±0.4 = two and a half refilled ticks.
+#
+# A reel that DID cost gas would fail this in the loudest possible way: it would re-arm the
+# pause on every tick, the refill would never start, and the tank would read 0.
+
 key Ctrl 1.0             # reel-in without an anchored hook pulls on nothing
 wait 1.0
 mark f018-reel-without-a-hook
-assert gas >= 0
-assert gas < 0.3         # and therefore costs nothing, empty tank or not
+assert gas > 5.4         # measured 5.800 — the refill ran
+assert gas < 6.2
 
 wait 3                   # keep the run alive: if it ends, the process ends before the image

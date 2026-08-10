@@ -231,6 +231,18 @@ pub struct VectorTuning {
     pub gas_tank: f32,
     pub gas_boost_per_s: f32,
     pub gas_reel_per_s: f32,
+    /// How fast the tank refills **while neither boosting nor reeling** (`docs/QUESTIONS.md`
+    /// Q-033). It does not run during a boost, so it does not lengthen a single held boost —
+    /// that length is [`gas_tank`](Self::gas_tank) divided by
+    /// [`gas_boost_per_s`](Self::gas_boost_per_s) and nothing else.
+    ///
+    /// No `serde(default)`, here as everywhere: a missing value has to crash on load (§4).
+    /// `0.0` in the file is the old behaviour — a tank that never comes back — and it is a
+    /// decision somebody wrote down, not a value nobody noticed was missing.
+    pub gas_regen_per_s: f32,
+    /// How long after the last tick that wanted gas the refill stays off, in seconds.
+    /// Multiplied out to ticks by `vector::gas`, so that tapping boost does not become free.
+    pub gas_regen_delay_s: f32,
     /// Who pays first when the tank does not cover both. **A game-value decision**, which is
     /// why it stands here and not as an `if` in `vector/gas.rs`.
     pub gas_priority: Vec<GasConsumer>,

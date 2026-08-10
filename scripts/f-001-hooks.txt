@@ -37,12 +37,19 @@
 # other way.
 # ---------------------------------------------------------------------------------------
 #
-# **What this run proves.** It drives the two mouse buttons the way a human does —
-# `hook left` presses `MouseButton::Left`, `src/net/local.rs` turns it into
-# `Buttons::HOOK_LEFT`, the inbox delivers it as an `Intent`, and `vector::hook::update_hooks`
-# reads the edge. Every station of that chain reports in the log. Both buttons are held for a
-# full second, and the trigger reports exactly once per press — that is `just_pressed` against
-# `PrevButtons` doing its job in the real game, not in a test.
+# **What this run proves.** It drives the two rope triggers the way a human does —
+# `hook left` presses `KeyQ` and `hook right` presses `KeyE`, `src/net/local.rs` turns them
+# into `Buttons::HOOK_LEFT` / `Buttons::HOOK_RIGHT`, the inbox delivers them as an `Intent`,
+# and `vector::hook::update_hooks` reads the edge. Every station of that chain reports in the
+# log. Both are held for a full second, and the trigger reports exactly once per press — that
+# is `just_pressed` against `PrevButtons` doing its job in the real game, not in a test.
+#
+# ⚠️ **The ropes were on the mouse until 2026-08-10 and this comment said so.** The user asked
+# for them on `Q`/`E` so they can be steered while aiming; `LMB`/`RMB` became the blades
+# (`src/net/local.rs`, the scheme is written out in its header). The script verb `hook
+# left|right` kept its name and now presses the KEY — which is why nothing below this line
+# had to move. For the other direction there is now `slash left|right`, because `parse_key`
+# cannot reach a mouse button at all.
 #
 # **Why the watchtower and not the 4 m block.** `assets/data/maps.ron` places a 12 m
 # `landmark` at (24, 6, -40), so its near face is z = -34 and its roof is y = 12. Standing 14 m
@@ -92,11 +99,21 @@ mark f-001-left-anchored
 key Ctrl 5.0            # REEL_IN: the rope gets shorter and the player goes with it
 wait 0.6
 mark f-001-reeled
+# ⚠️⚠️ **`height > 12.0` and `speed > 35.0` ARE RED AS OF 2026-08-10 AND ARE LEFT RED.**
+# Measured now: **9.881 m** and **19.344 m/s**, against the 13.064 m and 46.414 m/s this file
+# has quoted for a day. Nothing above this line changed. `B-004`'s take-up ratchet in
+# `src/player/rope.rs` makes the rope follow the real distance down and never up, so the player
+# no longer flies past his anchor — and the old pair WAS that overshoot (Q-032: the reel ends at
+# 54.18 m/s and is then whipped; FIND-016). The rope-and-nothing-else claim still holds at
+# 9.881 m — a jump reaches 1.056 m — but the numbers are not these numbers any more.
+# Rewriting the brackets here would hide a movement regression inside a hook test.
 assert height > 12.0    # a jump reaches 1.056 m. Twelve metres is the rope, and nothing else.
 assert height < 14.0
 assert speed > 35.0     # measured 46.4 m/s [debian] — see the note below
 assert speed < 55.0
-assert gas < 100        # and the reel really was paid for out of the tank
+assert gas < 300        # and the reel really was paid for out of the tank (`gas_tank` is 300
+                        # since 2026-08-10 — this bracket is the old `< 100` rebased, not
+                        # loosened; measured 296.300, i.e. 3.7 spent)
 
 wait 1.2
 mark f-001-on-the-roof

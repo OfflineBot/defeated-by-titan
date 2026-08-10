@@ -12,7 +12,7 @@
 //! (`avian3d-0.7.0/src/dynamics/joints/mod.rs:329-343`). That *is* the definition of "a rope
 //! pulls, it does not push" — no `if` here says so, the limit does.
 //!
-//! ## The four decisions in this file
+//! ## The five decisions in this file
 //!
 //! 1. **Reeling in happens per SUBSTEP, never per tick.** Measured with 24 substeps, `v0 50`:
 //!    per tick the shortening injects `rate x SubstepCount` and the player reaches
@@ -36,6 +36,31 @@
 //!    [`sync_rope_length`] is the only writer of that component (`docs/architecture.md`,
 //!    authority table). `vector::hook` reads `overextended` in the **next** tick — one tick of
 //!    lag is the price for `Hook` having exactly one writer.
+//!
+//! 5. **The length is a RATCHET: it follows the real distance down and never up** (`B-004`).
+//!    `limits = (0, L)` corrects only when the distance *exceeds* `L`
+//!    (`avian3d-0.7.0/src/dynamics/joints/mod.rs:326-344`), so a player who closes on his
+//!    anchor faster than the rope is taken in leaves the rope **slack**, and a slack rope
+//!    constrains nothing. Measured before the fix, on a 50.000 m rope with the reel **not**
+//!    held: the enforced length stayed at 50.000 m and the player flew **50.000 m past the
+//!    anchor** at 20, 25, 28, 30, 40, 55 and 75 m/s — the whole rope length, at every speed.
+//!    With the reel held the overshoot starts exactly at `vector.reel_speed_m_s` = 28 m/s and
+//!    grows: 8.667 m at 40, 16.000 m at 55, 22.500 m at 75. [`shorten_ropes`] therefore also
+//!    takes up slack — without a rate cap and without the button — and the user's sentence
+//!    („wenn ich mich festhake und ganz schnell ran fliege kann ich overshooten") is answered
+//!    by the *length*, not by a faster reel.
+//!
+//!    ⚠️ **It was accused of costing this project its headline speed, and it was measured
+//!    innocent** (2026-08-10). `scripts/game-full.txt` ACT 1 fell from 46.414 m/s to
+//!    19.344 m/s on the day the take-up landed. Isolated behind a temporary switch, ACT 1
+//!    reads **19.344 m/s and 9.881 m to the last digit with the take-up on, off, only while
+//!    the reel is held, and with a 2 m slack margin** — four ropes, one number. The whole
+//!    delta belongs to `src/player/locomotion.rs`; with that file at its previous revision
+//!    ACT 1 reads 46.414 m/s and 13.064 m, again with the take-up both on and off.
+//!    `tests/vector_rope.rs::measure_the_overshoot_past_the_anchor` says the same thing in
+//!    the small: over 16 approaches the peak speed equals `v0` in **every** row with the
+//!    take-up on and with it off — there is no whip for the ratchet to eat, while the
+//!    overshoot goes from 50.000 m to 3.000 m (`vector.min_rope_m`).
 //!
 //! ## `B-003` — a teleport lets go of every rope, and says so
 //!
@@ -252,10 +277,17 @@ pub fn detach_ropes(
     }
 }
 
-/// `F-005` — shortens `limits.max` by `ReelSpeed * substep_dt`, **once per substep.**
+/// `F-005` — the two things that shorten `limits.max`, **both once per substep.**
 ///
-/// That this works at all is in the source: `solve_xpbd_joint::<DistanceJoint>` runs inside
-/// the [`SubstepSchedule`] and re-reads `&mut DistanceJoint` in **every** substep
+/// 1. **The reel** takes `ReelSpeed * substep_dt` off the length while the button is held. It
+///    costs gas, it is capped at `vector.reel_speed_m_s`, and it is the only one of the two
+///    that can pull a player *toward* an anchor he is not already approaching.
+/// 2. **The take-up** (`B-004`) follows the length down to the distance that really exists —
+///    **no rate cap, no button, and never upward.** A rope that is given slack spools it in;
+///    a rope that is taut is not touched. This is what makes the length a **ratchet**.
+///
+/// That the substep placement works at all is in the source: `solve_xpbd_joint::<DistanceJoint>`
+/// runs inside the [`SubstepSchedule`] and re-reads `&mut DistanceJoint` in **every** substep
 /// (`avian3d-0.7.0/src/dynamics/solver/xpbd/plugin.rs:160-203`), using `self.limits` directly
 /// (`.../xpbd/joints/distance.rs:80`). A change made here therefore lands in the very next
 /// substep.
@@ -264,27 +296,74 @@ pub fn detach_ropes(
 /// clock by `timestep / SubstepCount` once per physics tick
 /// (`avian3d-0.7.0/src/schedule/mod.rs:246-254`), so the step size is derived from **one**
 /// number instead of from two that drift apart the day `substeps` moves in `game.ron`.
+///
+/// # `B-004` — why the take-up is here and not in a system of its own
+///
+/// `limits.max` has exactly one writer, and that is a rule, not a preference
+/// (`docs/architecture.md`, authority table; §6 rule 3). A second system that also lowered the
+/// length would be a second writer of the same field, and the two would race inside a schedule
+/// that runs 24 times per tick.
+///
+/// **Per substep and not per tick**, for the same reason the reel is: at
+/// `vector.max_speed_m_s` = 75 the body moves 1.25 m per tick and 0.052 m per substep. A
+/// take-up that only ran once per tick would leave up to a tick's worth of travel as slack —
+/// exactly the hole this fixes, one order of magnitude smaller.
+///
+/// **`min_rope_m` still wins.** The floor is applied last, so a player who is closer to his
+/// anchor than `vector.min_rope_m` does not get a rope shorter than the file allows.
+///
+/// **It cannot turn anchoring into a yank.** [`attach_ropes`] is born at exactly the distance
+/// that exists, so on the first substep `min(limits.max, distance)` is `limits.max` and this
+/// changes nothing at all.
+///
+/// **And it does not eat the swing.** Measured before the take-up existed
+/// (`tests/vector_rope.rs::measure_the_dip_of_a_swing_below_its_own_length`): over 4 s on an
+/// 8.000 m rope at `v0` 8/12/16/30 m/s, with gravity on and off, the distance to the anchor
+/// dips below the enforced length by **0.0000 m** — the solver contributes no measurable
+/// slack, so there is nothing for the ratchet to bite on. The one case that does dip is
+/// `v0 = 20` with gravity on (0.7093 m), and there the rope is **really** slack: the player
+/// goes over the top of the anchor and a real rope would hang loose too.
 pub fn shorten_ropes(
     time: Res<Time<Substeps>>,
     data: Res<GameData>,
     players: Query<(&PlayerId, &ReelSpeed)>,
+    positions: Query<&Position>,
     mut ropes: Query<(&Rope, &mut DistanceJoint)>,
 ) {
     let min_rope_m = data.game.vector.min_rope_m;
     let dt = time.delta_secs();
-    if dt <= 0.0 {
-        return;
-    }
 
     for (rope, mut joint) in &mut ropes {
-        let Some((_, reel)) = players.iter().find(|(id, _)| **id == rope.player) else {
-            continue;
-        };
-        let rate_m_s = reel.m_s[rope.side.index()];
-        if rate_m_s <= 0.0 {
-            continue;
+        let mut next_m = joint.limits.max;
+
+        // 1. The reel — a rate, and only while the button is held.
+        if dt > 0.0
+            && let Some((_, reel)) = players.iter().find(|(id, _)| **id == rope.player)
+        {
+            let rate_m_s = reel.m_s[rope.side.index()];
+            if rate_m_s > 0.0 {
+                next_m -= rate_m_s * dt;
+            }
         }
-        let next_m = (joint.limits.max - rate_m_s * dt).max(min_rope_m);
+
+        // 2. The take-up — the slack the player has flown in, all of it, at once.
+        //
+        // The joint's own ends, so this is the very distance `DistanceLimit` measures: both
+        // local anchors are `Vec3::ZERO` (see `attach_ropes`). A missing `Position` means the
+        // anchor marker has not been through avian's prepare stage yet — then there is nothing
+        // to measure and the length stays where it is, which is the safe direction.
+        if let (Ok(anchor), Ok(body)) =
+            (positions.get(rope.anchor), positions.get(rope.body_entity))
+        {
+            let distance_m = (anchor.0 - body.0).length();
+            // A non-finite distance reads as "the player has vanished" (§9d) and must not be
+            // allowed to set a length — `min` with a NaN would take the NaN.
+            if distance_m.is_finite() {
+                next_m = next_m.min(distance_m);
+            }
+        }
+
+        let next_m = next_m.max(min_rope_m);
         // Only on a real change: at the floor the value stops moving, and a joint marked
         // changed in every one of the 24 substeps is 24 lies per tick in every `Changed`
         // filter that comes after it (§11).

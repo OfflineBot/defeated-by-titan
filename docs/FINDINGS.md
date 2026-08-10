@@ -340,7 +340,14 @@ runs at compliance 0 against a static anchor, so the correction completes inside
 substep; `player/rope.rs::attach_ropes` sets `limits.max` to the **current** distance, so the
 player is exactly at the limit the moment `Ctrl` goes down. The algebra that follows: the
 correction is `(v_r + r)·h`, so the projected radial velocity afterwards is **exactly `−r`** —
-not "0 → 28 m/s" but **"anything → 28 m/s", independent of what it was before**.
+not "0 → 28 m/s" but **"anything → 28 m/s *radially*, independent of what it was before"**.
+
+> ⚠️ **That word "radially" was missing until 2026-08-10 and its absence made the sentence false
+> as a claim about *speed*.** Measured, same rig, three starting tangential speeds, first tick
+> after the reel: 0.013 → **27.997** · 5.284 → **28.588** (Pythagoras predicts 28.49) · 24.119 →
+> **37.394** (predicts 36.95). At `reel_speed_m_s: 14`: 24.119 → **28.170** (predicts 27.888). The
+> reel **adds** its rate to the radial component; total speed therefore rises. The title and the
+> algebra of this finding were right; one sentence was over-general. See FIND-028.
 
 **What is NOT claimed:** an earlier version of this finding put the figure at 40 320 m/s²
 (4110 g) by dividing the step by one substep. That is a difference quotient across a
@@ -430,6 +437,14 @@ Those two describe a hanging swing; nothing in the repository describes the whip
 this project has been quoting for a day (46.414). It also means the single most violent event in
 the movement system — a 7.7 m/s loss in one tick — is undocumented and untested. Whether it is
 correct physics for a taut rope at the length floor or a solver artefact is **not decided here**.
+
+> ⚠️ **Correction, 2026-08-10 (later).** This finding was read for a while as *"the whip is where
+> the speed comes from"*, and FIND-033's first version was built on that. **It is not an
+> acceleration mechanism.** Measured over 16 rope approaches at v0 = 10…75 m/s: **peak speed never
+> exceeds entry speed**, with or without slack take-up. The loss recorded above is real; the
+> inference that the pass-and-whip *produced* 46.414 m/s is refuted — that number came from
+> `ground_locomotion` deleting the horizontal component every tick while the player was still
+> `Grounded` on the rope. See FIND-033.
 
 **Confidence:** 🟧 as a measurement (reproduced byte-identical), ⬜ as an explanation.
 
@@ -608,6 +623,407 @@ shutter, because there is no shutter to move.
 explanation. It should be **re-opened** rather than carried forward as a law — the current rule
 tells future sessions to expect nondeterminism where the renderer provides determinism, and it
 would excuse a genuine nondeterminism bug as expected behaviour.
+
+## FIND-026 — 🔴 In the city the rope contributes exactly nothing, and the ground deletes what a swing earns
+
+**Symptom:** the user played the game on 2026-08-10 — the first time a human ever has — and said
+*"seile ohne boost bringen gar nichts. das mit den seilen muss noch deutlich besser gehen!"*.
+He is right, and the number is **0.000**.
+
+**Measured [cachy], 27 headless runs, two of each key configuration reproduced bit-identically.**
+
+**1. The rope does nothing in the real city.** From the highest roof a player can stand on (large
+house, 11.5 m), hooking the tallest structure in the world (church, anchor y = 29.98, rope
+51.29 m), running off the edge: the run **with** the rope and the run **without** it are
+identical to the last digit on **all 401 sampled ticks** — same peak 21.924 m/s, same landing
+tick, same 5.055 m/s afterwards.
+*Cause, and it is geometry rather than a defect:* a pendulum exists only while the rope is
+shorter than the anchor's height above you. 51.29 m of rope against 18.5 m of anchor height puts
+the bottom of the arc **24.3 m underground**, and `limits = (0, L)` applies nothing while the
+player is inside the limit — so it applied nothing, ever. `maps.ron` had already predicted this
+in prose ("87 % of the 90 m hook range produce no swinging on a grid house, but a fall on the
+leash"); this is that sentence measured.
+
+**2. On flat ground the rope is worse than no rope.** Same input program, hook high on the church:
+
+| | max speed | max height |
+|---|---|---|
+| with rope | **6.198 m/s** | 0.966 m |
+| no rope | **8.604 m/s** | 1.053 m |
+
+**3. The rope itself is nearly lossless — the mechanic is fine, the world is not.** On a clean rig
+(floating anchorable cube, air below, L = 16.15 m, drop 14.55 m): specific energy 799.99 → 799.00
+over the swing = **0.124 %**; bottom speed **24.119 m/s**; return apex 39.910 m against a start of
+39.955 m, i.e. **0.045 m lost per half-swing ≈ 0.10 %/s**. That swing covers **48.02 m in 2.83 s
+= 16.97 m/s average, 2.83× running speed.**
+
+**4. The ground deletes the momentum.** Released at the bottom of an arc the player lands at
+**39.717 m/s**; two ticks later he is at **0.000 m/s** with no key held and **6.000 m/s** holding
+W. `src/player/locomotion.rs::ground_locomotion` **assigns** `velocity.x/z` on every `Grounded`
+tick, so `run_speed_m_s` is a ceiling on everything a swing earned. **F-014 Momentum-Chaining is
+not merely `Unbuilt` — the ground actively destroys the thing it is meant to chain.**
+
+**5. A reel TAP is a slingshot; a reel HOLD is a handbrake.** 0.1 s of `Ctrl` at the bottom of a
+24.119 m/s arc, 0.6 gas, no boost: **40.915 m/s**, apex **53.73 m = +13.8 m above the height he
+was dropped from**. The same input held 0.5 s: peak 75.445 (the `MaxLinearSpeed` clamp) and then
+**0.002 m/s**, hanging dead 3 m under the anchor. `min_rope_m` is the mechanism — 3.0 → 0.002,
+6.0 → 3.334, **10.0 → 29.989 m/s and still flying**. With a 0.1 s tap that never reaches the
+floor, 3.0 and 6.0 are bit-identical, which is what proves the floor is the cause.
+
+**6. It is NOT the solver.** `substeps` 6 / 24 / 48 → 0.276 / 0.045 / 0.005 m lost per half-swing;
+at the shipped 24 the loss is already negligible. `rope_iterations` 1 / 2 / 8 → **bit-identical**,
+because nothing reads it (FIND-027).
+
+**What the sources say "good" is:** the bible names **no rope numbers at all** — worth knowing on
+its own. It names the stake (line 29: the Vector Gear *is* the combat; line 195: P1's gate is a
+blind test against **Attack on Titan Revolution** that our movement must at least tie) and
+`init.md:78` lists **"Schwungenergie"** as one of the six building blocks. The only concrete
+acceptance criteria are in `docs/features.ron`: **F-004** *"Geschwindigkeit steigt beim
+Ausschwingen"* — true on the rig, bit-identical zero in the city; **F-005** *"Spieler kann aus dem
+Tiefpunkt Höhe gewinnen"* — true, +13.8 m, but only with gas and only as a tap. **F-006 Swerve,
+F-011 Hook-Break, F-013 Kollisionsdämpfung and F-014 Momentum-Chaining are all `Unbuilt`.**
+
+### ⚠️ ATTACKED 2026-08-10, and parts of it did not survive. Read this before using anything above.
+
+An independent round (34 runs, its own scratch tree, proven to be the one being read) verified
+each claim. **Two are refuted.**
+
+**§1 is REFUTED in its strong form. The city DOES swing.** The mechanism the original run hit is
+real but it is about **direction**, not about the city. `player/rope.rs:164` sets the rope length
+to the distance that exists at the moment of anchoring, so the rope is taut from tick one and
+resists only motion that **increases** the distance. The measured run pressed `W` — *toward* the
+church — the one direction in which falling off that roof keeps the distance constant, so the
+joint never engaged. Same roof, same anchor, `S` instead of `W`: **no rope → 22.161 m/s and he
+reaches the ground; with the rope → max 6.000 and he never leaves the roof.** Two further pairs
+agree (watchtower→church, L = 41.06: 22.576 vs 6.000; house→tree, L = 15.46: 21.968 vs 6.000).
+And a real pendulum exists on real church geometry: hooked at (60, 32.56, −67), L = 18.31, the
+player accelerates **2.7 → 24.85 m/s through a 15 m arc**.
+**What survives is narrower and structural:** the city lacks *usable arcs*, not engagement — the
+arc bottom lies underground for every rope longer than the anchor's height, and the church is the
+only anchor tall enough to give a real one (`maps.ron: layout.max_height_m` caps all 70 generated
+blocks at 11.5 m; the placed anchorables top out at 12 m; the church is 35 m).
+
+**§2 is REFUTED. The two numbers are not the same quantity.** 8.604 m/s is a **jump**, not
+locomotion: `Metric::Speed` is the 3-D magnitude and √(6² + (6.5 − 20/60)²) = **8.604** exactly,
+one tick after take-off. Raising `jump_speed_m_s` to 10.0 moved it to the predicted 11.377. In the
+rope run the player is already airborne at that tick (216 of 421 ticks above 0.3 m against 145 in
+the baseline), so `MovementState != Grounded` and `ground_locomotion` never wrote a jump at all.
+The rope run is not a slower baseline; it is a different mode.
+
+**§4 is CONFIRMED, with a better wording:** the ground **assigns `run_speed_m_s`**, and "deletes
+momentum" is the no-key special case. Reproduced on an open plane with no wall within 20 m and
+made decisive at the clamp: land at 75 m/s → **0.567 m/s** with no key, **6.567** holding W,
+**3.567** with `run_speed_m_s: 3.0` — linear in the RON value, so `locomotion.rs:59-60` is the
+writer and `Grounded` really was set. "Two ticks" is run-specific (1–3).
+
+**§5 is CONFIRMED, and the proposed fix is a trap.** Tap → 40.968 m/s, apex +13.68 m; hold →
+75.282 then 0.002 m/s at exactly `min_rope_m`. But **`min_rope_m: 10.0` does not fix the
+handbrake — it stops the reel before the handbrake**: a 0.22 s hold at 3.0 (the same amount of
+shortening) gives max 48.037 and final 40.034, the same outcome class. And its cost is real:
+`length_m.max(min_rope_m)` means a hook taken at 2.09 m creates a **10.00 m** rope, so every
+short-range hook carries 7.9 m of slack that does nothing and **you can never reel to within 10 m
+of an anchor — which is cortex-cut range.**
+
+**§6 is CONFIRMED.** `substeps` 24 is right; `rope_iterations` 1 / 2 / 16 bit-identical.
+
+**Confidence after the attack: 🟧** for §3 (the rig pendulum), §4, §5 and §6, and for the
+refutations of §1 and §2 — each mechanism was moved by a RON value the attacker changed himself.
+🟨 for the *interpretation* "the rope is a different mode, not a worse one", which nobody has
+attacked in turn.
+
+## FIND-027 — `vector.rope_iterations` is a dead value, and a test defends it anyway
+
+**Measurement:** sweeping `rope_iterations` 1 / 2 / 8 produces **bit-identical** output. `grep`
+finds no simulation system that reads the field: `src/shared/rope.rs` is the retired hand-written
+solver, exercised only by its own unit tests. Yet `tests/data.rs:228-230` still asserts `n >= 2`
+"or the two-hook case (F-004) is violated".
+
+**Why it counts:** a guard defending a number that cannot affect the game reads as a safety net
+and is not one. Either the field should go, or the two-rope case should actually use it — and the
+two-rope case is entirely unmeasured, which is the one situation the field was written for.
+
+## FIND-028 — FIND-013's wording is too strong: the reel injects a RADIAL rate, it does not assign
+
+**Symptom:** a second geometry contradicts the phrasing this project already wrote down.
+
+**Measurement:** from a hanging rest the speed becomes exactly **28.000** within 6 ticks —
+FIND-013 reproduced. But from the bottom of a swing at **24.119 m/s** the same reel reaches
+**40.915 m/s**, i.e. it **added**.
+
+**The honest statement:** the reel injects a fixed **radial** rate. That looks like assignment
+only when the tangential velocity is zero, which is exactly the case every earlier measurement
+happened to use. It is why a **tap** is a slingshot and a **hold** is a handbrake, and it means
+FIND-013's "anything → 28 m/s, independent of what it was" is true only for the radial component.
+
+**Why it counts:** the earlier wording would have sent somebody looking for a bug in a mechanic
+that is working — and it is the second time today that a claim survived a paper counter-check and
+then lost to a measurement in a different geometry.
+
+## FIND-029 — 🔴 A swing on the city's only tall anchor ends by pasting the player onto its wall at zero velocity, and he stays there
+
+**Measured [cachy], real graybox geometry, no reel involved:** a pendulum on the church
+accelerates to **24.85 m/s** and then goes to **0.000 m/s in one tick** at h = 14.248, against
+the church face — and stays there. A second case: 49.4 m/s → **0.002 m/s** at h = 27.015, held for
+400 ticks. The rig shows the same dead stop **with no wall anywhere**, at exactly `min_rope_m`.
+
+**Why it counts:** this is what a player actually experiences at the end of the one arc the city
+permits — the swing works, and then it ends in a full stop against a wall rather than in a
+release. Whether the wall case and the `min_rope_m` case are one bug or two is **not decided
+here**, and neither is in `docs/BUGS.md` yet.
+
+## FIND-030 — `player.max_substep_m` is a second dead value, guarded by two green tests
+
+**Measurement:** the same shape as FIND-027. `player.max_substep_m` is deserialized
+(`src/data/mod.rs`) and asserted in `tests/data.rs:122,168-172`, and **nothing in `src/` reads
+it**. Together with `vector.rope_iterations` that is **two numbers that cannot affect the game,
+each defended by a passing test**. A guard that cannot fail for the reason it names is worse than
+no guard: it reads as coverage.
+
+## FIND-031 — The frozen measuring binary is stale, and every RON sweep since the gas retune predates it
+
+**Measurement:** the binary used for the day's headless measurement rounds cannot load today's
+`assets/data/game.ron` — it rejects `gas_regen_per_s` / `gas_regen_delay_s` as unknown fields and
+runs `gas_tank: 100`. **Every number measured against it — including all of FIND-026 and its
+counter-round — describes the pre-2026-08-10 gas tuning.**
+
+**Why it counts:** the runtime-RON trick (sweep a value, re-run the same binary, no compile) is
+what made the day's measurement rounds affordable, and it silently stops being valid the moment
+the struct gains a field. Whoever re-freezes a binary for this purpose should record which commit
+it came from, in the log, next to the numbers.
+
+## FIND-032 — 🔴 `--ticks N` reports success for a run that was cut off with red asserts
+
+**Symptom:** a script run truncated by its tick limit before it reaches its own end **exits 0 even
+though asserts have failed**. Found 2026-08-10 by an agent whose commission contained two such
+numbers — supplied by the supervisor, from documentation.
+
+**Measurement [cachy]:**
+
+| run | result |
+|---|---|
+| `--script scripts/f-001-hooks.txt --ticks 400` | **exit 0**, two asserts red. Real end ≈ 500 ticks. |
+| `--mission tutorial --script scripts/game-full.txt --ticks 1200` | **exit 0**, two asserts red. |
+| the same two with a generous `--ticks` | `2 of 23 asserts failed`, **exit 1** |
+
+**Why it counts more than it looks.** `docs/HANDOVER.md` §2 records that this project already lost
+a day to *"a script asserted the broken behaviour and locked it in — it reported 5 asserts held,
+exit 0, for a completely dead feature"*. **This is that failure again with a different cause**, and
+it is worse, because it needs no mistake in the script at all: **every `--ticks` value written in a
+script header, in a doc, or in an agent's commission is a potential instance of it.** Both numbers
+in the commission that found it came out of this repository's own documentation.
+
+**The care the fix needs:** truncation is not always an error. `scripts/p4-cursor.txt` ends in
+`wait 600` deliberately so a windowed run stays alive for an outside observer, and screenshot runs
+are routinely cut at a chosen tick (`--ticks 152`) to photograph one moment. The invariant is
+narrower: **a failed assert must never produce exit 0 under any flag combination.** A fix that
+makes every screenshot run exit 1 would be worse than the bug.
+
+**FIXED 2026-08-10**, red-checked in both directions, closed against
+`tests/debug.rs::a_failed_assert_survives_the_tick_limit_that_cuts_the_script_off`. The rule now:
+a failed assert is an error always; a script that did not reach its end is an error with its own
+distinct line ("script did not finish: cut off at tick N — … This run has NOT shown what the
+script claims; raise --ticks"); a run with no script, or a script that finished, stays green. The
+screenshot worry did not apply — `exit_after_ticks` is only registered when `image.is_none()`
+(`src/lib.rs:175`), so a picture run cut at tick 152 was never on this path.
+
+**And it caught the project's own headline command.** `docs/HANDOVER.md` line 28 and
+`scripts/game-full.txt` line 17 both record `--ticks 1200` as *"23 asserts held, exit 0"* — that
+run is **truncated**: 1200 cuts inside the trailing `wait 3` and the script really ends at
+**1205**. `scripts/f170-objective.txt` line 4 has the same problem (`--ticks 400` against a run
+that ends at 457).
+
+**The `--screenshot` neighbour is a DIFFERENT defect, and this fix does not cure it.** Measured:
+`--offscreen --script … --ticks 400 --screenshot shot.png` → **exit 0** with two red asserts *and*
+a written PNG; the same run at `--ticks 2000` → **exit 1**, correct verdict, and **no image at
+all**. So the old belief "`--screenshot` swallows the verdict entirely" is too coarse: **you get
+the image or the verdict, never both**, depending on whether the shot tick falls before or after
+the script's end. Different exit owner (`src/debug/screenshot.rs::exit_when_written`). The fix is
+one line there — return `AppExit::error()` when `ScriptRun::failures` is non-empty, *after* the
+file is on disk — and it must not be done with an early guard, which would end the run at the
+failing assert and destroy the screenshot workflow.
+
+## FIND-033 — Fixing the overshoot cost 58 % of the project's headline speed
+
+**Symptom:** the slack take-up that fixed `B-004` (50.000 m of overshoot → 3.000 m) took the top
+speed with it, and nothing in the affected scripts changed.
+
+**Measurement [cachy]:**
+
+| `scripts/game-full.txt` ACT 1 | before | after |
+|---|---|---|
+| speed at the reel | **46.414 m/s** | **19.344 m/s** |
+| height at the reel | **13.064 m** | **9.881 m** |
+
+`game-full` now ends `2 of 23 asserts failed`, exit 1 — while still reaching `MISSION WON at tick
+898`. `scripts/f-001-hooks.txt` fails the same two ways.
+
+**⚠️ The first reading of this was WRONG and is kept here only so nobody re-derives it.** It said
+the 46.414 came from the player flying past his anchor and being **whipped** around it, and that
+the take-up ratchet had removed the whip — so that the user's two wishes (no overshoot, better
+ropes) pulled against each other. **An isolation round refuted all of it.**
+
+**ISOLATED [cachy], and the rope is innocent.** Speed and height at `mark game-reeled`, t=235 in
+every cell:
+
+| locomotion | take-up mode | speed | height | verdict |
+|---|---|---|---|---|
+| today (F-014 momentum) | always (shipping) | **19.344** | 9.881 | 2 of 23 failed |
+| today | **off** | **19.344** | 9.881 | 2 of 23 failed |
+| today | reel-only | **19.344** | 9.881 | — |
+| today | slack margin 2.0 | **19.344** | 9.881 | — |
+| **`HEAD` (old assignment)** | always | **46.414** | 13.064 | **23 held, exit 0** |
+| **`HEAD`** | off | **46.414** | 13.064 | **23 held, exit 0** |
+
+**Four different ropes, one number. Two different locomotions, the whole difference.** The take-up
+costs exactly **0.000 m/s**. `f-001-hooks` moves identically.
+
+**And there is no whip at all.** Across 16 rope approaches at v0 = 10…75, with and without
+take-up, **peak speed never once exceeded entry speed**. The "14.2 % whip loss" reading of
+FIND-016 does not describe an acceleration mechanism.
+
+**The real mechanism, localized to the only differing branch** (inside
+`if *state != MovementState::Grounded { continue; }`, firing only above `run_speed_m_s`): **the
+player is `Grounded` while the rope drags him**, so `ground_locomotion` writes his horizontal
+velocity through the whole early reel. The old code **deleted** `velocity.x/z` on every such tick —
+no WASD is held during `key Ctrl` — so only the rope's *vertical* work accumulated, and it flung
+him to 13.064 m, **past his own anchor at y = 11.04**, at 46.414 m/s. The new code bleeds the
+horizontal instead of deleting it, so he skids and lifts off lower.
+
+**So this project's headline speed number was an artefact of a grounded system overwriting a
+physics joint, not a rope mechanic.** `MovementState::Tethered` is declared at
+`src/shared/state.rs:136`, documented at `src/shared/rope.rs:59` as the thing "the caller derives",
+and **written by nobody** — that dead variant is the hole the whole thing fell into (FIND-023 saw
+the same hole from the HUD side).
+
+**`docs/PLAN-GAME.md` §3.1 calls `assert speed > 25` Risk 1's only tripwire, and it is red.** No
+assert was loosened. **19.344 m/s is the honest reachable number today**, and ACTS 2-4's
+30.00/30.33 m/s are all falls, not rope work.
+
+**Confidence: 🟧** for the isolation — four rope modes measured against two locomotions, with the
+experiment switch itself controlled (forcing take-up off turned two `b004_*` tests red, so the gate
+demonstrably worked while the scripts did not move). 🟨 for the mechanism, which is proven by
+*localization* and by the height crossing the anchor, not by a logged `MovementState`.
+
+## FIND-034 — The rope DOES reach 30 m/s. Risk 1's tripwire samples five ticks after the peak.
+
+**Measured [cachy] 2026-08-10**, `scripts/f-001-hooks.txt` ACT 1, per tick, after `Tethered`
+became a real state:
+
+| tick | speed | what |
+|---|---|---|
+| 199 | **28.000** | the reel hands the body over — `vector.reel_speed_m_s` to the digit, `Tethered` from this tick |
+| 230 | **38.684** | **the peak** |
+| 231 | **21.480** | the length reaches `min_rope_m` |
+| 235 | **20.147** | where `assert speed > 25` samples |
+
+**`docs/PLAN-GAME.md` §3.1 Risk 1 asks for a player who moves at 30 m/s. The flight meets it —
+38.684 m/s — and the tripwire that measures it does not see it.** The assert is not wrong to be
+red; it is measuring a real number at a moment nobody chose deliberately.
+
+**This does not license loosening it.** `assert speed > 25` is the only tripwire this project has
+for Risk 1, and 20.147 at t=235 is a true measurement of a real thing (the post-cliff speed). The
+honest repair is to *add* a sample at the peak, not to move or weaken the existing one — and that
+is a `scripts/` decision, not a rope one.
+
+## FIND-035 — `min_rope_m` is a cliff worth 17 m/s in one tick, and it is what the scripts end up measuring
+
+**Measured [cachy]:** t=230 → t=231, **38.684 → 21.480 m/s — −17.2 m/s in a single step**, at the
+exact moment the enforced length reaches `vector.min_rope_m` = 3.0. From t=231 the decay is exactly
+0.3333 m/s per tick, i.e. pure ballistics: the rope is done doing anything.
+
+**Cause:** at the length floor the constraint annihilates the whole radial component at once —
+"a rope pulls, it does not push" (`src/player/rope.rs` header). Nothing eases it.
+
+**Why it counts:** this cliff, not the reel, is what both `game-full` and `f-001-hooks` measure,
+and it is the same mechanism FIND-026 §5 recorded from the other side (a full reel to the floor
+parks the player at 0.002 m/s). **It looks like the real repair for Risk 1**, and it lives in
+`src/player/rope.rs`, not in locomotion and not in the scripts. Related: since `B-005`'s slack
+take-up, the floor is now reached *without a button being held*, so this cliff is on every fast
+approach and not only on a deliberate reel.
+
+## FIND-036 — The 46.414 autopsy, completed
+
+**The mechanism end to end, now measured rather than inferred:** on the handover tick
+`ground_locomotion` deleted the horizontal **−22.138** (no WASD is held during `key Ctrl`), leaving
+`(0, 17.143, 0)` — almost pure **tangent** to the rope. `rope_reel_in` multiplies the tangent by
+`length_prev / length_new`, so the reel whipped that leftover into the 75 m/s clamp and threw the
+player past his own anchor at y = 11.04 up to 13.064 m.
+
+**Keeping the −22.138 leaves 28 m/s pointing almost straight *at* the anchor, which a reel cannot
+amplify at all.** So the old headline number was **the ground deleting a joint's work and the joint
+amplifying the leftover** — and it must not be restored.
+
+**And the whole delta was one tick:** between the reel starting (t=199) and the body leaving the
+floor (t=201), `ground_locomotion` fired on exactly **one** grounded tick above the run speed.
+Everything else in ACT 1 was downstream of it.
+
+## FIND-037 — `MovementState::Tethered` is written for the first time, and the F3 overlay stopped lying
+
+**What was wrong:** `Tethered` was declared at `src/shared/state.rs:136`, documented at
+`src/shared/rope.rs:59` as the thing "the caller derives", and **written by nobody** since the day
+it was added. A player hanging on a rope and paying gas for it read **`Airborne`** on the F3
+overlay (FIND-023), and `ground_locomotion` treated him as `Grounded` and wrote his velocity.
+
+**The rule that fixed it, and why the obvious shapes do not work:** keying `Tethered` on "an arm is
+anchored" is wrong — measured, the player stands on the ground with a hook already anchored for
+**76 ticks** in `f-001-hooks` and until t=533 in `game-full`. Either would take his legs away.
+The rule used instead is a pure function of speed:
+
+> **The legs cannot produce more than the ground's top speed.** A body with a hook in something,
+> moving faster than that, is being moved by the rope whatever the ground contact says; a body with
+> a hook in something at walking pace is being moved by his legs whatever the hook says.
+
+**The threshold is not `run_speed_m_s`, and finding out why cost a test:** held `W` does not return
+exactly 6.0 — it alternates between **5.999977112 and 6.000022888** over 60 ticks, so a bare
+`> run_speed_m_s` flips a *walking* player to `Tethered` mid-stride. The caller passes
+`run_speed_m_s + (-gravity_m_s2)/simulation_hz` = **6.3333**, one tick of locomotion's own μ·g step
+— two numbers already in `game.ron`, **no new key**. Noise 2.3e-5, margin 0.333, rope 22.138: four
+orders of magnitude of clearance on either side.
+
+**Every reader of `MovementState` was checked** (whole-tree grep): only `player::locomotion`,
+`player::integrator`, `combat::health` (writes `Downed`), `blades::swing` (`== Downed`) and the F3
+overlay. **Nothing in `hud`, `vector::gas`, `mission` or `net` reads it**, so gas, HUD and jumping
+are untouched, and the `t007`/`p3` walking guarantees stay green.
+
+## FIND-038 — One line of key mapping broke 9 scripts and 25 tests, and every failure looked like a physics bug
+
+**Symptom:** the user asked for the ropes on `Q`/`E` after playing. `src/net/local.rs` was rebound
+— correctly, with 7 tests seen red against the old bindings. **The consequences were invisible to
+that change and to its author.**
+
+**Measurement [cachy] 2026-08-10.** Three separate waves, each found only when something downstream
+was run:
+
+| wave | damage | how it presented |
+|---|---|---|
+| `scripts/*.txt` | 9 files; `game-full` lost its climb **and all three kills**, `f-flight-cut` lost the `B-004` repro | `assert speed > 25` red, `assert kills` red |
+| `tests/combat.rs` + `tests/titan.rs` | 11 + 4 red | *"the blade never reached its active window — the swing state machine never started"* |
+| `tests/vector_hooks.rs` | **10 of 10 red** | *"the hook did not bite within 600 ticks — it is Idle"* |
+
+**Not one of those messages says "input".** They read as a broken swing state machine, a broken
+hook state machine and a broken flight. The scripts wave in particular is the dangerous one: the
+driver's `hook left|right` verb pressed a **mouse button**, which had just become a blade, so every
+script in the repository was silently *slashing* where it meant to hook — and `b001-anchor.txt`,
+whose entire purpose is the anchor repro, tested nothing while still exiting 0.
+
+**Cause:** nothing in this repository maps a binding to its dependents. The binding was spelled out
+at **19 separate call sites across three test files**, plus the script driver, plus every script.
+`read_input` is the only place that knows the truth, and nobody else reads it.
+
+**What was done:** `tests/vector_hooks.rs` now derives its key from one `hook_key(Side)` function
+(16 sites → 1); `combat.rs` and `titan.rs` have one site each; each carries a
+`⚠️ Depends on the binding … (src/net/local.rs::read_input)` comment. The script driver got the
+same treatment plus a new `slash left|right` verb.
+
+**What was NOT done, and is the real repair:** a test that wants a slash should press
+`Buttons::SLASH_RIGHT` through a helper that reads the same table `read_input` does, so a
+rebinding cannot diverge from its tests at all. Today the mapping is duplicated by hand
+everywhere, and the next rebinding will cost another round of exactly this.
+
+**The rule this suggests:** **a change to `src/net/local.rs` is never a local change.** Whoever
+touches it runs the whole suite *and* the script corpus before reporting, and the commission that
+orders it should say so — this one did not, and the author's own report correctly predicted the
+breakage while having no way to measure it.
 
 *(Append further findings here. A finding without a measurement is an opinion.)*
 

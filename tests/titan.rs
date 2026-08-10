@@ -879,9 +879,11 @@ fn fly_past_a_titan(kind: &str, dir: Vec3, air_m: f32, speed_m_s: f32, widen: Op
     spawn(&mut app, kind, Vec3::new(0.0, LANE_Y, 0.0));
     ticks(&mut app, 1);
 
-    // Hold the real slash key through the real `Intent` channel, and start the pass on the
+    // Hold the real slash button through the real `Intent` channel, and start the pass on the
     // blade's first cutting tick so the whole active window lies in front of it.
-    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyE);
+    // ⚠️ Depends on the binding `RMB` -> `SLASH_RIGHT` (`src/net/local.rs::read_input`); it has
+    // to be the RIGHT blade because the loop below reads `Swings.right`.
+    app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
     let active_from = app.world().get::<BladeTiming>(me).expect("the player has blades").active_from_tick;
     for _ in 0..300 {
         step(&mut app);

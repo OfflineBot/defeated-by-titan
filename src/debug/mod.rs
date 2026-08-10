@@ -24,7 +24,7 @@ use bevy::text::FontSize;
 // three ticks ago. The edge has its line with this reason in `docs/architecture.md`.
 use crate::mission::{KillTally, MissionPhase};
 use crate::shared::{
-    MovementState, LookOverride, IntentSystems, Gas, Health, LocalPlayer, Mark, PlayerId,
+    MovementState, LookOverride, IntentSystems, Gas, Health, Hook, LocalPlayer, Mark, PlayerId,
     StateClock, WarpPlayer, Cli, Velocity, Tick, TitanId, TitanKindName, TitanState, SpawnTitan,
 };
 use script::{Instruction, ScriptCommand, Metric};
@@ -119,6 +119,83 @@ impl ScriptRun {
     pub fn is_running(&self) -> bool {
         !self.plan.is_empty() && !self.done
     }
+
+    /// Whether a script was given at all. A run without one cannot be cut off in the middle
+    /// of anything — `--headless --ticks 600` with no `--script` is a plain simulation run.
+    pub fn has_script(&self) -> bool {
+        !self.plan.is_empty()
+    }
+
+    /// Instructions that were never executed.
+    ///
+    /// Zero does **not** mean the script finished: the last instruction may be a `wait` that
+    /// is still counting down, and until [`ScriptRun::done`] is set no summary has been
+    /// printed and no verdict exists. That is why [`cutoff_verdict`] asks `done` and uses
+    /// this number only for the message.
+    pub fn left(&self) -> usize {
+        self.plan.len().saturating_sub(self.at)
+    }
+}
+
+/// **The verdict of a run that `--ticks` is cutting off right now** — the one place that
+/// decides whether `--ticks n` ends green.
+///
+/// It exists because `--ticks` used to write [`AppExit::Success`] unconditionally
+/// (`src/lib.rs::exit_after_ticks`), so a run whose tick limit fell **before** the script
+/// reached its end reported success with red asserts in its own log:
+///
+/// ```text
+/// --headless --script scripts/f-001-hooks.txt --ticks 400   -> exit 0, 2 asserts red
+/// --headless --script scripts/f-001-hooks.txt --ticks 2000  -> exit 1, "2 of 14 asserts failed"
+/// ```
+///
+/// That is `docs/HANDOVER.md` §2.2 with a different cause: a script that reports success for
+/// something it did not show. Two facts decide, and they are **not** the same fact:
+///
+/// 1. **An assert failed.** Then the run is red, always, under every flag combination. This
+///    is the invariant — nothing below may soften it.
+/// 2. **The script did not reach its end.** Then the run has not *demonstrated* what the
+///    script claims, whatever the asserts that did run said, and the summary line that a
+///    reader looks for was never printed. So it is red too — but with its own, distinct
+///    message, because the fix is a bigger `--ticks` and not a bug in the game.
+///
+/// **A screenshot run is not affected and must not be.** `--screenshot` cuts a script short
+/// at a chosen tick on purpose, and `src/lib.rs` does not even register the `--ticks` exit
+/// then — the ending belongs to `debug::screenshot`, which waits for the PNG. (That path has
+/// a hole of its own; it is written up as a finding, not fixed here.)
+pub fn cutoff_verdict(run: &ScriptRun, tick: u64) -> AppExit {
+    if !run.has_script() {
+        info!("--ticks {tick} reached, exiting");
+        return AppExit::Success;
+    }
+
+    if run.done {
+        // `run_script` printed the summary and wrote the exit in the tick it finished. This
+        // only repeats its verdict, so that a limit landing on the same tick cannot turn it.
+        return if run.failures.is_empty() { AppExit::Success } else { AppExit::error() };
+    }
+
+    let failed = run.failures.len();
+    // Two different ways to be unfinished, and the difference is what a reader needs: either
+    // whole instructions were never reached, or the last one is still running (a `wait`, or a
+    // key still held down). Both mean the summary line was never printed.
+    let how = match run.left() {
+        0 => format!(
+            "instruction {} of {} is still running",
+            run.at.min(run.plan.len()),
+            run.plan.len()
+        ),
+        n => format!("{n} of {} instructions never ran", run.plan.len()),
+    };
+    error!(
+        "script did not finish: cut off at tick {tick} — {how}, {} asserts checked, \
+         {failed} failed. This run has NOT shown what the script claims; raise --ticks.",
+        run.checked,
+    );
+    for m in &run.failures {
+        error!("  {m}");
+    }
+    AppExit::error()
 }
 
 /// Bundles what the driver is allowed to touch. A system takes at most ~16 parameters, and
@@ -140,6 +217,11 @@ pub struct DriverWorld<'w, 's> {
             &'static Transform,
             &'static Gas,
             &'static Velocity,
+            // Not an `Option`, and that is the same judgement as `Gas` and `Velocity` above:
+            // `player::spawn_player` hangs all eight pieces of the Vector Gear on every player
+            // from tick 1 on, exactly so that nothing filters on a missing one. `Health` below
+            // is the documented exception, not the pattern.
+            &'static Hook,
             // `Option`, because nothing spawns player health yet (`P5`). Without the `Option`
             // a missing `Health` would silently drop the player out of THIS query — and
             // `warp`, `assert speed` and `assert gas` would all stop working at once, for a
@@ -197,7 +279,7 @@ fn run_script(mut run: ResMut<ScriptRun>, tick: Res<Tick>, time: Res<Time<Fixed>
                 });
             }
             ScriptCommand::Warp(pos) => {
-                if let Some((id, _, _, _, _)) = world.players.iter().next() {
+                if let Some((id, ..)) = world.players.iter().next() {
                     world.warp.write(WarpPlayer {
                         player: *id,
                         pos_x: pos.x,
@@ -213,7 +295,17 @@ fn run_script(mut run: ResMut<ScriptRun>, tick: Res<Tick>, time: Res<Time<Fixed>
                 world.keys.press(code);
                 run.held.push((Held::Key(code), duration_s));
             }
+            // ⚠️ The ropes are on `Q`/`E` and the blades on the mouse since 2026-08-10
+            // (`src/net/local.rs`, the user's scheme after the first human play session).
+            // Until then `hook` pressed a mouse button — which is now a BLADE, so every script
+            // in the repository was swinging a sword where it said it fired a rope, and no
+            // assert could see it. The verb keeps its name; only the device under it moved.
             ScriptCommand::Hook { right, duration_s } => {
+                let k = if right { KeyCode::KeyE } else { KeyCode::KeyQ };
+                world.keys.press(k);
+                run.held.push((Held::Key(k), duration_s));
+            }
+            ScriptCommand::Slash { right, duration_s } => {
                 let m = if right { MouseButton::Right } else { MouseButton::Left };
                 world.mouse.press(m);
                 run.held.push((Held::Mouse(m), duration_s));
@@ -285,12 +377,17 @@ fn measure(metric: Metric, world: &DriverWorld, tick: u64) -> Option<f32> {
         // Always measurable: the state is registered in every launch mode, and "no mission" is
         // the honest answer `Briefing` (0), not a missing one.
         Metric::Phase => Some(world.phase.get().code() as f32),
-        Metric::Speed | Metric::Height | Metric::Gas | Metric::Health => {
-            let (_, transform, gas, tempo, health) = world.players.iter().next()?;
+        Metric::Speed | Metric::Height | Metric::Gas | Metric::Health | Metric::Rope => {
+            let (_, transform, gas, tempo, hook, health) = world.players.iter().next()?;
             match metric {
                 Metric::Height => Some(transform.translation.y),
                 Metric::Gas => Some(gas.current),
                 Metric::Speed => Some(tempo.speed_m_s()),
+                // The one metric that reads the Vector Gear itself. `Hook::anchored_count` and
+                // not a count of its own: `vector::hook` is the single writer of `Hook`, and a
+                // second definition of "anchored" living in a debugging tool is exactly the
+                // kind of drift that makes a green run mean nothing.
+                Metric::Rope => Some(hook.anchored_count() as f32),
                 // `None` and not `0.0`: a player with no `Health` component is not a player
                 // at zero health, it is a player nobody has measured.
                 Metric::Health => health.map(|h| h.current),

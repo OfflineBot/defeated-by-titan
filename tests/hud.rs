@@ -169,7 +169,7 @@ fn f170_the_gas_bar_follows_the_gas_and_not_the_clock() {
     for (current, expected) in [(30.0_f32, 30.0_f32), (0.0, 0.0), (100.0, 100.0), (55.5, 55.5)] {
         app.world_mut()
             .entity_mut(player)
-            .insert(Gas { current, max: 100.0, unlimited: false });
+            .insert(Gas { current, ..Gas::full(100.0) });
         app.world_mut().run_schedule(Update);
 
         let mut q = app.world_mut().query_filtered::<&Node, With<GasBar>>();

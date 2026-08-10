@@ -65,6 +65,83 @@ it works. That costs nothing. A stage that is too high costs the next person hal
 
 ## Open bugs
 
+### `B-005` — the rope goes slack on a fast approach, so you fly past your own anchor
+
+> **Fixed the same day, and deliberately still filed under Open.** The fix has a red-then-green
+> test and a measured before/after (50.000 m → 3.000 m), but **no agent other than the one that
+> built it has attacked it**, and nobody has seen it in a window. By this project's own rule that
+> is 🟨, and a 🟨 fix is not a closed bug. It moves to *Closed* when a second head re-measures it.
+
+**Reported by the user on 2026-08-10**, from playing it: *"das seil hat eine maximal einhol
+dauer. das heißt wenn ich mich festhake und ganz schnell ran fliege kann ich overshooten! weil
+das seil nicht schnell genug 'eingefahren' wird!"*
+
+| Field | |
+|---|---|
+| **Repro** | `cargo test --test vector_rope -- --ignored measure_the_overshoot_past_the_anchor`, `[cachy]`. A 50.000 m rope, gravity off, flying straight at the anchor. |
+| **Evidence** | **Metres flown past the anchor, before the fix:** with the reel held — 3.000 (20 m/s) · 8.667 (40) · 16.000 (55) · 22.500 (75); **without the reel held — 50.000 at every single speed from 20 m/s up**, i.e. the whole rope. The 28 m/s threshold is exact only while the button is down (`enf_at_0` 15.002 measured at 40 m/s against `50·(1−28/v)` = 15.000; 31.334 against 31.333 at 75). **Without the button the enforced length never shrinks at all, so there is no threshold and a faster reel could never have fixed it.** After the fix: **3.000 m at every speed, with and without the reel** — exactly `vector.min_rope_m`, the geometric minimum. |
+| **Expectation** | The gear is a winch. A cable that has been closed on does not pay itself back out, and it does not hang slack while you dive at the thing you are attached to. The user asked for the same property from the other side earlier the same day — *"wenn mit seilen verbunden und wurde kürzer soll erstmal nicht länger werden"* (Q-034). |
+| **Cause** | `src/player/rope.rs::shorten_ropes` contains `if rate_m_s <= 0.0 { continue; }` — **the enforced length `limits.max` changes only while the reel button is held**, and then by at most `vector.reel_speed_m_s` = 28.0 m/s. `vector.max_speed_m_s` is 75.0. A `DistanceJoint` with `limits = (0, L)` corrects **only** when the distance exceeds `L` (`avian3d-0.7.0/src/dynamics/solver/xpbd/joints/mod.rs:326-344`). So closing on an anchor faster than 28 m/s outruns the limit, the rope goes slack, a slack rope constrains nothing, and the player sails past. **Without the reel held the limit never shrinks at all**, so slack develops on any approach at any speed. |
+
+**The fix under test: a slack take-up ratchet** — `limits.max` follows the true distance downward,
+with no rate cap and independently of the reel button, floored at `min_rope_m`. That is what a
+winch does, and it answers Q-034 and this bug with one mechanic.
+
+**FIXED 2026-08-10 [cachy].** Take-up added inside `shorten_ropes` — *not* a new system, because
+`limits.max` has exactly one writer (rule 3) — in the existing `SubstepSchedule` slot before
+`SubstepSolverSystems::WarmStart`:
+
+```rust
+limits.max = (limits.max - reel * dt).min(distance).max(min_rope_m);
+```
+
+Per **substep**, because at 75 m/s the body covers 1.25 m per tick against 0.052 m per substep.
+*(That choice is reasoned, not measured — a per-tick variant was not built, because it would need
+a second writer of `limits.max`.)*
+
+**The risk was real and it was measured both ways: the swing survives.** A pendulum needs a
+constant length through the arc, so if the distance dipped below the enforced length the ratchet
+would shorten the rope every pass and winch the player into his own anchor. Over 4 s on an 8.000 m
+rope at v0 = 8 / 12 / 16 / 30 m/s, gravity on and off, the dip was **0.0000 m in 9 of 10 cases** —
+the solver produces no measurable slack, so there is nothing to bite on. After the fix the same
+arcs end at **7.9997–7.9999 m**, i.e. 0.0003 m lost in 4 s. **No tolerance was needed and no new
+`game.ron` key is required.** The tenth case (v0 = 20 with gravity on) does ratchet, and there the
+rope is genuinely slack — the player goes over the top of the anchor, and that case dipped
+0.7093 m *before* the fix too.
+
+**Tests:** `tests/vector_rope.rs::b004_a_player_flying_at_his_anchor_does_not_pass_it` and
+`::b004_the_enforced_length_never_grows`, both seen red first. Two further guards
+(`b004_a_swing_keeps_its_length_across_the_arc`, `b004_anchoring_still_does_not_yank`) **were green
+before the fix and could not be made red** — stated plainly rather than dressed up, because before
+the fix nothing could shorten a swing at all. Four `#[ignore]`d measurement tests carry the raw
+tables. `cargo test --test vector_rope`: 12 passed, 0 failed.
+
+**And it partly answers `FINDINGS.md` FIND-026 — a split verdict, measured on real church
+geometry with a rope born at 53.269 m:**
+
+| closing flight first | rope after | arc bottom | reaches the ground |
+|---|---|---|---|
+| none | 53.269 m | **−18.32 m** | yes |
+| 20 m/s for 1 s | 38.848 m | −3.90 m | yes |
+| **40 m/s for 1 s** | **20.165 m** | **+14.79 m** | **no — taut 300/300 ticks** |
+| 75 m/s for 1 s | 7.379 m | +27.57 m | no (hangs under the anchor) |
+
+**Take-up alone does not fix FIND-026** — running off a roof moves you *away* from the anchor, so
+nothing is taken up and the 0 m/s row reproduces the old result exactly. But one second of closing
+at 40 m/s turns a 53.3 m leash into a 20.2 m rope and lifts the arc bottom from 18.3 m below
+ground to 14.8 m above it. **An arc that could not exist in the graybox now exists — it has to be
+paid for with gas first.** That is the mechanic the user described, and it turns his other
+complaint (*"seile ohne boost bringen gar nichts"*) from a geometric impossibility into a tuning
+question.
+
+**Stage: 🟨.** Headless numbers only. Not seen in a window, no screenshot, and **not yet attacked
+by an agent that did not build it**. The graybox rows inject the closing velocity and then zero
+it, so their peak speeds are not what a player would actually carry into the arc.
+
+**Still open:** `min_rope_m: 3.0` is now the entire overshoot budget, and FIND-026 §5 showed that
+reaching that floor parks the player dead under his anchor at 0.002 m/s — take-up now reaches it
+without a button being held. Whether 3.0 is still the right number is a `game.ron` question.
+
 ### `B-004` — cutting a titan while a rope is attached panics the game
 
 **Found 2026-08-10 [cachy]** by `scripts/f-flight-cut.txt`, the first file in this repository

@@ -14,7 +14,11 @@
 //! **Where the seam stands:** [`camera::rotate_camera`] has been filled since 2026-08-09 —
 //! image and aim ray point the same way, nailed down in `tests/render.rs` and seen in
 //! `docs/images/f002-look.png` / `docs/images/f002-look-turned.png`.
-//! [`rope::draw_ropes`] is still registered and still empty.
+//! [`rope::draw_ropes`] has been filled since 2026-08-10 and is registered below — a cyan line
+//! per **anchored** arm, and nothing at all for a released one. Before that day no pixel
+//! anywhere in this build told a player a rope was attached. Seen in
+//! `docs/images/f004-rope.png` against `docs/images/f004-rope-released.png`, which is the same
+//! scene 30 ticks later with the arm let go.
 
 pub mod camera;
 pub mod rope;

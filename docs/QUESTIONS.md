@@ -913,9 +913,17 @@ reproduced byte-identical):
 
 **Your premise number is also wrong, and it was mine, not yours.** 46.414 m/s is not what a reel
 gives. The reel ends at **54.18 m/s**; `scripts/f-001-hooks.txt` samples five ticks later, after
-the rope has whipped the player around and taken 14.2 % of his speed in one tick (FIND-016).
-Every earlier statement in this repository about "a reel gives 46.4 m/s" describes a reel plus a
-swing loss.
+the rope has taken 14.2 % of his speed in one tick (FIND-016). Every earlier statement in this
+repository about "a reel gives 46.4 m/s" describes a reel plus a loss.
+
+> ⚠️ **And 46.414 was not a rope number at all.** Isolated later the same day (FIND-033): with the
+> rope untouched and only `src/player/locomotion.rs` reverted, the same script gives **46.414**;
+> with today's locomotion and **four different rope behaviours**, it gives **19.344** in every
+> case. The old figure came from `ground_locomotion` *deleting* the player's horizontal velocity
+> on every tick while he was still `Grounded` on the rope, so only the joint's vertical work
+> accumulated and it threw him past his own anchor. **19.344 m/s is the honest number the rope
+> reaches today**, and `docs/PLAN-GAME.md` §3.1 Risk 1 (a player at 30 m/s) is currently **not met
+> by rope work** — every 30 m/s in this repository is a fall.
 
 **So the honest answer to "which value?" is: none of them.** Raising it makes the jolt bigger;
 lowering it makes the jolt smaller *and* the reel weaker, and below ~20 it stops being useful.
@@ -946,6 +954,86 @@ which is exactly the assert that would have caught this a day ago.
 rate, 3.0 → **54.18 m/s** and 5.0 → **39.62 m/s**. Two metres removes 27 % of the top speed. Its
 stated reason in the file is a *camera* constraint, so it is doing two unrelated jobs at once and
 should probably split into a separate `vector.min_reel_m`.
+
+## Q-033 — The gas never refilled. I gave it a regeneration; the shape of it is yours.
+
+**Context:** on 2026-08-10 the user played the game — **the first time a human ever has** — and
+said: *"der boost hält nicht lang genug"* and *"seile ohne boost bringen gar nichts"* and
+*"also gas tank sollte sehr viel mehr haben"*.
+
+**Measured, and it is worse than the complaint:** `Gas` was written in exactly two places —
+`Gas::full()` at spawn (`src/player/mod.rs:118,171`) and `gas_budget` in `src/vector/gas.rs`,
+which only ever subtracts. **There was no refill of any kind.** At `gas_boost_per_s: 18.0` on a
+`gas_tank: 100.0` that is **5.6 s of boost for a 330 s mission**, after which the Vector Gear
+was dead for the rest of the run. Titans have carried a `regen_per_s` since 2026-08-09; the
+player had nothing.
+
+**I asked him which shape the refill should take (regenerate while idle / refill on the ground /
+never but a much bigger tank) and he did not answer that half.** So, under the autonomous rule:
+
+**ASSUMPTION: it regenerates while neither boosting nor reeling, after a short delay**, with
+these values — all four in `assets/data/game.ron`, all marked `⚠️ UNTUNED`:
+
+| key | was | now | what it buys |
+|---|---|---|---|
+| `gas_tank` | 100.0 | **300.0** | the user asked for "sehr viel mehr" |
+| `gas_boost_per_s` | 18.0 | 18.0 | unchanged, boost still costs |
+| `gas_regen_per_s` | — | **10.0** | refills **only while nothing is being spent** |
+| `gas_regen_delay_s` | — | **0.5** | tapping boost does not become free |
+
+**Consequence: a full tank is `300 / 18` = 16.67 s of continuous boost, against 5.6 s before**,
+and an empty tank refills in `300 / 10` = 30 s of not using it. The delay is 30 ticks.
+
+⚠️ **Correction, 2026-08-10.** This entry first claimed "holding boost drains at a net 8/s, so a
+full tank is 37.5 s". **That was wrong and it was the supervisor's arithmetic, not the
+implementation's.** A net drain requires the refill to keep running *during* the boost, which
+contradicts the decision one line above it, empties `gas_regen_delay_s` of meaning, and
+contradicts the very tests this entry asked for ("does not refill while boost is held"). The
+agent implemented the decision and reported the error rather than quietly matching the number.
+**The tripled tank is the whole answer to the user's complaint; the regeneration lengthens no
+single held boost at all** — what it buys is that the gear is never permanently dead.
+*If 37.5 s is what is actually wanted*, the change is one line — move `refill_tank` above the
+spend branch in `src/vector/gas.rs` — and then `gas_regen_delay_s` must be deleted, because it
+would no longer mean anything, and three tests go red on purpose.
+
+**Why regeneration and not one of the other two:** the bible coples the resource to risk rather
+than to a timer — burning gas is *loud*, and a Bellower answers it (bible line 159). A resource
+that is simply gone after five seconds cannot carry that; a resource you keep choosing to spend
+can. Refilling only on the ground was the tempting alternative and it loses the same way: it
+turns the Vector Gear into a thing you use between rests, and pillar P1 says it **is** the
+combat, not the transport between fights (bible line 29).
+
+**What would have to be rolled back:** four values in one file and one system. No feature depends
+on the shape of the refill; `gas_regen_per_s: 0.0` restores the old behaviour exactly, and
+`gas_regen_delay_s` becomes dead but harmless. If you would rather have "ground only", that is a
+condition on one `if` in `src/vector/gas.rs`, not a redesign.
+
+**Still open and NOT decided by me:** whether 300 / 18 / 10 / 0.5 *feel* right. No test can
+answer that. It is the same class of question as Q-029, and only you can close it.
+
+## Q-034 — A rope that has been shortened already stays shortened. You asked; here is the answer.
+
+**Context:** the user, 2026-08-10: *"und wenn mit seilen verbunden und wurde kürzer soll erstmal
+nicht länger werden. aber da bin ich nicht sicher."*
+
+**It already behaves that way, and this is not a question but a confirmation.**
+`src/player/rope.rs:287` is the only write to the length after anchoring:
+
+```rust
+let next_m = (joint.limits.max - rate_m_s * dt).max(min_rope_m);
+```
+
+It only ever subtracts, floored at `min_rope_m: 3.0`. `attach_ropes` sets the initial length once,
+to the distance that really existed at the moment of anchoring, "so anchoring never yanks the
+player" (`rope.rs:105`). **Nothing anywhere increases `limits.max`.** A rope that got shorter
+stays shorter until the hook is released.
+
+**The neighbouring fact, which is probably the one that matters:** `limits.min = 0.0`, so the
+joint corrects **only** when the distance exceeds the maximum. The rope is a **leash, never a
+rod** — it pulls and can never push. Together with a reel that *assigns* velocity instead of
+adding to it (`FINDINGS.md` FIND-013), the working hypothesis for *"seile ohne boost bringen gar
+nichts"* is that **a rope-only player has no mechanism at all for turning a swing into height or
+into speed he did not already have.** That is being measured; it is not yet established.
 
 ---
 

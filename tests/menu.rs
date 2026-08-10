@@ -116,6 +116,40 @@ fn p4_esc_twice_gives_the_pointer_back_to_the_game() {
     assert_eq!(*app.world().resource::<Screen>(), Screen::Playing);
 }
 
+/// Four toggles in a row, checked after **every** one of them.
+///
+/// The two tests above check one flip each and would both still pass if the second `Esc` were
+/// the last one that worked. Outside the process, on the real screen, four toggles were driven
+/// with `ydotool` and the cursor came and went four times; this is the in-process twin of that
+/// run — and the only one of the two that a `cargo test` can defend.
+#[test]
+fn p4_the_pointer_follows_the_screen_through_four_toggles() {
+    let (mut app, window) = app_with_window();
+
+    for round in 1..=4 {
+        press_esc(&mut app, window);
+        // Odd press = paused, even press = playing again.
+        let (want_screen, want_grab) = if round % 2 == 1 {
+            (Screen::Paused, CursorGrabMode::None)
+        } else {
+            (Screen::Playing, CursorGrabMode::Locked)
+        };
+
+        assert_eq!(
+            *app.world().resource::<Screen>(),
+            want_screen,
+            "after Esc number {round} the screen has to be {want_screen:?}"
+        );
+        let c = cursor(&app, window);
+        assert_eq!(c.grab_mode, want_grab, "Esc number {round}: the pointer follows the screen");
+        assert_eq!(
+            c.visible,
+            want_screen == Screen::Paused,
+            "Esc number {round}: a paused pointer is visible, a playing one is not"
+        );
+    }
+}
+
 /// The capture itself — and that it happens **because there is a window**.
 #[test]
 fn p4_the_pointer_is_captured_when_there_is_a_window() {
@@ -185,6 +219,47 @@ fn f175_the_pause_screen_offers_resume_and_quit() {
     press_esc(&mut app, window);
     let mut overlay = app.world_mut().query::<&PauseElement>();
     assert_eq!(overlay.iter(app.world()).count(), 0, "Resume has to clear the screen again");
+}
+
+/// The overlay is on screen for as long as the pause lasts — and it is there **once**.
+///
+/// `spawn_pause_screen` is self-healing and not message-driven: its condition is *"paused and
+/// nothing on screen"* (`src/menu/pause.rs:27-30`). That is the right shape, and it is exactly
+/// the shape that fails silently — a missing guard spawns a fresh overlay **every frame** and
+/// nobody sees it, because the copies sit on top of each other and the screen looks correct.
+/// So the assertion is not "something is on screen" but "the same number of things".
+#[test]
+fn f175_the_pause_screen_is_on_screen_once_and_stays_once() {
+    let (mut app, window) = app_with_window();
+
+    press_esc(&mut app, window);
+    let after_one_pause = {
+        let mut overlay = app.world_mut().query::<&PauseElement>();
+        overlay.iter(app.world()).count()
+    };
+    assert!(after_one_pause > 0, "a paused game has to show its pause screen");
+
+    // Five frames of standing still in the pause. Nothing has changed, so nothing may be spawned.
+    for _ in 0..5 {
+        app.update();
+    }
+    let mut overlay = app.world_mut().query::<&PauseElement>();
+    assert_eq!(
+        overlay.iter(app.world()).count(),
+        after_one_pause,
+        "holding the pause for five frames must not spawn a second overlay per frame"
+    );
+
+    // …and through a whole second cycle: Resume, pause again.
+    press_esc(&mut app, window);
+    press_esc(&mut app, window);
+    let mut overlay = app.world_mut().query::<&PauseElement>();
+    assert_eq!(
+        overlay.iter(app.world()).count(),
+        after_one_pause,
+        "the second pause screen has to be the same size as the first one, not twice it"
+    );
+    assert_eq!(*app.world().resource::<Screen>(), Screen::Paused);
 }
 
 /// Resume is a button as well as a key — because a key is the only one of the two anybody in

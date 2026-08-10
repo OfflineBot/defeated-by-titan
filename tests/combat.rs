@@ -122,11 +122,15 @@ fn hits(app: &App) -> Vec<(u64, TitanHit)> {
     app.world().resource::<HitLog>().0.clone()
 }
 
-/// Holds the **right** slash. `KeyE` is `SLASH_RIGHT` (`src/net/local.rs`), and the right
-/// blade lies on `+X` for a player looking at −Z — the axis every pass in this file is built
-/// on. The real key, through the real `Intent` channel: no second, wrong way to play.
+/// Holds the **right** slash. The right blade lies on `+X` for a player looking at −Z — the
+/// axis every pass in this file is built on. The real button, through the real `Intent`
+/// channel: no second, wrong way to play.
+///
+/// ⚠️ Depends on the binding `RMB` → `SLASH_RIGHT` (`src/net/local.rs::read_input`). It has to
+/// be the right blade, not the left, because every assertion below reads `Swings.right`. Until
+/// 2026-08-10 this pressed `KeyE`; `E` is `HOOK_RIGHT` now and no blade ever swung.
 fn hold_slash(app: &mut App) {
-    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyE);
+    app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
 }
 
 fn swing_tick(app: &mut App) -> Option<u32> {

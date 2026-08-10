@@ -102,9 +102,27 @@ wait 0.6
 mark game-reeled
 
 # ***** docs/PLAN-GAME.md §3.1, Risk 1 — the tripwire, checked for the first time *****
+#
+# ⚠️⚠️ **THESE TWO ARE RED AS OF 2026-08-10, AND THEY ARE LEFT RED ON PURPOSE.**
+#
+#     assert speed > 25    measured 46.414 m/s until this morning, measures **19.344** now
+#     assert height > 12   measured 13.064 m   until this morning, measures ** 9.881** now
+#
+# Nothing in ACT 1 changed. What changed is underneath it: `B-004`'s take-up ratchet in
+# `src/player/rope.rs` (2026-08-10) makes the rope follow the real distance DOWN and never up,
+# so the player can no longer fly past his anchor. The 46.414 this file and
+# `scripts/f-001-hooks.txt` have quoted for a day was that overshoot — a reel that ended at
+# 54.18 m/s and then whipped (docs/QUESTIONS.md Q-032, docs/FINDINGS.md FIND-016). With the
+# rope kept taut the same reel arrives at 19.344 m/s and stops 2 m short of the roof line.
+#
+# **Loosening either line would delete the only tripwire this project has for Risk 1.** The
+# sentence "the whole combat design assumes a player who moves at 30 m/s" is either true of the
+# rope or it is not, and right now it is not — ACTS 2-4 below still cut at 30.00/30.33 m/s, but
+# every one of those is a FALL. The repair belongs to the rope/vector job, not to this file.
 assert speed > 25       # "the rest of this plan is designed for a player who moves at 30 m/s"
 assert height > 12.0    # a jump reaches 1.056 m. Twelve metres is the rope and nothing else.
-assert gas < 100        # and the reel really was paid for out of the tank
+assert gas < 300        # and the reel really was paid for out of the tank (`gas_tank` is 300
+                        # since 2026-08-10 — the old `< 100` rebased, not loosened)
 
 wait 1.2
 mark game-on-the-roof
@@ -116,7 +134,7 @@ assert kills == 0
 # ⚠️ **LET GO OF THE ROPE BEFORE FIGHTING.** This is the one thing that only shows up when the
 # pieces run together, and it cost this file its first two kills.
 #
-# `hook left 6.0` holds the button for 360 ticks from t=173, so the rope is alive until t=533;
+# `hook left 6.0` holds `KeyQ` for 360 ticks from t=173, so the rope is alive until t=533;
 # `key Ctrl 5.0` reels until t=498. In the first version of this file ACTS 2 and 3 warped 55 m
 # away while that `DistanceJoint` was still attached — the player was not falling, he was being
 # yanked, and the blade never came near a nape. **Not one line of the log said so**: no assert
@@ -127,7 +145,7 @@ assert kills == 0
 # fight waits the rope out. The husk of the mission's own first wave is 38 m away on the ground
 # and cannot reach a roof at y = 12 anyway (`combat::strike`'s ceiling is the shoulder,
 # 0.82 x 10 m).
-wait 4.2                # past t=533: both buttons released, the joint is gone
+wait 4.2                # past t=533: both rope keys released, the joint is gone
 mark game-rope-released
 assert speed < 1.0      # standing on the roof, attached to nothing
 assert height > 11.5
@@ -141,7 +159,7 @@ look 0 0
 wait 0.45               # 27 ticks of fall BEFORE the husk exists — that is what puts the
 spawn titan husk 0 0 18 # player 9 m/s faster at a nape in the same pose as q030's
 wait 0.90
-key E 0.40              # SLASH_RIGHT (`src/net/local.rs`): the right blade, on +X
+slash right 0.40        # SLASH_RIGHT (`src/net/local.rs`): the right blade, on +X
 wait 0.60
 mark game-cut-1
 assert kills == 1
@@ -156,7 +174,7 @@ look 0 0
 wait 0.45
 spawn titan husk 16 0 12
 wait 0.90
-key E 0.40
+slash right 0.40
 wait 0.60
 mark game-cut-2
 assert kills == 2
@@ -171,7 +189,7 @@ look 0 0
 wait 0.45
 spawn titan husk -16 0 12
 wait 0.90
-key E 0.40
+slash right 0.40
 wait 0.60
 mark game-cut-3
 

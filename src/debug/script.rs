@@ -11,7 +11,8 @@
 //! spawn titan husk 20 0 -40   # kind and position in meters
 //! look 0 -10                  # look direction in degrees (yaw, pitch)
 //! key Space 0.3               # hold the key for 0.3 s
-//! hook left                   # hook out
+//! hook left                   # hook out — the rope, on `Q`/`E`
+//! slash right 0.2             # the blade, on the right mouse button
 //! wait 1.2                    # commands are deferred — otherwise you photograph an empty field
 //! mark eingehakt              # a line in the log to line a screenshot up against
 //! assert speed > 25           # ⭐ the script may judge for itself: if it falls over, it is a test
@@ -44,8 +45,21 @@ pub enum ScriptCommand {
     Look { yaw_deg: f32, pitch_deg: f32 },
     /// `key <name> <seconds>` — hold a real key
     Key { code: KeyCode, duration_s: f32 },
-    /// `hook left|right <seconds>` — hold a real mouse button
+    /// `hook left|right <seconds>` — hold the real rope key, `Q` or `E`.
+    ///
+    /// ⚠️ It pressed `MouseButton::Left`/`Right` until 2026-08-10. The user moved the ropes
+    /// onto the keyboard so they can be **steered** while aiming (`src/net/local.rs`), and the
+    /// mouse buttons became the blades. The verb kept its name because a dozen scripts say it
+    /// and it still says what it means; only the button underneath moved. A script that was
+    /// not repointed on that day swung a sword where it meant to fire a rope, silently.
     Hook { right: bool, duration_s: f32 },
+    /// `slash left|right <seconds>` — hold a real mouse button.
+    ///
+    /// The counterpart to [`ScriptCommand::Hook`], and it exists because `parse_key` cannot
+    /// reach a mouse button at all: after the rebinding the blades live on `LMB`/`RMB`, and
+    /// without this verb no script could cut with the right blade at all (`KeyF` is a second
+    /// binding for the LEFT one only).
+    Slash { right: bool, duration_s: f32 },
     /// `wait <seconds>`
     Wait(f32),
     /// `mark <text>`
@@ -91,6 +105,19 @@ pub enum Metric {
     /// means `Lost` and gets `Won` because somebody inserted a variant in the middle is a green
     /// run that measured the opposite of what it says.
     Phase,
+    /// How many of the local player's hook arms are **anchored** right now — `0`, `1` or `2`
+    /// ([`Hook::anchored_count`](crate::shared::Hook::anchored_count)).
+    ///
+    /// **The first metric that observes the Vector Gear itself.** Until it existed, a script
+    /// that wanted to say "the rope was still on him when the blade went through the nape"
+    /// had to argue from the GAS LEDGER: reel gas is debited only while `REEL_IN` is held
+    /// **and** an arm is anchored (`src/vector/gas.rs`), so a falling tank implies a rope.
+    /// That is a proxy with about five ticks of resolution — `scripts/f-flight-cut.txt` names
+    /// the gap in its own header — and it cannot say *on which tick*. This one can.
+    ///
+    /// A count and not a yes/no, because `F-001`'s two hooks are independent: `== 2` is a
+    /// sentence a script has to be able to write.
+    Rope,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -201,19 +228,17 @@ fn parse_line(line: &str) -> Result<ScriptCommand, String> {
             code: parse_key(t.get(1).ok_or("key name is missing")?)?,
             duration_s: number(t.get(2), "duration")?,
         }),
-        "hook" => {
-            let side = *t.get(1).ok_or("`left` or `right` is missing")?;
-            let right = match side {
-                "left" => false,
-                "right" => true,
-                other => return Err(format!("side {other:?} — allowed: left, right")),
-            };
-            Ok(ScriptCommand::Hook {
-                right,
-                // Without a value: one tick. A hook is a tap, not autofire.
-                duration_s: if t.len() > 2 { number(t.get(2), "duration")? } else { 0.05 },
-            })
-        }
+        // The two triggers of the Vector Gear. Same shape on purpose: they are the same
+        // gesture on two different devices since the rebinding, and a script author who knows
+        // one knows the other.
+        "hook" => Ok(ScriptCommand::Hook {
+            right: side(&t)?,
+            duration_s: hold(&t)?,
+        }),
+        "slash" => Ok(ScriptCommand::Slash {
+            right: side(&t)?,
+            duration_s: hold(&t)?,
+        }),
         "wait" => Ok(ScriptCommand::Wait(number(t.get(1), "duration")?)),
         "mark" => {
             let text = t[1..].join(" ");
@@ -236,10 +261,14 @@ fn parse_line(line: &str) -> Result<ScriptCommand, String> {
                 // that accepted it would have handed the mission round a green run that
                 // measured nothing.
                 "phase" => Metric::Phase,
+                // `rope` reads `shared::Hook`, which has been on every player since `F-001` —
+                // so unlike `phase` this one never had to be refused. What it replaces is a
+                // proxy, not a hole: see [`Metric::Rope`].
+                "rope" => Metric::Rope,
                 other => {
                     return Err(format!(
                         "metric {other:?} is not measurable — known: \
-                         speed, height, gas, titans, tick, health, kills, phase"
+                         speed, height, gas, titans, tick, health, kills, phase, rope"
                     ));
                 }
             };
@@ -258,8 +287,29 @@ fn parse_line(line: &str) -> Result<ScriptCommand, String> {
             })
         }
         "end" => Ok(ScriptCommand::End),
-        other => Err(format!("unknown command {other:?}")),
+        // The list is spelled out and not left to a reader of this file: the error message is
+        // the only place a script author finds the vocabulary, and `slash` was invisible for
+        // exactly as long as it was missing from here.
+        other => Err(format!(
+            "unknown command {other:?} — known: \
+             spawn, warp, look, key, hook, slash, wait, mark, assert, end"
+        )),
     }
+}
+
+/// `left`/`right` after a `hook` or a `slash` — `true` means right.
+fn side(t: &[&str]) -> Result<bool, String> {
+    match *t.get(1).ok_or("`left` or `right` is missing")? {
+        "left" => Ok(false),
+        "right" => Ok(true),
+        other => Err(format!("side {other:?} — allowed: left, right")),
+    }
+}
+
+/// The optional hold time of a `hook`/`slash`. Without a value: one tick — a trigger is a
+/// tap, not autofire.
+fn hold(t: &[&str]) -> Result<f32, String> {
+    if t.len() > 2 { number(t.get(2), "duration") } else { Ok(0.05) }
 }
 
 /// Only the keys the game really uses. A complete table would be three hundred lines
@@ -280,9 +330,12 @@ fn parse_key(name: &str) -> Result<KeyCode, String> {
         "F3" | "f3" => KeyCode::F3,
         "Shift" | "shift" => KeyCode::ShiftLeft,
         "Ctrl" | "ctrl" => KeyCode::ControlLeft,
+        // `MARK` since the rebinding of 2026-08-10 (`src/net/local.rs`). Without it a script
+        // cannot press MARK at all — the button moved off `Q` and `Q` is a rope now.
+        "Tab" | "tab" => KeyCode::Tab,
         other => {
             return Err(format!(
-                "key {other:?} is unknown — known: W A S D Q E C F F3 Space Shift Ctrl"
+                "key {other:?} is unknown — known: W A S D Q E C F F3 Space Shift Ctrl Tab"
             ));
         }
     })
@@ -357,6 +410,41 @@ assert speed > 25
     }
 
     #[test]
+    fn slash_is_a_verb_and_it_mirrors_hook_exactly() {
+        // The blades moved onto the mouse on 2026-08-10 and `parse_key` cannot reach a mouse
+        // button, so without this verb `SLASH_RIGHT` had no route out of a script at all.
+        let a = parse("slash left\nslash right 0.2\n").expect("`slash` is a verb");
+        assert_eq!(a[0].command, ScriptCommand::Slash { right: false, duration_s: 0.05 });
+        assert_eq!(a[1].command, ScriptCommand::Slash { right: true, duration_s: 0.2 });
+        // Same error shape as `hook`, out of the same helper.
+        let f = parse("slash high").expect_err("`high` is not a side");
+        assert!(f[0].reason.contains("allowed: left, right"), "{:?}", f[0].reason);
+    }
+
+    #[test]
+    fn an_unknown_command_lists_the_vocabulary_it_does_have() {
+        // An error message that names no vocabulary is the reason a script author guesses —
+        // and `slash` is exactly the verb that would stay invisible.
+        let f = parse("swing left\n").expect_err("`swing` is not a command");
+        assert!(f[0].reason.contains("unknown command"), "{:?}", f[0].reason);
+        for known in ["hook", "slash", "key", "assert"] {
+            assert!(
+                f[0].reason.contains(known),
+                "the error has to list {known:?}: {:?}",
+                f[0].reason
+            );
+        }
+    }
+
+    #[test]
+    fn tab_is_a_key_a_script_can_press() {
+        // `MARK` sits on `Tab` since the rebinding — `Q` is a rope now. Without this arm no
+        // script can press MARK at all.
+        assert_eq!(parse_key("Tab"), Ok(KeyCode::Tab));
+        assert_eq!(parse_key("tab"), Ok(KeyCode::Tab));
+    }
+
+    #[test]
     fn mark_without_text_is_not_a_mark() {
         assert!(parse("mark").is_err());
         assert!(parse("mark   # just a comment").is_err());
@@ -393,11 +481,27 @@ assert speed > 25
     }
 
     #[test]
+    fn rope_is_a_metric_and_counts_up_to_two() {
+        // `== 2` has to be writable: `F-001`'s hooks are independent, so a yes/no would lose
+        // the one distinction the two arms exist for. That the number really follows the
+        // component is `tests/debug.rs::assert_rope_counts_the_anchored_arms_and_is_not_a_constant`.
+        let a = parse("assert rope >= 1\nassert rope == 2\n").expect("`rope` is measurable");
+        let ScriptCommand::Assert { metric, comparison, value } = a[0].command else {
+            panic!("`assert rope >= 1` did not become an assert");
+        };
+        assert_eq!(metric, Metric::Rope);
+        assert_eq!(comparison, Comparison::GreaterEqual);
+        assert_eq!(value, 1.0);
+        let ScriptCommand::Assert { value, .. } = a[1].command else { panic!("not an assert") };
+        assert_eq!(value, 2.0);
+    }
+
+    #[test]
     fn an_unknown_metric_still_lists_what_is_known() {
         // The error message is the only place a script author finds the vocabulary.
         let f = parse("assert cloud == 1").expect_err("`cloud` measures nothing");
         assert!(f[0].reason.contains("not measurable"));
-        for known in ["health", "kills", "phase"] {
+        for known in ["health", "kills", "phase", "rope"] {
             assert!(
                 f[0].reason.contains(known),
                 "the error has to list {known:?}: {:?}",

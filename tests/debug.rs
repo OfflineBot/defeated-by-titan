@@ -25,8 +25,8 @@ use defeated_by_titan::debug::script::parse;
 use defeated_by_titan::debug::{DebugOverlay, ScriptRun};
 use defeated_by_titan::player::spawn_player;
 use defeated_by_titan::shared::{
-    AnchorSurface, Block, Health, IdCounter, LocalPlayer, StateClock, TitanId, TitanKindName,
-    TitanState, Cli,
+    AnchorSurface, Block, BodyId, Health, Hook, HookState, IdCounter, LocalPlayer, Side,
+    StateClock, TitanId, TitanKindName, TitanState, Cli,
 };
 
 /// Builds the **real** app, headless — not a second, similar one.
@@ -464,6 +464,80 @@ fn assert_phase_without_a_mission_reads_briefing() {
     assert_eq!(failures.len(), 1, "nothing is Active without --mission");
 }
 
+/// Anchors one arm of the local player's [`Hook`], the way `vector::hook` would.
+///
+/// The state is written directly and not shot at a wall: what is under test here is the
+/// **metric**, and a fixture that has to hit a block first would go red for aiming.
+/// That a real shot really does anchor is `scripts/b001-anchor.txt`.
+fn anchor(app: &mut App, player: Entity, side: Side) {
+    let mut hook = app
+        .world_mut()
+        .get_mut::<Hook>(player)
+        .expect("a player carries a `Hook` from tick 1 (`player::spawn_player`)");
+    hook.arms[side.index()].state =
+        HookState::Anchored { body: BodyId(1), local_m: Vec3::ZERO };
+}
+
+#[test]
+fn assert_rope_counts_the_anchored_arms_and_is_not_a_constant() {
+    // **The metric `scripts/f-flight-cut.txt` had to argue around.** That run claims a cortex
+    // cut landed under rope momentum, and the only rope observation the vocabulary offered was
+    // the GAS LEDGER — gas is debited only while `REEL_IN` is held and an arm is anchored
+    // (`src/vector/gas.rs`), so a falling tank *implies* a rope. That is a proxy with about
+    // five ticks of resolution, and it is not the sentence "a rope was anchored on this tick".
+    //
+    // The transition is the claim: zero with nothing anchored, one per anchored arm. A metric
+    // that answered a constant would pass half of this test and prove nothing at all.
+    let mut app = running_app();
+    let player = local_player(&mut app);
+
+    let (checked, failures) = run_line(&mut app, "assert rope == 0");
+    assert_eq!(checked, 1, "the assert did not run at all");
+    assert!(failures.is_empty(), "nothing was ever fired, so nothing is anchored: {failures:?}");
+
+    let (_, failures) = run_line(&mut app, "assert rope >= 1");
+    assert_eq!(
+        failures.len(),
+        1,
+        "no hook has been fired — a rope check must not pass on an empty world"
+    );
+
+    anchor(&mut app, player, Side::Left);
+    let (_, failures) = run_line(&mut app, "assert rope >= 1");
+    assert!(failures.is_empty(), "one arm is anchored and the metric denies it: {failures:?}");
+    let (_, failures) = run_line(&mut app, "assert rope == 1");
+    assert!(failures.is_empty(), "one anchored arm must read as exactly one: {failures:?}");
+
+    // Two arms, because `F-001`'s hooks are independent: a metric that saturated at one would
+    // be green above and still be unable to tell one rope from two.
+    anchor(&mut app, player, Side::Right);
+    let (_, failures) = run_line(&mut app, "assert rope == 2");
+    assert!(failures.is_empty(), "both arms are anchored: {failures:?}");
+}
+
+#[test]
+fn assert_rope_without_a_player_measures_nothing_and_fails() {
+    // Same direction as `assert health` and `assert kills`: not measurable counts as failed
+    // (§9). `0.0` for "there is nobody to read a hook off" would turn `assert rope == 0` into a
+    // green line in a run that had no player in it at all.
+    //
+    // The marker is taken off rather than the entity despawned: `bevy_render`'s
+    // `sync_component` panics on a despawn in this headless fixture (measured), and the driver
+    // asks `With<LocalPlayer>` anyway — no local player is no local player.
+    let mut app = running_app();
+    let player = local_player(&mut app);
+    app.world_mut().entity_mut(player).remove::<LocalPlayer>();
+
+    let (checked, failures) = run_line(&mut app, "assert rope == 0");
+    assert_eq!(checked, 1);
+    assert_eq!(failures.len(), 1, "there is no player whose hooks could be counted");
+    assert!(
+        failures[0].contains("nothing"),
+        "the message has to say that nothing was measured, not print a number: {:?}",
+        failures[0]
+    );
+}
+
 #[test]
 fn a_metric_that_does_not_exist_is_an_error_and_not_a_zero() {
     // A parser that silently accepted an unknown word would hand back a green run that
@@ -472,9 +546,105 @@ fn a_metric_that_does_not_exist_is_an_error_and_not_a_zero() {
     let f = parse("assert cloud == 1\n").expect_err("`cloud` is not measurable");
     assert!(f[0].reason.contains("not measurable"), "{:?}", f[0].reason);
     assert!(
-        f[0].reason.contains("health") && f[0].reason.contains("kills") && f[0].reason.contains("phase"),
+        f[0].reason.contains("health")
+            && f[0].reason.contains("kills")
+            && f[0].reason.contains("phase")
+            && f[0].reason.contains("rope"),
         "the error message has to list what IS known: {:?}",
         f[0].reason
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// `--ticks` and the verdict. **The quietest way to lose a test in this repository.**
+// ---------------------------------------------------------------------------------------
+
+/// Runs the **real** app with a real `--ticks` limit and hands back the exit the process
+/// would have.
+///
+/// [`App::should_exit`] and not a hand-rolled read of `Messages<AppExit>`: that is the exact
+/// function `ScheduleRunnerPlugin`'s runner asks (`bevy_app-0.19.0/src/app.rs:1429`), errors
+/// included — so what comes back here is the exit code, not a guess at it.
+///
+/// The plan is injected instead of a file being written: `DebugPlugin` reads `--script` at
+/// **build** time, and a test that has to lay a file on disk first checks the file system
+/// rather than the rule. Everything under test — the registered `exit_after_ticks`, the real
+/// `ScriptRun`, `debug::cutoff_verdict` — is the app's own.
+fn exit_of_a_run(ticks: u64, script: &str) -> AppExit {
+    let mut app = defeated_by_titan::app(Cli { headless: true, ticks, ..default() });
+    // Without this the fixed step depends on how much wall time a frame happened to take,
+    // and `--ticks` would be reached after a number of frames nobody can predict.
+    app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    {
+        let plan = parse(script).unwrap_or_else(|e| {
+            let list: Vec<String> = e.iter().map(|f| f.to_string()).collect();
+            panic!("{script:?} does not parse: {}", list.join("; "))
+        });
+        app.world_mut().resource_mut::<ScriptRun>().plan = plan;
+    }
+    // Generously more frames than ticks: the exit has to come from `--ticks`, and a loop that
+    // stops exactly at the limit could not tell "exited" from "ran out of frames".
+    for _ in 0..(ticks * 2 + 20) {
+        app.update();
+        if let Some(exit) = app.should_exit() {
+            return exit;
+        }
+    }
+    panic!("the run never ended — `--ticks {ticks}` did not exit at all");
+}
+
+#[test]
+fn a_failed_assert_survives_the_tick_limit_that_cuts_the_script_off() {
+    // **The bug this test exists for.** `exit_after_ticks` wrote `AppExit::Success` the moment
+    // `tick >= ticks`, without ever looking at the script. So a limit that fell before the
+    // script's end ended the run green **with red asserts in its own log**:
+    //
+    //   --headless --script scripts/f-001-hooks.txt --ticks 400   -> exit 0, 2 asserts red
+    //   --headless --script scripts/f-001-hooks.txt --ticks 2000  -> exit 1, "2 of 14 failed"
+    //
+    // That is `docs/HANDOVER.md` §2.2 again with a different cause — a run that reports
+    // success for something it did not show — and every `--ticks` number in a script header is
+    // a potential instance of it.
+    //
+    // `assert height > 1000` cannot hold: the player is dropped from ~2 m. `wait 10` is 600
+    // ticks, so the limit of 4 lands in the middle of it and `mark` never runs.
+    let exit = exit_of_a_run(4, "assert height > 1000\nwait 10\nmark never-reached\n");
+    assert!(
+        exit.is_error(),
+        "a run whose asserts went red ended at exit 0 because --ticks cut it off — the one \
+         invariant is that a failed assert is never green, under any flag combination"
+    );
+}
+
+#[test]
+fn a_script_cut_off_before_its_end_is_not_a_green_run_either() {
+    // The second, weaker half — and the reason the message is a distinct one. Every assert
+    // that ran held, but the script never reached its end, so nothing it claims further down
+    // was ever checked and its summary line was never printed. A run that stops in the middle
+    // has not demonstrated what the file says it demonstrates; the fix is a bigger `--ticks`,
+    // not a change to the game.
+    let exit = exit_of_a_run(4, "assert height > 0\nwait 10\nmark never-reached\n");
+    assert!(
+        exit.is_error(),
+        "the script never got to its end and the run still reported success — that is exactly \
+         the reading a truncated `--ticks` must not be allowed to produce"
+    );
+}
+
+#[test]
+fn a_run_without_a_script_and_a_finished_script_both_stay_green() {
+    // **The half that keeps the fix from being worse than the bug.** `--ticks` has legitimate
+    // uses that have nothing to do with a verdict: a plain simulation run without any script,
+    // and a script that really is through. Neither may start failing.
+    assert!(
+        !exit_of_a_run(4, "").is_error(),
+        "`--ticks` without `--script` is a simulation run, not a failed test"
+    );
+    // `end` closes the script inside the limit; `wait 0.02` is one tick, so the run is really
+    // finished and not merely out of instructions.
+    assert!(
+        !exit_of_a_run(6, "assert height > 0\nwait 0.02\nend\n").is_error(),
+        "a script that reached its end with every assert holding must stay green"
     );
 }
 

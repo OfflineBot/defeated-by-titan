@@ -25,11 +25,22 @@ pub struct Gas {
     pub max: f32,
     /// `--sandbox` sets this: infinite gas, for looking around (§12a).
     pub unlimited: bool,
+    /// Seconds still to wait before the tank refills again (`F-018`, `docs/QUESTIONS.md`
+    /// Q-033). Armed by every tick that wants gas, counted down while nobody does.
+    ///
+    /// **It lives here and not in a `Resource` and not in a `Local`**: it is state of *one*
+    /// tank, twenty players have twenty of them, and it has to travel with the tank into a
+    /// save and one day down a wire (`docs/multiplayer.md` rule 8). The length of the pause
+    /// is a game value and stands in `game.ron` (`vector.gas_regen_delay_s`), never here.
+    ///
+    /// Written by the same single writer as [`current`](Self::current) —
+    /// `vector::gas::gas_budget`, the authority table in `docs/architecture.md`.
+    pub regen_delay_left_s: f32,
 }
 
 impl Gas {
     pub fn full(max: f32) -> Self {
-        Gas { current: max, max, unlimited: false }
+        Gas { current: max, max, unlimited: false, regen_delay_left_s: 0.0 }
     }
 
     pub fn fraction(&self) -> f32 {

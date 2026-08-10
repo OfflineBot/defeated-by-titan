@@ -1,4 +1,18 @@
-//! The guard over the camera's axis contract.
+//! The guard over the camera's axis contract — **and over the two ropes.**
+//!
+//! Two claims live here, and they fail in the same way: the image looks plausible and shows
+//! something other than what is measured. The camera half is below from
+//! [`f002_look_zero_points_the_camera_at_minus_z`] on; the rope half is at the end of the file
+//! and is younger. Until 2026-08-10 `render::rope::draw_ropes` was an empty body, so **no
+//! pixel anywhere in this build told a player that a rope was attached** — the gas bar
+//! draining was the only proxy, and every screenshot captioned "hook" or "rope" was showing
+//! none.
+//!
+//! The rope tests do **not** stop at the geometry function. They set a hook state on the real
+//! player, run the real `Update` and the real `Last`, and then read the gizmo buffer the app
+//! actually handed to the renderer (`bevy_gizmos::GizmoAsset::buffer`, filled by
+//! `update_gizmo_meshes` in `Last`). That is what makes them a check on the *registration*
+//! too: an unregistered system leaves the buffer empty and every one of them goes red.
 //!
 //! **Image and aim ray have to point the same way.** Until 2026-08-09 they did not:
 //! `render::camera::rotate_camera` was an empty body, the camera always looked at −Z, and
@@ -15,13 +29,19 @@
 //! `Intent` just set with the look direction of the (nonexistent) mouse. A test whose result
 //! depends on the machine's mood that day measures the machine.
 
+use core::any::TypeId;
+
 use bevy::camera::RenderTarget;
 use bevy::ecs::system::RunSystemOnce;
+use bevy::gizmos::config::DefaultGizmoConfigGroup;
+use bevy::gizmos::GizmoHandles;
 use bevy::prelude::*;
 use bevy::ui::DefaultUiCamera;
 use bevy::window::PrimaryWindow;
 use defeated_by_titan::data::GameData;
-use defeated_by_titan::shared::{Intent, LocalPlayer, Cli};
+use defeated_by_titan::debug::gizmo::GizmoToggle;
+use defeated_by_titan::render::rope::rope_color;
+use defeated_by_titan::shared::{BodyId, Cli, Hook, HookArm, HookState, Intent, LocalPlayer, Side};
 
 /// Builds the **real** app, headless — not a second, similar one.
 ///
@@ -267,4 +287,183 @@ fn the_camera_is_the_default_ui_camera() {
         q.iter(app.world()).count()
     };
     assert_eq!(windows, 0, "this app has a window — then the assertion above proves nothing");
+}
+
+// ---------------------------------------------------------------------------
+// F-004 — the ropes. See the file header for why these go through the buffer.
+// ---------------------------------------------------------------------------
+
+/// Everything the app really drew into the default gizmo group this frame, as
+/// `(start, end, colour)` — one entry per line.
+///
+/// The route is the app's own: `Gizmos` in `Update` flushes into
+/// `GizmoStorage<DefaultGizmoConfigGroup, ()>`, and `update_gizmo_meshes` in `Last` moves that
+/// storage whole into a [`GizmoAsset`] (`bevy_gizmos-0.19.0/src/lib.rs:288-320`). The storage
+/// itself is `pub(crate)` and unreadable from out here; the asset's buffer is public, and it
+/// is the same bytes. **Only `Update` and `Last` are run, never `app.update()`** — see the
+/// header: a fixed step would let `vector::hook`, the only writer of [`Hook`], overwrite the
+/// state the test just set, and the test would be measuring the machine's mood.
+///
+/// `line` writes a **pair into the list buffer**, no strip and no separator
+/// (`bevy_gizmos-0.19.0/src/gizmos.rs:412`), so chunks of two are lines and nothing else.
+fn drawn_lines(app: &mut App) -> Vec<(Vec3, Vec3, LinearRgba)> {
+    app.world_mut().run_schedule(Update);
+    app.world_mut().run_schedule(Last);
+
+    let handle = app
+        .world()
+        .resource::<GizmoHandles>()
+        .handles()
+        .get(&TypeId::of::<DefaultGizmoConfigGroup>())
+        .cloned()
+        .flatten();
+    // `update_gizmo_meshes` puts the slot back to `None` when nothing was drawn — that is the
+    // honest empty, not a missing group.
+    let Some(handle) = handle else {
+        return Vec::new();
+    };
+    let assets = app.world().resource::<Assets<GizmoAsset>>();
+    let view = assets.get(&handle).expect("the gizmo asset the handle names").buffer();
+    assert!(
+        view.strip_positions.is_empty(),
+        "something drew a line STRIP into the default group — this reader only understands \
+         lines, and the counts below would be wrong without saying so"
+    );
+    view.list_positions
+        .chunks(2)
+        .zip(view.list_colors.chunks(2))
+        .map(|(p, c)| (p[0], p[1], c[0]))
+        .collect()
+}
+
+/// Puts a hook state on the local player and returns his origin — the point a rope starts at.
+fn set_hook(app: &mut App, hook: Hook) -> Vec3 {
+    // Nobody else may be drawing into the default group, or "nothing was drawn" proves
+    // nothing. `debug::gizmo`'s three systems hang behind `gizmos_on`, and `DBT_GIZMOS` is an
+    // environment variable — so this is a real possibility and not a formality.
+    assert!(
+        !app.world().resource::<GizmoToggle>().on,
+        "DBT_GIZMOS is set: the debug gizmos are drawing into the same group and every count \
+         in this file is meaningless. Run these tests without it."
+    );
+    let player = local_player(app);
+    app.world_mut().entity_mut(player).insert(hook);
+    app.world()
+        .get::<Transform>(player)
+        .expect("the player has a transform")
+        .translation
+}
+
+/// One arm, anchored, with its tip at `tip_m`.
+fn anchored_arm(tip_m: Vec3) -> HookArm {
+    HookArm { state: HookState::Anchored { body: BodyId(7), local_m: Vec3::ZERO }, tip_m }
+}
+
+#[test]
+fn f004_an_anchored_arm_puts_a_line_on_the_screen() {
+    // The claim the whole file exists for: a rope is VISIBLE. Before 2026-08-10 this ran green
+    // on an empty `draw_ropes` for nobody, because nobody had written it.
+    let mut app = app();
+    let tip = Vec3::new(24.0, 11.04, -34.0);
+    let mut hook = Hook::default();
+    hook.arms[Side::Right.index()] = anchored_arm(tip);
+    let origin = set_hook(&mut app, hook);
+
+    let lines = drawn_lines(&mut app);
+    assert_eq!(lines.len(), 1, "one anchored arm has to be exactly one line, got {lines:?}");
+    let (start, end, _) = lines[0];
+    assert!(
+        (start - origin).length() < 1e-4,
+        "the rope starts at {start:?} instead of at the player's origin {origin:?}"
+    );
+    assert!(
+        (end - tip).length() < 1e-4,
+        "the rope ends at {end:?} instead of at the anchor {tip:?}"
+    );
+}
+
+#[test]
+fn f004_only_an_anchored_arm_draws_a_rope() {
+    // **The half that makes the other half falsifiable.** `tip_m` is live while `Flying` and
+    // `Retracting` too — a file that drew those would put a cyan line on screen for a
+    // projectile, and "there is a line" would stop meaning "he is attached".
+    let mut app = app();
+    let tip = Vec3::new(24.0, 11.04, -34.0);
+
+    for state in [
+        HookState::Idle,
+        HookState::Flying { target_m: tip, body: BodyId(7) },
+        HookState::Retracting,
+    ] {
+        let hook = Hook { arms: [HookArm { state, tip_m: tip }; 2] };
+        set_hook(&mut app, hook);
+        let lines = drawn_lines(&mut app);
+        assert!(lines.is_empty(), "{state:?} drew {} lines and must draw none", lines.len());
+    }
+
+    // And the same app, same tick, one field different: now there is a rope. Without this the
+    // test above would also be green on an app that draws nothing at all, ever.
+    let mut hook = Hook::default();
+    hook.arms[Side::Left.index()] = anchored_arm(tip);
+    set_hook(&mut app, hook);
+    assert_eq!(drawn_lines(&mut app).len(), 1, "an anchored left arm is one rope");
+}
+
+#[test]
+fn f004_the_two_arms_draw_independently() {
+    // `F-001` verbatim: two independently steerable hooks. Left anchored with the right free
+    // is one line — not two, not none — and a swapped index cannot pass both halves.
+    let mut app = app();
+    let left_tip = Vec3::new(-8.0, 9.0, -14.0);
+    let right_tip = Vec3::new(8.0, 9.0, -14.0);
+
+    let mut hook = Hook::default();
+    hook.arms[Side::Left.index()] = anchored_arm(left_tip);
+    set_hook(&mut app, hook);
+    let lines = drawn_lines(&mut app);
+    assert_eq!(lines.len(), 1, "left anchored, right free is one line");
+    assert!((lines[0].1 - left_tip).length() < 1e-4, "and it is the LEFT anchor it reaches");
+
+    let mut hook = Hook::default();
+    hook.arms[Side::Right.index()] = anchored_arm(right_tip);
+    set_hook(&mut app, hook);
+    let lines = drawn_lines(&mut app);
+    assert_eq!(lines.len(), 1, "right anchored, left free is one line");
+    assert!((lines[0].1 - right_tip).length() < 1e-4, "and it is the RIGHT anchor it reaches");
+
+    let mut hook = Hook::default();
+    hook.arms[Side::Left.index()] = anchored_arm(left_tip);
+    hook.arms[Side::Right.index()] = anchored_arm(right_tip);
+    set_hook(&mut app, hook);
+    let lines = drawn_lines(&mut app);
+    assert_eq!(lines.len(), 2, "both anchored is two lines");
+    let mut ends: Vec<Vec3> = lines.iter().map(|(_, end, _)| *end).collect();
+    ends.sort_by(|a, b| a.x.total_cmp(&b.x));
+    assert!((ends[0] - left_tip).length() < 1e-4);
+    assert!((ends[1] - right_tip).length() < 1e-4);
+}
+
+#[test]
+fn f004_a_rope_is_the_cyan_out_of_maps_ron() {
+    // `docs/conventions.md` §3 reserves cyan for gas, Vector Gear and anchor points, and a
+    // rope is Vector Gear. The number is not in the test: it is read out of the same file the
+    // game reads, so the day somebody re-tunes the signal colours this stays true instead of
+    // going red for the wrong reason (rule 2).
+    let mut app = app();
+    let mut hook = Hook::default();
+    hook.arms[Side::Right.index()] = anchored_arm(Vec3::new(0.0, 9.0, -14.0));
+    set_hook(&mut app, hook);
+
+    let expected = {
+        let data = app.world().resource::<GameData>();
+        rope_color(data).to_linear()
+    };
+    // The route the value took, spelled out, so the test cannot pass by comparing the
+    // function with itself: `signals:` -> `rope_color` -> the gizmo buffer.
+    let (r, g, b) = app.world().resource::<GameData>().maps.signals["cyan"];
+    assert_eq!(expected, Color::linear_rgb(r, g, b).to_linear(), "rope_color is not maps.ron");
+
+    let lines = drawn_lines(&mut app);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].2, expected, "a rope is drawn in a colour that is not maps.ron's cyan");
 }

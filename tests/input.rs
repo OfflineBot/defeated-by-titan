@@ -31,7 +31,7 @@ use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
-use defeated_by_titan::shared::{Cli, Intent, LocalPlayer, Tick};
+use defeated_by_titan::shared::{Buttons, Cli, Intent, LocalPlayer, Tick};
 
 /// One measured run.
 #[derive(Debug)]
@@ -233,5 +233,137 @@ fn p3_a_script_look_still_overrides_the_mouse() {
         (after_mouse.yaw - 0.25).abs() > 1e-6,
         "after an override the mouse has to move the view again — yaw stayed {}",
         after_mouse.yaw
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The **key mapping** — `src/net/local.rs` is the only place in the game that knows what a
+// key is, and this is the only place that says what the keys mean.
+//
+// The user played the game on 2026-08-10, the first time a human ever did, and asked for the
+// ropes on `Q` and `E` so they can be steered while the blades stay on the mouse. That is a
+// swap, not an addition: whoever moves `HOOK_LEFT` onto `Q` also has to move `MARK` off it,
+// and has to take `HOOK_LEFT` off the left mouse button. A test that only checked the new
+// binding would stay green with the key bound **twice** — so every case below asserts the
+// button that must be set **and** the button that must not be.
+// ---------------------------------------------------------------------------
+
+/// Presses keys and mouse buttons in the **real** app and returns the [`Buttons`] that arrive
+/// on the local player's `Intent` one tick later.
+///
+/// Goes through `ButtonInput` and the whole `FixedPreUpdate` chain, exactly like the script
+/// driver does (`src/debug/mod.rs:217-224`) — writing the `Intent` by hand would test nothing
+/// but the test.
+fn buttons_from(keys: &[KeyCode], mouse: &[MouseButton]) -> Buttons {
+    let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
+
+    // Startup frame with a zero delta, so no fixed step is smuggled in before the press.
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
+    app.update();
+
+    for key in keys {
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(*key);
+    }
+    for button in mouse {
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(*button);
+    }
+
+    // Two timesteps' worth of time: at least one fixed step is due, and a held button is still
+    // held in the second one.
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(
+        2 * app.world().resource::<Time<Fixed>>().timestep(),
+    ));
+    app.update();
+
+    let mut players = app.world_mut().query_filtered::<&Intent, With<LocalPlayer>>();
+    players
+        .iter(app.world())
+        .next()
+        .expect("the local player must exist after startup")
+        .buttons
+}
+
+/// `Q` is the **left rope**, and it is no longer the mark.
+#[test]
+fn bindings_q_is_hook_left_and_not_mark() {
+    let t = buttons_from(&[KeyCode::KeyQ], &[]);
+    assert!(t.contains(Buttons::HOOK_LEFT), "Q must set HOOK_LEFT — got {t:?}");
+    assert!(!t.contains(Buttons::MARK), "Q must not set MARK any more — got {t:?}");
+}
+
+/// `E` is the **right rope**, and it is no longer the right blade.
+#[test]
+fn bindings_e_is_hook_right_and_not_slash_right() {
+    let t = buttons_from(&[KeyCode::KeyE], &[]);
+    assert!(t.contains(Buttons::HOOK_RIGHT), "E must set HOOK_RIGHT — got {t:?}");
+    assert!(
+        !t.contains(Buttons::SLASH_RIGHT),
+        "E must not set SLASH_RIGHT any more — got {t:?}"
+    );
+}
+
+/// The left mouse button is the **left blade**, and it is no longer the left rope.
+#[test]
+fn bindings_left_mouse_is_slash_left_and_not_hook_left() {
+    let t = buttons_from(&[], &[MouseButton::Left]);
+    assert!(t.contains(Buttons::SLASH_LEFT), "LMB must set SLASH_LEFT — got {t:?}");
+    assert!(
+        !t.contains(Buttons::HOOK_LEFT),
+        "LMB must not set HOOK_LEFT any more — got {t:?}"
+    );
+}
+
+/// The right mouse button is the **right blade**, and it is no longer the right rope.
+#[test]
+fn bindings_right_mouse_is_slash_right_and_not_hook_right() {
+    let t = buttons_from(&[], &[MouseButton::Right]);
+    assert!(t.contains(Buttons::SLASH_RIGHT), "RMB must set SLASH_RIGHT — got {t:?}");
+    assert!(
+        !t.contains(Buttons::HOOK_RIGHT),
+        "RMB must not set HOOK_RIGHT any more — got {t:?}"
+    );
+}
+
+/// `MARK` had to go somewhere when `Q` became a rope: `Tab`, a key nothing else uses.
+#[test]
+fn bindings_tab_is_mark() {
+    let t = buttons_from(&[KeyCode::Tab], &[]);
+    assert!(t.contains(Buttons::MARK), "Tab must set MARK — got {t:?}");
+    assert!(
+        !t.contains(Buttons::HOOK_LEFT) && !t.contains(Buttons::HOOK_RIGHT),
+        "Tab must not touch a rope — got {t:?}"
+    );
+}
+
+/// The two hooks stay **independent** — the point of putting them on two keys is that both
+/// ropes can be out at once, and a hand can hold `Q` and `E` where it cannot hold two mouse
+/// buttons and still aim.
+#[test]
+fn bindings_q_and_e_hold_both_ropes_at_once() {
+    let t = buttons_from(&[KeyCode::KeyQ, KeyCode::KeyE], &[]);
+    assert!(
+        t.contains(Buttons::HOOK_LEFT) && t.contains(Buttons::HOOK_RIGHT),
+        "Q+E must set both hooks — got {t:?}"
+    );
+}
+
+/// What the rebinding was **not** allowed to touch: boost, reel-in, jump and dodge sit where
+/// they sat, and `F` keeps working as the second binding for the left blade (the keyboard's
+/// only route to it, and the one `parse_key` can reach).
+#[test]
+fn bindings_boost_reel_jump_dodge_and_f_are_unchanged() {
+    assert!(
+        buttons_from(&[KeyCode::ShiftLeft], &[]).contains(Buttons::BOOST),
+        "Shift must still be BOOST"
+    );
+    assert!(
+        buttons_from(&[KeyCode::ControlLeft], &[]).contains(Buttons::REEL_IN),
+        "Ctrl must still be REEL_IN"
+    );
+    assert!(buttons_from(&[KeyCode::Space], &[]).contains(Buttons::JUMP), "Space must still be JUMP");
+    assert!(buttons_from(&[KeyCode::KeyC], &[]).contains(Buttons::DODGE), "C must still be DODGE");
+    assert!(
+        buttons_from(&[KeyCode::KeyF], &[]).contains(Buttons::SLASH_LEFT),
+        "F must still be SLASH_LEFT"
     );
 }

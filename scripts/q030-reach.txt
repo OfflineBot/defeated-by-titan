@@ -58,7 +58,7 @@ warp -1.80 18.5 0.55
 look 0 0
 key F3 0.05
 wait 0.90
-key E 0.40
+slash right 0.40
 wait 0.08
 mark cortex-pass
 wait 0.10

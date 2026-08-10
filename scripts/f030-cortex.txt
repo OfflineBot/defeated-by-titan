@@ -57,7 +57,7 @@ warp 15.75 18.5 0.8
 look 0 0
 key F3 0.05
 wait 0.90
-key E 0.40
+slash right 0.40
 wait 0.08
 look -90 -6
 mark cortex-cut

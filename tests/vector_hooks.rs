@@ -159,14 +159,26 @@ fn aim_at_nothing(app: &mut App, e: Entity) {
     app.world_mut().entity_mut(e).insert(ForcedAim(AimPoint::default()));
 }
 
-/// Presses a **real** mouse button — the same input a human triggers and the same one the
-/// `--script` driver uses (`src/net/local.rs` maps left/right onto the two arms).
-fn press(app: &mut App, button: MouseButton) {
-    app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(button);
+/// The key that fires the hook on `side` — the **one** place in this file that knows a binding.
+///
+/// ⚠️ Depends on `Q` -> `HOOK_LEFT` and `E` -> `HOOK_RIGHT` (`src/net/local.rs::read_input`).
+/// Until 2026-08-10 the hooks sat on the mouse; `LMB`/`RMB` are the **blades** now, so pressing
+/// them fired no hook at all. Rebind there, change these two lines, and the file follows.
+fn hook_key(side: Side) -> KeyCode {
+    match side {
+        Side::Left => KeyCode::KeyQ,
+        Side::Right => KeyCode::KeyE,
+    }
 }
 
-fn let_go(app: &mut App, button: MouseButton) {
-    app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(button);
+/// Presses a **real** key — the same input a human triggers and the same one the `--script`
+/// driver uses (`src/net/local.rs` maps `Q`/`E` onto the two arms).
+fn press(app: &mut App, side: Side) {
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(hook_key(side));
+}
+
+fn let_go(app: &mut App, side: Side) {
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(hook_key(side));
 }
 
 /// A second player, without the `LocalPlayer` marker — the way a team mate arrives later.
@@ -232,7 +244,7 @@ fn f001_a_press_fires_once_and_holding_does_not_fire_again() {
     let body = put_body(&mut app, 90_001, Vec3::new(0.0, 1.6, -32.0), Vec3::splat(4.0));
     aim_at(&mut app, e, Vec3::new(0.0, 1.6, -28.0), body, true);
 
-    press(&mut app, MouseButton::Left);
+    press(&mut app, Side::Left);
     ticks(&mut app, 60); // one second of holding
 
     let log = app.world().resource::<HookLog>();
@@ -276,7 +288,7 @@ fn f001_the_edge_belongs_to_the_player_and_not_to_the_system() {
     aim_at(&mut app, first, Vec3::new(0.0, 1.6, -28.0), body_a, true);
     aim_at(&mut app, second, Vec3::new(20.0, 1.6, -28.0), body_b, true);
 
-    press(&mut app, MouseButton::Left);
+    press(&mut app, Side::Left);
     ticks(&mut app, 5);
     post(&mut app, second_id, Buttons::HOOK_LEFT);
     ticks(&mut app, 40);
@@ -338,7 +350,7 @@ fn measure_flight(speed_m_s: Option<f32>) -> (u64, f32, f32) {
     // The distance really flown: from the hand, not from the origin between the feet.
     let distance_m = (target - hand(&app, e)).length();
 
-    press(&mut app, MouseButton::Left);
+    press(&mut app, Side::Left);
     // The first update fires; from the second on the tip moves.
     app.update();
     assert!(
@@ -395,7 +407,7 @@ fn f001_the_tip_starts_in_the_hand_and_flies_towards_the_anchor() {
     aim_at(&mut app, e, target, body, true);
 
     let start = hand(&app, e);
-    press(&mut app, MouseButton::Left);
+    press(&mut app, Side::Left);
     app.update();
     assert!(
         (tip(&app, e, Side::Left) - start).length() < 1e-3,
@@ -439,12 +451,12 @@ fn f001_both_hooks_anchor_and_release_independently() {
 
     let left_point = Vec3::new(-16.0, 1.6, -20.0);
     aim_at(&mut app, e, left_point, left_body, true);
-    press(&mut app, MouseButton::Left);
+    press(&mut app, Side::Left);
     ticks_until_anchored(&mut app, e, Side::Left, 300);
 
     let right_point = Vec3::new(16.0, 1.6, -20.0);
     aim_at(&mut app, e, right_point, right_body, true);
-    press(&mut app, MouseButton::Right);
+    press(&mut app, Side::Right);
     ticks_until_anchored(&mut app, e, Side::Right, 300);
 
     assert_eq!(hook(&app, e).anchored_count(), 2, "both arms hold");
@@ -460,7 +472,7 @@ fn f001_both_hooks_anchor_and_release_independently() {
     }
 
     // Let go of the LEFT one only.
-    let_go(&mut app, MouseButton::Left);
+    let_go(&mut app, Side::Left);
     app.update();
     assert!(
         !arm_state(&app, e, Side::Left).is_anchored(),
@@ -478,7 +490,7 @@ fn f001_both_hooks_anchor_and_release_independently() {
     assert_eq!(released[0].reason, ReleaseReason::Released);
 
     // And now the right one, on its own.
-    let_go(&mut app, MouseButton::Right);
+    let_go(&mut app, Side::Right);
     app.update();
     assert_eq!(hook(&app, e).anchored_count(), 0);
     assert_eq!(app.world().resource::<HookLog>().released.len(), 2);
@@ -494,7 +506,7 @@ fn f001_letting_go_brings_the_tip_home_at_the_retract_speed_from_the_file() {
     let target = Vec3::new(0.0, 1.6, -28.0);
     let body = put_body(&mut app, 90_008, Vec3::new(0.0, 1.6, -32.0), Vec3::splat(4.0));
     aim_at(&mut app, e, target, body, true);
-    press(&mut app, MouseButton::Left);
+    press(&mut app, Side::Left);
     ticks_until_anchored(&mut app, e, Side::Left, 300);
 
     let distance_m = (tip(&app, e, Side::Left) - hand(&app, e)).length();
@@ -502,7 +514,7 @@ fn f001_letting_go_brings_the_tip_home_at_the_retract_speed_from_the_file() {
     let hz = data(&app).game.simulation_hz as f32;
     let expected = distance_m / speed * hz;
 
-    let_go(&mut app, MouseButton::Left);
+    let_go(&mut app, Side::Left);
     app.update(); // the release itself: Anchored -> Retracting
     assert_eq!(arm_state(&app, e, Side::Left), HookState::Retracting);
 
@@ -534,7 +546,7 @@ fn f001_a_hook_whose_carrier_disappears_releases() {
 
     let body = put_body(&mut app, 90_009, Vec3::new(0.0, 1.6, -32.0), Vec3::splat(4.0));
     aim_at(&mut app, e, Vec3::new(0.0, 1.6, -28.0), body, true);
-    press(&mut app, MouseButton::Left);
+    press(&mut app, Side::Left);
     ticks_until_anchored(&mut app, e, Side::Left, 300);
 
     // The carrier goes, exactly the way `world::index` reports it.
@@ -567,7 +579,7 @@ fn f001_an_overextended_rope_releases_one_tick_later() {
 
     let body = put_body(&mut app, 90_010, Vec3::new(0.0, 1.6, -32.0), Vec3::splat(4.0));
     aim_at(&mut app, e, Vec3::new(0.0, 1.6, -28.0), body, true);
-    press(&mut app, MouseButton::Left);
+    press(&mut app, Side::Left);
     ticks_until_anchored(&mut app, e, Side::Left, 300);
 
     app.world_mut().get_mut::<RopeLength>(e).expect("the player has a rope").overextended
@@ -592,7 +604,7 @@ fn f001_a_shot_at_nothing_anchorable_reports_no_anchor() {
 
     // 1. Nothing in range at all.
     aim_at_nothing(&mut app, e);
-    press(&mut app, MouseButton::Left);
+    press(&mut app, Side::Left);
     app.update();
     assert_eq!(arm_state(&app, e, Side::Left), HookState::Idle, "a miss must not fly");
     let released = app.world().resource::<HookLog>().released.clone();
@@ -600,11 +612,11 @@ fn f001_a_shot_at_nothing_anchorable_reports_no_anchor() {
     assert_eq!(released[0].reason, ReleaseReason::NoAnchor);
 
     // 2. A hit on a body that is not tagged as an anchor surface.
-    let_go(&mut app, MouseButton::Left);
+    let_go(&mut app, Side::Left);
     let wall = put_body(&mut app, 90_011, Vec3::new(0.0, 1.6, -32.0), Vec3::splat(4.0));
     aim_at(&mut app, e, Vec3::new(0.0, 1.6, -28.0), wall, false);
     ticks(&mut app, 2);
-    press(&mut app, MouseButton::Right);
+    press(&mut app, Side::Right);
     app.update();
     assert_eq!(arm_state(&app, e, Side::Right), HookState::Idle);
     let released = app.world().resource::<HookLog>().released.clone();
@@ -634,7 +646,7 @@ fn f001_the_anchor_rides_along_when_its_carrier_moves() {
     let point = Vec3::new(0.0, 1.6, -28.0);
     let body = put_body(&mut app, 90_012, center, Vec3::splat(4.0));
     aim_at(&mut app, e, point, body, true);
-    press(&mut app, MouseButton::Left);
+    press(&mut app, Side::Left);
     ticks_until_anchored(&mut app, e, Side::Left, 300);
 
     match arm_state(&app, e, Side::Left) {
