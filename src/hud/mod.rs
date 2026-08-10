@@ -15,6 +15,7 @@
 //! | blade pips, right | [`blade_pips`] | [`Blades`](crate::shared::Blades) | `blades` — the component exists, the wear does not |
 //! | health bar, bottom centre | [`health_bar`] | [`Health`](crate::shared::Health) | job R3-A — **absent today** |
 //! | crosshair, centre | [`crosshair`] | [`AimPoint`](crate::shared::AimPoint) | `vector::aim` — **exists** |
+//! | arm markers `Q`/`E`, below centre | [`arm_aim`] | [`Hook`](crate::shared::Hook), [`AimPoint`](crate::shared::AimPoint) | `vector` — **exists since 2026-08-10** |
 //! | objective line, top centre | [`objective`] | `KillTally`, `State<MissionPhase>` | `mission` — **exists since 2026-08-10** |
 //!
 //! The objective line is the one edge this domain has out of `bevy`, `shared` and `data`:
@@ -52,6 +53,9 @@
 //! | the three crosshair states, three crops | `scripts/f171-crosshair.txt` → `docs/images/f171-crosshair.png` |
 //! | the objective going `0/3` → `1/3` | `scripts/f170-objective.txt` → `docs/images/f170-objective-before.png`, `docs/images/f170-objective.png` |
 //! | the verdict, `WON` over the cleared field | `scripts/game-full.txt` → `docs/images/f071-won.png` |
+//! | the two arm markers, left arm anchored and right arm ready | `scripts/f-001-hooks.txt --ticks 400` → `docs/images/f171-aim.png`, and the same run with `arm_aim::spawn_arm_aim` unregistered → `docs/images/f171-aim-control.png` |
+//! | the same pair with nothing hookable (sky) and with the tower in range | `scripts/f171-crosshair.txt --ticks 126` → `docs/images/f171-aim-free.png`, `--ticks 188` → `docs/images/f171-aim-ready.png` |
+//! | the three of them stacked, 4x, around the crosshair | `docs/images/f171-aim-crop.png` |
 //!
 //! The objective line was decoded the same way the cyan was, against a control run of the same
 //! script **without `--mission`** — no mission, no `KillTally`, no line, everything else in the
@@ -61,6 +65,16 @@
 //! the `1/3` shot of one script exactly **9 × 13 px** change — one glyph cell, the leading
 //! digit. That is the sentence in `docs/PLAN-GAME.md` §1, measured.
 //!
+//! The arm markers were decoded against a control run of the **same** script with only
+//! `arm_aim::spawn_arm_aim` unregistered: they account for **735 changed pixels of 921 600**, all
+//! of them inside `x 571..708, y 468..507`, in exactly **five** connected components — the
+//! anchored disc 20 × 20, the ready ring 20 × 20, the tether 4 × 16, and the two letters. 482 of
+//! them are the cyan out of `maps.ron` (sRGB 63, 237, 249) against **3** in the control. The
+//! filled and the hollow glyph are told apart in the pixels and not in the source: the disc's
+//! centre pixel is that cyan and the ring's centre pixel is the roof grey the control has there
+//! too. Both bounding boxes are the tuples `tests/hud.rs` asserts, to the pixel, and the shot is
+//! bit-identical over two runs (`sha256 2c87b09e…`).
+//!
 //! Both were decoded, not assumed: against a control run with this plugin switched off, the
 //! HUD accounts for 6 368 changed pixels in `f170-hud.png`, 4 500 of them exactly the cyan out
 //! of `maps.ron` (sRGB 63, 237, 249) — and the control has **zero**. The gas bar measures
@@ -68,6 +82,7 @@
 //! frame. The three crosshair crops measure 302 × 178, 326 × 202 and 356 × 212 px — the same
 //! three tuples `tests/hud.rs` asserts, to the pixel.
 
+pub mod arm_aim;
 pub mod blade_pips;
 pub mod crosshair;
 pub mod gas_bar;
@@ -90,6 +105,7 @@ impl Plugin for HudPlugin {
                 health_bar::spawn_health_bar,
                 objective::spawn_objective,
                 crosshair::spawn_crosshair,
+                arm_aim::spawn_arm_aim,
             ),
         )
         .add_systems(
@@ -108,6 +124,11 @@ impl Plugin for HudPlugin {
                     crosshair::shape_crosshair,
                     crosshair::paint_crosshair,
                 )
+                    .chain(),
+                // The same three-step split for the arm markers, and for the same reason: the
+                // shape is then testable against a state set by hand, and the colour can be
+                // neutralised without touching the geometry.
+                (arm_aim::sense_arm_aim, arm_aim::shape_arm_aim, arm_aim::paint_arm_aim)
                     .chain(),
             ),
         );

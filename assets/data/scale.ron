@@ -271,7 +271,18 @@
         // precedence rule: a direct figure in meters beats any derivation
         // (docs/QUESTIONS.md Q-002). game.ron:vector.hook_range_m MUST be this number.
         // (Given by the user, 2026-08-09.)
-        anchor_range_m: 90.0,
+        //
+        // **90 -> 200 on 2026-08-10, and the user overrides his own earlier figure**: after
+        // playing it he said *"zudem muss die hook range sehr viel laenger sein!"*. The same
+        // precedence rule applies as before — a direct instruction beats the number it
+        // replaces, including his own (docs/QUESTIONS.md Q-035).
+        //
+        // Why 200 and not 150 or 400: the graybox is 400 m across, so 200 m is the largest
+        // range that still makes WHERE you stand a decision rather than a formality — at 400
+        // every anchor in the world is always in reach and the map stops existing. 200 m also
+        // reaches the church (35 m) from more than half the city, which is what FIND-026 says
+        // is missing. ⚠️ UNTUNED, and it is the user's number to move.
+        anchor_range_m: 200.0,
         // "Vector Gear speed x1.5 vs. standard" — the factor is given, but the REFERENCE
         // is missing: x1.5 of what? Running (6 m/s) would be 9 m/s and thus absurdly slow
         // for a Vector Gear; the speed limit (75 m/s) would be 112.5 m/s. The number stands

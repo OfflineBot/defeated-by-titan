@@ -1,0 +1,180 @@
+# f004-towers — the swing lane, measured: one real arc, and then five of them chained.
+#
+#   cargo run -- --headless --script scripts/f004-towers.txt --ticks 1200
+#
+# ⚠️ Rope only. This run never presses Shift (boost) and never presses Ctrl (reel), and it
+# spends **zero gas** — `assert gas == 300` at the end is the proof. Every metre of height and
+# every metre per second below comes out of `player/rope.rs` and gravity, nothing else.
+#
+# ## What it is evidence FOR
+#
+# `docs/FINDINGS.md` FIND-026: "the city lacks usable arcs — the arc bottom lies underground
+# for every rope longer than the anchor's height, and the church is the only anchor tall enough
+# to give a real one". The user, after playing it: „und mehr tuerme zum lang hangeln!".
+#
+# `assets/data/maps.ron` answers that with nine gate towers along z = 70, and the arithmetic
+# behind them stands in that file. The one line of it that decides everything:
+#
+#     arc bottom = H - L        (H = anchor height, L = rope length at the hook)
+#
+# so a swing exists only while `L < H`, and since `L` is at least the horizontal distance to
+# the anchor, **a tower has to be taller than the gap to the next tower.** 200 m of
+# `hook_range_m` does not change that by one metre — it is not the range that is missing.
+#
+# ## The baselines every number here is read against
+#
+#   running                       6.000 m/s   (game.ron: player.run_speed_m_s)
+#   the church arc (FIND-026)    24.85  m/s   — the best the old city could do, once
+#   a clean rig swing (FIND-026) 24.119 m/s
+#
+# ## ACT 1 — one arc, and where its bottom is
+#
+# Gate 0's crossbeam is hooked from the air beside gate -35, level with it: anchor
+# (-4.00, 59.42, 70.00), rope **26.10 m**. `59.42 - 26.10 = 33.32`, and 33.32 m is what the
+# arc bottom measures — **33 m above the ground and 22 m above the residential roofs**, not
+# 24 m underground. Peak **31.4 m/s at the bottom**, and the far side of the swing gives the
+# height back to within 0.4 m: the rope is not where the energy goes.
+#
+# ## ACT 2 — the chain, which is the actual commission
+#
+# Five hooks, five arcs, one after the other. Anchor, rope, lowest point, peak speed:
+#
+#   leg 1  gate   0   ( -4.00, 59.42)  L 26.10  low 33.32 m  31.4 m/s
+#   leg 2  gate  35   ( 31.00, 56.25)  L 33.89  low 27.66 m  34.8 m/s
+#   leg 3  gate  70   ( 66.00, 58.70)  L 41.79  low 19.30 m  39.3 m/s
+#   leg 4  gate 105   (101.00, 57.76)  L 47.96  low 11.03 m  43.3 m/s  = 7.2x running
+#   leg 5  gate 140   (136.00, 59.04)  L 45.27  caught at 13.8 m and 42.0 m/s, climbs to 41.9 m
+#
+# The horizontal positions are not measured directly — `Metric` has no x — but they follow from
+# the anchor, the rope and the height, and the bottom of an arc lies under its anchor: x = -30
+# at the start, 136 at the last hook, 178 at the top of leg 5. **208 m of chained swinging in
+# 7.23 s (t=508 to t=942) = 28.7 m/s average, 4.8x running speed, and not one unit of gas.**
+#
+# The lowest point sinks from leg to leg because a release at the bottom spends the whole
+# height budget on speed: leg 6 out of leg 4's 11.03 m would need a 58.6 m rope on a beam
+# 58 m up, `L < H` fails, and the chain would end on the ground. Leg 5 is the answer and it
+# needs no gas — hold the rope past the bottom and the swing puts the height back.
+#
+# ⚠️ The `look` angles are not decoration and they are not round by accident: each one was
+# swept until the ray hit the near face of the next crossbeam. One degree too high on leg 4
+# (45 instead of 44) still hits; two degrees (46) flies over the beam and the run reports
+# "found nothing anchorable" instead of failing an assert. Whoever moves a tower in `maps.ron`
+# re-sweeps these five numbers.
+
+wait 1.5                # world, camera, meshes and the render pipelines come up
+
+# ---------------------------------------------------------------------------------------
+# ACT 0 — the baseline. What the player is worth without a rope.
+# ---------------------------------------------------------------------------------------
+warp -30 0.5 70
+look -90 0
+wait 0.3
+assert height < 0.5     # standing on the floor of the lane, not on a roof
+assert speed < 0.5
+key W 1.5               # held LONGER than the wait below — a key that expires on the same
+wait 1.0                # tick as the measurement measures a player who has already let go
+mark f004-running
+assert speed > 5.9      # 6.000 m/s, and this is the number everything below is measured in
+assert speed < 6.1
+wait 0.8
+
+# ---------------------------------------------------------------------------------------
+# ACT 1 — one arc on gate 0, from level with its crossbeam.
+# ---------------------------------------------------------------------------------------
+warp -30 58 70
+look -90 0
+wait 0.1
+mark f004-arc-start
+assert height > 57.5    # 57.96: dropped off beside gate -35, level with the beams
+assert speed < 3.0
+
+hook right 4.0          # the rope, and nothing else, for the next four seconds
+wait 1.95
+mark f004-arc-bottom
+# **The number FIND-026 said this city did not have.** The arc bottom is 33.32 m ABOVE the
+# ground; the same rope on the old city's tallest anchor put it 24.3 m below.
+assert height > 33.0
+assert height < 33.7
+assert speed > 31.0     # against 6.0 running and 24.85 on the church
+assert speed < 31.7
+assert rope == 1        # one arm, holding
+
+wait 1.85
+mark f004-arc-apex
+# The far side of the swing. He is back up where he started, which is what "the rope is
+# nearly lossless" means when you say it in metres instead of in percent.
+assert height > 57.0
+assert speed < 4.0
+assert gas == 300       # not one unit spent: no boost, no reel
+
+# ---------------------------------------------------------------------------------------
+# ACT 2 — the chain. Five towers, five arcs, one after the other.
+# ---------------------------------------------------------------------------------------
+wait 0.6
+warp -30 58 70
+look -90 0
+wait 0.1
+mark f004-chain-start
+
+hook right 2.0          # leg 1 — gate 0, released at the bottom of the arc
+wait 2.0
+mark f004-leg-1
+assert height > 33.0    # 33.41 m: the bottom, and the release
+assert height < 33.8
+assert speed > 31.0     # 31.32 m/s
+assert speed < 31.8
+
+look -90 33
+hook left 0.95          # leg 2 — gate 35, hooked at 33.89 m, bottom 27.66 m
+wait 0.95
+mark f004-leg-2
+assert height > 27.3
+assert height < 28.0
+assert speed > 34.4     # 34.78 m/s
+assert speed < 35.2
+
+look -90 39
+hook right 0.90         # leg 3 — gate 70, hooked at 41.79 m, bottom 19.30 m
+wait 0.90
+mark f004-leg-3
+assert height > 19.0
+assert height < 19.7
+assert speed > 39.0     # 39.26 m/s
+assert speed < 39.6
+
+look -90 44             # ⚠️ swept. 46 degrees flies over the beam and hooks nothing.
+hook left 1.20          # leg 4 — gate 105, hooked at 47.96 m, bottom 11.03 m
+wait 1.20
+mark f004-leg-4
+# Released on the RISING side this time, not at the bottom: the bottom was 11.03 m and one
+# more release down there would need a 58.6 m rope on a 58 m tower — `L < H` fails and the
+# chain would end on the ground. Letting it come back up is the whole trick.
+assert height > 12.3
+assert height < 13.0    # 12.63 m
+assert speed > 42.2     # 42.52 m/s
+assert speed < 42.9
+
+look -90 63
+hook right 3.0          # leg 5 — gate 140, hooked at 45.27 m
+wait 0.40
+mark f004-leg-5-caught
+# The catch. He arrives almost straight under the beam (a 45.27 m rope on an anchor 45.2 m
+# above him), so this leg has no dip of its own — the rope takes him at his lowest point.
+assert height > 14.5
+assert height < 15.6    # 15.08 m
+assert speed > 40.9     # 41.35 m/s
+assert speed < 41.8
+assert rope == 1
+
+wait 1.60
+mark f004-leg-5-climb
+# **And this is why the chain does not end.** With no gas and no boost the rope turned
+# 41.35 m/s into 41.9 m of height: he is back up at beam level, from where the next leg is a
+# level hook again — the same geometry ACT 1 started from.
+assert height > 40.0
+assert speed > 24.0
+assert speed < 27.0
+
+wait 1.0
+mark f004-chain-end
+assert gas == 300       # 208 m of lane, five arcs, zero gas

@@ -230,6 +230,52 @@ point. The four that will bite soonest:
 
 ---
 
+## 5b. The honest paragraph for 2026-08-10 — what went unseen, and what I got wrong
+
+**Start here: [`NEXT.md`](NEXT.md).** It is the queue, in order, with the reason for each item.
+
+**Five things I reported as established were wrong**, and every one was caught by an agent
+re-measuring rather than by me:
+
+1. *"a full tank is 37.5 s of boost"* — arithmetic that required the refill to run during the
+   boost, which contradicts the mechanic I had specified one message earlier. It is **16.67 s**.
+2. *"the rope contributes exactly nothing in the city"* — that was **one input direction**. The
+   city swings; it lacks usable arcs.
+3. *"the rope is worse than no rope"* — the baseline I compared against was a **jump**, not
+   locomotion. Different quantity.
+4. *"the overshoot was the speed"* — the whip does not exist. Peak speed never exceeds entry speed
+   in 16 approaches. The 46.414 m/s was `ground_locomotion` deleting a joint's horizontal work.
+5. *"a taut rope absorbs radial thrust, so the boost blend must stay below 1.0"* — **false**, and
+   the worst of the five, because it was not a summary slip: I reasoned it out, presented it as the
+   design rationale, and wrote it into two files as the reason for a number. A rope is a one-sided
+   constraint. Measured, thrust straight at the anchor delivers **30 % more energy** than none.
+
+The pattern is consistent enough to be worth writing down for whoever reads this next: **the
+measurements in this repository held up; the prose summarising them ran optimistic.** Where the two
+disagreed, the measurement won every single time. What worked was the refutation discipline — three
+independent rounds, all three overturned something already reported as fact, roughly **one in three
+unattacked claims wrong**. What did not work was my judgement about this game's physics.
+
+**Process failures that cost real time:** I put "run the whole `cargo test`" into three commissions
+at once, against a rule I had been handed in writing — five concurrent runs, load average **205**,
+one build of **22 min 47 s**. I broke the tree once by adding two RON keys without their Rust
+fields, with agents mid-run against that file. And I commissioned the `Q`/`E` rebinding without
+telling the agent to run the script corpus, which is why one line of key mapping silently broke
+**9 scripts and 25 tests across 3 suites** (FIND-038).
+
+**What went unseen:** I have still never watched this game move. Every judgement I made about how
+it *plays* is inference from numbers and static frames. The swing lane's nine 58 m gates were
+measured to work and **never looked at** — they change the city's silhouette and nobody has checked
+that it looks like anything. `Busy` on the arm markers was rendered for the first time by the
+counter-round, not by its author. And the chain that produced 208 m of swinging was flown by a
+script that knew the tower coordinates in advance; a human aiming by hand at a 4 m beam 35 m away
+at 43 m/s is a different question entirely, and nothing here answers it.
+
+**And the thing that outranks all of it:** the user played for a few minutes and found more real
+problems than the whole day of instrumented measurement did — gas that never refilled, a rope that
+went slack on every fast approach, an overshoot invisible to every test we own because **no test
+ever flew at an anchor without holding reel**. Ask him to play. Then measure what he says.
+
 ## 6. The honest paragraph — what went unseen
 
 **Nobody has played this.** Every claim in this project rests on tests, measurements and

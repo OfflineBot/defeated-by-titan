@@ -1,4 +1,29 @@
-//! `F-007` Gas boost — an acceleration along the look direction for as long as the tank pays.
+//! `F-007` Gas boost — an acceleration along **look direction blended with rope direction**,
+//! for as long as the tank pays.
+//!
+//! ## Why the rope steers the boost at all (user, 2026-08-10)
+//!
+//! After playing it he asked for this in so many words: *„wenn man boostet soll man in richtung
+//! seil und mauszeiger fliegen! also dahin. dass wenn man zur hook schaut und gehookt ist und
+//! boostet man stark in die richtung fliegt!"* Up to that day the boost was **pure look
+//! direction** and the rope had no influence on it whatever.
+//!
+//! Taken literally — thrust straight at the anchor — it would be wrong, and this is the one
+//! thing worth understanding before touching [`boost_direction`]: a thrust along the rope is
+//! **radial**, a taut rope absorbs exactly the radial component, and radial thrust therefore
+//! adds **no tangential speed**. It winches you in and kills the swing. So neither end is right,
+//! and the answer is a blend whose weight is a number in the file
+//! (`game.ron: vector.boost_rope_fraction`, ⚠️ UNTUNED).
+//!
+//! **What the rope half buys, and it is the argument for the whole feature:** since `B-005` the
+//! enforced rope length ratchets down to the true distance every substep
+//! (`player::rope::shorten_ropes`), so flying *at* your anchor permanently **shortens** the
+//! rope. And a shorter rope is what lifts the bottom of the arc off the ground — measured in
+//! `docs/BUGS.md` `B-005`: 53.3 m of rope shortened to 20.2 m moved the bottom of the arc from
+//! 18.3 m **underground** to 14.8 m **above** it. Boost, shorten, swing higher, boost again:
+//! that loop is what turns a dead leash into a usable swing, and a look-only boost cannot reach
+//! it. Whoever sets `boost_rope_fraction` back to `0.0` is switching that loop off, not just
+//! changing a feel.
 //!
 //! ## It is an acceleration, not a force — and that is a decision about the RON file
 //!
@@ -59,13 +84,75 @@ use avian3d::prelude::{Forces, WriteRigidBodyForces};
 use bevy::prelude::*;
 
 use crate::data::GameData;
-use crate::shared::{BoostAccel, GasGrant, Intent};
+use crate::shared::math::direction;
+use crate::shared::{BoostAccel, GasGrant, Hook, Intent, Side};
 
-/// Writes [`BoostAccel`] = look direction * `vector.boost_m_s2`, or `ZERO`, and hands the same
-/// vector to avian as a linear acceleration.
+/// The direction the ropes pull the boost toward: the **mean of the unit directions** from the
+/// hand to every anchored tip. `None` means "no rope has a say" — nothing anchored, the player
+/// standing exactly on his anchor, or two ropes pointing exactly opposite each other.
+///
+/// **The mean of the directions, not the mean of the anchor points.** A 42 m rope and a 4 m rope
+/// steer equally; taking the midpoint of the two anchors instead would let the far one outvote
+/// the near one by its distance, which is a property of where you happened to hook and not of
+/// how you are hanging.
+///
+/// A free function, like `hook::anchor_target`, so the rule can be tested without an app.
+pub fn rope_dir(hand_m: Vec3, hook: &Hook) -> Option<Vec3> {
+    let mut sum = Vec3::ZERO;
+    for side in Side::ALL {
+        let arm = hook.arm(side);
+        if arm.state.is_anchored() {
+            // `direction` is `None` for the zero vector and for anything non-finite, so an
+            // anchor the player is standing exactly on contributes nothing instead of a NaN.
+            sum += direction(arm.tip_m - hand_m).unwrap_or(Vec3::ZERO);
+        }
+    }
+    // Two exactly opposed ropes sum to zero, and so does an idle gear: both are `None`, and
+    // both mean the same thing — the rope cannot say where "toward the rope" is.
+    direction(sum)
+}
+
+/// Where a boost pushes: `look_dir` blended `rope_fraction` of the way toward `rope_dir`, then
+/// **renormalized**.
+///
+/// The renormalize is the whole arithmetic of this function. `lerp` between two unit vectors is
+/// not a unit vector — at 90° apart and `0.5` it is 0.707 long — so without it
+/// `vector.boost_m_s2` would quietly become a number that depends on where the player is
+/// looking. **The blend decides the direction and never the strength**
+/// (`tests/vector_boost.rs`).
+///
+/// Two ways out, and both of them are the look direction:
+/// - **no rope** (`rope_dir` is `None`) — unhooked, the gear steers nothing;
+/// - **the blend cancels** — `look_dir` exactly opposite `rope_dir` at `0.5` gives the zero
+///   vector, and `normalize(ZERO)` is NaN. That is not a theoretical case: "hooked behind you,
+///   boosting forward" happens in every swing. A NaN here becomes a NaN `Transform`, and a NaN
+///   `Transform` is how a player vanishes from the world (§9d).
+///
+/// `rope_fraction == 0.0` returns before touching the arithmetic at all, and that is deliberate:
+/// `look_dir` is a unit vector only to about `1e-7`, so `direction(lerp(look, rope, 0.0))` would
+/// come back a few bits away from `look_dir`. `0.0` in the file has to mean **the behaviour we
+/// had**, bit for bit, or the knob is a rewrite instead of a knob.
+pub fn boost_direction(look_dir: Vec3, rope_dir: Option<Vec3>, rope_fraction: f32) -> Vec3 {
+    // Clamped, because outside `0..=1` this stops being a blend: at `2.0` and 90° apart the
+    // extrapolation points *away* from where the player is looking, which is no reading of what
+    // was asked for. The RON value is not range-checked anywhere yet (finding).
+    let w = rope_fraction.clamp(0.0, 1.0);
+    let Some(rope) = rope_dir.filter(|_| w > 0.0) else {
+        return look_dir;
+    };
+    direction(look_dir.lerp(rope, w)).unwrap_or(look_dir)
+}
+
+/// Writes [`BoostAccel`] = [`boost_direction`] * `vector.boost_m_s2`, or `ZERO`, and hands the
+/// same vector to avian as a linear acceleration.
 ///
 /// **Sole writer of [`BoostAccel`].** Contributor — never sole writer — of
 /// `VelocityIntegrationData::linear_increment`, which belongs to avian.
+///
+/// [`Hook`] and [`Transform`] are read, never written: the hook state belongs to
+/// `vector::hook`, the transform to the integrator. `hook::update_hooks` runs in
+/// `SimulationSystems::Intent` and this system in `Drive`, so the `tip_m` read here is **this**
+/// tick's anchor position and not last tick's.
 ///
 /// `Option<Forces>` and not a plain `Forces`: the physics components arrive with avian's own
 /// prepare step, and a player in his very first tick has none of them yet. With a plain
@@ -74,16 +161,22 @@ use crate::shared::{BoostAccel, GasGrant, Intent};
 /// contract exists to prevent (`shared::gear`).
 pub fn gas_boost(
     data: Res<GameData>,
-    mut players: Query<(&Intent, &GasGrant, &mut BoostAccel, Option<Forces>)>,
+    mut players: Query<(&Intent, &GasGrant, &Hook, &Transform, &mut BoostAccel, Option<Forces>)>,
 ) {
     let strength_m_s2 = data.game.vector.boost_m_s2;
+    let rope_fraction = data.game.vector.boost_rope_fraction;
+    let eye_height_m = data.game.player.eye_height_m;
 
-    for (intent, grant, mut drive, forces) in &mut players {
+    for (intent, grant, hook, transform, mut drive, forces) in &mut players {
+        // The hand is the eye — the same point `vector::hook` flies the tip from and to, and
+        // the same one `render::rope` draws the rope from. Anything else would make the
+        // direction the player is given differ from the rope he can see.
+        let hand_m = transform.translation + Vec3::Y * eye_height_m;
         // `look_dir()` is a unit vector by construction (`shared::intent`, checked there over
-        // the whole yaw/pitch range), so no `normalize` is needed and no NaN can come out of
-        // one: normalizing a zero-length vector is the classic way to make a player vanish
-        // from the world (§9d).
-        let wanted = if grant.boost { intent.look_dir() * strength_m_s2 } else { Vec3::ZERO };
+        // the whole yaw/pitch range); `boost_direction` keeps it one and never returns a NaN,
+        // which is what the two degenerate cases in its doc comment are about (§9d).
+        let dir = boost_direction(intent.look_dir(), rope_dir(hand_m, hook), rope_fraction);
+        let wanted = if grant.boost { dir * strength_m_s2 } else { Vec3::ZERO };
 
         // `set_if_neq`: a component that reports itself changed on all sixty ticks makes every
         // `Changed<BoostAccel>` filter behind it worthless — and a player who is not boosting

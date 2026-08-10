@@ -114,7 +114,7 @@ the user has said nothing about.
 | **Camera / Vector Gear** | | |
 | Camera height | 1.6 m | |
 | Ground-combat field of view | 55–65 degrees | biggest lever — vertical or horizontal? [Q-021](QUESTIONS.md) |
-| Anchor range | 90 m | |
+| Anchor range | 200 m | 90 m until 2026-08-10, see below |
 | Speed | ×1.5 | vs. standard — reference open, [Q-018](QUESTIONS.md) |
 
 *The user labelled the last four rows with the reference work's own terms; here they stand
@@ -127,6 +127,24 @@ with the project terms from [`docs/conventions.md`](conventions.md) §2.*
 > the one that holds here, `assets/data/titan.ron` leaves the Errant at 10 m, and the class
 > `boss` has no representative. **That is an assumption, not a translation** — it stands as
 > [Q-020](QUESTIONS.md) and is withdrawn by one sentence from the user.
+
+> ⚠️ **The anchor range was 90 m and is 200 m since 2026-08-10.** The user played the build and
+> asked for it to be *much* longer. The 90 m were his own figure from the day before — a live
+> instruction beats the number it replaces, the same precedence rule that had put the 90 m in
+> place of the backlog's derived 112 m ([Q-002](QUESTIONS.md)). 200 m is half the 400 m graybox:
+> the largest range at which *where you stand* is still a decision. The reasoning, and what
+> would have to be rolled back, is [Q-035](QUESTIONS.md).
+>
+> **What that changes for the modeler:** nothing about heights, and everything about how often a
+> landmark is worth building. The **anchor ceiling stays at 14.5 m** — it comes from roof height
+> plus `min_rope_m` and has nothing to do with range. But the church (35 m) is now reachable from
+> **more than half the city** instead of from its own block, so a tall silhouette earns its
+> polygons over a far larger area. Two numbers moved with the range and both are in
+> `assets/data/game.ron`: `hook_speed_m_s` 90 → **160** (a 200 m shot at 90 m/s would hang in the
+> air for 2.22 s; at 160 m/s it arrives in 1.25 s, and
+> `tests/data.rs::t005_a_hook_shot_at_full_range_arrives_before_the_target_has_moved` holds that
+> under 1.5 s) and `world.half_extent_m` 300 → **400**, because the spatial grid has to carry
+> half the map plus one full range.
 
 ### The three scales — and why nobody "corrects" them
 

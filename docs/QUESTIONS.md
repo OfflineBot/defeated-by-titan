@@ -29,7 +29,7 @@ game.
 
 | Backlog | × 0.28 | matches |
 |---|---|---|
-| hook range 400 studs (`F-002`) | 112 m | `prompts/init.md` §1: „ein Haken fliegt 60–120" (*a hook flies 60–120*) |
+| hook range 400 studs (`F-002`) | 112 m | `prompts/init.md` **§3** line 411: „ein Haken fliegt 60–120" (*a hook flies 60–120*) — cited as §1 here until 2026-08-10, wrong section. Superseded anyway: the range is **200 m** since Q-035 |
 | Ashgate District 2000 × 2000 studs | 560 × 560 m | mission arc 5–7 min |
 | Titanwood 3000 × 3000 studs | 840 × 840 m | largest map |
 
@@ -1034,6 +1034,49 @@ rod** — it pulls and can never push. Together with a reel that *assigns* veloc
 adding to it (`FINDINGS.md` FIND-013), the working hypothesis for *"seile ohne boost bringen gar
 nichts"* is that **a rope-only player has no mechanism at all for turning a swing into height or
 into speed he did not already have.** That is being measured; it is not yet established.
+
+## Q-035 — The hook range is 200 m now. That contradicts `prompts/init.md` §1 and your own 90 m.
+
+**Context:** on 2026-08-10, after playing it, the user wrote *"zudem muss die hook range sehr viel
+länger sein!"*. He had given the 90 m himself on 2026-08-09
+(`scale.ron: vector.anchor_range_m`, and Q-002 records that it displaced the backlog's 112 m).
+
+**Two documents now disagree with the instruction, and I followed the instruction:**
+
+- `prompts/init.md` **§3** (line 411, item 5 „Eine Einheit": *„ein Haken fliegt 60–120"*) names a
+  design window of **60–120 m**. 200 is well outside it, and
+  `tests/data.rs::t005_hook_range_stays_in_the_design_window` fired on exactly that.
+  *(That sentence has been cited as §1 in this file and in the test's comment since 2026-08-09 —
+  wrong section, verified 2026-08-10. Corrected here and in the guard; Q-002 carries the same
+  error and is corrected there too.)*
+- The user's own earlier figure was 90 m.
+
+The precedence rule this project already runs on (Q-002, and stated in `scale.ron` itself) is that
+**a direct figure in metres from the user beats any derivation** — and a live instruction beats the
+number it replaces, including one of his own. So the window was widened rather than the value
+trimmed, and the guard's message now names the conflict and the date instead of quietly passing.
+
+**ASSUMPTION: 200 m, and here is why not 150 and not 400.** The graybox is 400 m across. At 400 m
+of range every anchor in the world is always in reach and *where you stand stops being a decision*
+— the map would no longer exist as a design surface. 200 m is the largest range that keeps position
+meaningful, and it reaches the church (35 m, the only structure tall enough to give a real arc,
+`FINDINGS.md` FIND-026) from more than half the city, which is precisely what the measurements say
+is missing.
+
+**Two numbers moved with it, and neither is taste:**
+
+| key | was | now | why |
+|---|---|---|---|
+| `vector.hook_speed_m_s` | 90.0 | **160.0** | a hook is a projectile: at 90 m/s a 200 m shot takes **2.22 s** to arrive — longer than most of a swing, and long enough that the anchor you aimed at is not where you are any more. 160 holds the worst case at **1.25 s**, against the 1.0 s the old 90 m/90 m/s pair cost. |
+| `world.half_extent_m` | 300.0 | **400.0** | forced: the spatial index must carry half the map plus one full range, `200 + 200 = 400` exactly. **Cost: the grid covers 800×800 m instead of 600×600 at `cell_m: 8.0` — 10 000 cells against 5 625, i.e. 1.78× the index memory** for the same city. It buys nothing by itself; it is the price of the longer rope. |
+
+**What would have to be rolled back:** three numbers in two RON files, one widened window in
+`tests/data.rs`, and one table row in `docs/models.md`. No code depends on any of them. Setting
+`anchor_range_m` back to 90 and `half_extent_m` back to 300 restores the previous behaviour exactly;
+`hook_speed_m_s` would go back to 90 with it, or stay at 160 as a separate improvement.
+
+**Still open and not decided by me:** whether 200 m actually feels right, and whether a 1.25 s
+worst-case hook flight is acceptable or already too slow to read. Both are yours.
 
 ---
 

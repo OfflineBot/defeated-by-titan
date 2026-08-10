@@ -247,6 +247,16 @@ pub struct VectorTuning {
     /// why it stands here and not as an `if` in `vector/gas.rs`.
     pub gas_priority: Vec<GasConsumer>,
     pub boost_m_s2: f32,
+    /// How much of the boost **direction** is taken from the rope instead of from the look
+    /// direction (`F-007`, user 2026-08-10). `0.0` = pure look direction, `1.0` = straight at
+    /// the anchor. Dimensionless, so no unit suffix — `_fraction` like
+    /// [`TitanScale::cortex_fraction`] and `maps.ron: layout.anchorable_fraction`.
+    ///
+    /// **⚠️ UNTUNED.** It changes only the direction; the strength stays
+    /// [`boost_m_s2`](Self::boost_m_s2) at every value, and `tests/vector_boost.rs` holds that.
+    /// No `serde(default)`: at `0.0` this is the old behaviour, and that has to be a decision
+    /// somebody wrote into the file, not a value nobody noticed was missing.
+    pub boost_rope_fraction: f32,
     pub max_speed_m_s: f32,
 }
 

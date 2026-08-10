@@ -11,6 +11,7 @@ checks that.
 | Question | File |
 |---|---|
 | *Where do we actually stand?* | [`STATUS.md`](STATUS.md) — the four stages, generated |
+| *What do I do first, right now?* | [`NEXT.md`](NEXT.md) — the queue the last session left, in order, with the reason for each |
 | *What is next to do?* | [`TODO.md`](TODO.md) — open work in buildable order, generated |
 | *How does this project work?* | [`../CLAUDE.md`](../CLAUDE.md) — the index of the rules, under 150 lines |
 | *Which machine am I sitting on?* | [`environment.md`](environment.md) — **the first question of every session** |

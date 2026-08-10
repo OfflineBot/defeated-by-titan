@@ -148,7 +148,10 @@ pub const fn node_count(state: CrosshairState) -> usize {
 /// **Deliberately not a signal colour.** Cyan, amber and crimson mean gas, cortex and danger
 /// (`docs/conventions.md` §3); "the ray hits nothing worth having" means none of the three, so
 /// painting it cyan would be the first leak in that rule.
-const NEUTRAL: Color = Color::srgba(1.0, 1.0, 1.0, 0.75);
+/// `pub`, because [`arm_aim`](crate::hud::arm_aim) means exactly the same thing with it — "this
+/// arm's ray hits nothing worth having" — and a second literal in a second file is how two
+/// elements that say the same thing start looking different.
+pub const NEUTRAL: Color = Color::srgba(1.0, 1.0, 1.0, 0.75);
 
 pub fn spawn_crosshair(mut commands: Commands) {
     for part in CrosshairPart::ALL {

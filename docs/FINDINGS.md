@@ -1025,6 +1025,213 @@ touches it runs the whole suite *and* the script corpus before reporting, and th
 orders it should say so — this one did not, and the author's own report correctly predicted the
 breakage while having no way to measure it.
 
+## FIND-039 — The backlog already specified the feature the user asked for, and nobody had read it
+
+**Symptom:** on 2026-08-10 the user asked for *"2 punkte angezeigt … so der e und q haken hingehen
+würden"*. The commission written for it called "what actually makes Q and E different" the hard
+open question and listed three invented options. **The answer was already in the repository.**
+
+**Measurement — `docs/backlog/gameplay.ron`:**
+
+- **F-026** is this commission almost word for word: the two best points carry the key symbol, four
+  states, *"jeweils durch FORM UND Farbe unterschieden (Farbenblindheit)"*, and the acceptance
+  *"a test player can at any time say without thinking where Q and E would take him."*
+- **F-023** (*Kandidatensuche mit Hemisphaeren-Aufteilung*) answers the hard question: the candidate
+  set is split **relative to the camera forward axis into a left and a right hemisphere, and Q
+  serves only the left set, E only the right.**
+- **F-028** is the fallback for an empty hemisphere. **F-021** (discrete anchor points) is what all
+  of it hangs on.
+
+All four are ⬜ and all live in `vector`/`world`, not in `hud`.
+
+**Why it counts:** `docs/backlog/` is generated from the user's own spreadsheet and it is not being
+read when work is commissioned. A day of design reasoning went into re-deriving something already
+written down — and the version that got re-derived was worse, because it invented a shoulder offset
+that cannot work (FIND-040).
+
+**The honest limit of what was built:** `vector::hook` hands **one** `AimPoint` to both arms
+(`src/vector/hook.rs:132`), so the two markers describe **the same world point** and differ only in
+each arm's own state. **That is not what the user asked for.** It is a useful element and it is not
+"two points where Q and E would go". The gap closes with F-021 + F-023 in `vector`; a per-arm
+carrier in `shared` crosses no domain edge and changes `hud` on one line.
+
+## FIND-040 — A shoulder offset cannot separate the two aim markers, and the arithmetic says why
+
+**Symptom:** the supervisor proposed `player.hand_offset_m` as the fix for two markers landing on
+the same pixel — twice, in two commissions.
+
+**Measurement:** `camera.fov_deg` is 60 (vertical), so at 1280×720 the focal length is
+`360 / tan 30° = 623.5 px/rad`. A **0.30 m** lateral hand offset therefore subtends
+
+| distance | separation on screen |
+|---|---|
+| 30 m | **6.2 px** |
+| 100 m | **1.9 px** |
+
+**Two markers 6 px apart are one marker.** The hypothesis is refuted for aiming.
+
+**What the hand offset IS still worth:** it is the fix for FIND-022 — the simulation's hand is
+bit-identical to the camera position, which is why every drawn rope projects to a vertical line
+through the crosshair. That is a **rendering** argument, and it was being confused with an
+**aiming** argument. Two symptoms, one missing number, but only one of them is cured by it.
+
+## FIND-041 — Swing spacing is capped by anchor HEIGHT, not by hook range. The longer rope buys reach, not arcs.
+
+**Symptom:** the hook range was raised 90 → 200 m (Q-035) partly in the belief that it would help
+swinging. **It does not help swinging at all.**
+
+**The arithmetic, and it is the whole level-design constraint:** `attach_ropes` sets `L` to the
+distance at the moment of the hook and `shorten_ropes` only lowers it, so for an anchor `H` above
+ground
+
+```
+arc bottom = H − L        L = sqrt(d² + u²)     (d horizontal, u anchor above player)
+a usable arc  ⇔  L < H,   and since L ≥ d   ⇒   d < H
+```
+
+**The horizontal gap to the next anchor must be smaller than the anchor's height.** A 200 m rope
+needs a 200 m anchor to swing on. This is why the graybox was dead: the church is 35 m and the lot
+pitch is 35 m, so `35 − 35 = 0` puts the arc bottom exactly on the pavement — **one tower short.**
+
+**Height buys clearance; SPACING buys speed:** `v = sqrt(2g·descent)`. At 35 m of spacing,
+`sqrt(2·20·35) = 37.4 m/s = 6.2×` running.
+
+**Measured [cachy], nine 58 m gates at 35 m pitch, rope only — no boost, no reel, `gas == 300` at
+both ends: 208 m of chained swinging in 7.23 s = 28.7 m/s average = 4.8× running, peak 43.3 m/s
+(7.2×) on leg 4.** Red-checked: with the gantries stripped from a scratch map the same script
+reports **17 of 39 asserts failed** and every hook logs `found nothing anchorable`.
+
+## FIND-042 — A swing anchor must stand over open ground, so the shape is a GATE, not a tower
+
+**Measurement/reasoning, and it is not obvious until you draw it:** the bottom of a pendulum lies
+**vertically under its anchor**. On a solid tower that point is *inside the tower*, so a swing that
+is not released early ends in the wall the player is hanging from — the same class of ending
+FIND-029 recorded on the church (24.85 m/s → 0.000 against the church face, and he stays there).
+
+**The shape that works:** two columns plus a crossbeam, anchor over the gap, player flies
+**through**. Built as 8×56×8 columns at z = 56 and 84 with an 8×4×36 beam at y 56–60: 20 m of clear
+width, 56 m of clear height.
+
+**Second half of the same idea, found by the round gate an hour later: the columns must NOT be
+anchorable.** They were tagged at first, on the reasoning that "a tower you cannot hook is a bad
+tower". Two things say otherwise:
+
+- **The rule above forbids it.** A pendulum's bottom lies vertically under its anchor, and on a
+  column that point is *inside the column* — so a hookable column is an anchor that breaks the very
+  constraint the gate exists to satisfy. It is FIND-029's ending (24.85 m/s → 0.000 against the
+  church face, and he stays there) rebuilt nine times over.
+- **It was measurably a lie in the map.** The beam sits on top of the columns (columns y 0..56,
+  beam y 56..60 spanning z 52..88) and **covers both roofs**, so
+  `tests/vector_aiming.rs::f002_every_tagged_surface_in_the_map_is_reachable_by_free_aiming`
+  reported exactly **18 of 87 tagged surfaces unreachable** — one per column, nine gates. A tagged
+  surface nothing can hook is a lie in the map, and the guard caught it precisely.
+
+Columns are now `anchorable: false` (`stone_gray`), the beam `anchorable: true` (`sand_brown`), so
+the colour split now states something true: the part that reads from a distance is the part you can
+hook. **The chain is unaffected — `scripts/f004-towers.txt` still reports 39 asserts held, exit 0**,
+because it was hooking beams all along.
+
+**Process note worth keeping:** the towers agent ran `--test world` and `--test data` and not
+`--test vector_aiming`, so this survived until the main head's round gate. It is the same shape as
+FIND-038 — a change whose blast radius is wider than the files it touches.
+
+## FIND-043 — The take-up ratchet raises the arc bottom, so `arc bottom = H − L` is a bound and not an equality
+
+**Measured [cachy]**, predicted vs actual lowest point along the chain:
+
+| leg | predicted `H − L` | measured | gain |
+|---|---|---|---|
+| 1 | 33.32 | **33.32** | 0.00 (a pendulum released from rest never goes slack) |
+| 2 | 22.36 | **27.66** | **+5.3 m** |
+| 3 | 16.91 | **19.30** | +2.4 m |
+| 4 | 9.80 | **11.03** | +1.2 m |
+
+**`B-005`'s slack take-up bites exactly when the player enters the arc with forward speed**, which
+is the whole chain case. Design consequence: towers may stand slightly closer than the raw
+arithmetic permits — **but only for a player who is already moving**, so `d < H` stays the bound to
+build to.
+
+## FIND-044 — Releasing at the bottom of every arc is not sustainable, and the number says why
+
+**Measured:** each bottom-release converts the whole height budget into speed, and the lowest point
+sinks along the chain — **33.3 → 27.7 → 19.3 → 11.0 m**. A sixth leg out of 11.03 m would need a
+58.6 m rope on a 58 m beam, and `L < H` fails from the other side.
+
+**The fix costs no gas:** hold past the bottom, and the swing puts 41.35 m/s back as **41.9 m of
+height** (leg 5, measured). So the height budget is renewable in the air.
+
+**Consequence for `F-014` Momentum-Chaining:** it does **not** need a new mechanic in the air. What
+it needs is for the ground to stop assigning `run_speed_m_s` — which is FIND-026 §4 and is already
+fixed via `MovementState::Tethered` (FIND-037). The two findings meet here.
+
+## FIND-045 — 🔴 "A taut rope absorbs radial thrust" is false, and it was the stated reason for a tuning value
+
+**Symptom:** the boost/rope blend was built on the argument that thrust *toward* the anchor is
+radial, that a taut rope absorbs the radial component, and that such thrust therefore adds no
+tangential speed — which is why `boost_rope_fraction` is 0.5 and not 1.0. The argument stands in
+`src/vector/boost.rs`'s header and in `assets/data/game.ron`. **It is wrong.**
+
+**Why, in one line:** a rope is a **one-sided** constraint. It absorbs radial-**outward** motion
+only. The blend points **inward**, which is never absorbed — and `shorten_ropes` then ratchets the
+shortening in permanently (`B-005`).
+
+**Measured [cachy]**, 1.0 s into an identical 2.0 s boost off an identical swing, same anchor
+(`body 4 @ (24, 12, −44.8)`, rope 60.93 m):
+
+| `boost_rope_fraction` | speed m/s | height m | specific energy ½v² + g·h |
+|---|---|---|---|
+| 0.00 | 49.12 | 30.52 | 1816.9 |
+| 0.50 | 58.11 | 22.93 | 2147.1 |
+| **1.00** | **63.47** | 17.13 | **2357.0** |
+
+**Monotonic in speed and in total energy; 1.0 delivers 30 % more energy than 0.0.** The real trade
+is speed and energy against **retained height**, and the honest reason for a value below 1.0 is
+**control** — at 1.0 the mouse steers nothing while hooked, and the user asked for *"in richtung
+seil **und** mauszeiger"*.
+
+**Why it counts beyond this one knob:** the number was defended by a physical claim that nobody had
+measured, in a file whose whole purpose is that its numbers carry their reasoning. A wrong reason in
+a comment is worse than no reason — it stops the next reader from checking.
+
+## FIND-046 — The boost blend sends you 90° off-look exactly where it matters most
+
+**Measured:** with the rope near anti-parallel to the look direction — **rope behind you, boosting
+forward, which `boost.rs`'s own comment calls a case that "happens in every swing"** — the `nlerp`
+blend at `w = 0.5` puts the boost **~90° away from where the player is looking**. At 170°
+separation the boost goes **85° off-look**; at 179°, **89.5°**. The `direction()` cutoff of 1e−6
+means the anti-parallel fallback only fires within ~1e−4° of exactly 180°, so there is a wide band
+where the result is useless rather than degenerate.
+
+**And the knob is not a dial.** `nlerp` is not angularly linear: at 10° separation `w = 0.25` moves
+the boost 25 % of the angle, but at **170° separation it moves it 3 %**, and `w = 0.75` moves it
+**97 %**. Near anti-parallel it behaves like a hard switch at 0.5 rather than a slider.
+
+**Confidence 🟧** — measured by an agent that did not build the feature, over a 3.6 M-sample sweep
+plus 200 k adversarial near-cancellations.
+
+## FIND-047 — The arm markers never move: they are state badges, not aim points
+
+**Measurement:** `node_for` pins the two markers at `top: 65 %`, `left/right: 52 %`, and an
+independent round measured them at **the same pixels (x 595–612 / 667–684) in four runs with four
+different aims**. They are not a projection of anything.
+
+Combined with FIND-039 (both arms share one `AimPoint`), the honest description is **per-arm state
+badges** — idle / would-catch / tip-out / holding. That is a useful element and it is **not** "two
+points where Q and E would go".
+
+**Why it counts:** `src/hud/arm_aim.rs`'s first line says *"where the two hooks would go"*. A reader
+of that line will never reach `FINDINGS.md`. **Whatever row this gets in `docs/STATUS.md` must say
+"per-arm state badges", or the next session builds on a 🟨 dressed as 🟧.**
+
+**Two smaller results from the same round, both worth keeping:**
+- **`Ready` vs `Busy` is the weak pair**: same cyan, same ring, differing only by 8 px of diameter
+  and an 8 px outward shift. Against F-026's acceptance — *"say without thinking"* — that is the one
+  nobody had looked at, and `Busy` had **never been rendered at all** until the counter-round
+  photographed it (152 px, 26×26).
+- **The shape test over-neutralises**: it forces `BackgroundColor` *and* `BorderColor` to white,
+  which **fills the ring** and destroys the fill-vs-outline cue the code itself calls a shape
+  difference. The claim survives; the test is weaker than the claim.
+
 *(Append further findings here. A finding without a measurement is an opinion.)*
 
 Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUESTIONS.md)

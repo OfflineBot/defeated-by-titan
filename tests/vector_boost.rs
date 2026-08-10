@@ -1,4 +1,4 @@
-//! `F-007` Gas boost — the four ways it can be wrong that a screenshot never shows.
+//! `F-007` Gas boost — the ways it can be wrong that a screenshot never shows.
 //!
 //! The acceptance of `F-007` reads "boost produces noticeable acceleration". "Noticeable" is
 //! not a criterion, so these tests measure against `assets/data/game.ron` instead:
@@ -15,6 +15,10 @@
 //!    boost that outruns it is exactly the exploit.
 //! 4. **Half a boost on an empty tank.** `F-018` says: at 0 there is no more flying. Not
 //!    "less flying".
+//! 5. **The rope steers the strength instead of the direction** (from 2026-08-10, section 5
+//!    below, where its own five failure modes are spelled out). A `lerp` of two unit vectors
+//!    is not a unit vector, and that one missing `normalize` makes `boost_m_s2` depend on
+//!    where the player happens to be looking.
 //!
 //! ## Why these tests drive with `app.update()`
 //!
@@ -48,7 +52,11 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::player::spawn_player;
-use defeated_by_titan::shared::{BoostAccel, Buttons, Cli, Gas, GasGrant, IdCounter, Intent};
+use defeated_by_titan::shared::{
+    BodyId, BodyMask, BoostAccel, Buttons, Cli, Gas, GasGrant, Hook, HookArm, HookState,
+    IdCounter, IndexEntry, Intent, Side, SpatialIndex,
+};
+use defeated_by_titan::vector::boost::{boost_direction, rope_dir};
 
 /// Builds the **real** app, headless, one simulation step per `update()`.
 fn app() -> App {
@@ -290,4 +298,278 @@ fn f007_a_held_button_without_a_grant_produces_exactly_zero() {
     let v = velocity(&app, e);
     assert_eq!(v.x, 0.0, "he drifts at {} m/s in x without a single grant of gas", v.x);
     assert_eq!(v.z, 0.0, "he drifts at {} m/s in z without a single grant of gas", v.z);
+}
+
+// ---------------------------------------------------------------------------------------
+// 5. The rope steers the boost (user, 2026-08-10)
+// ---------------------------------------------------------------------------------------
+//
+// *"wenn man boostet soll man in richtung seil und mauszeiger fliegen! also dahin. dass wenn
+// man zur hook schaut und gehookt ist und boostet man stark in die richtung fliegt!"*
+//
+// The five ways this can be wrong, and none of them shows up in a screenshot:
+//
+// 1. **The blend changes the STRENGTH.** `lerp` of two unit vectors is not a unit vector — it
+//    is shorter than 1 everywhere except at the ends, by up to 30 % at 90 degrees. Whoever
+//    forgets the `normalize` afterwards has silently made `boost_m_s2` depend on where the
+//    player is looking. Every test below asserts the length separately from the direction.
+// 2. **The old behaviour is gone.** `boost_rope_fraction: 0.0` has to reproduce the look-only
+//    boost **bit for bit** — that is what makes the new key a knob and not a rewrite.
+// 3. **NaN.** The player exactly on his anchor, or looking exactly away from it at 0.5: both
+//    produce a zero vector somewhere in the middle, and `normalize` turns that into NaN. NaN
+//    in a `Transform` is how a player vanishes from the world (§9d).
+// 4. **The rope steers while there is no rope.** Unhooked, the fraction may do nothing at all,
+//    at any value.
+// 5. **Two ropes are not one rope.** With both arms anchored the two directions have to meet
+//    in the middle, not "the left one wins because it is index 0".
+
+/// The look direction for a given yaw/pitch in degrees — the same construction the game uses,
+/// so a test never hand-writes a direction the `Intent` would not produce.
+fn look(yaw_deg: f32, pitch_deg: f32) -> Vec3 {
+    Intent { yaw: yaw_deg.to_radians(), pitch: pitch_deg.to_radians(), ..default() }.look_dir()
+}
+
+/// An anchored arm whose tip sits at `tip_m`.
+fn anchored(tip_m: Vec3, body: u32) -> HookArm {
+    HookArm { state: HookState::Anchored { body: BodyId(body), local_m: Vec3::ZERO }, tip_m }
+}
+
+#[test]
+fn f007_at_zero_the_rope_does_not_move_the_boost_by_a_single_bit() {
+    // THE regression guard. `boost_rope_fraction: 0.0` is the behaviour of every `f007_*` test
+    // above it, and it is checked for **bit** equality, not for "close": a blend that is
+    // mathematically the identity but numerically 0.9999997 turns every exact assertion in
+    // this file into a flake, and the four tests above would start failing for a reason nobody
+    // could find.
+    let l = look(30.0, 20.0);
+    let anchor = Some(Vec3::X);
+    assert_eq!(
+        boost_direction(l, anchor, 0.0),
+        l,
+        "at boost_rope_fraction = 0 the rope moved the boost direction — then the new key is \
+         not a knob, it is a rewrite of F-007"
+    );
+    // And with no rope at all, trivially the same.
+    assert_eq!(boost_direction(l, None, 0.0), l);
+}
+
+#[test]
+fn f007_looking_at_the_anchor_boosts_along_the_rope_at_full_strength() {
+    // Both inputs agree, so the blend cannot change the direction whatever the fraction is —
+    // and that is exactly the case in which a missing `normalize` still gives the right
+    // direction and the wrong length. Hence the length assertion.
+    let l = look(-90.0, 0.0); // +X (docs/conventions.md: yaw 0 looks along -Z)
+    for w in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        let d = boost_direction(l, Some(Vec3::X), w);
+        assert!(
+            (d - Vec3::X).length() < 1e-6,
+            "looking straight at the anchor at fraction {w} gives {d:?}, not the rope direction"
+        );
+        assert!(
+            (d.length() - 1.0).abs() < 1e-6,
+            "the boost direction is {} long at fraction {w} — the blend changed the STRENGTH, \
+             and boost_m_s2 now depends on where the player looks",
+            d.length()
+        );
+    }
+}
+
+#[test]
+fn f007_looking_ninety_degrees_off_the_anchor_lands_between_the_two() {
+    // The real case: hooked to the right, looking forward. The result has to lie **between**
+    // look and rope — on the rope's side, never past it, never on the far side.
+    let l = Vec3::NEG_Z; // forward
+    let rope = Vec3::X; // the anchor is off to the right
+    let d = boost_direction(l, Some(rope), 0.5);
+
+    assert!(
+        (d.length() - 1.0).abs() < 1e-6,
+        "the blend is {} long instead of 1 — a lerp of two unit vectors is NOT a unit vector, \
+         and that is this feature's one arithmetic trap",
+        d.length()
+    );
+    // Strictly between: positive along both inputs, and past neither of them.
+    assert!(d.dot(l) > 0.0 && d.dot(l) < 1.0, "{d:?} does not lie on the look side any more");
+    assert!(d.dot(rope) > 0.0 && d.dot(rope) < 1.0, "{d:?} does not lean toward the rope");
+    assert!(d.y.abs() < 1e-6, "{d:?} left the plane both inputs live in");
+    // At exactly half it is the bisector: 45 degrees off each.
+    assert!(
+        (d.dot(l) - d.dot(rope)).abs() < 1e-6,
+        "at 0.5 the direction is not the bisector: {:.4} along look against {:.4} along rope",
+        d.dot(l),
+        d.dot(rope)
+    );
+    // And it really moves with the knob — more fraction, more rope.
+    let quarter = boost_direction(l, Some(rope), 0.25);
+    assert!(
+        quarter.dot(rope) < d.dot(rope),
+        "0.25 leans as far toward the rope as 0.5 does — the fraction is not being read"
+    );
+    // Outside 0..1 it is not a blend any more but an extrapolation, and at 2.0 that points
+    // AWAY from the look direction. It is clamped, and that is a decision, not an accident.
+    assert_eq!(boost_direction(l, Some(rope), 2.0), rope, "above 1 the rope wins outright");
+    assert_eq!(boost_direction(l, Some(rope), -1.0), l, "below 0 the look direction wins");
+}
+
+#[test]
+fn f007_without_a_hook_the_fraction_does_nothing_at_any_value() {
+    let l = look(30.0, 20.0);
+    for w in [0.0, 0.5, 1.0, 2.0, -1.0] {
+        assert_eq!(
+            boost_direction(l, None, w),
+            l,
+            "unhooked at fraction {w} the boost left the look direction — there is no rope to \
+             lean on"
+        );
+    }
+}
+
+#[test]
+fn f007_the_two_degenerate_cases_fall_back_to_the_look_direction() {
+    let l = Vec3::NEG_Z;
+
+    // (a) The player exactly on his anchor: `rope_dir` has no direction to give. The system
+    //     hands over `None` and the boost is the look direction — not NaN.
+    let hook = Hook { arms: [anchored(Vec3::new(5.0, 1.0, 5.0), 7), HookArm::default()] };
+    assert_eq!(
+        rope_dir(Vec3::new(5.0, 1.0, 5.0), &hook),
+        None,
+        "standing exactly on the anchor produced a direction — normalize(ZERO) is NaN, and NaN \
+         in a Transform is how a player vanishes (§9d)"
+    );
+
+    // (b) Looking exactly AWAY from the anchor at 0.5: the lerp is the zero vector, and
+    //     normalizing it is NaN. This is not a theoretical case — it is "hooked behind you,
+    //     boosting forward", which happens in every swing.
+    let d = boost_direction(l, Some(-l), 0.5);
+    assert!(d.is_finite(), "look opposite rope at 0.5 gave {d:?} — that is a NaN player");
+    assert_eq!(d, l, "the fallback for an undecidable blend is the look direction, {d:?} is not");
+    assert!((d.length() - 1.0).abs() < 1e-6, "the fallback is {} long, not 1", d.length());
+
+    // Two ropes pointing exactly opposite each other cancel the same way.
+    let opposed = Hook {
+        arms: [anchored(Vec3::new(10.0, 0.0, 0.0), 7), anchored(Vec3::new(-10.0, 0.0, 0.0), 8)],
+    };
+    assert_eq!(
+        rope_dir(Vec3::ZERO, &opposed),
+        None,
+        "two exactly opposed ropes have no mean direction, and the answer is None, not NaN"
+    );
+}
+
+#[test]
+fn f007_two_anchors_pull_the_boost_to_the_middle_between_them() {
+    // One rope forward-right, one forward-left. The mean of the two **unit** directions is
+    // straight forward — the near anchor does not outvote the far one, because a direction has
+    // no length. (A mean of the two anchor POINTS would; that is the mistake this pins down.)
+    let hook = Hook {
+        arms: [anchored(Vec3::new(3.0, 0.0, -3.0), 7), anchored(Vec3::new(-30.0, 0.0, -30.0), 8)],
+    };
+    let d = rope_dir(Vec3::ZERO, &hook).expect("two anchored arms are a direction");
+    assert!(
+        (d - Vec3::NEG_Z).length() < 1e-6,
+        "the mean of the two ropes is {d:?}, not straight ahead — the 4.2 m rope outvoted the \
+         42 m one, so the mean was taken over the points instead of the directions"
+    );
+    assert!((d.length() - 1.0).abs() < 1e-6, "the mean rope direction is {} long", d.length());
+
+    // One arm anchored, one idle: only the anchored one counts.
+    let one = Hook { arms: [anchored(Vec3::new(0.0, 0.0, -8.0), 7), HookArm::default()] };
+    assert_eq!(rope_dir(Vec3::ZERO, &one), Some(Vec3::NEG_Z));
+    assert_eq!(rope_dir(Vec3::ZERO, &Hook::default()), None, "an idle gear is not a rope");
+}
+
+// --- and the same thing through the real app, because a pure function proves nothing about
+// --- what the running game actually writes into `BoostAccel`.
+
+/// Anchors the flier's left arm to a body `offset_m` away from his hand, and holds the button
+/// that keeps it anchored.
+///
+/// `update_hooks` (`SimulationSystems::Intent`) runs **before** `gas_boost`
+/// (`SimulationSystems::Drive`), re-derives `tip_m` from the spatial index every tick and
+/// releases the arm the moment the hook button is not held (`ReleaseReason::Released`) or the
+/// carrier is not in the index (`BodyGone`). So both are needed here, and the returned anchor
+/// is the one the boost will really see.
+fn hang_on(app: &mut App, e: Entity, offset_m: Vec3) -> Vec3 {
+    let eye = app.world().resource::<GameData>().game.player.eye_height_m;
+    let hand = app.world().get::<Transform>(e).expect("a player has a transform").translation
+        + Vec3::Y * eye;
+    let anchor = hand + offset_m;
+    let body = BodyId(80_007);
+    app.world_mut().resource_mut::<SpatialIndex>().insert(IndexEntry {
+        id: body,
+        center_m: anchor,
+        half_size_m: Vec3::splat(1.0),
+        mask: BodyMask::SOLID.with(BodyMask::ANCHORABLE),
+    });
+    let mut hook = app.world_mut().get_mut::<Hook>(e).expect("a player carries both arms");
+    hook.arms[Side::Left.index()] =
+        HookArm { state: HookState::Anchored { body, local_m: Vec3::ZERO }, tip_m: anchor };
+    let mut intent = app.world_mut().get_mut::<Intent>(e).expect("a player has an intent");
+    intent.buttons.set(Buttons::HOOK_LEFT, true);
+    anchor
+}
+
+#[test]
+fn f007_in_the_running_game_a_hooked_boost_leans_toward_the_anchor() {
+    // Hooked 60 m to the right (+X), looking straight ahead (−Z). With the file's fraction the
+    // drive has to leave the look axis and lean toward the rope — and keep its length.
+    //
+    // Measured `[cachy]` at `boost_rope_fraction: 0.5`: **BoostAccel = (24.0416, 0.0, −24.0416),
+    // length exactly 34.0** — the 45-degree bisector of look and rope, at full strength. With
+    // the rope ignored it was `(−0.0, 0.0, −34.0)`, which is what the first red of this test
+    // reported.
+    let mut app = app();
+    let d = data(&app);
+    let a = d.game.vector.boost_m_s2;
+    let w = d.game.vector.boost_rope_fraction;
+    let e = flier(&mut app, 0.0);
+    hang_on(&mut app, e, Vec3::X * 60.0);
+
+    boost(&mut app, e, 0.0, 0.0); // yaw 0 = look along −Z
+    ticks(&mut app, 1);
+
+    let got = drive(&app, e);
+    assert!(
+        (got.length() - a).abs() < 1e-3,
+        "BoostAccel is {} m/s^2 long instead of game.ron's boost_m_s2 = {a} — the blend \
+         changed the strength",
+        got.length()
+    );
+    assert!(
+        got.x > 0.0,
+        "BoostAccel is {got:?}: it does not lean toward the anchor at all, although \
+         game.ron: vector.boost_rope_fraction = {w}"
+    );
+    assert!(got.z < 0.0, "BoostAccel is {got:?}: it gave the look direction up entirely");
+    // The exact vector, against the same rule computed by hand from what the game holds.
+    let hand = app.world().get::<Transform>(e).expect("transform").translation
+        + Vec3::Y * d.game.player.eye_height_m;
+    let hook = *app.world().get::<Hook>(e).expect("hooks");
+    let want = boost_direction(look(0.0, 0.0), rope_dir(hand, &hook), w) * a;
+    assert!(
+        (got - want).length() < 0.05,
+        "BoostAccel is {got:?}, the rule says {want:?} — the system is not applying the rule \
+         the tests above pin down"
+    );
+}
+
+#[test]
+fn f007_in_the_running_game_at_zero_a_hooked_boost_is_the_pure_look_direction() {
+    // The regression guard once more, but through the whole app: with the knob at 0 a hooked
+    // player boosts exactly where he looks — **bit for bit** the pre-2026-08-10 behaviour.
+    let mut app = app();
+    let a = app.world().resource::<GameData>().game.vector.boost_m_s2;
+    app.world_mut().resource_mut::<GameData>().game.vector.boost_rope_fraction = 0.0;
+    let e = flier(&mut app, 0.0);
+    hang_on(&mut app, e, Vec3::X * 60.0);
+
+    boost(&mut app, e, 30.0, 20.0);
+    ticks(&mut app, 1);
+
+    assert_eq!(
+        drive(&app, e),
+        look(30.0, 20.0) * a,
+        "at boost_rope_fraction = 0 a hooked player no longer boosts where he looks"
+    );
 }

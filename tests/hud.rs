@@ -28,12 +28,15 @@ use defeated_by_titan::hud::blade_pips::{BladeCluster, BladePip, SharpnessBar};
 use defeated_by_titan::hud::crosshair::{
     self, CrosshairPart, CrosshairShape, CrosshairState,
 };
+use defeated_by_titan::hud::arm_aim::{self, ArmAimState, ArmMarker, ArmMarkerLabel};
 use defeated_by_titan::hud::gas_bar::GasBar;
 use defeated_by_titan::hud::health_bar::{HealthBar, HealthTrack};
 use defeated_by_titan::hud::objective::ObjectiveLine;
 use defeated_by_titan::hud::{HudElement, KEEP_OUT_HIGH_PCT, KEEP_OUT_LOW_PCT};
 use defeated_by_titan::mission::{KillTally, MissionPhase};
-use defeated_by_titan::shared::{Blades, Cli, Gas, Health, LocalPlayer, PlayerId, TitanId};
+use defeated_by_titan::shared::{
+    BodyId, Blades, Cli, Gas, Health, Hook, HookState, LocalPlayer, PlayerId, Side, TitanId,
+};
 
 /// Builds the **real** app, headless — not a second, similar one.
 fn app() -> App {
@@ -820,4 +823,389 @@ fn f171_the_shape_table_is_the_only_place_the_numbers_live() {
             "{state:?}: `node_count` and `shape_of` disagree"
         );
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// F-171 — the two arm markers, `Q` and `E`
+// ---------------------------------------------------------------------------------------
+//
+// The user's sentence after playing on 2026-08-10: *"und es muss auch visuell immer 2 punkte
+// angezeigt werden so der e und q haken hingehen würden!"* Two markers, always, one per arm.
+//
+// The trap this block exists to catch is the same one the whole file is built against, in its
+// nastiest form for this element: **two markers that stand somewhere plausible and mean
+// nothing**. A pair of dots symmetric around the crosshair photographs beautifully whether or
+// not it is wired to the arms at all. So nothing below asserts that "an entity exists": every
+// test here moves an arm and demands that the geometry moves with it.
+
+const ARM_STATES: [ArmAimState; 4] = [
+    ArmAimState::Free,
+    ArmAimState::Ready,
+    ArmAimState::Busy,
+    ArmAimState::Anchored,
+];
+
+fn set_arm_state(app: &mut App, state: ArmAimState) {
+    let mut q = app
+        .world_mut()
+        .query_filtered::<&mut ArmAimState, With<ArmMarker>>();
+    for mut s in q.iter_mut(app.world_mut()) {
+        *s = state;
+    }
+}
+
+/// `(visible node count, bounding width px, bounding height px)` for **one** arm.
+///
+/// Per side, not for the pair: the whole claim of this element is that the two sides can say
+/// different things, and a tuple over both of them together could not see that.
+fn arm_geometry(app: &mut App, side: Side) -> (usize, f32, f32) {
+    app.world_mut()
+        .run_system_once(arm_aim::shape_arm_aim)
+        .expect("the one-shot system runs");
+    app.world_mut().run_schedule(PostUpdate);
+    app.world_mut().run_schedule(PostUpdate);
+
+    let mut count = 0;
+    let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
+    let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
+    let mut q = app
+        .world_mut()
+        .query::<(&ArmMarker, &Node, &ComputedNode, &UiGlobalTransform)>();
+    for (marker, node, computed, at) in q.iter(app.world()) {
+        if marker.side != side || node.display == Display::None {
+            continue;
+        }
+        let (a, b, c, d) = rect(computed, at);
+        if c - a <= 0.0 || d - b <= 0.0 {
+            continue;
+        }
+        count += 1;
+        min_x = min_x.min(a);
+        min_y = min_y.min(b);
+        max_x = max_x.max(c);
+        max_y = max_y.max(d);
+    }
+    (count, max_x - min_x, max_y - min_y)
+}
+
+/// Puts one hook state on one arm of the local player, leaving the other arm alone.
+fn set_arm(app: &mut App, side: Side, state: HookState) {
+    let player = local_player(app);
+    let mut hook = app
+        .world_mut()
+        .entity_mut(player)
+        .get::<Hook>()
+        .copied()
+        .expect("the player carries a `Hook` — `player::spawn_player` inserts it");
+    hook.arms[side.index()].state = state;
+    app.world_mut().entity_mut(player).insert(hook);
+}
+
+/// What one arm's marker currently says.
+fn arm_state(app: &mut App, side: Side) -> ArmAimState {
+    let mut q = app.world_mut().query::<(&ArmMarker, &ArmAimState)>();
+    q.iter(app.world())
+        .find(|(m, _)| m.side == side)
+        .map(|(_, s)| *s)
+        .expect("both arms must have a marker")
+}
+
+#[test]
+fn f171_the_two_arm_markers_differ_in_shape_not_only_in_colour() {
+    // ★ **The criterion.** `F-026`'s acceptance is that a player can say without thinking where
+    // `Q` and `E` would take him, and `F-171`'s is that he can do it colour-blind. The only way
+    // to make either falsifiable is to take the colour away: every `BackgroundColor` and every
+    // `BorderColor` on the markers is forced to one and the same value, and the four states
+    // still have to come out as four different `(node count, width, height)` tuples.
+    //
+    // Goes red the moment the four states become four colours on one dot.
+    let mut app = app();
+    attach_screen(&mut app);
+
+    let mut measured = Vec::new();
+    for state in ARM_STATES {
+        set_arm_state(&mut app, state);
+        {
+            let mut q = app
+                .world_mut()
+                .query_filtered::<(&mut BackgroundColor, &mut BorderColor), With<ArmMarker>>();
+            for (mut fill, mut border) in q.iter_mut(app.world_mut()) {
+                fill.0 = Color::WHITE;
+                border.set_all(Color::WHITE);
+            }
+        }
+        measured.push((state, arm_geometry(&mut app, Side::Left)));
+    }
+
+    // The colour really is gone — otherwise every assertion below would be free.
+    {
+        let mut q = app
+            .world_mut()
+            .query_filtered::<(&BackgroundColor, &BorderColor), With<ArmMarker>>();
+        assert!(
+            q.iter(app.world()).all(|(f, b)| f.0 == Color::WHITE && b.top == Color::WHITE),
+            "the test did not manage to neutralise the colour — then it proves nothing about \
+             shape"
+        );
+    }
+
+    for (state, (count, w, h)) in &measured {
+        assert!(
+            *count > 0 && *w > 0.0 && *h > 0.0,
+            "{state:?} draws nothing at all: {count} nodes, {w} x {h} px — and requirement 1 is \
+             that BOTH markers are visible in EVERY state, because a marker that vanishes tells \
+             the player nothing about why"
+        );
+        assert_eq!(
+            *count,
+            arm_aim::node_count(*state),
+            "{state:?}: the shape table promises {} nodes and {count} are drawn",
+            arm_aim::node_count(*state)
+        );
+    }
+    for (i, (a_state, a)) in measured.iter().enumerate() {
+        for (b_state, b) in measured.iter().skip(i + 1) {
+            let differs = a.0 != b.0 || (a.1 - b.1).abs() > 0.5 || (a.2 - b.2).abs() > 0.5;
+            assert!(
+                differs,
+                "{a_state:?} and {b_state:?} are the same shape — {a:?} against {b:?}. With the \
+                 colour taken away a player cannot tell them apart, and both `F-171`'s and \
+                 `F-026`'s acceptance is exactly that he can"
+            );
+        }
+    }
+
+    // The mirror: the right arm is the left arm's shape, on the other side. A right marker that
+    // silently drew something else would pass every assertion above.
+    for state in ARM_STATES {
+        set_arm_state(&mut app, state);
+        let left = arm_geometry(&mut app, Side::Left);
+        let right = arm_geometry(&mut app, Side::Right);
+        assert_eq!(
+            left, right,
+            "{state:?}: the two arms draw different shapes — {left:?} against {right:?}. The \
+             side is carried by WHERE the marker stands, never by what it looks like"
+        );
+    }
+
+    for (state, (count, w, h)) in &measured {
+        println!("f171 arm {state:?}: {count} nodes, {w:.1} x {h:.1} px");
+    }
+}
+
+#[test]
+fn f171_the_two_markers_come_apart_when_the_two_arms_do() {
+    // ★ **The one with teeth.** Today both hooks fly at the one `AimPoint` the camera ray
+    // produced — `vector::hook::update_hooks` reads it once and gives it to both arms — so a
+    // preview that put them on two different world points would be drawing a mechanic the
+    // simulation does not have (`docs/backlog/gameplay.ron` F-023's hemispheres are ⬜).
+    //
+    // What is true is that the two arms have their own STATE. This test is the proof that the
+    // markers are wired to that state per arm and not to one shared value: one arm anchors, the
+    // other stays idle, and the two markers have to say two different things.
+    let mut app = app();
+    attach_screen(&mut app);
+    // The aim answer is pinned, and it has to be: `app()` runs two `app.update()`s, a fixed step
+    // can fall inside them depending on how busy the machine is, and then `vector::aim` writes a
+    // real raycast into `AimPoint` underneath the test. Measured on 2026-08-10: this test passes
+    // alone and fails in a full `--test hud` run without this line. What is under test here is
+    // the arm STATE, so the shared aim answer is held still.
+    {
+        use defeated_by_titan::shared::AimPoint;
+        let player = local_player(&mut app);
+        app.world_mut()
+            .entity_mut(player)
+            .insert(AimPoint { point_m: None, body: None, anchorable: false });
+    }
+
+    set_arm(&mut app, Side::Left, HookState::Anchored { body: BodyId(1), local_m: Vec3::ZERO });
+    set_arm(&mut app, Side::Right, HookState::Idle);
+    app.world_mut()
+        .run_system_once(arm_aim::sense_arm_aim)
+        .expect("the one-shot system runs");
+
+    assert_eq!(arm_state(&mut app, Side::Left), ArmAimState::Anchored);
+    assert_ne!(
+        arm_state(&mut app, Side::Left),
+        arm_state(&mut app, Side::Right),
+        "one arm is anchored and the other is idle, and both markers say the same thing — then \
+         the pair is one marker drawn twice"
+    );
+    let anchored = arm_geometry(&mut app, Side::Left);
+    let idle = arm_geometry(&mut app, Side::Right);
+    assert_ne!(
+        anchored, idle,
+        "the two states reach the screen as the same geometry {anchored:?} — the difference has \
+         to be visible, not only in a component"
+    );
+
+    // And the other way round, so a marker hard-wired to `Side::Left` cannot pass.
+    set_arm(&mut app, Side::Left, HookState::Idle);
+    set_arm(&mut app, Side::Right, HookState::Anchored { body: BodyId(1), local_m: Vec3::ZERO });
+    app.world_mut()
+        .run_system_once(arm_aim::sense_arm_aim)
+        .expect("the one-shot system runs");
+    assert_eq!(arm_state(&mut app, Side::Right), ArmAimState::Anchored);
+    assert_eq!(arm_state(&mut app, Side::Left), ArmAimState::Free);
+
+    // A retracting arm is not a ready one: `vector::hook` only fires from `Idle`, so a `Ready`
+    // ring over an arm that cannot shoot is a promise the simulation does not keep.
+    set_arm(&mut app, Side::Left, HookState::Retracting);
+    app.world_mut()
+        .run_system_once(arm_aim::sense_arm_aim)
+        .expect("the one-shot system runs");
+    assert_eq!(arm_state(&mut app, Side::Left), ArmAimState::Busy);
+}
+
+#[test]
+fn f171_the_arm_markers_read_the_aim_point() {
+    // The other half of the wiring: with both arms idle the shape is decided by
+    // `AimPoint::anchorable`, which `vector::aim` writes. Goes red when somebody leaves the
+    // system registered and empties its body — the failure this repo has already had once.
+    use defeated_by_titan::shared::AimPoint;
+    let mut app = app();
+    let player = local_player(&mut app);
+
+    for (anchorable, expected) in
+        [(false, ArmAimState::Free), (true, ArmAimState::Ready), (false, ArmAimState::Free)]
+    {
+        app.world_mut().entity_mut(player).insert(AimPoint {
+            point_m: Some(Vec3::new(0.0, 1.6, -10.0)),
+            body: Some(BodyId(1)),
+            anchorable,
+        });
+        app.world_mut()
+            .run_system_once(arm_aim::sense_arm_aim)
+            .expect("the one-shot system runs");
+        for side in Side::ALL {
+            assert_eq!(
+                arm_state(&mut app, side),
+                expected,
+                "with `anchorable: {anchorable}` the {side:?} marker has to be {expected:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn f170_the_arm_markers_stay_out_of_the_middle_in_every_state() {
+    // `f170_nothing_covers_the_middle_of_the_screen` sees this pair only in the state a fresh
+    // player is in. The pair changes size with its state, so it gets its own loop over all four
+    // — including the widest glyph and the one with the tether.
+    let mut app = app();
+    attach_screen(&mut app);
+    let (w, h) = screen(&mut app);
+    assert!(w > 0.0 && h > 0.0, "the UI laid out into a {w} x {h} viewport");
+
+    let box_min_x = w * KEEP_OUT_LOW_PCT / 100.0;
+    let box_max_x = w * KEEP_OUT_HIGH_PCT / 100.0;
+    let box_min_y = h * KEEP_OUT_LOW_PCT / 100.0;
+    let box_max_y = h * KEEP_OUT_HIGH_PCT / 100.0;
+
+    for state in ARM_STATES {
+        set_arm_state(&mut app, state);
+        app.world_mut()
+            .run_system_once(arm_aim::shape_arm_aim)
+            .expect("the one-shot system runs");
+        app.world_mut().run_schedule(PostUpdate);
+        app.world_mut().run_schedule(PostUpdate);
+
+        let mut q = app
+            .world_mut()
+            .query_filtered::<(&Name, &Node, &ComputedNode, &UiGlobalTransform), Or<(With<ArmMarker>, With<ArmMarkerLabel>)>>();
+        let mut seen = 0;
+        for (name, node, computed, at) in q.iter(app.world()) {
+            if node.display == Display::None {
+                continue;
+            }
+            let (min_x, min_y, max_x, max_y) = rect(computed, at);
+            if max_x - min_x <= 0.0 || max_y - min_y <= 0.0 {
+                continue;
+            }
+            seen += 1;
+            let overlaps =
+                min_x < box_max_x && max_x > box_min_x && min_y < box_max_y && max_y > box_min_y;
+            assert!(
+                !overlaps,
+                "in {state:?} `{name}` covers the middle of the screen: \
+                 ({min_x:.1}, {min_y:.1})..({max_x:.1}, {max_y:.1}) against the box \
+                 ({box_min_x:.1}, {box_min_y:.1})..({box_max_x:.1}, {box_max_y:.1})"
+            );
+        }
+        // Two glyphs and two letters at the very least, plus the tethers where a state has them.
+        let expected = 2 * arm_aim::node_count(state) + 2;
+        assert_eq!(
+            seen, expected,
+            "in {state:?} only {seen} of the expected {expected} marker nodes were laid out — \
+             the test just checked almost nothing, and requirement 1 is that both markers are \
+             visible ALWAYS"
+        );
+    }
+}
+
+#[test]
+fn f171_the_marker_letters_are_the_keys_that_fire_the_arms() {
+    // `hud` may not reach into `net`, so the letters `Q` and `E` are written a second time in
+    // `src/hud/arm_aim.rs`. This is the test that keeps the two spellings equal: it reads the
+    // binding out of `src/net/local.rs` and falls over the day a hook is rebound without the
+    // label following. A label that names the wrong key is worse than no label.
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/net/local.rs"),
+    )
+    .expect("src/net/local.rs must be readable");
+    let code: String = source
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    for (side, button) in [(Side::Left, "HOOK_LEFT"), (Side::Right, "HOOK_RIGHT")] {
+        let letter = arm_aim::key_label(side);
+        let expected = format!("Buttons::{button}, keys.pressed(KeyCode::Key{letter})");
+        assert!(
+            code.contains(&expected),
+            "the {side:?} marker is labelled `{letter}`, but `src/net/local.rs` does not \
+             contain `{expected}` — the HUD is naming a key that does not fire this arm"
+        );
+    }
+    assert_ne!(arm_aim::key_label(Side::Left), arm_aim::key_label(Side::Right));
+}
+
+#[test]
+fn f171_the_arm_markers_cost_no_ray_and_no_sweep() {
+    // `CLAUDE.md` rule 6: nothing runs over all entities to answer a question about the ten
+    // metres in front of your nose. The crosshair next door pays for one cortex-filtered ray per
+    // frame and says so in its header; this element pays for **none** — it reads `Hook` and
+    // `AimPoint`, which `vector` has already written this tick.
+    //
+    // The bound is deliberately loose. What it is here to catch is not a microsecond, it is the
+    // day somebody "improves" the preview by casting a probe ray per arm: two `SpatialQuery`
+    // casts against a hundred blocks plus the system overhead do not fit into it, and a pair of
+    // component reads does with two orders of magnitude to spare.
+    let mut app = app();
+    attach_screen(&mut app);
+    let sense = app.world_mut().register_system(arm_aim::sense_arm_aim);
+    let shape = app.world_mut().register_system(arm_aim::shape_arm_aim);
+    let paint = app.world_mut().register_system(arm_aim::paint_arm_aim);
+
+    // Warm up: the first call builds the system state, and that cost is paid once ever.
+    for _ in 0..100 {
+        app.world_mut().run_system(sense).expect("the system runs");
+        app.world_mut().run_system(shape).expect("the system runs");
+        app.world_mut().run_system(paint).expect("the system runs");
+    }
+    let rounds = 2_000;
+    let start = std::time::Instant::now();
+    for _ in 0..rounds {
+        app.world_mut().run_system(sense).expect("the system runs");
+        app.world_mut().run_system(shape).expect("the system runs");
+        app.world_mut().run_system(paint).expect("the system runs");
+    }
+    let per_frame_us = start.elapsed().as_secs_f64() * 1e6 / f64::from(rounds);
+    println!("f171 arm markers: {per_frame_us:.3} us per frame for all three systems");
+    assert!(
+        per_frame_us < 50.0,
+        "the three arm-marker systems cost {per_frame_us:.3} us per frame — that is the order of \
+         a spatial query, and this element is not allowed to cast one"
+    );
 }

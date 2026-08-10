@@ -164,6 +164,122 @@
                 // cheapest anchor above the eaves and the only one that may stand in the
                 // middle of a street.
                 (center_m: (-20.0, 6.0, -58.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
+
+                // ---- The swing lane: nine gate towers along z = 70 --------------------
+                // Measured, and it is the only reason any of the numbers below may be
+                // believed: `scripts/f004-towers.txt` — 39 asserts, exit 0, one arc with its
+                // bottom 33.32 m ABOVE the ground and then five of them chained over 208 m
+                // at up to 43.3 m/s, on zero gas. Take these towers back out and the same
+                // script reports 17 of 39 red, every hook "found nothing anchorable".
+                // The user, 2026-08-10, after playing it: „und mehr tuerme zum lang
+                // hangeln!" — and FIND-026 says the same thing with numbers: the church at
+                // 35 m was the ONLY structure in this world tall enough to give a real arc.
+                //
+                // ## The arithmetic that decides height and spacing. Read it before you
+                // ## move one of these numbers.
+                //
+                // `player/rope.rs::attach_ropes` sets the rope to the distance that exists
+                // at the moment of the hook, and `shorten_ropes` only ever lets it get
+                // SHORTER. So for an anchor at height `H` above the ground and a rope `L`
+                // the bottom of the pendulum lies at
+                //
+                //     arc bottom = H - L
+                //
+                // and a swing exists at all only while that is above the ground. With
+                // `L = sqrt(d^2 + u^2)` (d = horizontal distance to the anchor, u = how far
+                // the anchor is above the player) that becomes, for a clearance floor `f`:
+                //
+                //     d < sqrt((H - f)^2 - u^2)      and in particular always   d < H - f
+                //
+                // **That is the whole design constraint, and it is NOT the hook range.**
+                // `vector.hook_range_m` is 200 m since 2026-08-10, but a rope of 200 m needs
+                // an anchor 200 m up to swing on. **A tower has to be TALLER than the gap to
+                // the next one.** Whoever spaces towers by hook range gets 200 m of leash and
+                // no pendulum — which is exactly the state FIND-026 measured.
+                //
+                // Choosing from that:
+                //   * spacing = **35 m**, the layout pitch (lot 28 + street 7). The towers
+                //     sit on the lot centres of the row z = 70, so each one removes exactly
+                //     the lot it stands on (world/map.rs drops a generated lot whole when a
+                //     placed block overlaps it) and the row becomes an open lane.
+                //   * a level hook to the next tower is then L = 35 m, the arc bottom sits at
+                //     H - 35, and the descent (and therefore the speed) is the spacing:
+                //     v = sqrt(2 * 20 * 35) = **37.4 m/s = 6.2x running speed**.
+                //   * height **60 m**: 60 - 35 = 25 m of arc bottom, i.e. 13.5 m of air over
+                //     the 11.5 m residential roofs even if a swing drifts out of the lane.
+                //     At the church's 35 m the same spacing would put the arc bottom at
+                //     y = 0 — the church is exactly one tower short of being chainable.
+                //
+                // ⚠️ **60 m is above the church (35 m) and it is a decision the user has to
+                // confirm.** `scale.ron` names no building above the church; 60 m is the one
+                // height above it the user has written down at all
+                // (`wall.platform_height_m`). Rolling it back is this block and nothing else.
+                //
+                // ## Why a GATE and not a plain tower
+                //
+                // The bottom of the pendulum lies vertically under the ANCHOR. On a solid
+                // tower that point is inside the tower, so a swing that is allowed to run its
+                // course ends in the wall you are hanging from. Two columns and a crossbeam
+                // put the anchor over open ground: the beam spans the lane, its middle is
+                // 35 m of air above the street, and the arc bottom is out there with it. The
+                // player flies THROUGH the gate (20 m of clear width between the columns,
+                // 56 m of clear height) instead of into it.
+                //
+                // **The columns are NOT anchorable, and that is the second half of the gate
+                // idea rather than a restriction.** The rule two paragraphs up is that a swing
+                // anchor has to stand over OPEN GROUND — the bottom of a pendulum lies
+                // vertically under its anchor, and on a column that point is inside the
+                // column. A hookable column is therefore an anchor that breaks the very rule
+                // the gate shape exists to satisfy: you would swing straight into the thing
+                // you are hanging from, which is what `docs/FINDINGS.md` FIND-029 measured on
+                // the church (24.85 m/s -> 0.000 against its face, and he stays there).
+                //
+                // It was also measurably wrong the other way: with the columns tagged, the
+                // beam sits on top of them (columns y 0..56, beam y 56..60 over z 52..88) and
+                // COVERS both roofs, so `tests/vector_aiming.rs` reported exactly **18 of 87
+                // tagged surfaces unreachable by free aiming** — one per column, nine gates.
+                // A tagged surface nothing can hook is a lie in the map.
+                //
+                // So: beam `anchorable: true` in `sand_brown`, columns `anchorable: false` in
+                // `stone_gray` — and the colour split now says something true, namely that the
+                // part which reads from a distance is the part you can actually hook.
+                //
+                // Nine of them at x = -140 .. +140: 280 m of lane, eight legs. The lots at
+                // x = +-175 in the same row stay built.
+                //
+                // ⚠️ **The row is z = 70 and not the nearer z = 35, and that is not taste.**
+                // `scripts/f170-objective.txt` spawns a titan at (0, 0, 18) and
+                // `scripts/f053-windup.txt` one at (0, 0, 25) — both would have stood INSIDE
+                // the column at (0, ., 21). A lane one row further north touches no script in
+                // the repository; the highest +z any of them uses is 76.5
+                // (`scripts/f171-crosshair.txt`), and no column stands at that x.
+                (center_m: (-140.0, 28.0, 56.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-140.0, 28.0, 84.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-140.0, 58.0, 70.0), size_m: (8.0, 4.0, 36.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-105.0, 28.0, 56.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-105.0, 28.0, 84.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-105.0, 58.0, 70.0), size_m: (8.0, 4.0, 36.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-70.0, 28.0, 56.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-70.0, 28.0, 84.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-70.0, 58.0, 70.0), size_m: (8.0, 4.0, 36.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-35.0, 28.0, 56.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-35.0, 28.0, 84.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-35.0, 58.0, 70.0), size_m: (8.0, 4.0, 36.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (0.0, 28.0, 56.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 28.0, 84.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 58.0, 70.0), size_m: (8.0, 4.0, 36.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (35.0, 28.0, 56.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (35.0, 28.0, 84.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (35.0, 58.0, 70.0), size_m: (8.0, 4.0, 36.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (70.0, 28.0, 56.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (70.0, 28.0, 84.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (70.0, 58.0, 70.0), size_m: (8.0, 4.0, 36.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (105.0, 28.0, 56.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (105.0, 28.0, 84.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (105.0, 58.0, 70.0), size_m: (8.0, 4.0, 36.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (140.0, 28.0, 56.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (140.0, 28.0, 84.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (140.0, 58.0, 70.0), size_m: (8.0, 4.0, 36.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
             ],
         ),
     },

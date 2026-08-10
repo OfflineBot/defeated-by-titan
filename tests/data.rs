@@ -97,10 +97,75 @@ fn t005_the_simulation_runs_at_sixty_hertz() {
 
 #[test]
 fn t005_hook_range_stays_in_the_design_window() {
-    // init.md §1 names 60–120 m. If this test falls over, somebody tuned the range without
-    // carrying its origin along. The tighter guard sits directly below.
+    // The window WAS 60..=120, straight out of `prompts/init.md` §3 („Eine Einheit"): *„Ein
+    // Mensch ist 1,8, ein Titan 3–15, ein Haken fliegt 60–120."* (Q-002 cites that sentence as
+    // §1; it stands in §3, item 5. The sentence is what matters, not the section number.)
+    //
+    // ⚠️ **Widened to 60..=200 on 2026-08-10 — deliberately, and against the project's own
+    // source document.** The user played the build and said *"zudem muss die hook range sehr
+    // viel länger sein!"*. This project has a precedence rule for exactly this collision, and
+    // it is written down twice (docs/QUESTIONS.md Q-002, assets/data/scale.ron:vector): **a
+    // direct figure in metres from the user beats any derivation** — and a live instruction
+    // beats the number it replaces, including the user's own earlier 90 m. So the window moved
+    // and the value did not get trimmed back into it. The whole decision, with the rollback
+    // point, is docs/QUESTIONS.md Q-035.
+    //
+    // The ceiling is 200 and not "no ceiling": the graybox is 400 m across, so 200 m is
+    // exactly half the map. Beyond that every anchor in the world is always in reach and
+    // *where you stand stops being a decision* — the map would no longer be a design surface.
+    // A guard with no upper bound is not a guard, it is a comment.
     let r = data().game.vector.hook_range_m;
-    assert!((60.0..=120.0).contains(&r), "hook_range_m = {r} — init.md §1 names 60–120 m");
+    assert!(
+        (60.0..=200.0).contains(&r),
+        "hook_range_m = {r} — the window is 60..=200 m. Its floor is init.md §3 („ein Haken \
+         fliegt 60–120\"); its ceiling is half the 400 m graybox, raised from 120 to 200 on \
+         2026-08-10 because the user overrode his own 90 m after playing (\"die hook range \
+         [muss] sehr viel länger sein\", docs/QUESTIONS.md Q-035). Above 200 m the whole map \
+         is always in reach and position stops being a decision — moving that ceiling again \
+         is the user's call, not a tuning step"
+    );
+}
+
+#[test]
+fn t005_a_hook_shot_at_full_range_arrives_before_the_target_has_moved() {
+    // **The guard that was missing on 2026-08-10.** `hook_range_m` went 90 -> 200 because the
+    // user asked for it; `hook_speed_m_s` had to go 90 -> 160 with it, and nothing in this
+    // file would have noticed if it had not. That is the dangerous shape: the range is the
+    // number somebody tunes, the speed is the number nobody thinks of, and the symptom is not
+    // a crash but "the hook feels sluggish now".
+    //
+    // The fact nobody had pinned: **a hook is a projectile, so range / speed is how long the
+    // worst-case shot takes to arrive.** 90 m at 90 m/s cost 1.0 s. 200 m at 160 m/s costs
+    // 1.25 s. At the old 90 m/s the new range would have cost **2.22 s** — and this assert is
+    // what turns that into a red test instead of a feel complaint three sessions later.
+    //
+    // Why the ceiling is 1.5 s: at `max_speed_m_s` (75) the player himself covers 112 m in
+    // 1.5 s. Past that the anchor you aimed at is more than half a hook range behind you by
+    // the time the hook gets there, so aiming stops being aiming and becomes leading a target
+    // — a different game, and not one anybody decided to build. 1.5 s leaves the current
+    // 1.25 s some room without leaving room for a doubling.
+    let v = &data().game.vector;
+    let flight_s = v.hook_range_m / v.hook_speed_m_s;
+    assert!(
+        flight_s <= 1.5,
+        "a shot to maximum range takes {flight_s} s ({} m at {} m/s) — the ceiling is 1.5 s. \
+         A hook is a projectile: range / speed is its worst-case flight time. If the range \
+         grew, the speed has to grow with it (2026-08-10: 90 m/90 m/s = 1.0 s became \
+         200 m/160 m/s = 1.25 s; leaving the speed at 90 would have meant 2.22 s). \
+         docs/QUESTIONS.md Q-035",
+        v.hook_range_m, v.hook_speed_m_s
+    );
+    // And the same fact from the other side, with no literal in it: while the hook flies, the
+    // player is still moving. If he can outrun a full hook range during his own shot, the
+    // anchor point he picked is meaningless by the time the hook lands.
+    let drift_m = v.max_speed_m_s * flight_s;
+    assert!(
+        drift_m < v.hook_range_m,
+        "at max_speed_m_s = {} the player travels {drift_m} m during the {flight_s} s flight \
+         of a maximum-range shot — that is further than the {} m range itself. The hook would \
+         be out of range of its own anchor before it arrives",
+        v.max_speed_m_s, v.hook_range_m
+    );
 }
 
 #[test]
@@ -772,11 +837,19 @@ fn t005_the_ashwalker_rises_thirty_meters_above_the_wall() {
 #[test]
 fn t005_the_wall_is_reachable_in_two_moves() {
     // Catches: a wall whose crown (120 m) or whose intermediate platform (60 m) is no longer
-    // reachable within the anchor range (90 m).
+    // reachable within the anchor range.
     // Without this test: the three numbers wander independently — range down for balancing,
     // wall up for effect — and at some point the wall can no longer be climbed from below.
     // That only surfaces when somebody tries it in game, and then the guess is "the controls
     // are broken", not "three RON numbers do not fit together".
+    //
+    // ⚠️ **Since the range went 90 -> 200 m (2026-08-10, Q-035) this test has slack it did not
+    // use to have, and the name is now optimistic:** at 200 m the crown (120 m) is reachable
+    // from the ground in ONE move, so the intermediate platform is no longer load-bearing for
+    // the climb. The asserts below are still the right asserts — they are what goes red if the
+    // range comes back down — but nobody should read a green run here as evidence that the
+    // two-move climb is still the design. Whether the platform still has a job is a question
+    // for the user, not for this file.
     let d = data();
     let m = &d.scale.wall;
     let range = d.scale.vector.anchor_range_m;

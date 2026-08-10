@@ -142,6 +142,7 @@ The normal case in this project is that the user is **not** there. Then this hol
 
 | Question | File |
 |---|---|
+| **What do I do first, right now?** | [`docs/NEXT.md`](docs/NEXT.md) — the queue the last session left, in order |
 | What is open, in which order? | [`docs/TODO.md`](docs/TODO.md) *(generated)* |
 | How far may I trust a thing? | [`docs/STATUS.md`](docs/STATUS.md) *(generated)* |
 | Which machine, what works here? | [`docs/environment.md`](docs/environment.md) |
