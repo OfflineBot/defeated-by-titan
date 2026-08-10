@@ -19,7 +19,7 @@ before `Could` is the order, not a recommendation (prompts/init.md §2).
 | ⬜ | F-031 | Geschwindigkeitsabhaengige Schadensformel | 1 | F-030 | needs F-030 |
 | ⬜ | F-032 | Sekundaere Trefferzonen | 1 | F-030 | needs F-030 |
 | ⬜ | F-033 | Klingenhaltbarkeit | 1 | F-030 | needs F-030 |
-| 🟧 | F-034 | Hit-Stop und Impact-Frames | 1 | F-030 | needs F-030 |
+| 🟨 | F-034 | Hit-Stop und Impact-Frames | 1 | F-030 | needs F-030 |
 | ⬜ | F-040 | Gerichteter Griff-Escape | 1 | F-030 | needs F-030 |
 | ⬜ | F-035 | Lance Charges (Fernwaffe) | 2 | F-030 | needs F-030 |
 | ⬜ | F-037 | Kein Friendly Fire | 1 | F-035 | needs F-035 |

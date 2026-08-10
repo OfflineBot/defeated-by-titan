@@ -844,6 +844,109 @@ but those tests place the blade themselves. **A player flying past a solid husk 
 reach the nape**, which means the kill is proven as a mechanism and not yet as a thing a player
 can do.
 
+## Q-031 — Is the approach angle a thing this game has? Today it is not, and no number can make it one.
+
+**Context:** on 2026-08-10 you asked me to judge two of the 26 untuned numbers, and named the
+husk's `turn_deg_per_s: 50` as one that "decides everything — does the husk turn so slowly that
+the approach angle means something?". I went to tune it and found there is nothing to tune.
+
+**Measurement** (the full record is [`FINDINGS.md`](FINDINGS.md) FIND-012, produced by one agent
+and then attacked by an independent one that was asked to refute it and could not):
+
+- `src/combat/strike.rs:99-103` — the titan's strike test is
+  `ground_m <= reach_m && to.y <= top_m && to.y >= -reach_m`. **A cylinder.** No dot product, no
+  forward vector. Front and back book the same damage.
+- `src/titan/brain.rs:398-400` — the turn block runs only while `Pursue && distance_m >
+  attack_range_m`, and `distance_m` is horizontal. **A titan does not turn inside 6.0 m**, nor in
+  `Idle`, `Windup`, `Strike` or `Recover`.
+- Every cut in `scripts/game-full.txt` lands at **1.882 m** from the axis. The husk in all three
+  acts never turns once.
+
+So `turn_deg_per_s` governs an approach that has no consequence, in a zone the titan has already
+left by the time the fight starts. **This is not a tuning question and I will not pretend it is
+one by picking a number.** Answering "50 or 80?" would produce a value, a commit, and no
+difference whatsoever to anybody playing.
+
+**The question that is actually yours:** should a titan's facing matter?
+
+1. **No — the strike stays omnidirectional.** Then `turn_deg_per_s` is decoration, the nape is
+   reachable from any side, and the skill in the fight is entirely about height, speed and
+   timing. This is a legitimate design; it is roughly what a "swarm of hazards" game does. Then
+   the honest move is to delete the knob, not tune it.
+2. **Yes — the strike gets a facing cone, and the titan turns inside its attack range.** Then the
+   approach angle becomes real, `turn_deg_per_s` becomes the number you said it was, and the
+   cortex-on-the-nape design finally means something mechanically: coming from behind is *safer*,
+   not merely equally good. This is what the design bible implies everywhere it talks about the
+   nape.
+
+**ASSUMPTION: (2), and I have implemented none of it.** I am assuming the bible means what it
+says about the nape, so the hole gets recorded rather than papered over with a value. **I have
+changed no number and no line of combat code on the strength of this assumption.**
+
+**What would have to be rolled back:** nothing. That is the point of stopping here. If you pick
+(1), Q-031 closes and `turn_deg_per_s` plus `attack_range_m` should be deleted from `titan.ron`
+with a line saying why. If you pick (2), it is a job in `combat/strike.rs` (a half-angle against
+the titan's forward vector) and one in `titan/brain.rs` (drop the `distance_m > attack_range_m`
+guard on the turn), each with a red test first.
+
+**Why it matters today:** it gates the tuning round you asked for. Seven of the 26 untuned
+numbers are per-kind combat values in `titan.ron`, and at least two of them are meaningless until
+this is decided.
+
+## Q-032 — The reel is a jolt, and no value of `reel_speed_m_s` can make it a swing
+
+**Context:** on 2026-08-10 you asked: *"vector.reel_speed_m_s (ein Reel gibt 46,4 m/s — liest
+sich das als Ruck oder als Schwung?)"* and said it was file work, not code work. **It is a jolt,
+it is measured, and it is the one part of your instruction the measurement contradicts: this
+cannot be fixed in a file.**
+
+**Measured [cachy], 2026-08-10** (full record in [`FINDINGS.md`](FINDINGS.md) FIND-013, 16 runs,
+reproduced byte-identical):
+
+- The player's speed goes `0.000 → 28.000` m/s in **one tick**: **1680 m/s², 171 g**. The reel's
+  own next tick adds +0.05 m/s. The onset is ~500× the steady state.
+- Across nine rungs the first tick equals the configured rate to three decimals. **The law is
+  `speed := reel_speed_m_s`** — an assignment, not an acceleration. Confirmed against a moving
+  start (airborne at 5.5 m/s → 28.307 one tick later).
+- End speed is **monotone** in `reel_speed_m_s` and pins at `MaxLinearSpeed(75)` between r=32 and
+  r=36. There is no sweet spot to find by trying values.
+
+**Your premise number is also wrong, and it was mine, not yours.** 46.414 m/s is not what a reel
+gives. The reel ends at **54.18 m/s**; `scripts/f-001-hooks.txt` samples five ticks later, after
+the rope has whipped the player around and taken 14.2 % of his speed in one tick (FIND-016).
+Every earlier statement in this repository about "a reel gives 46.4 m/s" describes a reel plus a
+swing loss.
+
+**So the honest answer to "which value?" is: none of them.** Raising it makes the jolt bigger;
+lowering it makes the jolt smaller *and* the reel weaker, and below ~20 it stops being useful.
+The knob that would decide feel does not exist yet — an ease-in on the length rate. What it would
+buy, **computed** from the measured law (not measured; nothing ramped has ever run):
+
+| `reel_ramp_s` | per-tick Δv | accel | ramp | reel duration (was 0.5297 s) | extra gas |
+|---|---|---|---|---|---|
+| — (today) | **28.000 m/s** | 1680 m/s² · 171 g | 1 tick | 0.5297 s | — |
+| 0.05 | 9.333 | 560 m/s² · 57 g | 3 tk | 0.5547 s (+4.7 %) | 0.15 |
+| **0.15** | **3.111** | 187 m/s² · 19 g | 9 tk | 0.6047 s (+14.2 %) | 0.45 |
+| 0.25 | 1.867 | 112 m/s² · 11 g | 15 tk | 0.6547 s (+23.6 %) | 0.75 |
+
+0.15 s is the value at which the onset becomes indistinguishable from what the reel already does
+one tick later (+3.102 m/s), for 4.5 ticks and 0.45 gas of 100.
+
+**ASSUMPTION: `reel_speed_m_s` stays at 28.0 and I have changed nothing.** Tuning it would be
+tuning the size of a discontinuity, and it would bury a mechanical defect under a number — the
+same mistake Q-030 refused to make. 28 also sits with headroom below the clamp, which values
+above 32 do not.
+
+**What would have to be rolled back:** nothing. No file value was changed and no code was
+touched. The follow-up is `vector.reel_ramp_s` in `game.ron` plus an ease-in in
+`src/vector/reel.rs`, behind a red test that asserts the first tick's Δv is *below* the rate —
+which is exactly the assert that would have caught this a day ago.
+
+**Second lever, and it carries no `⚠️ UNTUNED` marker at all:** `min_rope_m`. Measured at stock
+rate, 3.0 → **54.18 m/s** and 5.0 → **39.62 m/s**. Two metres removes 27 % of the top speed. Its
+stated reason in the file is a *camera* constraint, so it is doing two unrelated jobs at once and
+should probably split into a separate `vector.min_reel_m`.
+
 ---
 
 ## Answered

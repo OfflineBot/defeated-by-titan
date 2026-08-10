@@ -1,0 +1,279 @@
+# f-flight-cut — A CORTEX CUT LANDED OUT OF ROPE FLIGHT, not out of a fall.
+#
+#   the verdict:  cargo run -q -- --headless --script scripts/f-flight-cut.txt --ticks 400
+#
+# MEASURED on offlinebot, 2026-08-10 — the run says, in this order:
+#
+#   t=131   strike: player 1 takes 34.0 — 66.0/100.0 left   (he is still on the ground)
+#   t=132   hook Right of player 1 anchored on body 22 at 60.00 29.96 -67.00
+#   t=132   rope Right of player 1 attached at 30.37 m
+#   t=149   cut titan 1 Torso  at 28.40 m/s                 (5.663 m up, climbing)
+#   t=152   **cut titan 1 Cortex at 74.70 m/s**             (8.243 m up, climbing)
+#   t=157   hook Right of player 1 let go: Released
+#   script run finished: **21 asserts held**, 363 ticks — exit 0
+#
+# ⚠️ **No `--mission`.** This file counts bodies (`assert titans`), not kills: `assert kills`
+# measures nothing without a running mission and nothing counts as failed (`src/debug/mod.rs:
+# measure`). With `--mission tutorial` the tutorial's own first wave stands in the world from
+# tick 1 and `assert titans == 1` below is red for a reason that has nothing to do with the cut.
+# `--ticks 400` is enough; the script finishes on its own at t=363.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT THIS FILE CLAIMS
+#
+# `scripts/game-full.txt` proves three cortex cuts and every one of them is landed **out of a
+# fall**: `warp` to 30.8 m, wait, cut. The core loop of this game — hook, reel, cut while the
+# rope is carrying you — was proven as a MECHANISM and unproven as a MOVEMENT.
+#
+# This run claims one thing: **the husk's cortex is cut while the player is being carried
+# upward by a rope that is still attached to him.** Three measurements carry it, and all three
+# are `assert` lines:
+#
+#   1. **28.397 m/s at 5.663 m of height, from a standing start at y = 0** (the asserts at
+#      t=149). There are three sources of speed in this build and only three. Gravity: he began
+#      at rest at y = 0 and is HIGHER than he began — free fall from y = 0 gives 0 m/s. The
+#      jump: `game.ron: jump_speed_m_s` 6.5 against g = −20 reaches **1.056 m** and 6.5 m/s.
+#      The gas boost: `Shift`, and there is no `key Shift` line in this file. What is left is
+#      the rope, and 28.4 m/s is 4.4x the only other number in the list.
+#   2. **The rope is still attached at the cut, and the gas ledger says so.**
+#      `src/vector/gas.rs:69` debits reel gas only when
+#      `intent.pressed(REEL_IN) && hook.anchored_count() > 0` — the cost follows the effect,
+#      not the button — and `gas_budget` is the **only** writer of `Gas`, so nothing refills it.
+#      The tank is therefore a counter of anchored reeling ticks at 0.1/tick, and three ticks
+#      after the cut it reads **98.200**: eighteen consecutive paid ticks, t=137..154, with the
+#      cut at t=152 inside them. A rope that let go early stops that ledger and turns
+#      `assert gas < 98.7` red.
+#   3. **He is higher after the cut than before it, and still fast.** 5.663 m at t=149,
+#      8.243 m at t=155, 31.546 m at t=180 — at 66.585 m/s. Gravity moves nothing upward.
+#
+# ⚠️ **There is no verb in the script vocabulary that observes a hook.** The eight metrics are
+# speed, height, gas, titans, tick, health, kills, phase (`src/debug/script.rs:226-245`) and
+# not one of them reads `Hook` or `RopeLength`. The gas ledger is the closest thing that
+# exists, and it is a **proxy**. The smallest fix is a ninth metric; it is in this job's report
+# and it is not this file's to make.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT THIS FILE DOES **NOT** CLAIM
+#
+# - **Not a swing.** The rope stands 9.5 degrees off vertical and the momentum is a REEL, not
+#   a pendulum arc. `F-004`'s swing is not shown here, and a reel is the easier half.
+# - **Not aiming.** The pass is arranged by arithmetic, the way `scripts/q030-reach.txt`
+#   arranges its fall. The player does not steer and would not survive a titan standing 30 cm
+#   to one side — the first version of this file missed the nape by 1.23 m and hit only the
+#   torso. **A cut that has to be computed to the tick is not a cut a human can land**; that is
+#   `P3`, and this run says nothing about it.
+# - **Not a clean 28 m/s cut.** The cortex is cut at **74.70 m/s**, not at the 28.4 m/s the
+#   player was flying at four ticks earlier, and that number is an ARTEFACT — see the bug
+#   below. The honest sentence is: he entered the pass at 28.4 m/s under rope power and was
+#   inside the nape at 74.7.
+# - **Not a rope that is still on him at the end.** It is released at t=157, five ticks after
+#   the cut, and everything after that is a ballistic coast on momentum the rope gave him:
+#   89.666 m and 45.919 m/s at t=241 are gravity spending a launch, not a reel. The release is
+#   not a design choice — it is dodging a bug, see below.
+# - **Not a picture.** One tick is 0.47 m at 28 m/s and 1.25 m at 74 m/s; `--offscreen` catches
+#   whichever tick it catches (`scripts/f-001-hooks.txt` measured 38 828 differing pixels at
+#   46 m/s). Nothing in this run stands still.
+# - **Not the mission loop, and not a fight.** No `--mission`, so no `kills`, no `phase`, no
+#   WON. The husk lands exactly one strike (health 100 -> 66) and never walks a step.
+#
+# ---------------------------------------------------------------------------------------
+# ⚠️⚠️ THE BUG THIS FILE FOUND, AND WHY `hook right` READS 0.74 AND NOT 4.0
+#
+# **A blade hit while a rope is attached corrupts avian's joint-island bookkeeping, and the
+# process panics the next time that joint is removed:**
+#
+#   thread 'main' panicked at avian3d-0.7.0/src/dynamics/solver/islands/mod.rs:786:9:
+#   assertion failed: island.joint_count > 0
+#
+# `combat::hitstop::begin` puts `RigidBodyDisabled` on the player for the impact frame
+# (`gear.ron: feel.hit_stop_cortex_s` 0.12 = 7 ticks, here t=153..159). The `DistanceJoint` is
+# still attached to that body. Measured bracket, five runs, one number apart:
+#
+#   rope released t=157  (INSIDE the impact frame)   -> exit 0, 21 asserts held
+#   rope released t=161, 173, 203, 263, 353 (after)  -> panic, exit 101
+#
+# and the trigger needs both halves: with `key Ctrl` deleted (no rope tension) or `key E`
+# deleted (no hit) the same release at t=353 is clean. `scripts/game-full.txt` never meets it,
+# because every one of its three cuts is landed out of a FALL with no rope attached — **this is
+# the first file in the repository that cuts while roped, and it panics the game.**
+#
+# The red test is one character: change `hook right 0.74` to `hook right 0.80` and the same run
+# releases at t=161 instead of t=157 and dies. **The 0.74 is a dodge, not a design.** It goes
+# back to 4.0 — and the tail of this file goes back to describing a rope instead of a coast —
+# the day the bug is fixed. -> `docs/BUGS.md`, and it is not this file's repair to make.
+#
+# The 74.70 m/s of the cut is the same bug's second face: `player::rope::shorten_ropes` keeps
+# shortening `limits.max` through the impact frame while the frozen player cannot follow, so
+# the two ticks of the TORSO hit stop store 0.93 m of rope that is paid back in one tick —
+# 74.700 m/s is `game.ron: vector.max_speed_m_s` 75.0, i.e. the clamp, not a speed anybody
+# chose. It is why the cut lands at all in the shape it does, and it must not be tuned against.
+#
+# ---------------------------------------------------------------------------------------
+# THE GEOMETRY — and the two things that had to be MEASURED, not derived
+#
+# **The church, and only the church.** `maps.ron` places it at (60, 17.5, −60), 14 x 35 x 14,
+# `anchorable: true` — the one structure in the graybox tall enough for a near-vertical rope.
+# Its −Z face is z = −67. The default run builds `map "Graybox": 79 blocks (9 placed, 70
+# generated)`, and the church is one of the nine.
+#
+# **The lot around it is empty, and that is arithmetic.** Lot 28 m + street 7 m = 35 m period,
+# `nx = floor(400/35) = 11`, centres at −175 + 35i. The lot at (70, −70) spans x 56..84,
+# z −84..−56, **overlaps the church**, and `src/world/map.rs:200-205` drops such a lot whole.
+# Player (60, 0, −72) and husk (61.80, 0, −72.55) both lie inside it.
+#
+# ⚠️ **MEASURED 1 — THE YAW IS 180, AND THE FIRST VERSION OF THIS FILE HAD 0.** The church is
+# at z = −67..−53 and the player at z = −72, so the target is at *greater* z, and
+# `forward = (−sin yaw, 0, −cos yaw)` makes yaw 0 point the other way. The run said it in one
+# line — `hook Right of player 1 found nothing anchorable (t=112)` — and then nine asserts fell
+# over downstream while the husk beat a standing player from 100 to 0. A probe from the same
+# spot, four shots, settles the axis for good:
+#
+#   look 180 80 -> anchored at (60.00, 29.96, −67.00), rope 30.37 m, t=132   [1.6 + 5·tan80]
+#   look 180 60 -> anchored at (60.00, 10.26, −67.00)                        [1.6 + 5·tan60]
+#   look 180 45 -> anchored at (60.00,  6.60, −67.00)                        [1.6 + 5·tan45]
+#   look   0 80 -> found nothing anchorable                                  [the bug]
+#
+# Every predicted length in that table was right to the digit. **The arithmetic was never the
+# problem and a sign was.** Whoever aims a hook in this game writes the axis down first.
+#
+# ⚠️ **MEASURED 2 — THE REEL LIFTS THE PLAYER STRAIGHT UP; IT DOES NOT PULL HIM ALONG THE
+# ROPE.** This file was first built on "he travels the line P->A at `reel_speed_m_s`", which
+# predicted a drift of 1.23 m toward the church during the climb — so the husk was placed
+# 1.23 m nearer the wall, and the blade went through the torso and missed the nape by exactly
+# that. The measured climb, one tick at a time:
+#
+#   end of tick  143    148    149   150   151    152        (150/151 = torso hit stop)
+#   height      3.297  5.663  6.136 6.136 6.136  8.243
+#   speed      28.379 28.397 28.405 ...          74.700
+#
+# 0.4731 m/tick is not 0.46667 x cos(9.5 deg) = 0.4603 (travel along the rope). It is
+# `0.46667 x L / (A_y − y)` — the rate at which a body **rising vertically at constant x and z**
+# takes up a rope that is shortening at 0.46667 m/tick. The horizontal offset of 5 m is spent
+# only at the very end, when the rope is shorter than it. So the flight is a **plumb line at
+# x = 60.00, z = −72.00**, and the cortex has to stand there:
+#
+#   `src/titan/rig.rs: cortex_in_head` puts the cortex `head_m / 2` = 0.55 m **behind** the
+#   neck, and a spawned titan carries no rotation (`rig.rs:296`), so a husk at (X, 0, Z) has
+#   his cortex at (X, 8.9, Z + 0.55). Z = −72.55 puts it at z = −72.00, on the plumb line.
+#   X = 61.80 puts the axis **1.80 m to +X of the player** — `scripts/q030-reach.txt`'s measured
+#   margin, 0.20 m of air between the two capsules — because at `look 0 0` the RIGHT blade lies
+#   on +X (`src/blades/cut.rs: blade_segment`) and **you cut what you fly past, not what you
+#   look at.** The player's x and z never move, so that 1.80 m holds for the whole pass instead
+#   of being right for one tick.
+#
+# **Why the cut lands in `Recover`.** Ground distance is x/z only
+# (`titan::brain::nearest_player`), so a player 7 m up is still 1.882 m away: the husk goes
+# `Idle -> Pursue -> Windup` on his first two ticks and never walks, because
+# `titan::brain::walk` moves nothing that is inside its own `attack_range_m` = 6.0.
+# `windup_s` 0.60 = 36 ticks and `strike_s` 0.2 = 12 put `Recover` at t=143..166, and only
+# `Recover` and `Idle` carry `lean_deg: 0` (`src/titan/pose.rs`). The cut lands at **t=152**,
+# nine ticks into `Recover`, against an upright body. His one `Strike` at t=131 lands on a
+# player still standing on the ground: 34 damage, health 66 for the rest of the run.
+#
+# ---------------------------------------------------------------------------------------
+# HOW THIS FILE FAILS, IF IT DOES
+#
+# The failure this file was predicted to have, and did have on its second run, is worth
+# leaving written down because the symptom was exactly the predicted one: **a
+# `cut titan 1 Torso` line with no `Cortex` line after it, and exactly one red assert —
+# `assert Titans == 0 — measured 1.000`.** Height, speed and gas all stayed green, because the
+# flight was right and only the last metre was wrong. If that shape comes back, the fault is
+# the husk's position, not the timing: check z first (it is the axis this file already got
+# wrong once), then x, then the `wait 0.09` before `key E`.
+#
+# A shot that finds nothing (`hook Right ... found nothing anchorable`) is the other shape:
+# three of the five asserts at t=149 go red in the same tick with `measured 0.000`,
+# `measured -0.000`, `measured 100.000`. That is geometry, and no shifting of waits repairs it.
+
+wait 1.5          # world, camera, meshes and the render pipelines come up (90 ticks)
+
+# =========================================================================================
+# SET UP — the player at the foot of the church, the husk beside the line he will fly.
+# =========================================================================================
+#
+# The husk is spawned HERE and not later, because his pose clock has to run: 36 ticks of
+# `Windup` plus 12 of `Strike` before `Recover` opens at t=143, and the cut is at t=152.
+
+look 180 80                     # +Z and up: `forward = (−sin yaw, 0, −cos yaw)`, so yaw 180
+                                # is +Z. The ray crosses z = −67 after 28.794 m at
+                                # y = 1.6 + 5 x tan 80 = 29.956 — measured 29.96, five metres
+                                # below the ridge.
+warp 60 0 -72                   # 5 m out from the face, inside the dropped lot
+spawn titan husk 61.8 0 -72.55  # cortex at (61.80, 8.90, −72.00) — on the plumb line
+key F3 0.05                     # the overlay carries pos, tick and the husk's state into a PNG
+wait 0.3                        # the warp takes effect one tick later than it is written
+
+assert height > -0.1    # standing on the ground, not sunk into it and not inside a house
+assert height < 0.5
+assert speed < 0.5      # and standing STILL — every number below is read against this zero
+assert gas > 99.9       # a full tank: nothing has been paid for yet
+assert titans == 1      # the husk exists, and he is the only one (no `--mission`)
+assert health > 99      # he has not been hit yet
+mark flight-aim
+
+# =========================================================================================
+# ACT 1 — the hook. One rope, and it bites at t=132.
+# =========================================================================================
+#
+# ⚠️ 0.74 s = 45 ticks, so `MouseButton::Right` is released at **t=157**, inside the impact
+# frame of the cut. That is not a design choice, it is the dodge documented at the top of this
+# file: at 0.80 the release falls at t=161 and avian panics. **This number goes back to 4.0
+# when that bug is fixed**, and the three asserts in ACT 3 go back to describing a rope.
+
+hook right 0.74
+wait 0.4                # the tip needs 20 ticks for 28.794 m; this waits 25
+
+# =========================================================================================
+# ACT 2 — the reel. Straight up at 28.4 m/s, and the blade goes out mid-flight.
+# =========================================================================================
+
+mark flight-anchored
+key Ctrl 3.0            # REEL_IN: 28 m/s of LENGTH, per substep, from this tick on
+look 0 0                # the rope does not care where he looks — the BLADE does: at yaw 0 the
+                        # right blade lies on +X, and the husk is on +X.
+wait 0.09               # 7 ticks
+
+# The slash goes out **before** he is at the nape: `active_from_s` 0.08 = swing tick 5, so the
+# blade begins cutting at t=149 and the pass is at t=152.
+key E 0.20              # SLASH_RIGHT (`src/net/local.rs:69`)
+wait 0.06               # 5 ticks
+
+# ***** the three numbers the whole claim stands on, read one tick before the blade bites *****
+assert speed > 25       # measured 28.397. A jump gives 6.5, gravity from y = 0 gives 0, and
+                        # `Shift` is pressed nowhere in this file.
+assert height > 4.5     # measured 5.663 m. A jump reaches 1.056 m.
+assert height < 6.5
+assert gas < 99.2       # measured 98.8: twelve ticks of reeling PAID, and `src/vector/gas.rs:69`
+assert gas > 98.4       # only debits reel gas while a hook is anchored.
+mark flight-fast
+wait 0.07               # 6 ticks — across the cut at t=152
+
+# ***** the cut has landed: the player is frozen in his own impact frame *****
+assert height > 6.0     # measured 8.243 m — HIGHER than six ticks ago, at 74.700 m/s
+assert height < 11.0
+assert gas < 98.7       # measured 98.200: eighteen anchored reeling ticks paid, t=137..154,
+assert gas > 97.6       # with the cut at t=152 inside them. The rope was on him.
+mark flight-cut
+wait 0.4
+
+# =========================================================================================
+# ACT 3 — the verdict. He is higher, still fast, still alive; the husk is not.
+# =========================================================================================
+#
+# ⚠️ The rope let go at t=157, so these two are a **ballistic coast on rope-given momentum**,
+# not a reel: 31.546 m at 66.585 m/s. The brackets are deliberately loose — they hold both for
+# this coast and for the ~21 m at ~28 m/s a still-attached rope would give, so that fixing the
+# hit-stop bug does not turn this file red for the wrong reason.
+
+assert height > 11.0    # measured 31.546 m: still going up, 28 ticks after the cut
+assert speed > 20       # measured 66.585 m/s
+assert health > 0       # measured 66: the husk's one strike landed while the player stood
+mark flight-still-rising
+wait 1.0
+
+# ***** the kill, counted the only way a run without a mission can count it *****
+assert titans == 0      # `death_s` 1.0 -> the body is gone 60 ticks after the cortex was cut
+assert height > 25      # measured 89.666 m
+assert health > 0
+mark flight-hanging
+wait 2

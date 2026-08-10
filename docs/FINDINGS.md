@@ -290,6 +290,249 @@ were attacked and held:
   roof**. The gray body filling the frame from y = 503 downwards has no cyan boundary — the
   untagged wall, in front of it, not shot through.
 
+## FIND-012 — The titan's strike is a cylinder: facing is decorative, and the approach angle means nothing
+
+**Symptom:** the user's tuning question was "does the husk turn slowly enough at
+`turn_deg_per_s: 50` that the approach angle means something?". The question has no tuning
+answer, because nothing reads a titan's facing when damage is booked.
+
+**Measurement:** `src/combat/strike.rs:99-103`, `reaches()` is
+
+```
+ground_m <= reach_m && to.y <= top_m && to.y >= -reach_m
+```
+
+**No dot product, no forward vector, no half-angle.** A horizontal distance, a ceiling and a
+floor — a cylinder around the titan's axis. Attacking from behind and attacking from the front
+book the identical damage. Independently: `grep` over `src/titan/` finds exactly **one** writer
+of a titan's root yaw (`brain.rs:428`); the rotations in `rig.rs` are `from_rotation_x` on child
+arm and torso entities, and `SpawnTitan` carries no facing at all (`rig.rs:239`).
+
+Second half of the same hole (this is FIND-012's original subject and it survived the attack):
+the turn block in `brain.rs:411-429` runs only under `state == Pursue && distance_m >
+attack_range_m` (`brain.rs:398-400`), and `distance_m` is horizontal (`brain.rs:333`). So a titan
+does not turn inside 6.0 m, nor in `Idle`, `Windup`, `Strike` or `Recover`. Every cut in
+`scripts/game-full.txt` lands at **1.882 m** from the axis — all three acts offset 1.80 m in −X
+*and* 0.55 m in +Z — so the husk in those acts never turns once: `pursuing` is false from his
+first tick onward.
+
+**Why it counts:** two knobs the user was asked to judge (`turn_deg_per_s`, and
+`attack_range_m` behind it) cannot be judged, because the mechanic they would govern is not
+implemented. Tuning either one changes nothing a player can feel. This is a **design hole, not
+a number** — and it should be answered before any of the 26 untuned values are touched, because
+it decides whether "the approach angle" is a thing this game has.
+
+**Whose it is:** combat design. Recorded as a decision in [`QUESTIONS.md`](QUESTIONS.md) Q-031.
+
+**Confidence:** source reading plus arithmetic, produced by one agent and then attacked by a
+second one that was told to refute it and could not. **Nothing here has been run** — 🟨.
+
+## FIND-013 — The reel does not accelerate the player, it assigns his radial velocity
+
+**Symptom:** `src/vector/reel.rs:5` describes F-005 as "a change of length, not a pulling
+force". The implementation makes the length change set the velocity outright, in one tick.
+
+**Measurement:** the chain is complete in avian's own source.
+`avian3d-0.7.0/src/dynamics/solver/xpbd/plugin.rs:259-270` does
+`body.linear_velocity += (delta_position - pre_solve_delta_pos) / delta_secs` **per substep**;
+`DistanceJoint::solve` (`joints/mod.rs:326-344`) applies nothing while `distance <= max`, and
+runs at compliance 0 against a static anchor, so the correction completes inside its own
+substep; `player/rope.rs::attach_ropes` sets `limits.max` to the **current** distance, so the
+player is exactly at the limit the moment `Ctrl` goes down. The algebra that follows: the
+correction is `(v_r + r)·h`, so the projected radial velocity afterwards is **exactly `−r`** —
+not "0 → 28 m/s" but **"anything → 28 m/s", independent of what it was before**.
+
+**What is NOT claimed:** an earlier version of this finding put the figure at 40 320 m/s²
+(4110 g) by dividing the step by one substep. That is a difference quotient across a
+discontinuity and it is not a number anything observes. The honest observable is **+28 m/s
+within one tick**, against `player.boost_m_s2 = 34`, which needs 49 ticks for the same change.
+
+**Why it counts:** `vector.reel_speed_m_s` is the knob the user singled out and asked "jolt or
+swing?". If this holds under measurement, the answer is *jolt, structurally* — and no value of
+`reel_speed_m_s` can make it a swing, because the knob does not set an acceleration. What is
+missing is a value that does not exist yet (an ease-in, `vector.reel_ramp_s`) or a change to
+`min_rope_m`, which carries no `UNTUNED` marker at all because its stated reason is a camera
+constraint.
+
+**MEASURED, 2026-08-10 [cachy], and it is exact.** Sixteen runs against the frozen binary, with
+`vector.reel_speed_m_s` varied in a scratch copy of `assets/` (the game reads `assets/data`
+relative to the working directory — `src/data/mod.rs:46-62` — so a value can be changed without
+recompiling; the scratch tree was proven to be the one being read before any number was taken).
+
+| tick | speed | Δ | height |
+|---|---|---|---|
+| 149 (`key Ctrl`) | 0.000 | — | −0.000 |
+| 150 | **28.000** | **+28.000** | 0.287 |
+| 151 | 31.102 | +3.102 | 0.751 |
+| 152 | 31.153 | +0.051 | 1.214 |
+
+**+28.000 m/s in one 16.7 ms tick = 1680 m/s² = 171 g**, and then +0.05 m/s per tick. The onset
+is ~500× the steady state. Across nine rungs the first tick reads 10.003 / 14.001 / 20.002 /
+24.001 / 28.000 / 32.001 / 36.000 / 45.001 / 60.002 — **the law is `speed := reel_speed_m_s`, to
+three decimals.** Checked against a moving start as well: reel pressed while airborne at
+5.500 m/s gives **28.307 m/s** one tick later, against 28.34 predicted by "radial component
+destroyed, tangential kept". Two runs of the same configuration are byte-identical over 153
+samples.
+
+**The number the project has been quoting is not the reel's output.** The reel completes at
+**54.18 m/s**; `scripts/f-001-hooks.txt` samples 5 ticks later, after the rope at `min_rope_m`
+has whipped the player around and taken **14.2 % of his speed in one tick** (54.010 → 46.327).
+The rig reproduced f-001's known pair exactly (46.415 m/s at 13.064 m) before measuring anything
+new, which is what makes the rest of the ladder trustworthy.
+
+**Stage 🟧** for the step itself: measured, reproduced, and the rig validated against a
+previously known number.
+
+## FIND-014 — The punish window is fine for the husk and too short for two of the three titan kinds
+
+**Symptom:** an agent claimed `recover_ticks (24) >= swing_ticks + cooldown_ticks (39)` is red
+today. The claim is **refuted**, and the correct version of it is red somewhere else.
+
+**Measurement:** the numbers are right (24, 21, 18 recover; 36 windup, 12 strike, 90 cooldown;
+units are ticks, converted once through `round(s·hz)`; `swing.rs:113-120` starts the blade
+cooldown at swing *end*, so 39 is the right cut-to-cut period). The comparison was wrong.
+`brain.rs:254-255` sets `cooldown_left = 90` on entry to **Windup**, and `decide` (`:291`)
+blocks the next Windup until it reaches 0. So the real no-attack window is
+`attack_cooldown − windup − strike + recover = 90 − 36 − 12 + 24 = ` **42 ticks against 39
+needed** — a second cut fits, with 3 ticks to spare.
+
+The correct assert is `attack_cooldown_ticks − windup_ticks − strike_ticks >= swing_ticks +
+blade_cooldown_ticks`. It is **green for the husk and red for the scuttler (18 < 39) and the
+weaver (25 < 39)**.
+
+**Why it counts:** neither of the two small kinds is in play yet, so this bites the day one
+spawns — and it will look like a combat bug rather than a data one. It is also a clean example
+of the rule: the first agent had every number right and the conclusion wrong.
+
+**Confidence:** 🟨, arithmetic over the RON files and the state machine; not run.
+
+## FIND-015 — `src/vector/reel.rs:5` cites a function nothing calls
+
+**Symptom:** the module header points at `shared::rope::rope_reel_in`.
+
+**Measurement:** `grep` finds no production caller of that function.
+
+**Why it counts:** small, but it is the header of exactly the file whose documented intent and
+implementation disagree (FIND-013). Whoever reads the header to understand the reel is sent to
+retired code.
+
+## FIND-016 — The rope eats 14 % of the player's speed in one tick, against a documented 4.26 % per second
+
+**Symptom:** measured while running the reel ladder (FIND-013), not looked for.
+
+**Measurement [cachy], 2026-08-10:** at `reel_speed_m_s = 28` the player reaches 54.010 m/s and
+is at 46.327 m/s on the **next tick** — **−14.2 % in 16.7 ms**, at the moment the rope hits
+`min_rope_m` and whips him around. The `substeps: 24` comment in `assets/data/game.ron` claims a
+swing loss of 4.26 % **per second**, and `tests/vector_rope.rs` measures 0.43 %/s over 60 ticks.
+Those two describe a hanging swing; nothing in the repository describes the whip.
+
+**Why it counts:** it is the difference between the reel's real output (54.18 m/s) and the number
+this project has been quoting for a day (46.414). It also means the single most violent event in
+the movement system — a 7.7 m/s loss in one tick — is undocumented and untested. Whether it is
+correct physics for a taut rope at the length floor or a solver artefact is **not decided here**.
+
+**Confidence:** 🟧 as a measurement (reproduced byte-identical), ⬜ as an explanation.
+
+## FIND-017 — `MaxLinearSpeed(75)` is load-bearing tuning, not a safety backstop
+
+**Measurement [cachy]:** end-of-reel speed against `reel_speed_m_s` is monotone increasing —
+23.2 (r=20) → 38.6 (r=24) → 54.2 (r=28) → 69.0 (r=32) → **75.00 pinned** (r=36, 45, 60). The
+clamp is reached between r=32 and r=36.
+
+**Why it counts:** above r ≈ 35 the reel's end speed *is* the clamp, so anyone raising the reel
+rate past 32 is turning a knob that no longer does anything. A clamp that silently becomes the
+tuning value is the kind of thing that costs a day. The unclamped peaks (75.02 / 75.62 / 75.77)
+also show the clamp leaking by up to 1 %.
+
+**Also refuted here:** the hypothesis that end speed is a **U** in `reel_speed_m_s` with a
+minimum near 28-32. Two independent paper models predicted it (55.5 m/s at r=20, 75.35 at r=14);
+the measurements are 23.2 and 23.4 — wrong in magnitude and in direction. The hypothesis is not
+undecided, it is **dead**.
+
+**Confidence:** 🟧, nine rungs, two of them repeated identically.
+
+## FIND-018 — The two lowest ladder rungs are contaminated, and the rig they inherit is poor
+
+**Symptom:** reported by the measuring agent as a result rather than dropped, which is why it is
+here.
+
+**Measurement:** at `reel_speed_m_s = 10` the player hits the watchtower at t=221, **17 ticks
+before** the reel completes — the 10.05 m/s recorded at the nominal completion tick is a
+post-impact number and says nothing about the reel. At r = 14 the impact is at t=214 and
+completion at t=213: one tick of margin. Pre-impact peaks are 21.98 (r=10) and 23.41 (r=14).
+
+**Why it counts:** the `scripts/f-001-hooks.txt` geometry ends in a collision on **every** rung,
+so every number in the ladder inherits a rig that terminates in a wall. A clean reel measurement
+needs an anchor with ~40 m of nothing beneath it, and no such fixture exists in the repository.
+
+**Confidence:** 🟧 for the contamination itself; the numbers above r=20 are unaffected.
+
+## FIND-019 — A pixel diff of 0 means "nothing changed" AND "the camera is clamped on a blank plane"
+
+**Symptom:** the window campaign of 2026-08-10 produced a **false bug**, held it across three
+runs and twelve measurements, and only then refuted it. It reported "after `Esc`/`Esc` the mouse
+never rotates the view again" — a one-way-door bug in the cursor grab. There is no such bug.
+
+**Measurement:** the agent's own large `ydotool mousemove` calls had driven the pitch into its
+`±89°` clamp, so the camera was staring at flat ground or flat sky, **where a yaw change is
+invisible**. The two cases are numerically distinguishable and nothing was looking:
+
+| frame kind | distinct colours | std |
+|---|---|---|
+| camera clamped on a featureless plane | **19-23** | 13.09 |
+| camera on the city, mouse demonstrably working | **1110-1360** | ~67 |
+
+**The fix is a method, not a patch:** switch the **F3 overlay on for every window measurement**,
+so the tick counter stands inside the picture. Then "nothing happened" and "the process is
+frozen" stop being the same number, and a 0-pixel diff becomes readable. With the overlay on, a
+playing frame changes 215 px over 2 s and a paused one changes 0 px — the pause is provable
+precisely because the tick is in frame.
+
+**Why it counts:** every window screenshot this project will ever take is a pixel diff over a
+parked scene. This trap is available at every one of them, and it produces a confident wrong
+answer rather than an error.
+
+## FIND-020 — `--novsync` does nothing in a window on niri, and the frame rate is the display's
+
+**Measurement [cachy], `wl_surface.commit` counted on the Wayland wire over the last 10 s of a
+22 s run:** vsync **1801 commits = 180.1 fps**, median frame time 5.551 ms, p95 5.907 ms;
+`--novsync` **1801 commits = 180.1 fps** — identical. DP-2 runs at 180.002 Hz.
+
+**Cause:** `wp_tearing_control` never appears in the protocol log — the client never asks for it,
+so `PresentMode::AutoNoVsync` cannot be honoured and the swapchain stays throttled to the
+refresh rate.
+
+**Why it counts:** `prompts/init.md` §11 introduces `--novsync` so that "what does this cost?"
+is not measured against the 16.6 ms ceiling six times over. **In a window on this machine that
+flag is a no-op**, so any performance measurement taken in a window is measuring the display.
+Performance work has to go through `--offscreen` or `--headless` until the tearing-control
+protocol is requested. Also note the ceiling here is 5.55 ms, not 16.6 — this display is 180 Hz,
+not 60.
+
+## FIND-021 — Four things the window taught us that no headless run could
+
+**All measured [cachy] 2026-08-10, first windowed session in the project's life.**
+
+1. **`wtype -k F3` never reaches the game; `ydotool key 61:1 61:0` does.** `wtype -k Escape`
+   works. Anyone driving the window from outside must use `ydotool` for function keys.
+   (Evidence: overlay absent after `wtype`, present after `ydotool`, absent again after the next
+   `ydotool` toggle.)
+2. **`niri msg windows` reports the game with `App ID: (unset)`.** An earlier recon in the same
+   session reported `app_id defeated_by_titan` and was **wrong**. The only reliable handle is the
+   window title. If an `app_id` is wanted, winit has to be told to set one.
+3. **A `--script` run exits the moment the script's last line is consumed — `--ticks 0` does not
+   hold it open.** `scripts/f170-hud.txt` died at "4 asserts held, 493 ticks" and took the window
+   with it. A windowed script that an outside observer needs to look at must end in a long
+   `wait`; that is why `scripts/p4-cursor.txt` ends in `wait 600`.
+4. **The window opens tiled at 947x1030 on DP-1**, not fullscreen and not on the 2560x1440
+   output. Every window measurement has to move and fullscreen it first
+   (`niri msg action move-window-to-monitor-down`, `fullscreen-window`) or it is measuring a
+   947 px viewport.
+5. **`--mission tutorial` with nobody at the keyboard is a loss screen in ~16 s.** The husk
+   spawns at (24, 0, 0), walks to the standing player and downs him: `mission LOST kills 0/3`,
+   player `Downed`, by t≈941. Not a bug — but every unattended windowed mission run ends in
+   `LOST` unless something moves.
+
 *(Append further findings here. A finding without a measurement is an opinion.)*
 
 Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUESTIONS.md)

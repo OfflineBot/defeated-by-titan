@@ -152,10 +152,46 @@ that is worth exactly as much as the attribution line next to it.
 | `mark` + `assert` in every script | a screenshot that matches a log line |
 | `hostname` (§14) | the decision whether an image is possible today at all |
 
-**Gap:** in this repo **none** of these tools has been built so far — no flags, no script
-format, no overlay. `src/` exists, but `src/main.rs` is a placeholder (`MinimalPlugins`). This
-file is the requirement, not the finding. As soon as the first script really runs through with
-exit code 0, the number belongs here.
+**The gap is closed (2026-08-10).** Every tool in this file exists and has run: eleven flags in
+`src/shared/cli.rs`, a nine-verb script driver in `src/debug/script.rs`, the F3 overlay,
+`--screenshot`, `--offscreen`, `--headless`. `scripts/game-full.txt` plays the whole game to
+`MISSION WON at tick 898` with 23 asserts and exit 0. *(The paragraph that stood here said none
+of it was built and that `src/main.rs` was a `MinimalPlugins` placeholder — true when written,
+false for a day before anybody noticed. A stale gap note is worse than no note: it tells the next
+session to build something that already exists.)*
+
+## e) A failing assert is a probe, and `wait 0` is a per-tick clock
+
+**The trick that turned "undecidable without running" into nine measured curves, without
+touching `src/`.** The script vocabulary has no verb that *samples* anything — but
+`src/debug/mod.rs:231-244` prints the measured value of an assert **when it fails**. So an
+assert that can never hold is a read-out:
+
+```
+assert speed < -1        # can never be true -> always prints the real speed
+```
+
+Two mechanics turn that into a trace:
+
+- **`wait 0` costs exactly one tick** (`run.wait_s = 0.0; return`, and `0.0 > 0.0` is false on
+  the next tick). `wait 0.001` would cost two — the difference matters when you are counting.
+- **Asserts with no `wait` between them run in the same tick**, so `tick` / `speed` / `height`
+  next to each other form one coherent sample.
+
+150 such blocks in a row gave a per-tick trace of the reel and produced the measurement that the
+reel assigns velocity rather than accelerating it (`docs/FINDINGS.md` FIND-013): `0.000 →
+28.000 m/s` in one tick, exact across nine configurations.
+
+**And the values it reads are file values, so no rebuild is needed either.** `src/data/mod.rs:46-62`
+resolves `assets/data` **relative to the working directory** before falling back to
+`CARGO_MANIFEST_DIR`. Copy `assets/` into a scratch directory, edit a number there, run the
+**already-built** binary from that directory, and you have swept a tuning value without paying
+for a single compile — which matters, because cargo's lock on `target/` means only one agent can
+compile at a time.
+
+⚠️ **Prove the scratch tree is the one being read, before you take a number from it.** Put
+something unparseable in your copy and check that the run dies on it. Otherwise a whole sweep can
+silently measure the repository's unchanged value nine times.
 
 Related: [`docs/environment.md`](../environment.md) · [`docs/lessons/environment.md`](environment.md) ·
 [`docs/lessons/supervision.md`](supervision.md) ·

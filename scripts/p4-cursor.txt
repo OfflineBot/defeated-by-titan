@@ -1,0 +1,35 @@
+# p4-cursor — a long-lived WINDOWED run that stands still, so an outside observer can test
+# the pointer.
+#
+#   dbt --script scripts/p4-cursor.txt --ticks 0        (a graphics session keeps the window,
+#                                                        src/shared/cli.rs::script_forces_headless)
+#
+# This file is not the evidence for P4 and it cannot be: `src/debug/script.rs::parse_key` has
+# no `Escape` (W A S D Q E C F Space F3 Shift Ctrl), and no verb reports a look angle. P4 is
+# "the pointer is captured on start and released on Esc" — a statement about the COMPOSITOR,
+# and only something outside the process can see it. So this script's whole job is to make
+# the frame **boring**: park the player on the ground, park the camera, and then do nothing
+# for ten minutes.
+#
+# Why boring matters: the observation is a pixel difference between two `grim` captures. A
+# scene that moves on its own has a difference of its own, and then "the view rotated" and
+# "the titan took a step" are the same number. No mission, therefore no titans; no key held,
+# therefore no walking. What is left is a static city, and every changed pixel afterwards has
+# exactly one cause — the mouse, or the pause overlay.
+#
+# The last `look` is one-shot (`src/net/local.rs`: `look_override.0.take()`), so the mouse
+# takes over from the tick after it. That is the point: the script aims the camera once, and
+# then hands the look back to the real device.
+
+wait 2.0            # world, camera, meshes, render pipelines
+
+look 0 -6           # a shallow tilt: the streets read, the sky stays out of half the frame
+warp 0 3 60         # 60 m south of the origin, 3 m up — he falls the last bit and stands
+wait 3.0            # let the fall end; a moving camera would be noise in every diff
+
+mark p4-parked
+assert height > -1  # he did not fall through the ground
+assert speed < 0.5  # he stands still — the frame is static from here on
+assert titans == 0  # no mission: nothing walks through the picture
+
+wait 600            # ten minutes of nothing. The observer works from outside.

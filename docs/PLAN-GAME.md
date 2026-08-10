@@ -647,12 +647,27 @@ list.
 
 Worth stating on its own: **there is no F-ID in 245 rows for "the game has a working mouse".**
 
+> **2026-08-10 — the first windowed session.** Until today nobody had seen this game outside an
+> offscreen buffer, and P3/P4 were unprovable in principle on machine A. On machine B they were
+> attacked from **outside the process**, with `grim` reading the real compositor and `ydotool`
+> injecting real evdev events. P4 and the pause screen now have a picture and a number
+> (below) — and **both stay 🟨**, because the third leg, a test in `tests/` that goes red, does
+> not exist yet. Two of the three pieces is 🟨; that is the rule, not a formality.
+> The first frame of the game ever seen in a real window is `docs/images/p4-first-light.png`
+> (2560×1440): a titan that towers over the skyline, all five HUD elements correctly placed —
+> and a flat, shadowless, textureless greybox with a one-colour sky. It is recognisably a city
+> and a titan. It is not yet a place.
+> Traps that cost this session real time are in [`FINDINGS.md`](FINDINGS.md) FIND-019 to FIND-021
+> — read them **before** taking any window measurement, especially FIND-019, which produced a
+> confident wrong bug report across twelve measurements.
+
 | # | claim | test / goes red when | number | picture |
 |---|---|---|---|---|
 | **P1** `IsDefaultUiCamera` | UI renders into an `--offscreen` image | `tests/render.rs::the_camera_is_the_default_ui_camera`; red when the component is dropped. **The real proof is a PNG** | UI root `physical_size` = 1280×720, not 0×0 | any HUD picture above |
 | **P2** F3 overlay registered | position, gas, tick and every titan's state are on screen behind F3 | `tests/debug.rs` asserts the systems are in the schedule; red when the `add_systems` line goes | — | `docs/images/f050-states.png` |
 | **P3** mouse-look accumulation | applied yaw over a run equals raw device motion ± 1 % at any frame rate | red when `read_input` reads `AccumulatedMouseMotion` directly in `FixedPreUpdate`. **Repro before fix** (rule 5) | applied vs. raw yaw at 60 and at `--novsync`; today's loss is ~1 frame in 2.4 at 144 fps | — (a number, not a picture) |
-| **P4** cursor grab + `Esc` | the pointer is captured on start and released on `Esc` | red when `CursorOptions.grab_mode` is left at its default `None` (`bevy_window-0.19.0/src/window.rs:782-789`) | — | — |
+| **P4** cursor grab + `Esc` | the pointer is captured on start and released on `Esc` | red when `CursorOptions.grab_mode` is left at its default `None` (`bevy_window-0.19.0/src/window.rs:782-789`) | **seen in a real window, 2026-08-10 [cachy]**: a real 400 px `ydotool mousemove` rotates the view by 918 426 / 3 686 400 px (24.9 %) while captured and by **0 px** while paused; `grim -c` finds **0 px** of cursor while captured and a **165 px** blob at screen centre while paused; after 400 units of captured motion the cursor reappears at x 1280..1292 instead of the x≈1400 a free pointer would show. Four toggles, both directions. Idle noise 0 px | `docs/images/p4-cursor-captured.png` · `docs/images/p4-cursor-released.png` · `docs/images/p4-playing.png` |
+| **P4b** the pause screen | `Esc` brings `Paused` / `Resume (Esc)` / `Quit`, and the simulation really stops | (see P4 — the same missing `tests/` leg) | **[cachy]**: before/after `Esc` 3 686 397 / 3 686 400 px changed, control run without `Esc` **0 px**. Verified by CONTENT, not by "the image changed": two bands of the exact `PLATE` colour, each **44 px tall × 240 px wide** at x 1160..1399, i.e. `Val::Px(240.0)` × `Val::Px(44.0)` with `row_gap` 14 (755−740−1). Real pause, not an overlay: F3 tick digits change **215 px** over 2 s playing, **0 px** paused | `docs/images/p4-paused.png` · `docs/images/p4-pause-plate.png` |
 | **P5** player `Health` + `Downed` | a titan strike in range subtracts; at 0 the player is `Downed`, **not despawned** | `tests/combat.rs::p5_a_downed_player_is_a_state_and_not_a_removed_entity`; red when the entity is despawned | hits to down, ticks of invulnerability | `docs/images/f070-lost.png` |
 
 ---

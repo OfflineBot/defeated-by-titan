@@ -65,7 +65,31 @@ it works. That costs nothing. A stage that is too high costs the next person hal
 
 ## Open bugs
 
-*(none)*
+### `B-004` — cutting a titan while a rope is attached panics the game
+
+**Found 2026-08-10 [cachy]** by `scripts/f-flight-cut.txt`, the first file in this repository
+that lands a cut while roped. **This is the core loop of the game: hook, fly, cut.**
+
+| Field | |
+|---|---|
+| **Repro** | `./target/debug/defeated_by_titan --headless --script scripts/f-flight-cut.txt --ticks 400`, `[cachy]`. In the file, change ACT 3's `hook right 0.74` to `hook right 0.80` — one character. 0.74 releases the rope at t=157, **inside** the 7-tick impact frame (153-159) and the run is clean; 0.80 releases at t=161 and it panics. Bracketed at t=161 / 173 / 203 / 263 / 353 — **every** release outside the impact frame panics, exit **101**. |
+| **Evidence** | `assertion failed: island.joint_count > 0`, `avian3d-0.7.0/src/dynamics/solver/islands/mod.rs:786`. Both halves are required: delete `key Ctrl` (rope, no hit) or delete `key E` (hit, no rope) and the identical t=353 release exits 0. Logs: `…/scratchpad/run-iso-{noreel,notitan,noslash}` against `run-rel2-{0.74,0.80,1.0}`. |
+| **Expectation** | A cut landed under rope momentum is the game's central action; the design bible gates every meta system behind exactly this move. It must not depend on letting go of the rope first, and it must never abort the process. |
+| **Cause** | `combat::hitstop::begin` puts `RigidBodyDisabled` on the player for the impact frame while the `DistanceJoint` is still attached. avian removes the body from its island; the joint's later removal then decrements a count that is already zero. **Second face, different file:** `player::rope::shorten_ropes` does not check `HitStop` either — it keeps shortening `limits.max` through an impact frame the player cannot follow, storing **0.93 m of rope over two frozen ticks**, which is paid back in a single tick as a clamp-limited **74.700 m/s**. |
+
+**Why nothing caught it for a day.** `scripts/game-full.txt` lands all three of its cuts **out of
+a fall, with no rope attached** — its own header says so. The 356-test suite never attaches a
+joint and a hit stop to the same body in the same tick. Five pieces green separately.
+
+**Consequence for `f-flight-cut.txt` today:** the file releases the rope 5 ticks after the cut to
+dodge this, and says so in its header. Its cut therefore lands at **74.70 m/s**, which is
+`vector.max_speed_m_s` — the clamp, not a speed anybody chose, and an artefact of the stored rope
+above. The dodge goes away, and ACT 3 goes back to describing a rope, the day this is fixed. It
+is also **not** established that the cut still lands once it is fixed: the 74.7 m/s snap is part
+of why the sweep crosses the nape at all, and the timing will need re-measuring.
+
+**No fix yet, and deliberately no fix today** — rule 5 wants the red test first, and the red test
+here is a one-character script change that is already written down above.
 
 ## Closed bugs
 
