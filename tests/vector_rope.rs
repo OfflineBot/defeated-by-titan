@@ -38,8 +38,8 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::shared::{
-    AimPoint, BodyId, BodyMask, Cli, HookState, IndexEntry, LocalPlayer, PlayerId, RopeLength,
-    Side, SimulationSystems, SpatialIndex, WarpPlayer,
+    AimPoint, BodyId, BodyMask, Cli, Hook, HookReleased, HookState, IndexEntry, LocalPlayer,
+    PlayerId, ReleaseReason, RopeLength, Side, SimulationSystems, SpatialIndex, WarpPlayer,
 };
 use defeated_by_titan::vector::aim::aim;
 
@@ -59,11 +59,27 @@ fn force_aim(mut players: Query<(&ForcedAim, &mut AimPoint)>) {
     }
 }
 
+/// Every `HookReleased` the run has produced, in order — the **noise** a release makes.
+///
+/// `B-003` was not a bug about a rope, it was a bug about silence: the joint outlived the
+/// teleport and **nothing said so**. So the messages are recorded, not just the components.
+#[derive(Resource, Default)]
+struct Releases(Vec<(PlayerId, Side, ReleaseReason, u64)>);
+
+fn collect_releases(mut log: ResMut<Releases>, mut messages: MessageReader<HookReleased>) {
+    for m in messages.read() {
+        log.0.push((m.player, m.side, m.reason, m.tick));
+    }
+}
+
 /// Builds the **real** app, headless, one simulation step per `update()`.
 fn app() -> App {
     let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
     app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    app.init_resource::<Releases>();
     app.add_systems(FixedUpdate, force_aim.in_set(SimulationSystems::World).after(aim));
+    // `PostStep`, so that a release written in `Intent` of the same tick is already in.
+    app.add_systems(FixedUpdate, collect_releases.in_set(SimulationSystems::PostStep));
     app.update(); // Startup: the city and the local player come into being
     app
 }
@@ -134,9 +150,15 @@ fn hold_reel_in(app: &mut App) {
 /// Hangs the player on a rope of about `nominal_length_m`, at `player_pos`, with the anchor
 /// straight **above** him. Returns the length the joint really got.
 ///
-/// The player is warped back onto his spot in **every** tick of the hook's flight, so that
-/// the length the rope is born with is the one this function names and not one plus however
-/// far he fell in the meantime. The warp stops the moment the hook bites.
+/// The player is put back onto his spot in **every** tick of the hook's flight, so that the
+/// length the rope is born with is the one this function names and not one plus however far he
+/// fell in the meantime. It stops the moment the hook bites.
+///
+/// ⚠️ **`place`, not `warp`, and this used to be a `warp`.** Since `B-003` a warp lets go of
+/// every rope of the player it moves — including one anchored in the very tick of the warp
+/// (`player::rope::attach_ropes`). Pinning a player with a warp while his hook is in the air is
+/// therefore a way to build a rope that is destroyed the moment it exists. `place` writes
+/// `Position` and does what this harness actually means: move the body, touch nothing else.
 fn hang(app: &mut App, e: Entity, player_pos: Vec3, nominal_length_m: f32) -> f32 {
     let anchor = player_pos + Vec3::Y * nominal_length_m;
     let body = BodyId(80_001);
@@ -152,12 +174,14 @@ fn hang(app: &mut App, e: Entity, player_pos: Vec3, nominal_length_m: f32) -> f3
         anchorable: true,
     }));
 
-    warp(app, e, player_pos);
+    place(app, e, player_pos);
+    set_velocity(app, e, Vec3::ZERO);
     app.update();
     app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
 
     for _ in 0..600 {
-        warp(app, e, player_pos);
+        place(app, e, player_pos);
+        set_velocity(app, e, Vec3::ZERO);
         app.update();
         let anchored = app
             .world()
@@ -182,6 +206,39 @@ fn hang(app: &mut App, e: Entity, player_pos: Vec3, nominal_length_m: f32) -> f3
             .map(|h| h.arm(Side::Left).state)
             .unwrap_or(HookState::Idle)
     );
+}
+
+/// Hangs the **second** arm on the same anchor the first one already holds.
+///
+/// Deliberately **without** a warp: since `B-003` a warp lets go of every rope, so warping
+/// the player during the right hook's flight — the way [`hang`] does — would quietly kill the
+/// left rope this function is supposed to add to. The player hangs still (no gravity, no
+/// velocity), so he does not need holding in place.
+fn hang_right(app: &mut App, e: Entity) -> f32 {
+    app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
+    for _ in 0..600 {
+        app.update();
+        if hook_state(app, e, Side::Right).is_anchored() {
+            app.update(); // one tick, so `sync_rope_length` has published the length
+            let l = rope_length(app, e, Side::Right);
+            assert!(l > 0.0, "the right hook bit and no rope came into being");
+            return l;
+        }
+    }
+    panic!("the right hook did not bite within 600 ticks — it is {:?}", hook_state(app, e, Side::Right));
+}
+
+fn hook_state(app: &App, e: Entity, side: Side) -> HookState {
+    app.world().get::<Hook>(e).expect("every player carries both arms").arm(side).state
+}
+
+/// Moves the body **without** a `WarpPlayer` — the rope survives this one.
+///
+/// Writing `Position` directly is what a warp deliberately does not do (`src/player/mod.rs`
+/// writes the `Transform`), and it is the only way left to put a hanging player somewhere
+/// else since a warp releases his ropes on purpose (`B-003`).
+fn place(app: &mut App, e: Entity, to: Vec3) {
+    app.world_mut().get_mut::<Position>(e).expect("the player is a physics body").0 = to;
 }
 
 fn kill_gravity(app: &mut App) {
@@ -381,10 +438,16 @@ fn f004_the_rope_pulls_but_does_not_push() {
     let anchor = anchor_point(&mut app).expect("a rope has an anchor");
 
     // Straight at the anchor, at half his rope's length, and then let go of everything.
+    //
+    // `place` and **not** `warp`: since `B-003` a warp releases every rope of the player it
+    // moves, and this test needs the rope alive to have anything to measure. The old version
+    // of this test warped here and would have gone on passing with no joint in the world at
+    // all — a green test measuring nothing.
     let half = l0 * 0.5;
-    warp(&mut app, e, anchor - Vec3::Y * half);
+    place(&mut app, e, anchor - Vec3::Y * half);
     app.update();
     set_velocity(&mut app, e, Vec3::ZERO);
+    assert_eq!(joint_count(&mut app), 1, "the rope has to still be there to be measured");
 
     let start = (position(&app, e) - anchor).length();
     ticks(&mut app, 60);
@@ -398,6 +461,106 @@ fn f004_the_rope_pulls_but_does_not_push() {
     assert!(
         end < l0 - 0.5,
         "he ended up at {end:.3} m of {l0:.3} m — something drove him to the full length"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// `B-003` — a teleport that drags a rope behind it, and says nothing
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn b003_a_warp_lets_go_of_every_rope() {
+    // **The bug this test was written for.** `scripts/game-full.txt` warped the player 55 m
+    // away in ACTS 2 and 3 while ACT 1's rope was still attached. He was not falling onto the
+    // nape, he was being yanked back toward an anchor 55 m behind him — two of three kills
+    // silently did not happen, and not one line of the log said so.
+    //
+    // Both arms, because "every rope" is the claim and one side proves half of it.
+    let mut app = app();
+    let e = me(&mut app);
+    let d = data(&app);
+    let hz = d.game.simulation_hz as u64;
+
+    // Gravity off: then the only thing in the world that can move the player away from the
+    // spot the warp put him on is the rope, and the drag distance is the whole measurement.
+    kill_gravity(&mut app);
+    let home = Vec3::new(0.0, 120.0, 0.0);
+    let l_left = hang(&mut app, e, home, d.game.vector.min_rope_m * 3.0);
+    let l_right = hang_right(&mut app, e);
+    assert_eq!(joint_count(&mut app), 2, "two hooks, two joints");
+    let anchor = anchor_point(&mut app).expect("a rope has an anchor");
+
+    // 55 m — the distance `scripts/game-full.txt` warps over, and far beyond a 9 m rope.
+    let far = home + Vec3::X * 55.0;
+    let asked_for_m = (far - anchor).length();
+    warp(&mut app, e, far);
+    app.update();
+
+    let left_over = joint_count(&mut app);
+    let drag_m = (position(&app, e) - far).length();
+    assert_eq!(
+        left_over, 0,
+        "one tick after a warp of {asked_for_m:.2} m, {left_over} joint(s) are still holding \
+         the player: ropes of {l_left:.2} m and {l_right:.2} m. He was dragged {drag_m:.2} m \
+         away from the coordinate he was warped to, back toward his old anchor."
+    );
+    assert_eq!(
+        [rope_length(&app, e, Side::Left), rope_length(&app, e, Side::Right)],
+        [0.0, 0.0],
+        "`RopeLength` still claims a constraint on a player who was teleported away — \
+         0.0 means 'no constraint' (src/shared/gear.rs)"
+    );
+
+    // The tips have to come home before the arms are free again: the hand is 55 m from the
+    // old anchor and `vector.hook_retract_speed_m_s` decides how long that takes. Four
+    // seconds is many times the 0.46 s the file's 120 m/s need for it.
+    ticks(&mut app, 4 * hz);
+    assert_eq!(
+        [hook_state(&app, e, Side::Left), hook_state(&app, e, Side::Right)],
+        [HookState::Idle, HookState::Idle],
+        "the ropes are gone but the arms still believe they are holding on — an arm that never \
+         comes back to `Idle` can never fire again (`vector::hook`, decision 1)"
+    );
+
+    // And he really stands where the warp put him (§12c: "the player stands exactly there").
+    let drift_m = (position(&app, e) - far).length();
+    assert!(
+        drift_m < 0.05,
+        "{:.2} s after the warp the player is {drift_m:.2} m off the coordinate he was warped \
+         to, {:.2} m from his old anchor — something is still pulling him",
+        4.0,
+        (position(&app, e) - anchor).length()
+    );
+}
+
+#[test]
+fn b003_a_warp_that_lets_go_says_so_out_loud() {
+    // **The other half of `B-003`, and the expensive half.** A teleport that drops a rope
+    // without a word is a teleport nobody can debug: `hud` and `sound` read
+    // `HookReleased.reason` (`src/shared/message.rs`), and a run's log is the only thing a
+    // `--headless` script leaves behind. A fix that releases the rope in silence has fixed
+    // the yank and left the day-costing part in place.
+    let mut app = app();
+    let e = me(&mut app);
+    let d = data(&app);
+    let id = player_id(&app, e);
+
+    kill_gravity(&mut app);
+    let home = Vec3::new(0.0, 120.0, 0.0);
+    hang(&mut app, e, home, d.game.vector.min_rope_m * 3.0);
+    assert!(hook_state(&app, e, Side::Left).is_anchored(), "the left arm has to be holding on");
+
+    // Everything said before the warp is somebody else's business.
+    let before = app.world().resource::<Releases>().0.len();
+    warp(&mut app, e, home + Vec3::X * 55.0);
+    ticks(&mut app, 3);
+
+    let said: Vec<_> = app.world().resource::<Releases>().0[before..].to_vec();
+    assert!(
+        said.iter().any(|(p, s, _, _)| *p == id && *s == Side::Left),
+        "the warp let go of a rope the player was hanging on and wrote no `HookReleased` for \
+         it — {} message(s) in three ticks: {said:?}. That silence is `B-003`.",
+        said.len()
     );
 }
 

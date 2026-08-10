@@ -1,0 +1,99 @@
+# f170-objective — THE COUNTER ON THE SCREEN: one cut, and the top of the screen says 1/3.
+#
+#   the verdict:  cargo run -q -- --headless  --mission tutorial \
+#                     --script scripts/f170-objective.txt --ticks 400
+#   the picture:  cargo run -q -- --offscreen --mission tutorial \
+#                     --script scripts/f170-objective.txt --ticks 300 \
+#                     --screenshot docs/images/f170-objective.png
+#   the CONTROL:  the very same line WITHOUT `--mission` (see below)
+#
+# ## What this file is for, and why it is not `scripts/game-full.txt`
+#
+# `docs/PLAN-GAME.md` §1 asks for a counter "in the top of the screen" that "goes from `0/3` to
+# `1/3`". `game-full.txt` photographs the END of that sentence — the word `WON` over a cleared
+# field. This one photographs the MIDDLE, which is the half a player spends the mission looking
+# at: the mission running, `Active`, one titan cut, `1/3` in amber above the crosshair.
+#
+# ## The control run is the point, not an afterthought
+#
+# A line of amber text at the top of a PNG proves nothing on its own — it could be painted by
+# anything. So the same script runs a second time **without `--mission`**, and nothing else
+# changed:
+#
+#   cargo run -q -- --offscreen --script scripts/f170-objective.txt --ticks 300 \
+#       --screenshot /tmp/f170-objective-control.png
+#
+# Without a mission there is no `KillTally` entity, `hud::objective::objective_text` gets
+# `None`, and the line hides itself (`tests/hud.rs::f170_the_objective_line_stays_empty_without
+# _a_mission`). Everything else in the frame is identical: the city, the light, the player, the
+# husk — `spawn titan` writes the same `SpawnTitan` message with or without a mission. The two
+# asserts below fail in that run, loudly and on purpose; the failure IS the control (no mission,
+# no kill, no counter), and the PNG is written at tick 300 long before the run ends.
+#
+# MEASURED on debian, 2026-08-10:
+#
+#   t=182   cut titan 2 Torso  at 30.00 m/s
+#   t=185   cut titan 2 Cortex at 30.33 m/s  -> kill: player 1 cut titan 2 — 1/3
+#   t=213   MARK f170-cut          t=275  MARK f170-objective
+#   headless: 4 asserts held, 457 ticks, exit 0
+#
+#   the PICTURES, both bit-identical over two runs:
+#     docs/images/f170-objective-before.png  tick 150, the line reads 0/3
+#       sha256 9e72560fa051eaf5de8ca8ddaf67f8f4ac81b8fbfa57ce52158786dbe7a2830a
+#     docs/images/f170-objective.png         tick 300, the line reads 1/3
+#       sha256 baef9522dbc4e0c8fc3388146a168a3588910bddf51c1c0789a38d63ca848488
+#
+#   DECODED, top-centre band x 448..832, y 0..96 of 1280 x 720 (36 864 px):
+#     0/3 against the control : 259 px differ, ALL 259 moved toward amber, control has 0
+#     1/3 against the control : 229 px differ, ALL 229 moved toward amber, control has 0,
+#                               8 of them EXACTLY the amber of maps.ron (linear
+#                               1.0/0.68/0.10 -> sRGB 255, 215, 89)
+#     both bounding boxes     : x 625..654, y 23..39 — 30 x 17 px, three glyphs at 18 px,
+#                               centred on 640 = the middle of a node at left 30 %, width 40 %
+#     1/3 against 0/3         : 114 px differ, and their bounding box is x 625..633,
+#                               y 25..37 — **9 x 13 px, one glyph cell, the leading digit.**
+#                               The `/3` is bit-identical between the two shots.
+#
+# That last line is the whole criterion: `docs/PLAN-GAME.md` §1 asks that the counter "goes
+# from `0/3` to `1/3`", and what changed on the screen between the two ticks is exactly one
+# character in exactly the right place, in amber, and nothing else in the band.
+#
+# ## The cut is `scripts/game-full.txt`'s ACT 2, verbatim
+#
+# Same geometry, same fall, same blade — it is a pass that has already been measured twice, and
+# a picture job is no place to invent a new one. The player is dropped from 30.8 m, the husk is
+# spawned 27 ticks INTO the fall so its pose at the cut is `scripts/q030-reach.txt`'s proven
+# one, he stands 1.80 m to -X of the titan's axis, and the RIGHT blade lies on +X at yaw 0
+# (`src/blades/cut.rs: blade_segment`). See `scripts/game-full.txt` for the arithmetic.
+#
+# ⚠️ The 300 ticks belong to THIS file: the last mark falls at t=276 and the player has been
+# standing still on the ground since t=199. Whoever changes a `wait` changes the image.
+
+wait 1.5          # 90 ticks: world, camera, meshes and the render pipelines come up
+key F3 0.05       # the overlay on, so the counter's digits stand next to the HUD's in one PNG
+
+assert kills == 0 # nothing has happened yet — the line reads 0/3 at this moment
+assert phase == 2 # Active: the mission has been running since tick 0
+
+# --- the cut: game-full.txt ACT 2 -------------------------------------------------------
+warp -1.80 30.8 18.55
+look 0 0
+wait 0.45         # 27 ticks of fall BEFORE the husk exists
+spawn titan husk 0 0 18
+wait 0.90
+key E 0.40        # SLASH_RIGHT (`src/net/local.rs`): the right blade, on +X
+wait 0.60
+mark f170-cut
+
+assert kills == 1 # 0/3 -> 1/3, and THAT is what the top of the screen has to say
+assert phase == 2 # one kill of three does not win it — the line stays a counter, not a verdict
+
+# --- the picture ------------------------------------------------------------------------
+# The player has landed and stands still. yaw -54 turns him from the empty sky back over the
+# field, onto the husk the MISSION spawned on its 24 m ring at (24, 0, 0) — the one titan in
+# this frame that is not the script's. A resting moment on purpose: `--offscreen` is only
+# bit-reproducible where the state changes slowly (`scripts/f-001-hooks.txt`).
+look -54 2
+wait 1.0
+mark f170-objective
+wait 3

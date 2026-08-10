@@ -37,6 +37,36 @@
 //!    authority table). `vector::hook` reads `overextended` in the **next** tick — one tick of
 //!    lag is the price for `Hook` having exactly one writer.
 //!
+//! ## `B-003` — a teleport lets go of every rope, and says so
+//!
+//! A `WarpPlayer` puts the player somewhere else in one tick. A `DistanceJoint` that survives
+//! that does not follow him — it **pulls him back**, and it does so without a single line
+//! anywhere. Measured: one tick after a 55.73 m warp off a 9 m rope the player was **47.93 m**
+//! back toward his old anchor, `script run finished` reported success and two of three kills in
+//! `scripts/game-full.txt` silently did not happen.
+//!
+//! The release runs on **two** rails, and it needs both:
+//!
+//! 1. **The joint goes in `SimulationSystems::Drive`** ([`detach_ropes`], the same system that
+//!    already carries out `HookReleased` and `BodyGone`) — one stage **before** the warp is
+//!    written in `Integrate`, so avian never sees a joint and a teleported body in the same
+//!    step. Doing it inside `apply_warps` would be too late: its `Commands` are applied at the
+//!    next sync point, and that is behind `PhysicsSystems::StepSimulation`.
+//! 2. **The arm learns about it through [`RopeLength::overextended`]**, set by
+//!    [`sync_rope_length`] — the only writer of that component. `vector::hook` is the **only
+//!    writer of `Hook`** and reads that flag one tick later (`src/vector/hook.rs`, header);
+//!    asking through it is what keeps `Hook` at one writer instead of two. Without this rail
+//!    the joint would be gone and the arm would stay `Anchored` on nothing — a hook that can
+//!    never fire again.
+//!
+//! ⚠️ **The reason the player is told is `ReleaseReason::Overextended`, and that is a
+//! stand-in.** The honest reason would be `ReleaseReason::Warped`, and that enum is
+//! `src/shared/message.rs:113-123`, which this domain does not own. `Overextended` is the
+//! closest of the four: it is the one that already means "the rope's length cannot be honoured
+//! any more", and it is the one `hud` and `sound` already treat as "the rope tore" rather than
+//! "the player let go". A warp under `vector.hook_range_m` — 55 m of the file's 90 — would
+//! never trigger it on distance alone, which is exactly why the flag is set here by hand.
+//!
 //! ## What is deliberately not here
 //!
 //! The anchor marker **does not follow a moving carrier**. `vector::hook` keeps `tip_m` in
@@ -49,7 +79,8 @@ use bevy::prelude::*;
 
 use crate::data::GameData;
 use crate::shared::{
-    BodyGone, BodyId, HookAnchored, HookReleased, PlayerId, ReelSpeed, RopeLength, Side,
+    BodyGone, BodyId, Hook, HookAnchored, HookReleased, PlayerId, ReelSpeed, RopeLength, Side,
+    WarpPlayer,
 };
 
 /// One rope, as a component on the joint entity.
@@ -72,16 +103,34 @@ pub struct Rope {
 ///
 /// `L` is the **current** player-to-anchor distance, floored at `vector.min_rope_m`: the rope
 /// starts at the length it really has, so anchoring never yanks the player.
+///
+/// A player who is warped in this same tick gets **no** rope at all (`B-003`): the `Position`
+/// read here is the one from before the teleport, so the length would be measured from a spot
+/// the player is about to leave — and `apply_warps` runs one stage later, in `Integrate`. The
+/// arm is let go of through `RopeLength::overextended` like every other warped one.
 pub fn attach_ropes(
     mut commands: Commands,
     data: Res<GameData>,
     mut messages: MessageReader<HookAnchored>,
+    mut warped: MessageReader<WarpPlayer>,
     players: Query<(Entity, &PlayerId, &Position)>,
     ropes: Query<(Entity, &Rope)>,
 ) {
     let min_rope_m = data.game.vector.min_rope_m;
+    let warped: Vec<PlayerId> = if warped.is_empty() {
+        Vec::new()
+    } else {
+        warped.read().map(|m| m.player).collect()
+    };
 
     for anchored in messages.read() {
+        if warped.contains(&anchored.player) {
+            info!(
+                "hook {:?} of player {} bit in the tick its player was warped — no rope (B-003)",
+                anchored.side, anchored.player.0
+            );
+            continue;
+        }
         let Some((body_entity, _, position)) =
             players.iter().find(|(_, id, _)| **id == anchored.player)
         else {
@@ -145,16 +194,23 @@ pub fn attach_ropes(
     }
 }
 
-/// Removes the joint again — on **every** release reason, and on a carrier that is gone.
+/// Removes the joint again — on **every** release reason, on a carrier that is gone, and on a
+/// player who was teleported away (`B-003`).
 ///
 /// `BodyGone` is read here as well as in `vector::hook`, and on purpose: `hook` turns it into
 /// a `HookReleased`, which is what this system really acts on, but a carrier that disappears
 /// without anybody having a hook on it must not leave an anchor marker standing in the world.
 /// Both paths despawn at most once — the query is the truth about what exists.
+///
+/// `WarpPlayer` is the third, and it is the one that has to be handled **here** rather than
+/// where the teleport happens: this system runs in `SimulationSystems::Drive`, one stage before
+/// `player::apply_warps` moves the body in `Integrate`, so the joint is already gone by the
+/// time avian's first system of that same tick looks for one. See the module header, `B-003`.
 pub fn detach_ropes(
     mut commands: Commands,
     mut released: MessageReader<HookReleased>,
     mut gone: MessageReader<BodyGone>,
+    mut warped: MessageReader<WarpPlayer>,
     ropes: Query<(Entity, &Rope)>,
 ) {
     // Collected once instead of read per rope: a `MessageReader` has one cursor, and the
@@ -169,12 +225,27 @@ pub fn detach_ropes(
     } else {
         gone.read().map(|m| m.body).collect()
     };
-    if released.is_empty() && gone.is_empty() {
+    let warped: Vec<PlayerId> = if warped.is_empty() {
+        Vec::new()
+    } else {
+        warped.read().map(|m| m.player).collect()
+    };
+    if released.is_empty() && gone.is_empty() && warped.is_empty() {
         return;
     }
 
     for (entity, rope) in &ropes {
-        if released.contains(&(rope.player, rope.side)) || gone.contains(&rope.body) {
+        let by_warp = warped.contains(&rope.player);
+        if released.contains(&(rope.player, rope.side)) || gone.contains(&rope.body) || by_warp {
+            if by_warp {
+                // The line `B-003` did not have. A rope that is cut by something the player
+                // did not ask for has to leave a trace — `scripts/game-full.txt` lost two of
+                // three kills to exactly this happening in silence.
+                info!(
+                    "rope {:?} of player {} cut: the player was warped away (B-003)",
+                    rope.side, rope.player.0
+                );
+            }
             commands.entity(rope.anchor).despawn();
             commands.entity(entity).despawn();
         }
@@ -235,15 +306,27 @@ pub fn shorten_ropes(
 /// `vector.hook_range_m` — the same number `vector::aim` measures the shot against, read from
 /// the file and not invented a second time here. `vector::hook` reads the flag in the next
 /// tick and releases with `ReleaseReason::Overextended`.
+///
+/// **A warp raises the same flag** (`B-003`), for every arm that is holding on — see the module
+/// header for why the flag and not a write to `Hook`, and why the reason the player is told is
+/// a stand-in. `Hook` is only **read** here; its one writer stays `vector::hook::update_hooks`.
 pub fn sync_rope_length(
     data: Res<GameData>,
+    mut warped: MessageReader<WarpPlayer>,
     ropes: Query<(&Rope, &DistanceJoint)>,
     anchors: Query<&Transform>,
-    mut players: Query<(&PlayerId, &Position, &mut RopeLength)>,
+    mut players: Query<(&PlayerId, &Position, &Hook, &mut RopeLength)>,
 ) {
     let hook_range_m = data.game.vector.hook_range_m;
+    // Collected once instead of read per player — a `MessageReader` has one cursor, and the
+    // second player would find it empty. `Vec::new()` does not allocate.
+    let warped: Vec<PlayerId> = if warped.is_empty() {
+        Vec::new()
+    } else {
+        warped.read().map(|m| m.player).collect()
+    };
 
-    for (id, position, mut length) in &mut players {
+    for (id, position, hook, mut length) in &mut players {
         // Assembled whole and assigned whole: a side without a rope is `0.0` because the
         // default is, not because somebody remembered to clear it. At most two ropes per
         // player, so the inner scan is bounded by 2 x players and not by "all entities" (§11).
@@ -257,6 +340,17 @@ pub fn sync_rope_length(
             if let Ok(anchor) = anchors.get(rope.anchor) {
                 next.overextended[i] =
                     (anchor.translation - position.0).length() > hook_range_m;
+            }
+        }
+        if warped.contains(id) {
+            // `B-003`. Only the arms that really hold on: an `Idle` arm would carry a flag
+            // nobody reads, and `RopeLength` would be marked changed for every player every
+            // `warp` (§11). The joint itself is already gone — `detach_ropes` took it one
+            // stage earlier in this same tick — so this loop found nothing to set it from.
+            for side in Side::ALL {
+                if hook.arm(side).state.is_anchored() {
+                    next.overextended[side.index()] = true;
+                }
             }
         }
         length.set_if_neq(next);

@@ -182,6 +182,17 @@ fn spawn_local_player(
 /// tick (`avian3d-0.7.0/src/physics_transform/mod.rs:215-223`), and this system is ordered
 /// before every avian system. `Velocity` is deliberately **not** written — it is derived, and
 /// [`integrator::readback`] derives it from the `LinearVelocity` zeroed here.
+///
+/// ## The ropes are **not** released here — and that is not an oversight (`B-003`)
+///
+/// A `DistanceJoint` that survives a teleport pulls the player straight back: measured at
+/// **47.93 m of drag in one tick** out of a 55.73 m warp. But the release cannot happen in this
+/// system: its `Commands` land at the next sync point, and that is behind
+/// `PhysicsSystems::StepSimulation` — avian would step once with a teleported body still tied
+/// to an anchor. So [`rope::detach_ropes`] reads the same `WarpPlayer` one stage earlier, in
+/// `SimulationSystems::Drive`, and [`rope::sync_rope_length`] raises
+/// `RopeLength::overextended` so `vector::hook` — the only writer of `Hook` — lets the arm go
+/// on its own. Both live in [`rope`]; this system stays what its name says.
 fn apply_warps(
     mut messages: MessageReader<WarpPlayer>,
     mut players: Query<(&PlayerId, &mut Transform, &mut LinearVelocity)>,

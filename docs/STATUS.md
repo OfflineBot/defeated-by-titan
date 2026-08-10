@@ -11,7 +11,7 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 
 **🟧 needs three pieces of evidence:** a picture (screenshot path), a number (measured, with the machine `[debian]`/`[cachy]`) and code (a test that goes red when it breaks). If one is missing it is 🟨 — doubt moves the stage down, not up (prompts/init.md §8, §9).
 
-**Tally:** 225 ⬜ · 13 🟨 · 7 🟧 · 0 ✅ of 245 rows.
+**Tally:** 223 ⬜ · 14 🟨 · 8 🟧 · 0 ✅ of 245 rows.
 
 ## combat
 
@@ -47,8 +47,8 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 
 | Item | ID | Stage | Evidence (test / screenshot / number) | Note |
 |---|---|---|---|---|
+| HUD-Grundlayout | F-170 | 🟧 | all five elements in one frame, docs/images/f071-won.png: gas bar cyan left (227 px of a 277.6 px track = 81.8 % against the overlay's gas 82/100 in an earlier shot), five blade pips right, crimson health bar bottom centre, four-tick crosshair, amber objective top centre · decoded against a control run with the element hidden: 1633 px differ in the top band, 668 exactly the amber of maps.ron, control 0 · between 0/3 and 1/3 exactly 9x13 px change - one glyph cell, the leading digit - and the /3 is bit-identical · red-checked four ways: bar wired to a constant, objective widened over the middle, a literal colour, an invented string · sha256 22d5db57 twice [debian] | 2026-08-09 [debian] — nothing is hidden any more: the two elements that had no producer (health, objective) got one this session. The objective reads MissionPhase::label() and KillTally, never an invented string, and a source-level test forbids any phase's word as a literal in the HUD |
 | Dynamisches Fadenkreuz | F-171 | 🟧 | three states as (nodes, w, h): (4, 302x178), (4, 326x202), (8, 356x212), and the PNG's bounding boxes agree exactly · red-checked with all BackgroundColors forced to white: Free and Anchor collapse to the same shape · signal pixels 80 / 264 cyan / 840 amber · docs/images/f171-crosshair.png, three crops, each source shot bit-identical twice [debian] | 2026-08-09 [debian] — the three states differ in geometry, not only in colour; forcing the colours equal in the test is what makes the colour-blindness clause falsifiable at all |
-| HUD-Grundlayout | F-170 | ⬜ | — | — |
 | Vollstaendige Tastenbelegung | F-172 | ⬜ | — | — |
 | Menuestruktur | F-175 | ⬜ | — | — |
 | Grafikeinstellungen | F-177 | ⬜ | — | — |
@@ -60,7 +60,7 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 | Item | ID | Stage | Evidence (test / screenshot / number) | Note |
 |---|---|---|---|---|
 | Missions-Zustandsmaschine | F-070 | 🟧 | Lost decided at tick 19800 exactly, red-checked against a Time::delta_secs() accumulator which lands on 19804 - four ticks late from f32 drift alone, in a harness fed exactly one fixed step per frame · red-checked again with the duration as a Rust literal: left 19800, right 600 · docs/images/f070-lost.png sha256 68aa8dc1 over three runs of one binary [debian] | 2026-08-09 [debian] — the timer counts fixed ticks and never a clock. The second loss path (every player down) is live as of P5 and fires at tick 220 in its own test |
-| Modus: Skirmish | F-071 | ⬜ | — | — |
+| Modus: Skirmish | F-071 | 🟨 | MISSION WON at tick 898 from a real flight and three real cortex cuts at 30.33 m/s closing speed - no injected message, the script vocabulary has no verb for one · 3/3 kills, 23 asserts held, exit 0, identical over three headless runs · red-checked: counting every TitanHit makes a torso hit win (left 1, right 0); checking titans == 0 wins at tick 0 before anything spawns (left Won, right Active) · 4 non-cortex TitanHit in the same run, so the cortex filter was provably exercised · docs/images/f071-won.png [debian] | 2026-08-09 [debian] — CEILING 🟨 ON PURPOSE, as the plan pre-registered: the description's civilian clause ('without too many NPC civilians dying') is dropped, because there are no NPCs and no F-ID for them. All three legs of 🟧 exist otherwise. Kept at 🟨 so the row can move down later without an argument |
 | Modus: Breach (Verteidigung) | F-072 | ⬜ | — | — |
 | Modus: Escort | F-073 | ⬜ | — | — |
 | Schwierigkeitsgrade | F-080 | ⬜ | — | — |

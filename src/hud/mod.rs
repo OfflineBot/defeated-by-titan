@@ -7,7 +7,7 @@
 //! PC-only means: more information at once, because no thumb covers half the screen
 //! (Bible 3.5).
 //!
-//! ## Five elements, and two of them have no producer yet
+//! ## Five elements, and one of them still has no producer
 //!
 //! | element | file | reads | producer |
 //! |---|---|---|---|
@@ -15,7 +15,13 @@
 //! | blade pips, right | [`blade_pips`] | [`Blades`](crate::shared::Blades) | `blades` — the component exists, the wear does not |
 //! | health bar, bottom centre | [`health_bar`] | [`Health`](crate::shared::Health) | job R3-A — **absent today** |
 //! | crosshair, centre | [`crosshair`] | [`AimPoint`](crate::shared::AimPoint) | `vector::aim` — **exists** |
-//! | objective line, top centre | [`objective`] | mission state | job R3-B — **absent today** |
+//! | objective line, top centre | [`objective`] | `KillTally`, `State<MissionPhase>` | `mission` — **exists since 2026-08-10** |
+//!
+//! The objective line is the one edge this domain has out of `bevy`, `shared` and `data`:
+//! `hud -> mission`, read-only, with its reason on the allow list in `docs/architecture.md`.
+//! It is there because `docs/PLAN-GAME.md` §1 counts the counter and the word `WON` as part of
+//! "playable", and both are **state** — a message that fired three ticks ago cannot say what
+//! the count is in the frame being drawn.
 //!
 //! **The failure this module is built against has a name: "the bar that is a picture of a
 //! bar"** (`docs/PLAN-GAME.md` §8, F-170) — every element of the list present, and three of
@@ -44,6 +50,16 @@
 //! |---|---|
 //! | the five elements over a populated frame, tank at 82 % | `scripts/f170-hud.txt` → `docs/images/f170-hud.png` |
 //! | the three crosshair states, three crops | `scripts/f171-crosshair.txt` → `docs/images/f171-crosshair.png` |
+//! | the objective going `0/3` → `1/3` | `scripts/f170-objective.txt` → `docs/images/f170-objective-before.png`, `docs/images/f170-objective.png` |
+//! | the verdict, `WON` over the cleared field | `scripts/game-full.txt` → `docs/images/f071-won.png` |
+//!
+//! The objective line was decoded the same way the cyan was, against a control run of the same
+//! script **without `--mission`** — no mission, no `KillTally`, no line, everything else in the
+//! frame the same. In the top-centre band it accounts for 229 changed pixels in
+//! `f170-objective.png` and 1 633 in `f071-won.png`, 668 of those exactly the amber out of
+//! `maps.ron` (sRGB 255, 215, 89); the control has **zero** in both. And between the `0/3` and
+//! the `1/3` shot of one script exactly **9 × 13 px** change — one glyph cell, the leading
+//! digit. That is the sentence in `docs/PLAN-GAME.md` §1, measured.
 //!
 //! Both were decoded, not assumed: against a control run with this plugin switched off, the
 //! HUD accounts for 6 368 changed pixels in `f170-hud.png`, 4 500 of them exactly the cyan out

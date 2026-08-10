@@ -32,7 +32,8 @@ use defeated_by_titan::hud::gas_bar::GasBar;
 use defeated_by_titan::hud::health_bar::{HealthBar, HealthTrack};
 use defeated_by_titan::hud::objective::ObjectiveLine;
 use defeated_by_titan::hud::{HudElement, KEEP_OUT_HIGH_PCT, KEEP_OUT_LOW_PCT};
-use defeated_by_titan::shared::{Blades, Cli, Gas, Health, LocalPlayer};
+use defeated_by_titan::mission::{KillTally, MissionPhase};
+use defeated_by_titan::shared::{Blades, Cli, Gas, Health, LocalPlayer, PlayerId, TitanId};
 
 /// Builds the **real** app, headless — not a second, similar one.
 fn app() -> App {
@@ -42,6 +43,62 @@ fn app() -> App {
     app.update();
     app.update();
     app
+}
+
+/// The same app **with a mission running** — `--mission tutorial`, the way `main.rs` builds it.
+///
+/// Not a hand-made mission entity: `mission::begin_mission` walks `Briefing → Deploying →
+/// Active` in `Startup` and `deploy` puts the [`KillTally`] down with the `kill_target` **out of
+/// `missions.ron`**. A test that spawned its own tally with a `3` in it would be checking its own
+/// literal against the HUD's.
+fn mission_app() -> App {
+    let mut app = defeated_by_titan::app(Cli {
+        headless: true,
+        mission: Some("tutorial".to_string()),
+        ..default()
+    });
+    app.update();
+    app.update();
+    app
+}
+
+/// `kill_target` of the tutorial **out of the file** — the number the objective counts to.
+fn kill_target(app: &App) -> u32 {
+    app.world()
+        .resource::<GameData>()
+        .missions
+        .templates
+        .get("tutorial")
+        .expect("missions.ron must know the tutorial template")
+        .kill_target
+}
+
+/// What the objective line reads, and whether it is drawn at all.
+fn objective(app: &mut App) -> (String, Display) {
+    let mut q = app
+        .world_mut()
+        .query_filtered::<(&Text, &Node), With<ObjectiveLine>>();
+    let (text, node) = q
+        .iter(app.world())
+        .next()
+        .expect("no node with `ObjectiveLine` — `hud::objective::spawn_objective` is not registered");
+    (text.0.clone(), node.display)
+}
+
+/// Books one kill on the **real** counter, through the mission's own API.
+fn credit(app: &mut App, player: PlayerId, titan: TitanId) {
+    let mut q = app.world_mut().query::<&mut KillTally>();
+    let mut tally = q
+        .iter_mut(app.world_mut())
+        .next()
+        .expect("a mission entity with a `KillTally` — `--mission tutorial` did not deploy");
+    assert!(tally.credit(player, titan), "titan {titan:?} was already credited");
+}
+
+/// Moves the mission phase the way `mission::decide` does, transition included.
+fn set_phase(app: &mut App, phase: MissionPhase) {
+    app.world_mut().resource_mut::<NextState<MissionPhase>>().set(phase);
+    app.world_mut().run_schedule(StateTransition);
 }
 
 fn local_player(app: &mut App) -> Entity {
@@ -224,29 +281,177 @@ fn lit_pips(app: &mut App) -> usize {
 }
 
 #[test]
-fn f170_the_objective_line_stays_empty_until_a_producer_exists() {
-    // `mission` is a stub, `hud → mission` is not on the allow list in `docs/architecture.md`,
-    // and there is therefore nothing that produces an objective. The honest state is: the node
-    // exists, hidden, empty.
+fn f170_the_objective_line_stays_empty_without_a_mission() {
+    // **This test is what stops the shortcut**, and it is the one that was here before the
+    // producer landed: write `"Kill 5 titans"` into `hud::objective::update_objective` to make
+    // the screenshot look finished, and it goes red.
     //
-    // **This test is what stops the shortcut.** Write `"Kill 5 titans"` into
-    // `hud::objective::update_objective` to make the screenshot look finished, and it goes red.
+    // It has grown a second half. Hiding the line unconditionally used to pass the first half,
+    // and now cannot: with `--mission tutorial` the line has to say something.
     let mut app = app();
     app.world_mut().run_schedule(Update);
 
-    let mut q = app.world_mut().query_filtered::<(&Text, &Node), With<ObjectiveLine>>();
-    let (text, node) = q.iter(app.world()).next().expect("no node with `ObjectiveLine`");
+    let (text, display) = objective(&mut app);
     assert!(
-        text.0.is_empty(),
-        "the objective line reads {:?} — but nothing in this build produces an objective, \
-         so that string was invented by the HUD (docs/PLAN-GAME.md §8, F-170)",
-        text.0
+        text.is_empty(),
+        "the objective line reads {text:?} in a game with no mission — nothing produced that \
+         string, so the HUD invented it (docs/PLAN-GAME.md §8, F-170)"
     );
     assert_eq!(
-        node.display,
+        display,
         Display::None,
         "an objective line with no objective has to be hidden, not empty-but-drawn"
     );
+
+    let mut app = mission_app();
+    app.world_mut().run_schedule(Update);
+    let (text, display) = objective(&mut app);
+    assert!(
+        !text.is_empty() && display == Display::Flex,
+        "with `--mission tutorial` running the objective line reads {text:?} and is {display:?} \
+         — a line that hides in every case passes the half of this test above without ever \
+         showing a player anything"
+    );
+}
+
+#[test]
+fn f170_the_objective_counts_the_real_kills() {
+    // ★ **The one with teeth for this element.** `docs/PLAN-GAME.md` §1 asks for a counter that
+    // "goes from `0/3` to `1/3`", and the named failure of the row is the element that is
+    // present and wired to a constant.
+    //
+    // Neither number in the assertion below is written here: the target comes out of
+    // `missions.ron` through `GameData`, the count out of the mission's own `KillTally`. Put a
+    // literal `3` in the HUD and change `kill_target` in the file, and this goes red.
+    //
+    // **The kills are booked on two different players on purpose.** The mission is won by the
+    // squad (`mission::run::KillTally::total`), so the line counts the squad. A HUD that showed
+    // `KillTally::of(local_player)` would read 2/3 next to a `WON` in the first co-op session —
+    // that swap turns this test red at the second kill.
+    let mut app = mission_app();
+    let target = kill_target(&app);
+    assert!(target >= 3, "missions.ron: tutorial kill_target = {target} — this test needs 3+");
+
+    app.world_mut().run_schedule(Update);
+    assert_eq!(
+        objective(&mut app).0,
+        format!("0/{target}"),
+        "a mission that has just started stands at 0 kills of {target}"
+    );
+
+    for n in 1..=target {
+        // player 1, 2, 1, 2 … — the total is the squad's, not one player's.
+        let player = PlayerId(1 + n % 2);
+        credit(&mut app, player, TitanId(100 + n));
+        app.world_mut().run_schedule(Update);
+        assert_eq!(
+            objective(&mut app).0,
+            format!("{n}/{target}"),
+            "after {n} credited kill(s) the line has to read {n}/{target}"
+        );
+    }
+
+    // And now the half a literal survives. Everything above is also true of
+    // `format!("{}/3", …)`, because `missions.ron` happens to say 3 — so the target is moved
+    // out from under the HUD. `KillTally::target` is `kill_target` and nothing else, so this is
+    // the same move as editing the file, without touching a file another job owns.
+    let moved = target + 4;
+    {
+        let mut q = app.world_mut().query::<&mut KillTally>();
+        let mut tally = q.iter_mut(app.world_mut()).next().expect("the mission's KillTally");
+        tally.target = moved;
+    }
+    app.world_mut().run_schedule(Update);
+    assert_eq!(
+        objective(&mut app).0,
+        format!("{target}/{moved}"),
+        "the target moved from {target} to {moved} and the line did not follow — that number is \
+         a literal in the HUD, and `missions.ron` no longer decides what the mission counts to \
+         (CLAUDE.md rule 2)"
+    );
+}
+
+#[test]
+fn f170_the_screen_says_what_the_mission_decided() {
+    // ★ `docs/PLAN-GAME.md` §1: "the screen says **LOST**" / "it says **WON**". Not the F3
+    // overlay — the screen.
+    //
+    // The word is `MissionPhase::label()`'s and the HUD does not get its own copy of it. Two
+    // halves, and the second is the one that keeps them from drifting: the phase says `WON`, the
+    // HUD is asked, and then `src/hud/objective.rs` is read to check that the word is not
+    // *also* written down in there.
+    let mut app = mission_app();
+
+    for phase in [MissionPhase::Won, MissionPhase::Lost] {
+        set_phase(&mut app, phase);
+        app.world_mut().run_schedule(Update);
+        let (text, display) = objective(&mut app);
+        assert_eq!(
+            text,
+            phase.label(),
+            "the mission decided {phase:?} and the screen says {text:?} — a player only ever \
+             sees the HUD, so this is what the verdict IS (docs/PLAN-GAME.md §1)"
+        );
+        assert_eq!(display, Display::Flex, "the verdict has to be drawn, not just stored");
+    }
+
+    // The verdict is bigger than the counter — "large enough to be the thing you notice".
+    set_phase(&mut app, MissionPhase::Won);
+    app.world_mut().run_schedule(Update);
+    let verdict_px = objective_font_px(&mut app);
+    set_phase(&mut app, MissionPhase::Active);
+    app.world_mut().run_schedule(Update);
+    let count_px = objective_font_px(&mut app);
+    assert!(
+        verdict_px > count_px * 1.5,
+        "the verdict is {verdict_px} px and the counter {count_px} px — the word the whole \
+         mission was about has to be the thing you notice"
+    );
+
+    // And the HUD does not keep a second copy of the wording.
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/hud/objective.rs"),
+    )
+    .expect("src/hud/objective.rs must be readable");
+    let code: String = source
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for phase in [
+        MissionPhase::Briefing,
+        MissionPhase::Deploying,
+        MissionPhase::Active,
+        MissionPhase::Won,
+        MissionPhase::Lost,
+    ] {
+        let literal = format!("{:?}", phase.label());
+        assert!(
+            !code.contains(&literal),
+            "src/hud/objective.rs contains the literal {literal} — the words belong to \
+             `MissionPhase::label()`, and two spellings of one word drift apart the first time \
+             somebody renames a phase"
+        );
+    }
+    assert!(
+        code.contains("label()"),
+        "src/hud/objective.rs never calls `MissionPhase::label()` — then the words on the \
+         screen came from somewhere else"
+    );
+}
+
+/// The objective line's font size in logical pixels.
+fn objective_font_px(app: &mut App) -> f32 {
+    use bevy::text::FontSize;
+    let mut q = app
+        .world_mut()
+        .query_filtered::<&TextFont, With<ObjectiveLine>>();
+    let font = q.iter(app.world()).next().expect("no node with `ObjectiveLine`");
+    match font.font_size {
+        FontSize::Px(px) => px,
+        other => panic!("the objective line's font size is {other:?} and not `Px` — nothing \
+                         outside this file can then compare it"),
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -264,15 +469,18 @@ fn f170_nothing_covers_the_middle_of_the_screen() {
     app.world_mut().entity_mut(player).insert(Health::full(100.0));
     app.world_mut().run_schedule(Update);
 
-    // The objective would be hidden (no producer, see the test above), and a hidden node
-    // covers nothing — which would make this test blind to exactly the element most likely to
-    // be widened later. So the test shows it itself and asks the hypothetical question.
+    // The objective is hidden in this app (no mission), and a hidden node covers nothing —
+    // which would make this test blind to exactly the element most likely to be widened later.
+    // So the test shows it itself, in a **worse** state than the game can produce: forty
+    // characters at the verdict's font size, where the longest real line is `LOST` and the
+    // longest counter `99/99`. If this fits above the box, everything the element can say fits.
     {
         let mut q = app
             .world_mut()
-            .query_filtered::<(&mut Text, &mut Node), With<ObjectiveLine>>();
-        for (mut text, mut node) in q.iter_mut(app.world_mut()) {
+            .query_filtered::<(&mut Text, &mut Node, &mut TextFont), With<ObjectiveLine>>();
+        for (mut text, mut node, mut font) in q.iter_mut(app.world_mut()) {
             text.0 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into();
+            font.font_size = bevy::text::FontSize::Px(defeated_by_titan::hud::objective::VERDICT_PX);
             node.display = Display::Flex;
         }
     }

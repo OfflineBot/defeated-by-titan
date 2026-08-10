@@ -35,6 +35,12 @@ debug -> mission   # the F3 overlay and `assert phase|kills` read the mission ph
                    #  a tool that has to show what the game is doing right now cannot be
                    #  served by a TitanHit that fired three ticks ago, and mirroring the
                    #  state into shared/ would give one field two writers.
+hud -> mission     # the objective line draws the kill counter and the verdict, and
+                   #  `docs/PLAN-GAME.md` §1 makes both part of "playable": `0/3 -> 1/3`
+                   #  and the word WON/LOST. Same reason as the line above and no other:
+                   #  a HUD has to be right in the frame it is drawn in, so it needs the
+                   #  STATE (`KillTally`, `State<MissionPhase>`), not a TitanHit that
+                   #  fired three ticks ago. Read-only — `mission` stays the one writer.
 ```
 
 **One line as of 2026-08-09**, and it was empty until then. `prompts/init.md` §5 names `render`

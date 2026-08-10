@@ -69,6 +69,104 @@ it works. That costs nothing. A stage that is too high costs the next person hal
 
 ## Closed bugs
 
+### `B-003` — a teleport dragged the rope along, and nothing said so
+
+**Fixed on 2026-08-10**, test `b003_a_warp_lets_go_of_every_rope` was red, is green.
+
+| Field | |
+|---|---|
+| **Repro** | `cargo test --test vector_rope -- b003` at commit `c3c2ca4`, `[debian]` — two tests, both red before the fix. The same thing in the running game, with the script below at `--headless --ticks 700`: anchor on the watchtower, then `warp` 79.5 m away **while the left trigger is still held**. |
+| **Evidence** | **In the test:** one tick after a warp of 55.73 m off two 9.00 m ropes, *both* `DistanceJoint`s were still holding and the player had been pulled **47.93 m** back toward his old anchor — 86 % of the way home, in a single tick. Both hooks stayed `Anchored` for ever, and **zero** `HookReleased` messages arrived in the three ticks after the warp. **In the game:** `assert Height > 35 — measured 10.722` and `assert Speed < 10 — measured 75.000` (that is `vector.max_speed_m_s`: the yank saturated the clamp), `script run finished: 2 of 4 asserts failed`, exit 1. After the fix the same run reads `4 asserts held, 471 ticks`, exit 0. **In anger:** `scripts/game-full.txt` lost **two of its three kills** to this, and the run still reported success — no assert fired, no message, not one line of the log. |
+| **Expectation** | `prompts/init.md` §12c: a `warp` means *"the player stands exactly there afterwards"* — that is the whole worth of the verb, and a coordinate you get dragged off is not one. `F-004`: the rope is a constraint between the player and an anchor he chose; a body that teleports has not chosen anything. `src/vector/hook.rs` (header) names the reasons to let go that come from outside and are merely carried out there — a teleport is the third of them and was missing. |
+| **Cause** | `src/player/mod.rs:185-200` (before the fix) — `apply_warps` wrote `Transform` and zeroed `LinearVelocity` and **nothing else**. `src/player/rope.rs:154-182` — `detach_ropes` released on `HookReleased` and on `BodyGone`, and a warp is neither, so the joint survived the teleport and avian solved it in the very same tick. Nothing in the chain was individually wrong: the warp is right, the joint is right, the hook state machine is right, `detach_ropes` is right, and the script driver is right. **Five pieces green separately and red together.** |
+
+**Why it was silent, which is the expensive half.** Every channel that could have spoken was
+closed by construction. `RopeLength::overextended` — the one back-channel `vector::hook` listens
+to — compares the anchor distance against `vector.hook_range_m` (90 m) *after* the physics step,
+and the joint's whole job is to make sure that distance never exceeds `limits.max` (9 m). **The
+constraint erases the evidence that it acted.** The warps in `scripts/game-full.txt` are 55 m,
+under the 90 m threshold anyway. And the script's asserts measured `speed` and `height`, both of
+which a yanked player has in abundance. Exit code 0, twenty-three asserts held, two kills gone.
+
+**Fix**, in two rails, both in `player` — the domain that owns the joint:
+
+1. **`src/player/rope.rs::detach_ropes` also reads `WarpPlayer`** and despawns the joint and its
+   anchor marker. It runs in `SimulationSystems::Drive`, **one stage before** `apply_warps` in
+   `Integrate`, so avian never sees a teleported body still tied to an anchor. Doing it inside
+   `apply_warps` would not have worked: its `Commands` land at the next sync point, and that is
+   behind `PhysicsSystems::StepSimulation`. It logs `rope Left of player 1 cut: the player was
+   warped away (B-003)`.
+2. **`src/player/rope.rs::sync_rope_length` raises `RopeLength::overextended`** for every arm
+   that is `is_anchored()` when its player is warped. That component has exactly one writer and
+   still does; `vector::hook` — **the only writer of `Hook`** — reads the flag one tick later and
+   lets the arm go itself, with a real `HookReleased` and its own log line. Asking through the
+   message the hook module already listens to is the only way to release an arm from `player`
+   without becoming a second writer of `Hook` (§6 rule 3).
+
+`attach_ropes` was given the same guard: a hook that bites in the tick its player is warped gets
+**no** joint at all, because the `Position` it would measure the length from is the one the
+player is about to leave.
+
+⚠️ **The reason the player is told is `ReleaseReason::Overextended`, and it is a stand-in.** The
+honest one is `ReleaseReason::Warped`; that enum is `src/shared/message.rs:113-123`, which
+`player` does not own. `Overextended` is the closest of the four — it is the one that already
+means *"the rope's length cannot be honoured any more"*, and the one `hud` and `sound` read as
+"the rope tore" rather than "the player let go". → `docs/FINDINGS.md`.
+
+**Tests** — both seen red before the fix and red again with the fix taken back out (rule 5,
+step 3, with identical numbers both times: `47.93 m`, `0 message(s)`):
+
+| Test | what it pins |
+|---|---|
+| ★ `tests/vector_rope.rs::b003_a_warp_lets_go_of_every_rope` | **both** arms anchored on one anchor, then a 55 m warp: no `DistanceJoint` left, `RopeLength` `0.0` on both sides, both arms back to `HookState::Idle` four seconds later, and the player within 5 cm of the coordinate he was warped to. Gravity off, so the rope is the only thing left that could move him. Red before: *"2 joint(s) are still holding the player … dragged 47.93 m"*. |
+| ★ `tests/vector_rope.rs::b003_a_warp_that_lets_go_says_so_out_loud` | **the silence.** A `HookReleased` for that player and that side really arrives within three ticks of the warp. A fix that drops the rope and says nothing has only fixed the yank. Red before: *"0 message(s) in three ticks: []"*. |
+| `tests/vector_rope.rs::f004_the_rope_pulls_but_does_not_push` | was **green before and had to stay green** — and it moved the player with a `warp`, so after this fix it would have gone on passing with no joint in the world at all. It now uses a `place` helper that writes `Position` directly, plus an explicit `assert_eq!(joint_count, 1)`. Same for the `hang` harness, which pinned a flying hook's player with a warp in every tick. **A fix that makes a green test vacuous has broken it.** |
+
+**Evidence that it is fixed, in the running game and not in a test** — the script (it lives in
+the scratch directory; `scripts/` belongs to another job, and adding `scripts/b003-warp.txt`
+is in `docs/FINDINGS.md`):
+
+```
+wait 1.5
+look 0 34
+warp 24 0 -20
+wait 0.3
+assert height < 0.5
+hook left 6.0     # held for six seconds — the rope stays alive across everything below
+wait 1.0
+assert speed < 0.5
+warp 24 40 40     # and away, with the rope still on: 79.5 m from the anchor, under the 90 m
+wait 0.2          # of vector.hook_range_m, so `overextended` never fires on distance alone
+assert height > 35
+assert speed < 10
+```
+
+```
+rope Left of player 1 attached at 17.83 m (t=124)
+rope Left of player 1 cut: the player was warped away (B-003)
+hook Left of player 1 let go: Overextended (t=175)
+script run finished: 4 asserts held, 471 ticks        # exit 0
+```
+
+**Regression:** `cargo run -q -- --headless --mission tutorial --script scripts/game-full.txt
+--ticks 1600` — `cut titan 2 Cortex` at t=656, `titan 3` at t=777, `titan 4` at t=898,
+`MISSION WON at tick 898`, `23 asserts held, 1200 ticks`, exit 0 `[debian]`. Tick for tick the
+run this bug was found in. The workaround in that file (`wait 4.2 # past t=533 … the joint is
+gone`) is now unnecessary; taking it out is that file's job, not this one's.
+
+**Two things to learn from it:**
+
+1. **A constraint destroys the evidence that it acted.** `overextended` asks "is the player
+   further from his anchor than a rope may be?" — *after* the solver has spent the tick making
+   sure he is not. Every "did the limit get hit?" flag read downstream of the thing that enforces
+   the limit is this same bug. The cheap check: for every guard condition, ask which system runs
+   between the cause and the reading, and what that system does to the quantity being read.
+2. **When two systems change the same body in one tick, the second one has to be told about the
+   first.** The teleport and the joint are both right, and they are both right about a body only
+   one of them may own for that tick. The seam is the stage order, and it is the only place the
+   handover can be written down — which is why the release sits in `Drive` and not in the system
+   that does the teleporting.
+
 ### `B-002` — the mouse only turned the view correctly at exactly 60 fps
 
 **Fixed on 2026-08-10**, test `p3_the_applied_yaw_equals_the_device_motion` was red, is green.

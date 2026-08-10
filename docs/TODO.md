@@ -44,7 +44,7 @@ before `Could` is the order, not a recommendation (prompts/init.md §2).
 
 | Stage | ID | Item | Prio | Depends on | Why here |
 |---|---|---|---|---|---|
-| ⬜ | F-170 | HUD-Grundlayout | 1 | — | Must, no prerequisite |
+| 🟧 | F-170 | HUD-Grundlayout | 1 | — | Must, no prerequisite |
 | ⬜ | F-172 | Vollstaendige Tastenbelegung | 1 | F-170 | needs F-170 |
 | ⬜ | F-175 | Menuestruktur | 1 | F-170 | needs F-170 |
 | ⬜ | F-177 | Grafikeinstellungen | 1 | F-170 | needs F-170 |
@@ -57,7 +57,7 @@ before `Could` is the order, not a recommendation (prompts/init.md §2).
 | Stage | ID | Item | Prio | Depends on | Why here |
 |---|---|---|---|---|---|
 | 🟧 | F-070 | Missions-Zustandsmaschine | 1 | — | Must, no prerequisite |
-| ⬜ | F-071 | Modus: Skirmish | 1 | F-070 | needs F-070 |
+| 🟨 | F-071 | Modus: Skirmish | 1 | F-070 | needs F-070 |
 | ⬜ | F-072 | Modus: Breach (Verteidigung) | 1 | F-070 | needs F-070 |
 | ⬜ | F-073 | Modus: Escort | 1 | F-070 | needs F-070 |
 | ⬜ | F-080 | Schwierigkeitsgrade | 1 | F-070 | needs F-070 |
