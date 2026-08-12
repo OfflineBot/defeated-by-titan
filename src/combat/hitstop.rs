@@ -31,6 +31,57 @@
 //! carried into the cut is still there when the freeze lifts. That is the feel: the impact
 //! frame costs time, not momentum.
 //!
+//! ## `B-004` — a frozen body may not still be holding a joint
+//!
+//! `RigidBodyDisabled` and a `DistanceJoint` on the same body **corrupt avian's island
+//! bookkeeping**, and the process aborts the next time that joint is removed:
+//!
+//! ```text
+//! assertion failed: island.joint_count > 0
+//! avian3d-0.7.0/src/dynamics/solver/islands/mod.rs:786
+//! ```
+//!
+//! Read out of avian's source, in the order it happens:
+//!
+//! 1. `IslandPlugin`'s `On<Insert, (Disabled, RigidBodyDisabled)>` observer strips the body's
+//!    `BodyIslandNode` (`islands/mod.rs:126-136`).
+//! 2. That component's `on_remove` hook takes the last body out of the island and **removes
+//!    the island — while its `joint_count` is still 1** (`islands/mod.rs:1338-1385`). Nothing
+//!    in that path looks at the joints; the rope's anchor is `RigidBody::Static` and carries no
+//!    island node of its own, so the player was the island's only body.
+//! 3. When the freeze lifts, the body gets a fresh `BodyIslandNode`, and `create_island`
+//!    recycles exactly that slot — with `joint_count` back at 0.
+//! 4. Despawning the joint then decrements a zero (`islands/mod.rs:786`) and the assert fires.
+//!
+//! That is the whole measured bracket in `scripts/f-flight-cut.txt`: a release **inside** the
+//! impact frame was clean because the slot had not been handed out again yet, and every release
+//! after it died.
+//!
+//! **The fix is to take the joint out of the island first, not to stop freezing.** avian has
+//! exactly one component for that — [`JointDisabled`] — and its observers do the bookkeeping
+//! properly: `Add` removes the joint from the island (`joint_graph/plugin.rs:87`), `Remove`
+//! puts it back (`.../plugin.rs:108`). So:
+//!
+//! - **Freezing:** `JointDisabled` on every joint of the body **is queued before**
+//!   `RigidBodyDisabled` on the body. Commands are applied in order, so the island's
+//!   `joint_count` is 0 by the time the island is emptied and removed.
+//! - **Thawing:** the other way round — the body is enabled first, so that it has an island
+//!   again by the time the joint is put back and `add_joint` merges the two ends
+//!   (`islands/mod.rs:665-681`; merging an island-less body is the *second* face of the same
+//!   bug and panics with "Neither body … is in an island").
+//!
+//! The three deliberate consequences:
+//!
+//! - the freeze stays avian's `RigidBodyDisabled`, so `F-034`'s bit-identical `Position` for
+//!   exactly 7 ticks is untouched — and it is now bit-identical **with a taut rope**, which it
+//!   was not before: the joint used to keep solving through the impact frame;
+//! - the rope is not let go of and not re-created: `limits.max`, the anchor entity and
+//!   `Rope` all survive the freeze, so `RopeLength` still reads what it read before it;
+//! - the joint carries **no** force during the impact frame, which is the same statement the
+//!   freeze already makes about gravity — the impact frame costs time, not momentum.
+//!
+//! Two joints per player at most and a scan only on the tick a hit lands (§11).
+//!
 //! ## Where in the tick this runs, and why it is not `PostStep`
 //!
 //! `blades::cut` writes `TitanHit` in `PostStep`. Reading it in the *same* set would be a coin
@@ -39,7 +90,7 @@
 //! So the reaction happens in `Spatial`, the **first** stage of the next tick, which is
 //! deterministic and is the same tick `titan::brain::receive_hits` reacts in.
 
-use avian3d::prelude::RigidBodyDisabled;
+use avian3d::prelude::{DistanceJoint, JointDisabled, RigidBodyDisabled};
 use bevy::prelude::*;
 
 use crate::data::GameData;
@@ -72,6 +123,9 @@ pub fn begin(
     // disjoint by construction — nothing is a player and a titan at once.
     mut players: Query<(Entity, &PlayerId, Option<&mut HitStop>), Without<TitanId>>,
     mut titans: Query<(Entity, &TitanId, Option<&mut HitStop>), Without<PlayerId>>,
+    // `B-004`: the joints the frozen body is an end of. Read-only — the joint stays where it
+    // is and keeps its length; only avian's own `JointDisabled` marker is written here.
+    joints: Query<(Entity, &DistanceJoint)>,
 ) {
     for hit in hits.read() {
         let ticks = stop_ticks(hit.zone, &data);
@@ -80,7 +134,7 @@ pub fn begin(
         }
         for (entity, id, stop) in &mut players {
             if *id == hit.by {
-                freeze(&mut commands, entity, stop, ticks);
+                freeze(&mut commands, entity, stop, ticks, &joints);
             }
         }
         for (entity, id, stop) in &mut titans {
@@ -102,16 +156,38 @@ pub fn begin(
     }
 }
 
-fn freeze(commands: &mut Commands, entity: Entity, stop: Option<Mut<HitStop>>, ticks: u32) {
+fn freeze(
+    commands: &mut Commands,
+    entity: Entity,
+    stop: Option<Mut<HitStop>>,
+    ticks: u32,
+    joints: &Query<(Entity, &DistanceJoint)>,
+) {
     match stop {
         Some(mut existing) => existing.ticks_left = existing.ticks_left.max(ticks),
         None => {
             commands.entity(entity).insert(HitStop::new(ticks));
         }
     }
+    // `B-004` — **first the joints, then the body, and the order is the fix.** Commands are
+    // applied in the order they are queued, so every joint is out of the island before the
+    // island is emptied and thrown away. The other way round aborts the process the next time
+    // the rope is let go of. See the module header.
+    for joint in joints_of(entity, joints) {
+        commands.entity(joint).insert(JointDisabled);
+    }
     // Idempotent: inserting a marker that is already there costs one archetype check and
     // nothing else, and it saves an `Option<&RigidBodyDisabled>` in the query above.
     commands.entity(entity).insert(RigidBodyDisabled);
+}
+
+/// Every joint this body is an end of. At most two per player (`F-004`: two hooks).
+fn joints_of(entity: Entity, joints: &Query<(Entity, &DistanceJoint)>) -> Vec<Entity> {
+    joints
+        .iter()
+        .filter(|(_, joint)| joint.body1 == entity || joint.body2 == entity)
+        .map(|(e, _)| e)
+        .collect()
 }
 
 /// One tick off every freeze, and the body moves again at zero.
@@ -119,13 +195,23 @@ fn freeze(commands: &mut Commands, entity: Entity, stop: Option<Mut<HitStop>>, t
 /// Runs in [`SimulationSystems::PostStep`], i.e. **after** the step the body was frozen for.
 /// Counting down before the step would give `n` seconds of freeze that are `n − 1` ticks long,
 /// and the criterion counts ticks.
-pub fn advance(mut commands: Commands, mut frozen: Query<(Entity, &mut HitStop)>) {
+pub fn advance(
+    mut commands: Commands,
+    mut frozen: Query<(Entity, &mut HitStop)>,
+    joints: Query<(Entity, &DistanceJoint)>,
+) {
     for (entity, mut stop) in &mut frozen {
         if stop.tick() == 0 {
+            // `B-004`, and **the mirror image of `freeze`**: the body first, so that it has an
+            // island again before the joint is put back into one. A joint whose ends are both
+            // island-less panics in `merge_islands` instead.
             commands
                 .entity(entity)
                 .remove::<HitStop>()
                 .remove::<RigidBodyDisabled>();
+            for joint in joints_of(entity, &joints) {
+                commands.entity(joint).remove::<JointDisabled>();
+            }
         }
     }
 }

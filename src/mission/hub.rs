@@ -29,36 +29,41 @@
 //! - **It has no lobby, no loadout, no NPCs, no persistence.** A hub in this build is three
 //!   amber circles, three cyan ones, and the way back.
 //!
-//! ## The one authority question this module raises, written down and not hidden
+//! ## The authority question this module raised, and how it was closed
 //!
-//! ⚠️ `docs/architecture.md`'s authority table says `Gas` is written by **`vector`**.
-//! [`refuel_at_stations`] is a second writer of it, and that is a real widening of the rule —
-//! taken deliberately, because the alternative was to leave `Gas::refill` uncalled and Q-033
-//! unanswered. Three things keep it from being the coin toss the rule exists to prevent:
+//! `docs/architecture.md`'s authority table says `Gas` is written by **`vector`**. The first
+//! version of [`refuel_at_stations`] (2026-08-12, morning) called `Gas::refill` itself and was
+//! therefore a **second writer** — bounded by argument (fixed system order, only ever adding,
+//! hub phase only) but a second writer all the same, and the arguments that bounded it were
+//! all of the form *"the two never meet"*. That is exactly what stops holding over a wire,
+//! where "never meet" becomes two machines holding two numbers for one tank.
 //!
-//! 1. **The order is fixed, not incidental.** `vector::gas::gas_budget` runs in
-//!    [`SimulationSystems::Intent`](crate::shared::SimulationSystems::Intent), this runs in
-//!    `PostStep` — spend first, refill after, every tick, on every machine.
-//! 2. **The directions are disjoint.** `gas_budget` only ever subtracts (its own tests hold
-//!    that); this only ever adds, and only up to `Gas::max`.
-//! 3. **It only runs in the hub.** `run_if(in_state(MissionPhase::Hub))` — during a sortie
-//!    `vector` is the only writer there has ever been.
+//! **Since the same day it asks instead of writes:** a station sends
+//! [`RefuelRequest`](crate::shared::RefuelRequest) and `vector::gas::apply_refuel_requests`
+//! applies it. `mission` holds no `&mut Gas` anywhere, and the message type lives in `shared`,
+//! so no domain edge was bought for it. The seam is the one `WarpPlayer` already uses in
+//! [`open_hub`]: the hub decides *what should happen to a player*, the domain that owns the
+//! field does it. Guarded by
+//! `tests/mission.rs::f072_a_station_asks_for_gas_and_never_writes_the_tank_itself`, which
+//! runs the station system with **no `vector` in the app at all** — the one shape the whole-app
+//! tests cannot distinguish (`FINDINGS.md` FIND-063).
 //!
-//! ⚠️ **Measured on 2026-08-12: point 3 is carried twice, and taking the `run_if` away alone
-//! changes nothing observable.** The stations are `DespawnOnExit(MissionPhase::Hub)`, so
-//! outside the hub the query is empty anyway;
-//! `tests/mission.rs::f072_a_station_is_a_hub_thing_and_does_not_follow_you_into_a_sortie`
+//! **The cost, and it is one tick:** the request is written in `PostStep` and applied in the
+//! next tick's `Intent`, because a same-tick application would mean ordering a `vector` system
+//! against a `mission` system, which no domain may do. 16 ms of latency on a refuel at 40 gas/s
+//! is 0.67 gas — `vector::gas` already carries the same trade for its `Hook` read.
+//!
+//! ⚠️ **Measured on 2026-08-12: the `run_if(in_state(MissionPhase::Hub))` on the station
+//! systems is carried twice, and taking it away alone changes nothing observable.** The
+//! stations are `DespawnOnExit(MissionPhase::Hub)`, so outside the hub the query is empty
+//! anyway; `tests/mission.rs::f072_a_station_is_a_hub_thing_and_does_not_follow_you_into_a_sortie`
 //! only goes red when **both** are removed. The `run_if` stays as the guard for the day a
 //! station stops being state-scoped — but it is belt, and the lifetime is the braces.
-//!
-//! What is **owed** to `docs/architecture.md` (another job's file this session): one row saying
-//! `mission::hub` is the second writer of `Gas`, in the hub only, after `vector`. Reported, not
-//! quietly done.
 
 use bevy::prelude::*;
 
 use crate::data::GameData;
-use crate::shared::{Block, Gas, PlayerId, Tick, WarpPlayer};
+use crate::shared::{Block, PlayerId, RefuelRequest, Tick, WarpPlayer};
 
 use super::phase::MissionPhase;
 use super::run::{to_ticks, MissionClock, Mission};
@@ -300,30 +305,39 @@ pub fn deploy_on_contact(
     next.set(MissionPhase::Deploying);
 }
 
-/// **The only refill of a tank in this game** (`docs/QUESTIONS.md` Q-033).
+/// **The only refill of a tank in this game** (`docs/QUESTIONS.md` Q-033) — and it *asks*.
 ///
-/// Per tick and per player, `gas_per_s * dt` while he stands inside a station's circle. See the
-/// module header for why a second writer of `Gas` is acceptable here and what is owed to
-/// `docs/architecture.md` for it.
+/// Per tick and per player, one [`RefuelRequest`] over `gas_per_s * dt` while he stands inside
+/// a station's circle. **This function does not touch `Gas`**, and it holds no `&mut Gas` at
+/// all: `vector::gas::apply_refuel_requests` is the only thing that ever writes a tank
+/// (`docs/architecture.md`, authority table; `FINDINGS.md` FIND-063).
+///
+/// Three things that look like they belong here and deliberately do not:
+///
+/// - **No check whether the tank is already full.** The station cannot see the tank any more,
+///   and it does not need to: `Gas::refill` caps at `Gas::max` and the applier writes through
+///   `set_if_neq`, so a request for a full tank changes nothing and wakes no `Changed<Gas>`.
+/// - **No accumulating.** One tick, one request, per player in reach. A player standing in two
+///   overlapping stations gets one request, exactly as he got one refill before — the `find`
+///   is what says "a station", not "every station".
+/// - **The rate stays a station's property.** It was copied out of `gear.ron: resupply` at
+///   spawn ([`RefuelStation`]); the message carries the tick's amount, so the receiver needs no
+///   `GameData` and no knowledge of what a station is.
 pub fn refuel_at_stations(
     time: Res<Time<Fixed>>,
     stations: Query<(&RefuelStation, &Transform)>,
-    mut players: Query<(&Transform, &mut Gas), With<PlayerId>>,
+    players: Query<(&PlayerId, &Transform)>,
+    mut requests: MessageWriter<RefuelRequest>,
 ) {
     let dt = time.delta_secs();
-    for (at, mut gas) in &mut players {
+    for (id, at) in &players {
         let Some((station, _)) = stations
             .iter()
             .find(|(s, pad)| at.translation.distance(pad.translation) <= s.radius_m)
         else {
             continue;
         };
-        // On a copy and through `set_if_neq`, exactly like `vector::gas::gas_budget`: a full
-        // tank standing in a station must not report `Changed<Gas>` sixty times a second for a
-        // number that did not move (§6 rule 6).
-        let mut tank = *gas;
-        tank.refill(station.gas_per_s * dt);
-        gas.set_if_neq(tank);
+        requests.write(RefuelRequest { player: *id, amount: station.gas_per_s * dt });
     }
 }
 

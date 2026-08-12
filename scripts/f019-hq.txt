@@ -1,0 +1,138 @@
+# f019-hq — THE MAIN BUILDING, AND THE ONE THING A SCREENSHOT CANNOT SAY: you can walk in.
+#
+#   the verdict:  cargo run -q -- --headless --script scripts/f019-hq.txt --ticks 1600
+#   the picture:  cargo run -q -- --offscreen --screenshot docs/images/f019-hq.png \
+#                                 --script scripts/f019-hq.txt --ticks 1350
+#
+# ⚠️ **Two runs, two `--ticks`, and the second number is not a typo.** `end` stops the app, so a
+# screenshot scheduled past the end of the script is never taken — that is 1 400 ticks here, and
+# the shot has to land inside ACT 5's pose instead (the player is back on the pavement from
+# t = 1 310). Same split as `scripts/f003-ashgate.txt`.
+#
+# The user, 2026-08-12: „auch das main gebäude in dem der gas und schwert nachschub ist muss da
+# sein (in das gebäude muss man rein laufen können. drinnen sind die nachschübe)".
+#
+# ⚠️ `--ticks 1600` is past this script's own end (1 400 ticks). A run cut off before the script
+# finishes is an ERROR (`docs/FINDINGS.md` FIND-032), and raising the limit is free.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT THIS FILE CLAIMS — four things, and every one of them is an `assert`
+#
+#   1. the east facade is a **wall**: walking at it stops you       (the control, ACT 1)
+#   2. the gate beside it is a **door**: the same walk goes through (ACT 2)
+#   3. and it goes 29 m further, to the back wall of the hall       (ACT 2)
+#   4. the roof answers a rope, and it carries you                  (ACT 3, ACT 4)
+#
+# ---------------------------------------------------------------------------------------
+# THE GEOMETRY, AND WHY `height` IS A POSITION HERE
+#
+# `assets/data/maps.ron: ashgate` puts the garrison headquarters on the west side of the main
+# street, one block inside the inner gate:
+#
+#   outer footprint   x = -47 .. -15   z = -13 .. 13     32 x 26 m
+#   the gate          x = -16.5 .. -15  z = -3 .. 3      6 m wide, 4.5 m to the lintel
+#   the hall          x = -45.5 .. -16.5  z = -11.5 .. 11.5   29 x 23 m, 10 m in the clear
+#   floor             0.15 m            roof             11.5 m, anchorable
+#
+# The script language can measure `height` and it cannot measure x or z — so the floor does the
+# work. **0.15 m is the only floor height in this map**: the ground is 0.0, every apron 0.05,
+# the quays and the bridges 0.4. `assert height > 0.10` therefore says *inside the building* and
+# nothing else can satisfy it, and `assert height < 0.10` says *still out on the pavement*.
+# The x bracket is the walk itself: the facade stands 7 m from the warp point, so a player
+# stopped by it reaches 0 m/s after 1.2 s. Anything still moving at 6 m/s three seconds later
+# is past it. Both halves are geometry, neither is a feeling.
+#
+# `look 90 0` faces WEST: `forward = (-sin yaw, 0, -cos yaw)`, so yaw 90 is -X. That sign cost
+# `scripts/f-flight-cut.txt` nine red asserts once; it is spelled out here for the next reader.
+
+wait 1.5              # world, colliders and render pipelines come up (90 ticks)
+
+# =========================================================================================
+# ACT 1 — THE CONTROL. The facade is a wall, and walking at it gets you nowhere.
+# =========================================================================================
+# Without this act "he walked in" is worth nothing: a building whose walls do not stop anybody
+# is not a building, and the doorway of ACT 2 would prove only that the map is hollow.
+# z = -8 is the middle of the southern facade segment, 5 m clear of the opening.
+
+warp -8 2 -8
+look 90 0
+wait 1.0              # 2 m of fall onto the main street apron
+assert height < 0.10  # on the pavement: the apron tops out at 0.05 m
+key W 3.0             # 18 m of intent against 7 m of pavement
+wait 3.2
+assert speed < 0.5    # ⭐ stopped. `run_speed_m_s` is 6.0 — this is a wall, not a slope
+assert height < 0.10  # ⭐ and still outside: he never reached a 0.15 m floor
+mark f019-stopped-at-the-facade
+
+# =========================================================================================
+# ACT 2 — THE DOOR. The same walk, 8 m further north, and it does not stop.
+# =========================================================================================
+# z = 0 is the middle of the gate — and of the player's own spawn point, 15 m east of it. The
+# door is what you are looking at when the game starts.
+
+warp -8 2 0
+look 90 0
+wait 1.0
+assert height < 0.10  # same start, same pavement, same 0.05 m
+key W 9.0             # 54 m of intent: 7 m of street, 1.5 m of wall, 29 m of hall
+wait 3.0
+
+assert speed > 5.0    # ⭐ THE CLAIM. A player stopped by the facade is at 0 by t+1.2 s;
+                      #   at t+3.0 s he has covered ~17 m and stands around x = -25
+assert height > 0.10  # ⭐ and he is standing on the hall floor — 0.15 m, and nothing else in
+assert height < 0.30  #   this map is at 0.15 m
+mark f019-inside
+
+wait 6.2
+assert speed < 0.5    # ⭐ the back wall of the hall, 37.5 m from the warp point
+assert height > 0.10  # ⭐ still inside — he stopped at the far wall, not at the near one
+assert height < 0.30
+mark f019-at-the-back-wall
+
+# =========================================================================================
+# ACT 3 — THE ROOF ANSWERS A ROPE. Arriving by air is the natural way in.
+# =========================================================================================
+# From 32 m over the street, looking west and 41 degrees down. The ray clears the facade top
+# (10 m) by 17 m and lands on the roof around x = -33 — the slab is 32 m long, so the window is
+# not a needle. 33 m of rope against a 200 m range; the hook is a 160 m/s projectile, so 0.7 s
+# is four times its flight.
+
+warp -8 32 0
+look 90 -41
+wait 0.2
+hook left 1.5
+wait 0.7
+assert rope == 1      # ⭐ the roof is anchorable, and a rope fired from outside reaches it
+mark f019-roof-hooked
+wait 1.2              # the key releases at t+1.5 and the arm lets go with it
+
+# =========================================================================================
+# ACT 4 — AND IT CARRIES YOU. A roof you fall through is not a landing.
+# =========================================================================================
+
+warp -31 20 0
+look 90 0
+wait 3.0              # 8.5 m of fall is 0.92 s; the rest is settling
+assert height > 11.4  # ⭐ standing on the roof: the slab tops out at 11.5 m
+assert height < 11.7
+mark f019-on-the-roof
+
+# =========================================================================================
+# ACT 5 — THE PHOTOGRAPH. Nothing is asserted here; the camera is posed and left standing.
+# =========================================================================================
+# The last pose IS the picture, and a script that ends on the roof photographs a roof. This puts
+# the player back on **his own spawn point** (0, 2, 0) at eye height, looking west — 15 m from
+# the front door, which is the first thing the game shows anybody. Through the opening you can
+# see the hall floor, a post and both resupply racks; that is the sentence
+# „in das gebäude muss man rein laufen können. drinnen sind die nachschübe" as a photograph.
+#
+# ⚠️ Deliberately NOT a three-quarter view from the market square: the gantry spine stands at
+# x = +-14 over the whole main street, and every angle that shows the building's mass has a 56 m
+# column across the foreground. Two of those were tried and are in the run history.
+
+warp 0 2 0
+look 90 10
+wait 2.0
+mark f019-photo
+
+end

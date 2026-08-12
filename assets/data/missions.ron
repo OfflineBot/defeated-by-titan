@@ -14,9 +14,11 @@
     // The hub — the main building. Positions in meters, origin at the player's spawn.
     // -----------------------------------------------------------------------------------
     //
-    // ⚠️ The hub has **no building of its own yet**: it is laid out on the map that
-    // `maps.ron: current` builds, and only its pads are placed here. Every coordinate below
-    // therefore has to stay inside `maps.ron: layout.clear_radius_m` (24.0 m for the graybox),
+    // ⚠️ The hub's **pads** are still laid out on open ground: they are placed here and on
+    // whatever map `maps.ron: current` builds. Since 2026-08-12 the district does have a main
+    // building — the garrison headquarters, `maps.ron: ashgate`, door at (-15, ., 0) — but
+    // none of the furniture below has moved into it yet; see `refuel_stations`. Every
+    // coordinate below has to stay inside `maps.ron: layout.clear_radius_m` (24.0 m),
     // which is the circle the city generator keeps free — and on **+Z**, because the graybox
     // has an explicitly placed house at (0, 2, −12).
     hub: (
@@ -50,6 +52,23 @@
         // there is no regeneration anywhere else in the game, and `Gas::refill` has no other
         // caller. **How fast and how far stands in `gear.ron: resupply`**, not here — this
         // file says where the stations are, that file says what a station does.
+        //
+        // ⚠️ **These three still stand on the pavement, and the building exists now.**
+        // `maps.ron: ashgate` carries the garrison headquarters since 2026-08-12: a 32 x 26 m
+        // hall at x = -47..-15, z = -13..13, floor at 0.15 m, a 6 x 4.5 m gate on the main
+        // street at (-15, ., 0) — 15 m in front of the spawn point and straight ahead of it.
+        // The two racks inside it are furniture until somebody moves these coordinates onto
+        // them, and **that is the one line this file still owes the user's sentence** („drinnen
+        // sind die nachschübe"). The interior positions the racks are built for:
+        //
+        //     gas    (-42.0, 0.15, -6.5)   the south rack
+        //     blades (-42.0, 0.15,  6.5)   the north rack — needs the blade station type
+        //                                  (`blades::resupply`, `gear.ron: resupply`)
+        //
+        // It was NOT done in the same hand as the building, on purpose: `scripts/f070-hub.txt`
+        // walks 6 m up +Z onto the station at (0, 0, 6) and asserts `gas > 299` there, and
+        // moving the station without re-cutting that script turns a green feature red for a
+        // reason that is not in the game. **Rollback point: these three lines.**
         refuel_stations: [
             (center_m: (  0.0, 0.0, 6.0)),
             (center_m: (-14.0, 0.0, 6.0)),

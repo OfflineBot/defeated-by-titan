@@ -42,6 +42,11 @@
 //! | the cut at the tick of contact | `scripts/f030-cortex.txt` → `docs/images/f030-cortex.png` |
 
 pub mod cut;
+/// **The way back.** `F-033`: blades go blunt and break, and until 2026-08-12 nothing in the
+/// game ever gave one back. The arithmetic stands in this domain because `blades` is the only
+/// writer of `Blades`; the station that calls it is `mission`'s and is not built yet — see the
+/// module's own header for the exact caller.
+pub mod resupply;
 pub mod swing;
 
 use bevy::prelude::*;

@@ -644,7 +644,7 @@ fn f071_the_waves_come_out_of_the_file_at_the_ticks_the_file_says() {
 //    `f072_gas_comes_back_at_a_station_and_nowhere_else`).
 
 use defeated_by_titan::mission::{DeploymentPoint, RefuelStation, ReturnToHub};
-use defeated_by_titan::shared::Gas;
+use defeated_by_titan::shared::{Gas, RefuelRequest};
 
 /// The hub's layout out of `missions.ron` — never a literal in this file.
 fn hub_layout(app: &App) -> defeated_by_titan::data::HubLayout {
@@ -1019,4 +1019,85 @@ fn f072_every_door_names_a_mission_and_a_difficulty_the_file_knows() {
     }
     let levels: Vec<&String> = hub.deployments.iter().map(|p| &p.difficulty).collect();
     assert!(levels.len() >= 3, "the user asked for difficulty levels; the hub offers {levels:?}");
+}
+
+// ---------------------------------------------------------------------------
+// One writer of `Gas` — the rule 4 repair of 2026-08-12 (FIND-063)
+// ---------------------------------------------------------------------------
+
+/// A bare app with **only the hub's station system in it** — no `vector` anywhere.
+///
+/// The point of building it by hand instead of using [`in_the_hub`] is that the real app
+/// carries both halves, so it cannot tell "the hub asks and vector fills" from "the hub fills
+/// itself". Here the applier is simply absent, and a tank that still rises can only have been
+/// written by `mission`.
+fn a_station_and_a_player(with_vector: bool) -> (App, Entity) {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    app.insert_resource(Time::<Fixed>::from_hz(60.0));
+    app.add_message::<RefuelRequest>();
+    app.add_systems(FixedUpdate, defeated_by_titan::mission::hub::refuel_at_stations);
+    if with_vector {
+        // Ordered by hand, because here there is no `SimulationSystems` to hang it on: in the
+        // real app the applier runs in the NEXT tick's `Intent`, and this test is about who
+        // writes the tank, not about when.
+        app.add_systems(
+            FixedUpdate,
+            defeated_by_titan::vector::gas::apply_refuel_requests
+                .after(defeated_by_titan::mission::hub::refuel_at_stations),
+        );
+    }
+
+    app.world_mut().spawn((
+        RefuelStation { radius_m: 4.0, gas_per_s: 40.0 },
+        Transform::from_translation(Vec3::ZERO),
+    ));
+    let player = app
+        .world_mut()
+        .spawn((
+            PlayerId(1),
+            Transform::from_translation(Vec3::ZERO),
+            Gas { current: 0.0, ..Gas::full(300.0) },
+        ))
+        .id();
+    (app, player)
+}
+
+fn tank(app: &App, player: Entity) -> f32 {
+    app.world().entity(player).get::<Gas>().expect("the player carries a tank").current
+}
+
+#[test]
+fn f072_a_station_asks_for_gas_and_never_writes_the_tank_itself() {
+    // ⭐ The rule-4 test. `docs/architecture.md`'s authority table says `Gas` is written by
+    // `vector` and by nothing else. So a player standing in a station of a game **without**
+    // `vector::gas` must come out with the tank he went in with — the hub's job is to ask.
+    //
+    // Without this, "one writer" is a sentence in a doc: the second writer of 2026-08-12 was
+    // invisible to every other test in this file, because they all run the whole app.
+    let (mut app, player) = a_station_and_a_player(false);
+    for _ in 0..60 {
+        app.update();
+    }
+    assert_eq!(
+        tank(&app, player),
+        0.0,
+        "a second of standing in a station filled the tank with no `vector::gas` in the app — \
+         `mission` is writing `Gas` itself (docs/architecture.md, authority table; rule 4)"
+    );
+
+    // The other half, or the first one proves only that nothing works: the SAME station and
+    // the SAME player, with the applier added, do fill the tank. `40.0 gas/s` is the station's
+    // own rate, 60 ticks are one second at the 60 Hz this app is built with.
+    let (mut app, player) = a_station_and_a_player(true);
+    for _ in 0..60 {
+        app.update();
+    }
+    let after = tank(&app, player);
+    assert!(
+        (after - 40.0).abs() < 1.0,
+        "a second in the station gave {after} of the station's own 40.0 gas/s — the request is \
+         written but nothing applies it"
+    );
 }

@@ -728,6 +728,104 @@
                 (center_m: (88.0, 1.25, -30.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
                 (center_m: (88.0, 1.25, -6.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
 
+                // ---- The garrison headquarters — the main building, and you walk INTO it
+                // The user, 2026-08-12: „auch das main gebäude in dem der gas und schwert
+                // nachschub ist muss da sein (in das gebäude muss man rein laufen können.
+                // drinnen sind die nachschübe)". Until today the hub was three pads on open
+                // ground; this is the place they belong in.
+                //
+                // ## Where, and why here and not "wherever there is room"
+                //
+                // A garrison headquarters holds the gate and it holds the supply. This one
+                // stands **on the west side of the main street, one block inside the inner
+                // gate**, its front door on the two-gate axis and the market square with the
+                // church directly opposite: the civic centre of the district, at the point
+                // every sortie passes through anyway. Its back is the canal quay (x = -55),
+                // which is how a depot took delivery before it took lorries.
+                // The player's spawn point (0, 2, 0) stands **15 m in front of the door and
+                // looking at it**.
+                //
+                // ⚠️ The site is bounded on all four sides and the numbers are not free:
+                //   x >= -47   the canal quay ends at x = -55, and the bridges reach x = -52
+                //   x <= -15   the main street apron runs x = -15..15; the facade is flush
+                //              with it, so the door opens straight onto the pavement
+                //   |z| <= 13  the gantry columns of the swing spine stand at z = +-13.5..21.5
+                //              (x = -18..-10). Half a metre of clearance, and it is the reason
+                //              the hall is 26 m deep and not 40.
+                //
+                // ## THERE IS NO SUBTRACTION — the doorway is a GAP, not a hole
+                //
+                // `FIND-056` records what this costs when it is forgotten: the wall's decorative
+                // plinth was emitted across the full run while the courses above it carried the
+                // openings, and the gate measured `height 2.000` — solid. So the east facade is
+                // **three blocks and not one**: a south segment, a north segment and a lintel
+                // that starts at y = 4.5. Nothing else in this building crosses z = -3..3 at
+                // x = -16.5..-15. The one thing that does run through the opening is the base
+                // slab, and it is 0.15 m of floor, deliberately (see below).
+                //
+                // ## The base slab does three jobs and that is why it is one block
+                //
+                // 1. It is the **floor** — a depot floor a foot above the street, which is what
+                //    keeps stores dry and what a threshold is.
+                // 2. It is the **apron**: a generated house is dropped as soon as a placed block
+                //    overlaps it, and 8 m of row house against a roof at 11.0 m does NOT overlap.
+                //    Without the slab the layout builds houses inside the hall.
+                // 3. It is the **measurement**: 0.15 m is the only floor height in this map
+                //    (ground 0.0, aprons 0.05, quays and bridges 0.4), so `assert height > 0.10`
+                //    in `scripts/f019-hq.txt` is a position bracket that only the interior
+                //    satisfies. The step at the door is 0.10 m against a 0.35 m capsule radius —
+                //    below the radius, so the capsule rides over it instead of catching on it.
+                (center_m: (-31.0, 0.0, 0.0), size_m: (32.0, 0.3, 26.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                // the four walls. 10 m to the eaves, so the hall is 10 m in the clear — the
+                // roof is the 1.5 m slab on top and the ridge lands on 11.5 m exactly, which is
+                // `scale.ron: architecture.heights_m house_large`. **No invented height**: the
+                // user has written 4.5 / 8 / 11.5 / 12 / 35 and nothing else, and a landmark
+                // height for this building is a question for him (FIND-060 §2), not a number
+                // for me. `landmark: false` therefore holds and the guard in tests/data.rs
+                // still applies to it.
+                //
+                // ⚠️ All of them `anchorable: false`, and that is not laziness. The roof stands
+                // over the centre of every one of them, and a tagged surface with something on
+                // its roof centre is a lie in the map —
+                // `tests/world.rs::f003_no_anchorable_block_has_another_block_sitting_on_its_roof_centre`.
+                // **The roof is the anchor.** The interior is not tagged either, for the same
+                // reason plus the aiming invariant: nothing outside can reach an interior wall.
+                // west (back) wall — the canal side
+                (center_m: (-46.25, 5.0, 0.0), size_m: (1.5, 10.0, 26.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                // east facade, south of the door
+                (center_m: (-15.75, 5.0, -8.0), size_m: (1.5, 10.0, 10.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                // east facade, north of the door
+                (center_m: (-15.75, 5.0, 8.0), size_m: (1.5, 10.0, 10.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                // the lintel over the gate. It starts at y = 4.5, so the opening is **6 m wide
+                // and 4.5 m high**: a 1.8 m player with a 0.35 m capsule walks through it
+                // without aiming, and so does the cart the depot exists for.
+                (center_m: (-15.75, 7.25, 0.0), size_m: (1.5, 5.5, 6.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                // north and south walls, spanning only BETWEEN the two side walls: a corner
+                // built twice is a z-fight and a doubled collider.
+                (center_m: (-31.0, 5.0, 12.25), size_m: (29.0, 10.0, 1.5), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-31.0, 5.0, -12.25), size_m: (29.0, 10.0, 1.5), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                // ⭐ the roof, and it is the one tagged surface of the building: 32 x 26 m of
+                // sand_brown at 11.5 m, the colour every anchorable slab in this map wears.
+                // Arriving by air is the natural way in — from the gantry beam at 60 m over the
+                // street it is one shot, and the hall's own door is 15 m from the spawn point.
+                (center_m: (-31.0, 10.75, 0.0), size_m: (32.0, 1.5, 26.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                // four posts carrying the roof of a 29 x 23 m hall. They stand at z = +-8, so
+                // the aisle from the door to the back wall (z = -3..3) is 29 m of clear floor.
+                (center_m: (-38.0, 5.0, -8.0), size_m: (2.0, 10.0, 2.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-24.0, 5.0, -8.0), size_m: (2.0, 10.0, 2.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-38.0, 5.0, 8.0), size_m: (2.0, 10.0, 2.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-24.0, 5.0, 8.0), size_m: (2.0, 10.0, 2.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                // ---- The resupply, inside, against the back wall -----------------------
+                // ⚠️ **Furniture, not stations.** These two racks are what the player walks up
+                // to; the `RefuelStation` entities that make them work are wired in
+                // `src/mission/hub.rs` out of `missions.ron: hub.refuel_stations`, and that is a
+                // separate hand. The coordinates they should take stand in `missions.ron` next
+                // to the three that are still out on the pavement.
+                // gas tanks, south of the aisle
+                (center_m: (-42.0, 0.75, -6.5), size_m: (5.0, 1.2, 9.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
+                // blades, north of it
+                (center_m: (-42.0, 0.75, 6.5), size_m: (5.0, 1.2, 9.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
+
                 // ---- Deleted 2026-08-12: the hand-placed row housing and the pocket ----
                 // 75 detached boxes stood here — a 20 m pitch along the main street and a
                 // 24 m pitch in the pocket, each one an island with an untagged ridge cap on

@@ -36,19 +36,35 @@ pub mod aim;
 
 use bevy::prelude::*;
 
-use crate::shared::SimulationSystems;
+use crate::shared::{RefuelRequest, SimulationSystems};
 
 pub struct VectorPlugin;
 
 impl Plugin for VectorPlugin {
     fn build(&self, app: &mut App) {
+        // The channel a refuel station asks over. Registered **here** and not in `src/lib.rs`
+        // with the other messages, for the reason that makes this message different from all
+        // of them: it is a write path into `Gas`, this domain is the only writer of `Gas`
+        // (`docs/architecture.md`, authority table), and a channel into a field must not be
+        // able to exist without the one system that applies it. Registering a message twice is
+        // a no-op in Bevy, so moving the line to `lib.rs` later costs nothing.
+        app.add_message::<RefuelRequest>();
+
         app.add_systems(FixedUpdate, aim::aim.in_set(SimulationSystems::World))
-            // `.chain()`: the gas budget is booked BEFORE the hook switches — otherwise it
-            // hangs on system order whether a freshly set hook already costs gas in the same
-            // tick.
+            // `.chain()`: the tank is topped up BEFORE this tick's spending is booked, and the
+            // gas budget is booked BEFORE the hook switches — otherwise it hangs on system
+            // order whether a freshly set hook already costs gas in the same tick.
+            //
+            // `apply_refuel_requests` reads requests that `mission::hub` wrote in the PREVIOUS
+            // tick's `PostStep` — one tick of latency, bought on purpose. Applying in the same
+            // tick would mean ordering a `vector` system against a `mission` system, which is a
+            // hidden edge past the allow list; and inside one set, without an order, whether
+            // the request arrives this tick or the next would be a coin flip at 60 Hz.
             .add_systems(
                 FixedUpdate,
-                (gas::gas_budget, hook::update_hooks).chain().in_set(SimulationSystems::Intent),
+                (gas::apply_refuel_requests, gas::gas_budget, hook::update_hooks)
+                    .chain()
+                    .in_set(SimulationSystems::Intent),
             )
             // **Deliberately without `.chain()`**: both write their own component by
             // assignment, the `&mut` sets are disjoint, so the order is provably

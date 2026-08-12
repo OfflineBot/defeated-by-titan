@@ -34,7 +34,8 @@ use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::{GameData, GasConsumer};
 use defeated_by_titan::player::spawn_player;
 use defeated_by_titan::shared::{
-    BodyId, Buttons, Cli, Gas, GasGrant, Hook, HookState, IdCounter, Intent, LocalPlayer, Side,
+    BodyId, Buttons, Cli, Gas, GasGrant, Hook, HookState, IdCounter, Intent, LocalPlayer,
+    PlayerId, RefuelRequest, Side,
 };
 
 /// Builds the **real** app, headless, one simulation step per `update()`.
@@ -743,5 +744,78 @@ fn f018_a_tank_is_a_whole_mission_of_flying_because_nothing_refills_it() {
          (docs/QUESTIONS.md Q-033) — that is a run that ends before the mission does",
         v.gas_tank,
         v.gas_boost_per_s
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// 8. The refill — `vector` is the ONE writer of `Gas`, and a station only asks (FIND-063)
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn f018_a_refuel_request_is_the_only_thing_that_ever_raises_a_tank() {
+    // The reader's half of the rule-4 repair of 2026-08-12. `mission::hub`'s station used to
+    // call `Gas::refill` itself; now it sends `RefuelRequest` and **this** domain applies it.
+    // What is measured here is the seam, not the station: a real app with no hub in it at all.
+    let mut app = app();
+    let me = me(&mut app);
+    let d = data(&app);
+    let max = d.game.vector.gas_tank;
+    set_tank(&mut app, me, 0.0);
+
+    // 1. Nobody asks: nothing comes back. Q-033 from this side — the applier must not be a
+    //    regeneration with an extra step.
+    ticks(&mut app, 30);
+    assert_eq!(gas(&app, me).current, 0.0, "the tank refilled itself without a request");
+
+    // 2. One request, one tick, exactly the amount asked for.
+    let id = *app.world().get::<PlayerId>(me).expect("a player carries an id");
+    app.world_mut().write_message(RefuelRequest { player: id, amount: 25.0 });
+    ticks(&mut app, 1);
+    assert!(
+        (gas(&app, me).current - 25.0).abs() < 1e-3,
+        "25 gas were asked for and the tank holds {}",
+        gas(&app, me).current
+    );
+
+    // 3. A request for somebody else's tank is not mine. The message carries a `PlayerId` for
+    //    this reason and for no other (`docs/multiplayer.md` rule 2).
+    let mate = second_player(&mut app, Vec3::new(30.0, 2.0, 0.0));
+    set_tank(&mut app, mate, 0.0);
+    let mate_id = *app.world().get::<PlayerId>(mate).expect("a player carries an id");
+    assert_ne!(mate_id, id, "two players, two ids");
+    app.world_mut().write_message(RefuelRequest { player: mate_id, amount: 10.0 });
+    ticks(&mut app, 1);
+    assert!(
+        (gas(&app, me).current - 25.0).abs() < 1e-3,
+        "somebody else's refuel landed in my tank: {}",
+        gas(&app, me).current
+    );
+    assert!(
+        (gas(&app, mate).current - 10.0).abs() < 1e-3,
+        "the request named him and his tank holds {}",
+        gas(&app, mate).current
+    );
+
+    // 4. And never above the tank, however much is asked for.
+    app.world_mut().write_message(RefuelRequest { player: id, amount: max * 10.0 });
+    ticks(&mut app, 1);
+    assert!(
+        (gas(&app, me).current - max).abs() < 1e-3,
+        "a station overfilled the tank: {} of {max}",
+        gas(&app, me).current
+    );
+
+    // 5. A full tank that keeps being asked writes NOTHING — the `Changed<Gas>` signal the HUD
+    //    reads must not tick sixty times a second for a number that does not move (§6 rule 6).
+    let before = gas_changes(&app);
+    for _ in 0..30 {
+        app.world_mut().write_message(RefuelRequest { player: id, amount: 5.0 });
+        ticks(&mut app, 1);
+    }
+    assert_eq!(
+        gas_changes(&app) - before,
+        0,
+        "30 requests against a full tank woke `Changed<Gas>` {} times",
+        gas_changes(&app) - before
     );
 }

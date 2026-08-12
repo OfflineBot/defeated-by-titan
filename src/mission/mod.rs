@@ -108,10 +108,12 @@ impl Plugin for MissionPlugin {
 
         // ---- the hub loop ------------------------------------------------------------------
         //
-        // All three in `PostStep`, and that is the whole ordering story: the trigger has to
-        // read the position **this** tick's integration produced, and the refill has to land
-        // after `vector::gas::gas_budget` (which sits in `Intent`) so that spending and
-        // refilling in one tick have a fixed order instead of a race.
+        // All three in `PostStep`, and that is the whole ordering story: both triggers have to
+        // read the position **this** tick's integration produced, not the one the player had
+        // before he walked. The station only *asks* — it writes `shared::RefuelRequest`, and
+        // `vector::gas::apply_refuel_requests` (`Intent`) applies it in the next tick, because
+        // `Gas` has exactly one writer and it is not this domain (`docs/architecture.md`,
+        // authority table; `FINDINGS.md` FIND-063).
         app.add_systems(
             FixedUpdate,
             (hub::deploy_on_contact, hub::refuel_at_stations)

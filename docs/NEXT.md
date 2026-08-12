@@ -7,11 +7,11 @@ first, then do the session ritual from [`CLAUDE.md`](../CLAUDE.md), then start a
 
 **Branch: `session-2026-08-09`.** `main` is still diverged — see `HANDOVER.md` §7.
 
-> ⚠️ **The literal first item is at the BOTTOM of this file, under `## 0.`** — `Gas` has two
-> writers since the hub landed, and that is the violation rule 4 exists to prevent. It is ~30 lines
-> and it should be done before anything else builds on the hub.
-> *(It sits at the bottom because appending with `>>` costs nothing to read and opening this file to
-> insert at the top costs ~4 000 tokens. Order by the number, not by the position.)*
+> ⚠️ **Read the `## ✅ DONE` section at the BOTTOM of this file first** — several items in the
+> numbered list below have since been closed, and the section at the end says which. The `Gas`
+> two-writer violation that used to stand here is **fixed** (`FIND-063`).
+> *(New entries are appended at the end because `>>` costs nothing to read while opening this file
+> to insert at the top costs ~4 000 tokens. **Order by the number, not by the position.**)*
 
 ---
 
@@ -366,3 +366,42 @@ ground slab whose top is exactly y = 0**, so every apron edge — street, square
 a **5 cm lip**, and the player spawns on one (he rests at 0.04996878 m instead of 0). The overlap is
 deliberate: it is what makes `world/map.rs` drop a generated lot. Whether a player at 40 m/s trips
 on it is unmeasured.
+
+---
+
+## ✅ DONE 2026-08-12 — items closed since this file was written
+
+- **§0 `Gas` single writer** — fixed. `mission::hub` writes `shared::RefuelRequest`; `vector::gas`
+  applies it in `apply_refuel_requests` and is the only thing that ever raises a tank. No domain
+  edge (the message lives in `shared`). One tick of latency by design = 0.67 gas at 40 gas/s.
+  Behaviour unchanged: `scripts/f070-hub.txt` still 20 asserts, exit 0, same marks at the same
+  ticks. `FIND-063`.
+  ⚠️ **One deliberate deviation:** `RefuelRequest` is registered in `VectorPlugin`, not in
+  `src/lib.rs` where the other eight messages live. The argument for it — a write path into `Gas`
+  should not exist without its applier — is good enough to keep, but it is inconsistent and the
+  next reader will wonder. Moving it is a safe one-liner in `src/lib.rs`.
+
+## 4. 🔴 THE SCRIPT CORPUS IS AIMED AT A MAP THAT NO LONGER SHIPS
+
+Flipping `current` to `ashgate` silently invalidated the evidence base. Measured, unmodified, today:
+
+| script | result in ashgate | what it proved |
+|---|---|---|
+| `scripts/f-flight-cut.txt` | `hook Right … found nothing anchorable (t=112)` → **9 of 21 asserts failed, exit 1** | **the core loop**: a cortex cut landed out of rope flight |
+| `scripts/game-full.txt` | 5 of 23 failed, all ACT 1 | the end-to-end mission run |
+
+Both are written against `map "Graybox": 79 blocks` and a church that is **not built here**. The
+mission still wins (ACTs 2–4 are falls, not swings), but **the flight half of the game currently
+has no passing evidence at all.**
+
+⚠️ **~30 other scripts also `warp` to graybox coordinates and have not been checked.**
+
+**This is not a repair, it is a re-aim**, and it needs the district's real geometry:
+- from spawn `(0, 2, 0)` a hook at pitch 70–80 finds nothing in any of eight yaws — **the ray flies
+  over the district**; `look 0 30` anchors at `(0.00, 58.00, −97.60)` (measured while fixing B-004).
+- `f-flight-cut`'s `hook right 0.74` dodge **is no longer needed** — B-004 is fixed, so the rope may
+  stay attached through the cut. Re-aiming it is also the chance to measure what the cut speed
+  becomes when it is not pinned to the 75.0 m/s clamp.
+
+**Do this before trusting any 🟧 that rests on a script**, and re-run the whole corpus once when it
+is done — a script that anchors nothing still exits 0 if its asserts never fire.

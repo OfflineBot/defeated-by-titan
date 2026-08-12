@@ -38,8 +38,9 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::shared::{
-    AimPoint, BodyId, BodyMask, Cli, Hook, HookReleased, HookState, IndexEntry, LocalPlayer,
-    PlayerId, ReleaseReason, RopeLength, Side, SimulationSystems, SpatialIndex, WarpPlayer,
+    AimPoint, BodyId, BodyMask, Cli, HitStop, HitZone, Hook, HookReleased, HookState, IndexEntry,
+    LocalPlayer, PlayerId, ReleaseReason, RopeLength, Side, SimulationSystems, SpatialIndex,
+    TitanHit, TitanId, WarpPlayer,
 };
 use defeated_by_titan::vector::aim::aim;
 
@@ -1019,5 +1020,79 @@ fn f004_releasing_the_hook_removes_the_joint() {
         distance > l0 * 2.0,
         "one second after letting go he is {distance:.2} m from the anchor, his rope was \
          {l0:.2} m — something is still holding him"
+    );
+}
+
+/// ★ **`B-004`, second face — a frozen player does not spool rope.**
+///
+/// `combat::hitstop` takes the body out of the solver for the impact frame, and before this
+/// test [`shorten_ropes`](defeated_by_titan::player::rope::shorten_ropes) went on shortening
+/// `limits.max` right through it: rope the player cannot follow, stored and paid back in the
+/// first tick he moves again. In `scripts/f-flight-cut.txt` that was **0.93 m over the two
+/// frozen ticks of a torso hit** — `vector.reel_speed_m_s` 28 / 60 Hz x 2 — cashed in as
+/// 74.700 m/s, which is `vector.max_speed_m_s` and therefore the clamp and not a speed anybody
+/// chose. A cortex freeze is 7 ticks and would store 3.27 m.
+///
+/// The criterion is the one number that can be read from outside: the enforced length does not
+/// move by a millimetre while `HitStop` is on the player, with the reel held down the whole
+/// time.
+#[test]
+fn b004_a_frozen_player_does_not_spool_rope() {
+    let mut app = app();
+    kill_gravity(&mut app);
+    let e = me(&mut app);
+    let d = data(&app);
+    let l0 = hang(&mut app, e, Vec3::new(0.0, 60.0, 0.0), 30.0);
+
+    // The reel, held from here to the end — the length has to fall before the freeze, or the
+    // test would be green on a rope that never moved at all.
+    hold_reel_in(&mut app);
+    ticks(&mut app, 6);
+    let before = rope_length(&app, e, Side::Left);
+    assert!(
+        before < l0 - 0.5,
+        "the reel took in {:.3} m in six ticks — nothing is being measured here",
+        l0 - before
+    );
+
+    // The cut. `TitanHit` is the message `combat::hitstop::begin` reacts to.
+    let id = *app.world().get::<PlayerId>(e).expect("the player carries his id");
+    app.world_mut().write_message(TitanHit {
+        titan: TitanId(1),
+        by: id,
+        zone: HitZone::Cortex,
+        speed_m_s: 30.0,
+    });
+    ticks(&mut app, 1);
+    assert!(
+        app.world().get::<HitStop>(e).is_some(),
+        "the hit did not freeze the player, so this test never met the bug"
+    );
+    let at_freeze = rope_length(&app, e, Side::Left);
+
+    // Five ticks inside the seven-tick cortex freeze.
+    ticks(&mut app, 5);
+    let inside = rope_length(&app, e, Side::Left);
+    assert!(app.world().get::<HitStop>(e).is_some(), "the freeze ended too early to measure");
+    let stored_m = at_freeze - inside;
+    assert_eq!(
+        inside, at_freeze,
+        "the rope was taken in by {stored_m:.4} m over five frozen ticks while the body could \
+         not follow — at {} m/s that is what the first unfrozen tick pays back as a clamped \
+         {} m/s (B-004)",
+        d.game.vector.reel_speed_m_s, d.game.vector.max_speed_m_s
+    );
+
+    // And it starts again when the freeze lifts — a fix that simply stops the reel is wrong.
+    ticks(&mut app, 6);
+    assert!(app.world().get::<HitStop>(e).is_none(), "the freeze never ended");
+    let after = rope_length(&app, e, Side::Left);
+    assert!(
+        after < inside,
+        "the reel never started again after the freeze: {inside:.3} m -> {after:.3} m"
+    );
+    println!(
+        "B-004 second face: {before:.3} m -> {at_freeze:.3} m at the freeze, {inside:.3} m five \
+         frozen ticks later, {after:.3} m six ticks after it lifted"
     );
 }

@@ -99,13 +99,15 @@
 //! every anchorable body in the world is a static block. Wiring the marker to the tip is
 //! three lines; it is in this job's report as an open item rather than as untested code.
 
-use avian3d::prelude::{DistanceJoint, Position, RigidBody, SubstepSchedule, Substeps};
+use avian3d::prelude::{
+    DistanceJoint, JointDisabled, Position, RigidBody, RigidBodyDisabled, SubstepSchedule, Substeps,
+};
 use bevy::prelude::*;
 
 use crate::data::GameData;
 use crate::shared::{
-    BodyGone, BodyId, Hook, HookAnchored, HookReleased, PlayerId, ReelSpeed, RopeLength, Side,
-    WarpPlayer,
+    BodyGone, BodyId, HitStop, Hook, HookAnchored, HookReleased, PlayerId, ReelSpeed, RopeLength,
+    Side, WarpPlayer,
 };
 
 /// One rope, as a component on the joint entity.
@@ -138,7 +140,7 @@ pub fn attach_ropes(
     data: Res<GameData>,
     mut messages: MessageReader<HookAnchored>,
     mut warped: MessageReader<WarpPlayer>,
-    players: Query<(Entity, &PlayerId, &Position)>,
+    players: Query<(Entity, &PlayerId, &Position, Has<RigidBodyDisabled>)>,
     ropes: Query<(Entity, &Rope)>,
 ) {
     let min_rope_m = data.game.vector.min_rope_m;
@@ -156,8 +158,8 @@ pub fn attach_ropes(
             );
             continue;
         }
-        let Some((body_entity, _, position)) =
-            players.iter().find(|(_, id, _)| **id == anchored.player)
+        let Some((body_entity, _, position, frozen)) =
+            players.iter().find(|(_, id, _, _)| **id == anchored.player)
         else {
             // A hook whose player vanished between `Intent` and `Drive`. Nothing to hang.
             continue;
@@ -196,7 +198,7 @@ pub fn attach_ropes(
             ))
             .id();
 
-        commands.spawn((
+        let rope = (
             Name::new(format!("rope_p{}_{:?}", anchored.player.0, anchored.side)),
             Rope {
                 player: anchored.player,
@@ -210,7 +212,25 @@ pub fn attach_ropes(
                 .with_local_anchor1(Vec3::ZERO)
                 .with_local_anchor2(Vec3::ZERO)
                 .with_limits(0.0, length_m),
-        ));
+        );
+        // `B-004`, third face — a hook that bites **inside** an impact frame. A disabled body
+        // has no island (`combat::hitstop`, header), and `add_joint` merges the islands of the
+        // two ends, so a live joint born here aborts the process in `merge_islands` with
+        // "Neither body … is in an island" instead of hanging on the player. Born disabled it
+        // is never registered in the first place (`avian3d-0.7.0/src/dynamics/solver/
+        // joint_graph/plugin.rs:79`, the `Without<JointDisabled>` filter), and
+        // `combat::hitstop::advance` takes the marker off with every other one when the freeze
+        // lifts. The rope exists from this tick on either way — its length and its
+        // `RopeLength` are the ones measured here.
+        //
+        // ⚠️ **In the bundle, not as a second `insert`.** `Commands::spawn` is applied on its
+        // own and triggers avian's `On<Add, DistanceJoint>` observer right there; a marker
+        // queued behind it arrives one command too late and the joint is already registered.
+        if frozen {
+            commands.spawn((rope, JointDisabled));
+        } else {
+            commands.spawn(rope);
+        }
 
         info!(
             "rope {:?} of player {} attached at {:.2} m (t={})",
@@ -326,7 +346,7 @@ pub fn detach_ropes(
 pub fn shorten_ropes(
     time: Res<Time<Substeps>>,
     data: Res<GameData>,
-    players: Query<(&PlayerId, &ReelSpeed)>,
+    players: Query<(&PlayerId, &ReelSpeed, Has<HitStop>)>,
     positions: Query<&Position>,
     mut ropes: Query<(&Rope, &mut DistanceJoint)>,
 ) {
@@ -335,10 +355,24 @@ pub fn shorten_ropes(
 
     for (rope, mut joint) in &mut ropes {
         let mut next_m = joint.limits.max;
+        let player = players.iter().find(|(id, _, _)| **id == rope.player);
+
+        // 0. `B-004`, second face — **a frozen player does not spool rope.**
+        //
+        // `combat::hitstop` takes the body out of the solver for the impact frame; the length
+        // is the one thing left that would keep moving. Measured before this line existed, on
+        // `scripts/f-flight-cut.txt`: two frozen ticks of the torso hit stop stored **0.93 m**
+        // of rope, which the very next unfrozen tick paid back as 74.700 m/s — `game.ron`'s
+        // `vector.max_speed_m_s`, i.e. the clamp and not a speed anybody chose. Both halves of
+        // the shortening are skipped, the reel included: the reel is not paid for either
+        // (`vector::gas` debits per tick, and a frozen tick reels nothing).
+        if player.is_some_and(|(_, _, frozen)| frozen) {
+            continue;
+        }
 
         // 1. The reel — a rate, and only while the button is held.
         if dt > 0.0
-            && let Some((_, reel)) = players.iter().find(|(id, _)| **id == rope.player)
+            && let Some((_, reel, _)) = player
         {
             let rate_m_s = reel.m_s[rope.side.index()];
             if rate_m_s > 0.0 {

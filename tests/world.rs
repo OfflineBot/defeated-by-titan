@@ -557,6 +557,146 @@ fn f003_no_anchorable_block_has_another_block_sitting_on_its_roof_centre() {
 }
 
 // ---------------------------------------------------------------------------------------
+// F-019 — the garrison headquarters, and the only kind of door a box world can have
+// ---------------------------------------------------------------------------------------
+
+/// The headquarters, as it stands in `assets/data/maps.ron: ashgate`. Spelled out here rather
+/// than searched for by name, because a *measurement against the file* is the whole point: if
+/// somebody moves the hall, these tests have to go red and be re-derived, not quietly follow.
+const HQ_DOOR_X_M: f32 = -15.75; // the middle of the 1.5 m facade
+const HQ_DOOR_HALF_Z_M: f32 = 3.0; // the opening is 6 m wide, centred on z = 0
+const HQ_FLOOR_TOP_M: f32 = 0.15; // the base slab, and the only 0.15 m floor in the map
+const HQ_ROOF_TOP_M: f32 = 11.5; // `scale.ron: architecture.heights_m house_large`
+
+/// Whether a point in metres lies **strictly inside** some cuboid of the plan.
+///
+/// Strict, for the same reason [`plan_blocks`]'s own overlap test is: standing on a floor means
+/// touching it, and a test that counts touching as "blocked" would report every doorway solid.
+fn solid_at(plan: &[BlockPlan], p: Vec3) -> Option<&BlockPlan> {
+    plan.iter().find(|k| {
+        let h = k.size_m * 0.5;
+        let d = (p - k.center_m).abs();
+        d.x < h.x && d.y < h.y && d.z < h.z
+    })
+}
+
+#[test]
+fn f019_the_headquarters_doorway_is_a_gap_a_player_really_fits_through() {
+    // ★ The user, 2026-08-12: „in das gebäude muss man rein laufen können".
+    //
+    // ⚠️ **This world has no subtraction**, so the door is the space between two wall blocks
+    // and there is nothing about it that a reader of `maps.ron` can see. `FIND-056` is what
+    // happens when that is forgotten: the wall's plinth was emitted across the full run while
+    // the courses above it carried the openings, and the gate measured 2 m of solid stone —
+    // green file, green tests, and a gate you walk into.
+    //
+    // So this measures the opening the way the player meets it: a 1.8 m capsule of 0.35 m
+    // radius, swept through the whole thickness of the facade.
+    let plan = plan();
+    let r = 0.35f32; // game.ron: player.radius_m
+    let h = 1.8f32; // game.ron: player.height_m
+
+    // 1. The opening is free, over the full capsule and the full wall thickness.
+    let mut blocked: Vec<String> = Vec::new();
+    for i in 0..=12 {
+        let x = HQ_DOOR_X_M - 0.75 + 1.5 * i as f32 / 12.0;
+        for j in 0..=8 {
+            let z = -(HQ_DOOR_HALF_Z_M - r) + 2.0 * (HQ_DOOR_HALF_Z_M - r) * j as f32 / 8.0;
+            for k in 0..=6 {
+                let y = HQ_FLOOR_TOP_M + h * k as f32 / 6.0;
+                if let Some(b) = solid_at(&plan, Vec3::new(x, y, z)) {
+                    blocked.push(format!("{} at ({x:.2}, {y:.2}, {z:.2})", b.name));
+                }
+            }
+        }
+    }
+    assert!(
+        blocked.is_empty(),
+        "{} sample points inside the 6 x 4.5 m gate are solid — that is not a door: {blocked:#?}",
+        blocked.len()
+    );
+
+    // 2. And the facade beside it is NOT free, or "there is a door" would be "there is no
+    //    wall". This is the control the plinth story never had.
+    for z in [-8.0f32, 8.0] {
+        assert!(
+            solid_at(&plan, Vec3::new(HQ_DOOR_X_M, 1.0, z)).is_some(),
+            "the facade at z = {z} is open too — the hall has no east wall, only a gap"
+        );
+    }
+
+    // 3. The floor really is a floor, and it is the one the run brackets against. Nothing
+    //    else in this map stands at 0.15 m (ground 0.0, aprons 0.05, quays and bridges 0.4),
+    //    which is what makes `assert height > 0.10` in `scripts/f019-hq.txt` a position and
+    //    not a coincidence.
+    let floor = solid_at(&plan, Vec3::new(-31.0, HQ_FLOOR_TOP_M - 0.05, 0.0))
+        .expect("no floor slab under the middle of the hall");
+    assert!(
+        (floor.center_m.y + floor.size_m.y * 0.5 - HQ_FLOOR_TOP_M).abs() < 1e-4,
+        "the hall floor tops out at {} m, not at {HQ_FLOOR_TOP_M}",
+        floor.center_m.y + floor.size_m.y * 0.5
+    );
+
+    // 4. An interior you can walk around in: the aisle from the gate to the back wall is
+    //    clear over its whole 29 m, at head height and at knee height.
+    for i in 0..=28 {
+        let x = -16.5 - i as f32;
+        for y in [HQ_FLOOR_TOP_M + 0.5, HQ_FLOOR_TOP_M + 1.7] {
+            assert!(
+                solid_at(&plan, Vec3::new(x, y, 0.0)).is_none(),
+                "the aisle is blocked at ({x}, {y}, 0) — {:?}",
+                solid_at(&plan, Vec3::new(x, y, 0.0)).map(|k| k.name.clone())
+            );
+        }
+    }
+}
+
+#[test]
+fn f019_the_headquarters_roof_is_the_anchor_and_the_interior_is_not_a_tagged_lie() {
+    // Two claims, and the second is the one that costs something to keep.
+    //
+    // 1. **The roof is hookable**, so arriving by air is the natural way in. It is the only
+    //    tagged surface of the building, it is `sand_brown` like every other anchorable slab
+    //    in this map, and it sits at 11.5 m.
+    // 2. **Nothing inside is tagged.** `tests/vector_aiming.rs::
+    //    f002_every_tagged_surface_in_the_map_is_reachable_by_free_aiming` walks every
+    //    anchorable block with a real ray; a tagged wall inside a closed hall is a surface
+    //    nothing outside can reach, and that is a lie in the map whichever test happens to be
+    //    pinned where. The rule is cheap to hold and expensive to discover.
+    let plan = plan();
+
+    let roof = plan
+        .iter()
+        .find(|k| {
+            (k.center_m.y + k.size_m.y * 0.5 - HQ_ROOF_TOP_M).abs() < 1e-4
+                && (k.center_m.x + 31.0).abs() < 1e-4
+                && k.center_m.z.abs() < 1e-4
+        })
+        .expect("no roof slab over the headquarters");
+    assert!(roof.anchorable, "the headquarters roof is not anchorable — you cannot land on it");
+    assert!(roof.solid, "the roof is not solid — you would fall through it");
+
+    // Everything else standing in the hall's footprint, above the floor: untagged.
+    let tagged: Vec<&str> = plan
+        .iter()
+        .filter(|k| {
+            !std::ptr::eq(*k, roof)
+                && k.anchorable
+                && k.center_m.x > -47.0
+                && k.center_m.x < -15.0
+                && k.center_m.z.abs() < 13.0
+                && k.center_m.y > HQ_FLOOR_TOP_M
+        })
+        .map(|k| k.name.as_str())
+        .collect();
+    assert!(
+        tagged.is_empty(),
+        "{tagged:?} are tagged inside the headquarters — a rope fired from outside can never \
+         reach them, and `f002_every_tagged_surface_...` would be measuring a lie"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
 // T-036a / B-001 — the index, and the ids without which nothing can be hooked
 // ---------------------------------------------------------------------------------------
 

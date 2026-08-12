@@ -37,11 +37,18 @@
 //!   costing gas in the next one — one tick of delay in exchange for an order that does not
 //!   depend on which system Bevy happens to run first.
 //!
-//! ## This file only ever subtracts (`docs/QUESTIONS.md` Q-033)
+//! ## The budget only ever subtracts; gas comes back only when a station asks (Q-033)
 //!
-//! **There is no refill here, and its absence is a decision.** The user answered it on
-//! 2026-08-12: *„gas refillt nur im main gebäude an bestimmten stationen/objekten"* — gas
+//! **[`gas_budget`] has no refill in it, and its absence is a decision.** The user answered it
+//! on 2026-08-12: *„gas refillt nur im main gebäude an bestimmten stationen/objekten"* — gas
 //! comes back **at a place you go to**, never on a timer.
+//!
+//! That place is `mission::hub`'s refuel station, and since the same day it **asks**:
+//! [`apply_refuel_requests`] takes a `RefuelRequest` and is the only thing in the game that
+//! ever raises a tank. It sits in this file because `Gas` has **one** writer and it is this
+//! file — a station that called `Gas::refill` itself was the rule-4 violation this repair took
+//! back out (`docs/FINDINGS.md` FIND-063). Nothing about the answer to Q-033 changes with it:
+//! no rate, no timer, no idle branch — a tank rises only while somebody stands in a station.
 //!
 //! Between 2026-08-10 and then this file did regenerate the tank while nobody was spending,
 //! after a `gas_regen_delay_s` pause. That was an assumption made under the autonomous rule
@@ -65,7 +72,46 @@
 use bevy::prelude::*;
 
 use crate::data::{GameData, GasConsumer};
-use crate::shared::{Buttons, Gas, GasGrant, Hook, Intent};
+use crate::shared::{Buttons, Gas, GasGrant, Hook, Intent, PlayerId, RefuelRequest};
+
+/// Puts gas back — **the only thing in the game that ever raises a tank** (Q-033).
+///
+/// The gas comes back at a place you walk to, and the place is `mission::hub`'s refuel station.
+/// But `Gas` has one writer and it is this file (`docs/architecture.md`, authority table), so
+/// the station **asks** with a [`RefuelRequest`] and this applies it. Until 2026-08-12 the
+/// station called `Gas::refill` itself; that was a second writer on one field, disjoint from
+/// this one only *by phase*, and "disjoint by phase" is the argument that stops being true over
+/// a wire (`docs/FINDINGS.md` FIND-063).
+///
+/// Three properties this has to keep, and each one is a test:
+///
+/// - **A request names a player and fills that player's tank.** Not `LocalPlayer`, not
+///   `.single()` — `docs/multiplayer.md` rule 2. Two players in one station are two requests.
+/// - **It never raises a tank above `Gas::max`**: `Gas::refill` caps, and a station that keeps
+///   asking after the tank is full changes nothing.
+/// - **`set_if_neq`, exactly like [`gas_budget`]**: a full tank in a station must not report
+///   `Changed<Gas>` sixty times a second for a number that did not move (§6 rule 6).
+///
+/// **One tick late, deliberately.** The station sees the player in `PostStep` and this runs in
+/// the next tick's `Intent`. Ordering it into the same tick would mean a `vector` system
+/// ordered against a `mission` system — a hidden edge past the allow list — and the whole point
+/// of the repair was not to buy an edge. It is the same trade the `Hook` read above makes, and
+/// at `gear.ron: resupply.gas_per_s` of 40 one tick is 0.67 gas.
+pub fn apply_refuel_requests(
+    mut requests: MessageReader<RefuelRequest>,
+    mut players: Query<(&PlayerId, &mut Gas)>,
+) {
+    for request in requests.read() {
+        for (id, mut gas) in &mut players {
+            if *id != request.player {
+                continue;
+            }
+            let mut tank = *gas;
+            tank.refill(request.amount);
+            gas.set_if_neq(tank);
+        }
+    }
+}
 
 /// Debits this tick's gas and writes [`GasGrant`].
 ///

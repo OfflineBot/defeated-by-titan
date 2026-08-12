@@ -224,3 +224,22 @@ everything is green. Doubt moves the stage down, not up.
 | Nothing is measured | **partly closed 2026-08-09:** on machine B (`offlinebot`) `nproc` = 16, but the width does not hang on that — **`cargo` takes a lock on `target/`**, so building agents wait for each other. Four at a time is the usable limit, not sixteen. For machine A the number is still 🟨. |
 
 Related: [workflow](workflow.md) · [performance](performance.md) · [STATUS](../STATUS.md) · [TODO](../TODO.md) · [QUESTIONS](../QUESTIONS.md) · [FINDINGS](../FINDINGS.md) · [BUGS](../BUGS.md) · [ACCEPTANCE](../ACCEPTANCE.md) · [ROADMAP](../ROADMAP.md) · [architecture](../architecture.md) · [conventions](../conventions.md) · [environment](../environment.md) · [README](../README.md)
+
+## An authority rule is invisible to a whole-app test
+
+Measured 2026-08-12 (`docs/FINDINGS.md` FIND-063). `mission::hub` wrote `Gas` directly for a day,
+against rule 4's "one field, one writer". **Every hub test stayed green through the violation and
+through its repair** — all of them build the whole app, and in a world where every domain is
+present, "who wrote this value" and "was the value right" are the same question.
+
+**The shape that makes it falsifiable: run the domain under test with the other domain MISSING.**
+`tests/mission.rs::f072_a_station_asks_for_gas_and_never_writes_the_tank_itself` builds a station
+and a player with **no `vector` plugin in the app**. Before the fix the tank rose by 39.33; after
+it, by 0.0 — because nothing was left that was allowed to raise it.
+
+**The general rule:** a test of a *behaviour* wants the whole app; a test of an *authority* wants
+the app with a hole in it. If a rule says "only X may write F", the test that proves it is the one
+where X is not there.
+
+This is the same family as the older lesson that a test which builds its own world proves nothing
+about the world the player is in — both are about the app under test not matching the claim.

@@ -48,8 +48,28 @@
         camera_kick_deg: 3.5,
         camera_kick_s: 0.18,
     ),
+    // What a resupply point of the main building gives back, per second of standing at it.
+    // **Where** the points are is `missions.ron: hub`, what they DO is here (§4).
+    //
+    // ⚠️ UNTUNED, all four. The gas pair is from 2026-08-12; the blade pair landed with the
+    // headquarters and `F-033 Klingenhaltbarkeit`, which had no number anywhere in the
+    // repository before this line — the same hole `feel` above was opened for.
     resupply: (
         gas_per_s: 40.0,
         range_m: 4.0,
+
+        // A fresh pair every two thirds of a second. It is deliberately NOT instant: standing
+        // at the rack has to be a decision with a duration, the same way refuelling is, or the
+        // supply run stops being a run. Five pairs from empty is 3.3 s.
+        //
+        // Fractional on purpose — the arithmetic runs on a float `charge` and only whole pairs
+        // ever reach `Blades::pairs_left`. A rate of 1.0 would hide that the accumulator
+        // exists, and it is the part that has to be right at 60 Hz.
+        blade_pairs_per_s: 1.5,
+
+        // The pair in the harness is honed back to 1.0 sharpness at this rate. Faster than the
+        // pairs come, because a half-blunt blade is the thing you fix before you top the
+        // harness up — 0.0 to 1.0 takes half a second.
+        sharpen_per_s: 2.0,
     ),
 )

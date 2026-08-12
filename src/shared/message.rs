@@ -77,6 +77,25 @@ pub struct WarpPlayer {
     pub pos_z: f32,
 }
 
+/// **Put gas back into a player's tank** — a refuel station asking, never a station writing.
+///
+/// `Gas` has exactly one writer, `vector::gas` (`docs/architecture.md`, authority table). A
+/// refuel station is hub furniture, i.e. `mission`, so it cannot fill a tank itself without
+/// becoming a second authority on one field — which is a rule-4 violation everywhere and, over
+/// a wire, two machines disagreeing about how much fuel a player has (`FINDINGS.md` FIND-063).
+/// So the station sends this and `vector::gas::apply_refuel_requests` is the only thing that
+/// ever touches the tank.
+///
+/// `amount` is **one tick's worth of gas, already multiplied by `dt`** — the sender holds the
+/// rate (`gear.ron: resupply.gas_per_s`, copied onto the station at spawn) and the receiver
+/// holds the tank. Capped at `Gas::max` by [`Gas::refill`](super::state::Gas::refill), so a
+/// station may keep asking for a full tank without anything happening.
+#[derive(Message, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RefuelRequest {
+    pub player: PlayerId,
+    pub amount: f32,
+}
+
 /// One line in the log to line a screenshot up against (`mark anchored`).
 #[derive(Message, Clone, Debug, Serialize, Deserialize)]
 pub struct Mark {

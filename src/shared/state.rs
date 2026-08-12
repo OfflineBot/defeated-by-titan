@@ -21,9 +21,10 @@ use serde::{Deserialize, Serialize};
 ///
 /// The user decided it on 2026-08-12: *"gas refillt nur im main gebäude an bestimmten
 /// stationen/objekten"*. Refuelling is **a place you go to**, not a rate. So the simulation
-/// has exactly one writer that ever *lowers* this number (`vector::gas::gas_budget`) and, for
-/// now, none that raises it — [`refill`](Self::refill) exists for the stations that are still
-/// to be built and is called by nobody. A field like `regen_delay_left_s` used to hang here
+/// has exactly one writer, `vector::gas`: it *lowers* this number in `gas_budget` and *raises*
+/// it in `apply_refuel_requests`, and nothing else touches it. A refuel station belongs to
+/// `mission` and therefore **asks** — [`RefuelRequest`](super::message::RefuelRequest), applied
+/// one tick later (`docs/FINDINGS.md` FIND-063). A field like `regen_delay_left_s` used to hang here
 /// for a timer-shaped regeneration; it is gone on purpose, and
 /// `tests/vector_gas.rs::f018_an_idle_tank_never_refills_on_its_own` keeps it gone.
 ///
@@ -67,10 +68,11 @@ impl Gas {
 
     /// Puts `amount` back, **capped at [`max`](Self::max)**.
     ///
-    /// ⚠️ **Nothing in the simulation calls this today, and that is the design** (Q-033): the
-    /// refuel stations of the main building are the only thing that ever will. Whoever wires
-    /// it to a timer, an idle branch or a tick is undoing the user's decision — see the type's
-    /// doc.
+    /// ⚠️ **Exactly one system in the simulation calls this** (Q-033):
+    /// `vector::gas::apply_refuel_requests`, on a `RefuelRequest` that a refuel station of the
+    /// main building sent. Whoever wires it to a timer, an idle branch or a tick is undoing the
+    /// user's decision — and whoever calls it from another domain has made `Gas` a field with
+    /// two writers, which is what 2026-08-12 cost a repair (see the type's doc).
     pub fn refill(&mut self, amount: f32) {
         if amount.is_finite() && amount > 0.0 {
             self.current = (self.current + amount).min(self.max);

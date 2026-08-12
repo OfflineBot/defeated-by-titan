@@ -2115,3 +2115,278 @@ and rests at y = 0.04996878 — the exact number in the red assert. **The open q
 map's owner:** the 5 cm is a lot generator's tool, but it is also a 5 cm lip along every apron
 edge (main street, square, boulevard, quays) in a game whose whole subject is momentum on the
 ground. Whether a player at 40 m/s trips on it has not been measured.
+
+---
+
+## FIND-063 — `Gas` has one writer again: a refuel station asks, `vector` fills, and the seam cost one tick
+
+**The violation, in one sentence:** the hub of 2026-08-12 (FIND-057 §2) let
+`mission::hub::refuel_at_stations` call `Gas::refill` itself, so a field with a named owner
+(`docs/architecture.md`: `vector`) had **two writers**. It was taken deliberately and written
+down rather than hidden, with three arguments that bounded it — fixed system order, only ever
+adding, hub phase only. **Every one of those arguments has the form "the two never meet."**
+That is precisely what stops being true over a wire: two writers that never meet locally are
+two authorities on one number remotely, and the divergence they produce is the kind nobody
+reproduces (§5 rule 4).
+
+### The shape, and the two things it deliberately does not do
+
+```
+mission::hub::refuel_at_stations   (PostStep)   →  shared::RefuelRequest { player, amount }
+                                                        ↓ next tick
+vector::gas::apply_refuel_requests (Intent)     →  Gas::refill, set_if_neq, capped at max
+```
+
+- **No domain edge was bought.** The message lives in `shared`, which is free to everyone —
+  the same solution `TitanState`, `ModelAnchors` and `WarpPlayer` already use. `tests/domains.rs`
+  is green with no line added to the allow list.
+- **The rate stayed in the file.** `gear.ron: resupply.gas_per_s`/`range_m` are copied onto
+  `RefuelStation` at spawn as before; the message carries `gas_per_s * dt`, so the applier needs
+  no `GameData` and knows nothing about what a station is (§4).
+- **`Gas::refill` still exists.** Only its caller moved. It is now called from exactly one
+  place in the simulation, and `src/shared/state.rs` says which.
+
+### The cost, measured and not estimated: **one tick, and it is not removable without an edge**
+
+The request is written in `PostStep` and read in the **next** tick's `Intent`. Applying it in
+the same tick would mean ordering a `vector` system against a `mission` system — a hidden edge
+past the allow list — and leaving both in `PostStep` unordered would make "does the refuel land
+this tick" a coin flip at 60 Hz, which is the very thing being repaired. At
+`resupply.gas_per_s = 40` one tick is **0.67 gas**. `vector::gas` already carries the identical
+trade for its one-tick-old `Hook` read, for the identical reason.
+
+### The test that makes "one writer" more than a sentence in a doc
+
+`tests/mission.rs::f072_a_station_asks_for_gas_and_never_writes_the_tank_itself` builds a bare
+app with `MinimalPlugins`, a station, a player — **and no `vector` at all**. A tank that rises
+there can only have been written by `mission`.
+
+| run | result |
+|---|---|
+| against the code of the morning (station calls `Gas::refill`) | **RED**: `left: 39.333332`, `right: 0.0` — one second in a station, no `vector` in the app |
+| after the repair | **green**, and the second half of the same test (applier added) gives `39.999` of the station's own 40.0 gas/s |
+| `requests.write(...)` in the station replaced by one line that drops the writer | **RED**: *"a second in the station gave 0 of the station's own 40.0 gas/s — the request is written but nothing applies it"* |
+
+⚠️ **What the whole-app tests could not see, and this is the finding under the finding:** every
+existing hub test (`f072_gas_comes_back_at_a_station_and_nowhere_else`, `…does_not_follow_you_
+into_a_sortie`) stayed green through the violation *and* through the repair, because they run
+the real app, where both halves are always present. A rule about **who** writes a field is
+invisible to any test that runs everybody. It needs an app with the other domain missing.
+
+### Behaviour, before and after: identical
+
+`scripts/f070-hub.txt` — **20 asserts held, 986 ticks, exit 0**, the same marks at the same
+ticks (`f072-gas-burnt` t=232, `f072-refuelled` t=330, `f072-won` t=753, `f072-home` t=955).
+`cargo test --test mission` 22 passed, `--test vector_gas` 18 passed, `--test domains` 3 passed.
+
+### Two things reported, not done
+
+1. **`shared::RefuelRequest` is registered in `VectorPlugin`, not in `src/lib.rs`** where the
+   other eight messages stand — `src/lib.rs` is the main head's file. There is an argument for
+   it staying there (a write path into `Gas` should not be able to exist without the one system
+   that applies it, and that system is `vector`'s), but it is a deviation from the convention
+   and the main head may prefer the line in `lib.rs`. Registering a message twice is a no-op in
+   Bevy, so moving it costs nothing.
+2. **`docs/NEXT.md` §0 still says this is to be done.** Not this job's file.
+
+---
+
+## FIND-062 — avian removes an island out from under its own joints, and `RigidBodyDisabled` is the trigger
+
+**Measured 2026-08-12 [offlinebot]**, closing `B-004`. The rule this leaves behind is one line
+long and it holds for every body in this game, not just the player:
+
+> **A body that is about to get `RigidBodyDisabled` must have every joint it is an end of
+> disabled first — and re-enabled last.** avian 0.7 does not do it for you and does not warn.
+
+### The mechanism, read out of avian's source and not guessed
+
+1. `IslandPlugin`'s `On<Insert, (Disabled, RigidBodyDisabled)>` observer strips the body's
+   `BodyIslandNode` (`avian3d-0.7.0/src/dynamics/solver/islands/mod.rs:126-136`).
+2. `BodyIslandNode::on_remove` takes the last body out of the island and **removes the island
+   while its `joint_count` is still 1** (`islands/mod.rs:1338-1385`). Nothing on that path looks
+   at joints. The rope's anchor is `RigidBody::Static` and carries no island node at all, so the
+   player is the island's only body and the island always dies.
+3. The freeze lifts, the body gets a fresh `BodyIslandNode`, and `create_island` **recycles that
+   slot** — `joint_count` back at 0.
+4. The joint is despawned, `remove_joint` decrements a zero, `debug_assert!(island.joint_count
+   > 0)` fires (`islands/mod.rs:786`) and the process exits **101**.
+
+That is the whole measured bracket in `scripts/f-flight-cut.txt`'s header: a release **inside**
+the impact frame was clean because the slot had not been handed out a second time yet.
+
+**There are three faces of it, not one**, and only the first was known:
+
+| # | trigger | panic |
+|---|---|---|
+| 1 | joint attached, then a hit stop, then the rope let go | `assertion failed: island.joint_count > 0`, `islands/mod.rs:786` |
+| 2 | a hook that **bites during** the impact frame | `Neither body 1439v0 nor 441v0 is in an island`, `islands/mod.rs:820` — `add_joint` merges the islands of both ends and a disabled body has none |
+| 3 | `player::rope::shorten_ropes` spooling through the freeze | no panic, a **74.700 m/s** clamp artefact — see `B-004` |
+
+Face 2 was found by writing the test for face 1 and asking what else touches the same pair. It
+is reachable in the running game with no unusual input at all: two hooks, one of them fired
+while a cut is landing.
+
+### The two things that cost time, and are worth writing down
+
+**A marker in a second `insert` arrives one command too late.** `commands.spawn(bundle)` is
+applied on its own and triggers avian's `On<Add, DistanceJoint>` observer right there, so
+`spawn(...)` followed by `.insert(JointDisabled)` registers the joint **live** for the length of
+one command and panics in `merge_islands`. It has to be in the bundle:
+`commands.spawn((rope, JointDisabled))`. This cost one red-test cycle and the failure looked
+exactly like "the fix does not work".
+
+**The order of two `Commands` is the fix.** Freezing queues `JointDisabled` **before**
+`RigidBodyDisabled`; thawing removes `RigidBodyDisabled` **before** `JointDisabled`. Commands are
+applied in queue order, so both directions are just "the joint is never registered against a body
+without an island". Nothing else was needed — no second freeze mechanism, no releasing the rope
+around the impact frame, and `F-034`'s `Time<Virtual>` argument is untouched.
+
+### Foreign territory, found on the way and **not** repaired here
+
+**`scripts/f-flight-cut.txt` no longer anchors anything and has not since `6e88eae`
+("F-003 world: ashgate is a district now").** Run unmodified today, `[offlinebot]`:
+
+```text
+map "Ashgate": 1000 blocks built (188 placed, 812 generated), 743 of them anchorable
+hook Right of player 1 found nothing anchorable (t=112)
+script run finished: 9 of 21 asserts failed          exit 1
+```
+
+Its geometry is written against `map "Graybox": 79 blocks` and the church at
+`(60, 17.5, −60)` — a `maps.ron` entry that is no longer the map that is built. **`B-004`'s
+documented repro therefore cannot be run from that file at all**, which is why the in-game
+evidence below uses a script rebuilt for Ashgate. The file belongs to another job (`scripts/` is
+not this one's), and re-aiming it is a measurement of its own: three of its numbers (the 28.4 m/s
+entry speed, the 5.663 m height, the whole husk placement) are derived from the church's
+position.
+
+A second observation from the same probe, for whoever re-aims it: **from the spawn point at
+`(0, 2, 0)` a hook at pitch 70-80 finds nothing anchorable in any of eight yaws** — the ray flies
+over the district. `look 0 30` anchors at `(0.00, 58.00, −97.60)`. Ashgate is wide and low where
+the graybox was narrow and tall, and every near-vertical rope in `scripts/` is aimed at a
+geometry that is gone.
+
+### Evidence
+
+`tests/combat.rs::b004_a_cut_landed_on_a_rope_survives_letting_the_rope_go` ·
+`b004_a_hook_that_bites_during_the_freeze_does_not_abort_the_process` ·
+`b004_the_freeze_is_still_bit_identical_with_a_rope_attached` ·
+`tests/vector_rope.rs::b004_a_frozen_player_does_not_spool_rope` — all four red first, with the
+panics quoted above. `cargo test --test combat` 23 passed, `--test vector_rope` 13 passed (4
+ignored), `--test player` 25 passed. In the running game (script in the scratchpad, Ashgate
+geometry): `cut titan 1 Torso at 28.05 m/s (t=160)` under a rope, `hook Right ... let go:
+Released (t=453)` — 293 ticks after the impact frame — `531 ticks`, **exit 0**.
+
+---
+
+## FIND-064 — The main building exists, and a box world can only make a door out of two walls
+
+**The user, 2026-08-12:** *„auch das main gebäude in dem der gas und schwert nachschub ist muss da
+sein (in das gebäude muss man rein laufen können. drinnen sind die nachschübe)"*. Until today the
+hub was three pads on open ground and `F-033 Klingenhaltbarkeit` was ⬜ — blades counted **down**
+and there was no code anywhere that could give one back.
+
+Both halves are now built: `assets/data/maps.ron: ashgate` carries the garrison headquarters
+(**1 000 blocks, 188 placed, 812 generated, 743 anchorable**), and `src/blades/resupply.rs` carries
+the arithmetic that restores a harness. `scripts/f019-hq.txt` holds **13 asserts, exit 0, 1 400
+ticks**; `docs/images/f019-hq.png` is the shot from the player's own spawn point.
+`--test world` 15, `--test data` 47, `--lib resupply` 3, `cargo check` clean, `tools/norms.py`
+clean (534 checks).
+
+### 1. Where it stands, and why the site had no free parameters
+
+West side of the main street, one block inside the inner gate, market square and church directly
+opposite: the civic centre, and the point every sortie passes anyway. **All four bounds are
+forced**, which is worth writing down because it looks like a choice:
+
+    x >= -47   the canal quay ends at -55 and the bridges reach -52
+    x <= -15   the main street apron is -15..15; the facade is flush with it, so the door
+               opens onto the pavement and the spawn point (0, 2, 0) looks straight at it
+    |z| <= 13  the gantry columns of the swing spine stand at z = +-13.5..21.5, x = -18..-10
+
+That last one is why the hall is **26 m deep and not 40**, and it is half a metre of clearance.
+Outer 32 x 26 m, hall 29 x 23 m clear, 10 m to the eaves, ridge **11.5 m** = `scale.ron:
+architecture.heights_m house_large`, so `landmark: false` still holds and `t005_placed_blocks_
+stay_residential_too` still applies to it. **No height was invented** — FIND-060 §2 flagged that
+the user has written 4.5 / 8 / 11.5 / 12 / 35 and nothing between 12 and 35, and a landmark height
+for this building is his call, not mine.
+
+### 2. The three things the box world charged for, and one of them is new
+
+- **The door is a gap.** East facade = south segment + north segment + a **lintel that starts at
+  y = 4.5**, giving a 6 x 4.5 m opening. This is `FIND-056` §3's plinth story exactly: a single
+  decorative course across the run and the gate measures solid.
+  `tests/world.rs::f019_the_headquarters_doorway_is_a_gap_a_player_really_fits_through` sweeps a
+  1.8 m / 0.35 m capsule through the full wall thickness at 13 x 9 x 7 sample points **and asserts
+  the facade beside it is solid** — without that control, "he walked in" only proves the map is
+  hollow.
+- **⚠️ NEW: a room needs an apron or the generator builds houses inside it.** A 21 m lot is dropped
+  when a *placed* block overlaps it — and an 8 m row house under a roof slab at 11.0 m **does not
+  overlap**. Four walls and a roof therefore enclose a volume the layout happily fills. The base
+  slab (32 x 26 x 0.3 m, top at 0.15 m) is what deletes them, and it is the same trick FIND-056
+  used for the street and the square, applied to an interior for the first time.
+- **Everything but the roof is `anchorable: false`**, and that is forced too: the roof stands over
+  the centre of every wall, and `f003_no_anchorable_block_has_another_block_sitting_on_its_roof_
+  centre` calls a tagged surface with something over it a lie. The roof is the anchor — 32 x 26 m
+  of `sand_brown` at 11.5 m, hooked from 33 m in ACT 3.
+
+### 3. `height` is the only position the script language has, and 0.15 m is what makes it one
+
+The vocabulary is `speed · height · gas · titans · tick · health · kills · phase · rope` — **there
+is no x or z**. So the bracket is built out of the two things that exist:
+
+- **y:** the hall floor tops out at **0.15 m**, and that is the only 0.15 m in the map (ground 0.0,
+  every apron 0.05, quays and bridges 0.4). `assert height > 0.10` cannot be satisfied anywhere
+  else; `assert height < 0.10` says *still on the pavement*. The step at the door is 0.10 m against
+  a 0.35 m capsule radius — **below the radius, so the capsule rides over it** instead of catching.
+  Measured: he walks it at full speed, first try.
+- **x:** the facade stands 7 m from the warp point, so a player stopped by it is at 0 m/s after
+  1.2 s. `assert speed > 5.0` at t+3.0 s is therefore *"he is west of the facade"*, and
+  `assert speed < 0.5` at t+9.2 s is *"he stopped at the back wall, 37.5 m out"*.
+
+⚠️ **This is a proxy and it should not have to be.** Two metrics — `x` and `z` on the local player
+— would turn four inferential asserts into two direct ones, and `src/debug/script.rs` was foreign
+territory in this hand. → `docs/QUESTIONS.md` / whoever owns `debug` next.
+
+### 4. Blade resupply: the API exists, the caller deliberately does not
+
+`Blades` lives in `shared/` and **`blades` is its only writer** — `Gas` cost a repair on 2026-08-12
+for having two (FIND-063), and this does not get to be the second. So `blades::resupply::restock`
+is a free function in the owning domain, not a method on the type:
+
+    restock(&mut Blades, &mut RestockCarry, &ResupplyTuning, capacity_pairs, dt_s) -> bool
+
+The pair **in the harness is honed first**, then whole spares are added — a player who runs in on a
+blunt blade wants the thing in his hand to work before he wants a fifth spare. `RestockCarry` is
+not decoration: `pairs_left` is a `u8` and 1.5 pairs/s at 60 Hz is 0.025 per tick, so without an
+accumulator the rate silently rounds to zero and the rack looks broken. New in
+`gear.ron: resupply`: **`blade_pairs_per_s: 1.5`** (five pairs from empty in 3.3 s) and
+**`sharpen_per_s: 2.0`** — ⚠️ UNTUNED, and `F-033` had *no number anywhere in the repository*
+before them.
+
+**The caller is one system and it is not in this hand**, on purpose — `src/mission/hub.rs`,
+`src/shared/**` and `docs/architecture.md` were all being written by other work:
+
+    shared::message   BladeRestockRequest { player: PlayerId, seconds: f32 }
+    mission::hub      sends it inside `gear.ron: resupply.range_m`
+    blades::resupply  reads it in FixedUpdate and calls `restock` — the ONLY caller
+
+Inventing the request type in `blades` instead would open a `mission -> blades` edge that
+`tests/domains.rs` falls over on. **The station coordinates the two racks are built for stand in
+`missions.ron` next to the three that are still on the pavement** — `(-42.0, 0.15, -6.5)` gas,
+`(-42.0, 0.15, 6.5)` blades. They were **not** moved there in this hand because
+`scripts/f070-hub.txt` walks 6 m up +Z onto the station at `(0, 0, 6)` and asserts `gas > 299`
+there; moving it without re-cutting that script turns a green feature red for a reason that is not
+in the game. **Rollback point: those three lines of `missions.ron`.**
+
+### 5. What the picture does and does not show
+
+`docs/images/f019-hq.png` is taken from the spawn point looking west, 15 m from the door: the
+facade fills the frame, the `sand_brown` roof band runs along the top, and **through the opening
+you can see the hall floor, a post and both racks**. It reads unmistakably as a building with
+supplies inside that you walk into.
+⚠️ **It does not show the building's mass**, and two three-quarter views from the market square
+were taken and thrown away first: the gantry spine stands at x = +-14 over the whole main street,
+so every angle that shows the hall as a solid has a 56 m column across the foreground. That is the
+map, not the building — but it means nobody has yet *seen* the headquarters as an object.

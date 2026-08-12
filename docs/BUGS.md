@@ -420,3 +420,59 @@ the evidence for the hook.
 
 Related: [`docs/FINDINGS.md`](FINDINGS.md) (foreign mistakes) · [`docs/STATUS.md`](STATUS.md) ·
 [`docs/lessons/`](lessons/)
+
+---
+
+### `B-004` — **FIXED** on 2026-08-12 (the entry above is left standing as it was found)
+
+**Fixed in two files, `src/combat/hitstop.rs` and `src/player/rope.rs`.** Four tests were red
+first, and red again with each half of the fix taken back out (rule 5, step 3).
+
+**The cause, one level deeper than the entry above had it.** It is not that avian dislikes a
+joint on a disabled body — it is that disabling the body **destroys the island the joint is
+counted in**: `On<Insert, (Disabled, RigidBodyDisabled)>` strips `BodyIslandNode`
+(`avian3d-0.7.0/src/dynamics/solver/islands/mod.rs:126-136`), whose `on_remove` hook removes the
+now-empty island *with `joint_count` still at 1* (`islands/mod.rs:1338-1385`), and the fresh node
+the thaw creates **recycles that same slot** with the count back at 0. The despawn then
+decrements a zero. Full derivation: `docs/FINDINGS.md` FIND-062.
+
+**The fix — avian's own `JointDisabled`, and the ORDER is the whole thing.**
+
+1. `combat::hitstop::freeze` queues `JointDisabled` on every joint the body is an end of
+   **before** it queues `RigidBodyDisabled` on the body. Commands are applied in queue order, so
+   the joint leaves the island (`joint_graph/plugin.rs:87`) while the count is still right, and
+   the island is then empty and clean when it is thrown away.
+2. `combat::hitstop::advance` does it the other way round: `RigidBodyDisabled` off first, so the
+   body has an island again by the time `JointDisabled` comes off and `add_joint` merges the two
+   ends. The reverse order is the **second face** of the same bug and panics with
+   `Neither body 1439v0 nor 441v0 is in an island` (`islands/mod.rs:820`).
+3. `player::rope::attach_ropes` spawns a rope that is born **inside** an impact frame with
+   `JointDisabled` already **in the bundle** — a hook can bite during the freeze, and a
+   `spawn(...)` followed by a separate `.insert(JointDisabled)` is one command too late: the
+   spawn triggers avian's `On<Add, DistanceJoint>` observer by itself.
+4. `player::rope::shorten_ropes` skips a player carrying `HitStop` — the second face named in
+   the entry above.
+
+**What was deliberately not done:** the freeze is still avian's `RigidBodyDisabled`. `F-034`'s
+claim is untouched and is now also proven **with a rope on the player**: `Position` bit-identical
+for exactly `round(0.12 × 60)` = 7 ticks and moving on the 8th
+(`tests/combat.rs::b004_the_freeze_is_still_bit_identical_with_a_rope_attached`) — a criterion
+the old code could not have met, because the joint went on solving through the impact frame.
+
+**Evidence.**
+
+| | |
+|---|---|
+| **Red first** | `island.joint_count > 0`, `islands/mod.rs:786` in two of the three combat tests; `Neither body … is in an island`, `islands/mod.rs:820` in the third. |
+| **Red again** | fix out of `hitstop::freeze`: the same two panics, the third stays green (its fix is in `rope.rs`). Fix out of `shorten_ropes`: `the rope was taken in by 2.3332 m over five frozen ticks … left: 24.400269 right: 26.73349` — and 2.3332 m is `reel_speed_m_s` 28 / 60 × 5 to four digits, which is the same arithmetic as the 0.93 m over two ticks in the entry above. |
+| **Green** | `cargo test --test combat` 23 passed · `--test vector_rope` 13 passed, 4 ignored · `--test player` 25 passed. |
+| **In the running game** | `cut titan 1 Torso at 28.05 m/s (t=160)` with the rope on him, `hook Right of player 1 let go: Released (t=453)` — 293 ticks after the impact frame, the release that used to abort the process — `script run finished: 1 asserts held, 531 ticks`, **exit 0**. |
+
+⚠️ **The documented repro in the entry above cannot be run any more, and not because of this
+fix.** `scripts/f-flight-cut.txt` has anchored nothing since the map became Ashgate
+(`6e88eae`): `hook Right of player 1 found nothing anchorable (t=112)`, `9 of 21 asserts
+failed`, exit 1 — with and without this fix. The in-game evidence above therefore comes from a
+script rebuilt for the current map. **The `hook right 0.74` dodge in that file's ACT 1 is no
+longer needed** — the bug it dodges is gone — but the file needs re-aiming for Ashgate before
+any of its numbers, including the 74.70 m/s cut, can be measured again. `scripts/` is not this
+job's to edit. → `docs/FINDINGS.md` FIND-062.

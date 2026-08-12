@@ -41,7 +41,7 @@
 use std::time::Instant;
 
 use avian3d::prelude::{
-    Collider, CollisionLayers, GravityScale, LayerMask, LinearVelocity, RigidBody,
+    Collider, CollisionLayers, DistanceJoint, GravityScale, LayerMask, LinearVelocity, RigidBody,
     RigidBodyDisabled, Sensor, SpatialQuery,
 };
 use bevy::ecs::system::RunSystemOnce;
@@ -51,8 +51,9 @@ use defeated_by_titan::blades::cut::{blade_segment, sweep};
 use defeated_by_titan::blades::swing::{BladeTiming, SweptFrom, Swings};
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::shared::{
-    Cli, Health, HitStop, HitZone, LocalPlayer, MovementState, PlayerId, Side, SpawnTitan, Tick,
-    TitanHit, TitanId, TitanState, Velocity, LAYER_PLAYER, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
+    BodyId, Cli, Health, HitStop, HitZone, HookAnchored, HookReleased, LocalPlayer, MovementState,
+    PlayerId, ReleaseReason, Side, SpawnTitan, Tick, TitanHit, TitanId, TitanState, Velocity,
+    LAYER_PLAYER, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
 };
 use defeated_by_titan::titan::rig::TitanPart;
 
@@ -1337,6 +1338,180 @@ fn f034_the_freeze_is_lifted_and_leaves_nothing_behind() {
         app.world().get::<RigidBodyDisabled>(me).is_none(),
         "the player stayed disabled — every later tick of the game is a frozen player"
     );
+}
+
+// ---------------------------------------------------------------------------
+// B-004 — the hit stop meets the rope
+// ---------------------------------------------------------------------------
+
+/// Hangs the player on a real [`DistanceJoint`], built by the system that owns it.
+///
+/// The message and not the hook FSM: `player::rope::attach_ropes` reads [`HookAnchored`], and
+/// what this file has to bring together is a **joint on the player's body** and a **hit stop**
+/// — not `vector::hook`, which has its own tests. The anchor is straight above the player and
+/// gravity is off (`place`), so the rope hangs slack and moves nobody.
+fn hang_a_rope(app: &mut App, above_m: f32) {
+    let me = player(app);
+    let at_m = position(app);
+    let id = *app.world().get::<PlayerId>(me).expect("the player carries his id");
+    let tick = now(app);
+    app.world_mut().write_message(HookAnchored {
+        player: id,
+        side: Side::Right,
+        body: BodyId(80_004),
+        point_x: at_m.x,
+        point_y: at_m.y + above_m,
+        point_z: at_m.z,
+        tick,
+    });
+    // `attach_ropes` runs in `Drive`, so the joint stands at the end of the next tick.
+    ticks(app, 2);
+    assert_eq!(joints(app), 1, "no rope came into being — the rest of this test measures nothing");
+}
+
+/// Lets the rope go the way every release in the game does: through [`HookReleased`], which
+/// `player::rope::detach_ropes` carries out by despawning the joint entity.
+fn let_the_rope_go(app: &mut App) {
+    let me = player(app);
+    let id = *app.world().get::<PlayerId>(me).expect("the player carries his id");
+    let tick = now(app);
+    app.world_mut().write_message(HookReleased {
+        player: id,
+        side: Side::Right,
+        reason: ReleaseReason::Released,
+        tick,
+    });
+    ticks(app, 2);
+}
+
+fn joints(app: &mut App) -> usize {
+    let mut q = app.world_mut().query::<&DistanceJoint>();
+    q.iter(app.world()).count()
+}
+
+/// Lands a cortex hit on the player without flying a pass — [`TitanHit`] is the message
+/// `combat::hitstop::begin` reacts to, and the blade that writes it has its own tests above.
+fn land_a_cortex_hit(app: &mut App) {
+    let me = player(app);
+    let id = *app.world().get::<PlayerId>(me).expect("the player carries his id");
+    app.world_mut().write_message(TitanHit {
+        titan: TitanId(1),
+        by: id,
+        zone: HitZone::Cortex,
+        speed_m_s: 30.0,
+    });
+}
+
+/// ★ **`B-004` — the game's core loop: cut a titan while a rope is on you, then let go.**
+///
+/// Before the fix this test does not fail, it **aborts the process**:
+///
+/// ```text
+/// thread 'main' panicked at avian3d-0.7.0/src/dynamics/solver/islands/mod.rs:786:9:
+/// assertion failed: island.joint_count > 0
+/// ```
+///
+/// The chain, read out of avian's own source: `RigidBodyDisabled` on the player makes
+/// `IslandPlugin`'s `On<Insert, (Disabled, RigidBodyDisabled)>` observer strip his
+/// `BodyIslandNode` (`islands/mod.rs:126-136`); that component's `on_remove` hook takes the
+/// last body out of the island and **removes the island while its `joint_count` is still 1**
+/// (`islands/mod.rs:1338-1385`). When the freeze lifts, the body gets a fresh
+/// `BodyIslandNode`, which recycles exactly that island slot — with `joint_count` back at 0.
+/// The despawn of the joint then decrements it (`islands/mod.rs:786`) and the assert fires.
+///
+/// That is also why the release **inside** the impact frame was clean in
+/// `scripts/f-flight-cut.txt`: the slot had not been handed out again yet.
+#[test]
+fn b004_a_cut_landed_on_a_rope_survives_letting_the_rope_go() {
+    let mut app = app();
+    place(&mut app, Vec3::new(0.0, LANE_Y, 0.0), Vec3::ZERO);
+    app.update();
+    hang_a_rope(&mut app, 9.0);
+
+    let me = player(&mut app);
+    land_a_cortex_hit(&mut app);
+    ticks(&mut app, 1);
+    assert!(
+        app.world().get::<HitStop>(me).is_some(),
+        "the hit did not freeze the player, so this test never met the bug"
+    );
+    assert_eq!(joints(&mut app), 1, "the rope has to still be there during the freeze");
+
+    // Past the freeze — this is where the island slot is handed out a second time.
+    ticks(&mut app, 12);
+    assert!(app.world().get::<HitStop>(me).is_none(), "the freeze never ended");
+
+    let_the_rope_go(&mut app);
+    assert_eq!(joints(&mut app), 0, "the rope was not removed");
+    ticks(&mut app, 5);
+}
+
+/// The other half of the same corruption: a hook that **bites** while the player is frozen.
+///
+/// `add_joint_to_graph` merges the islands of both ends (`joint_graph/plugin.rs:143-152`), and
+/// a disabled body has no island at all — `merge_islands` panics with *"Neither body … nor …
+/// is in an island"* (`islands/mod.rs:814-830`). Same cause, one tick earlier.
+#[test]
+fn b004_a_hook_that_bites_during_the_freeze_does_not_abort_the_process() {
+    let mut app = app();
+    place(&mut app, Vec3::new(0.0, LANE_Y, 0.0), Vec3::ZERO);
+    app.update();
+
+    let me = player(&mut app);
+    land_a_cortex_hit(&mut app);
+    ticks(&mut app, 2);
+    assert!(app.world().get::<RigidBodyDisabled>(me).is_some(), "the player is not frozen");
+
+    hang_a_rope(&mut app, 9.0);
+    ticks(&mut app, 12);
+    assert!(app.world().get::<HitStop>(me).is_none(), "the freeze never ended");
+    let_the_rope_go(&mut app);
+    assert_eq!(joints(&mut app), 0, "the rope was not removed");
+    ticks(&mut app, 5);
+}
+
+/// `F-034`'s proven behaviour, **with a rope on the player** — the fix must not buy the crash
+/// with a freeze that no longer freezes.
+///
+/// Same criterion as `f034_the_hit_stop_freezes_the_bodies_and_not_the_clock`: the position is
+/// bit-identical for exactly `round(hit_stop_cortex_s × simulation_hz)` = 7 ticks, and it
+/// moves again on the next one. A joint that is still solved through the impact frame moves
+/// the body by millimetres, and millimetres are not bit-identical.
+#[test]
+fn b004_the_freeze_is_still_bit_identical_with_a_rope_attached() {
+    let mut app = app();
+    let d = data(&app);
+    let expected = (d.gear.feel.hit_stop_cortex_s as f64 * d.game.simulation_hz).round() as usize;
+    assert_eq!(expected, 7, "the criterion is written against 7 ticks");
+
+    // Gravity **on** and the anchor to one side, so the rope is really under load: a slack
+    // rope would hold still even without a fix.
+    place(&mut app, Vec3::new(0.0, LANE_Y, 0.0), Vec3::new(0.0, 0.0, -20.0));
+    let me = player(&mut app);
+    app.world_mut().entity_mut(me).insert(GravityScale(1.0));
+    app.update();
+    hang_a_rope(&mut app, 6.0);
+    ticks(&mut app, 6); // let him fall into the rope, so the joint is taut
+
+    land_a_cortex_hit(&mut app);
+    let mut samples: Vec<[u32; 3]> = Vec::new();
+    for _ in 0..20 {
+        app.update();
+        let p = position(&mut app);
+        samples.push([p.x.to_bits(), p.y.to_bits(), p.z.to_bits()]);
+    }
+    let frozen_at = samples[0];
+    let held = samples.iter().take_while(|p| **p == frozen_at).count();
+    assert_eq!(
+        held, expected,
+        "the player on a rope was bit-identical for {held} ticks instead of {expected} — \
+         the joint was solved through the impact frame"
+    );
+    assert_ne!(samples[held], frozen_at, "the freeze never ended");
+
+    let_the_rope_go(&mut app);
+    ticks(&mut app, 5);
+    println!("B-004: 7 frozen ticks with a taut rope, and the rope let go afterwards");
 }
 
 // ---------------------------------------------------------------------------

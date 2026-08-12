@@ -477,6 +477,14 @@ pub struct BladeTuning {
 pub struct ResupplyTuning {
     pub gas_per_s: f32,
     pub range_m: f32,
+    /// Whole blade pairs per second, handed back at a rack of the main building.
+    ///
+    /// Fractional, and the accumulator that turns it into whole pairs lives in
+    /// [`crate::blades::resupply`] — `Blades::pairs_left` is a `u8` and a rate that is not a
+    /// whole number per tick has to be carried somewhere.
+    pub blade_pairs_per_s: f32,
+    /// How fast the pair in the harness is honed back towards `sharpness == 1.0`.
+    pub sharpen_per_s: f32,
 }
 
 // ---------------------------------------------------------------------------
