@@ -1,7 +1,11 @@
 # f170-objective — THE COUNTER ON THE SCREEN: one cut, and the top of the screen says 1/3.
 #
 #   the verdict:  cargo run -q -- --headless  --mission tutorial \
-#                     --script scripts/f170-objective.txt --ticks 400
+#                     --script scripts/f170-objective.txt --ticks 500
+#
+#   ⚠️ `--ticks 400` until 2026-08-12, and it CUT THE SCRIPT OFF: the run needs 457 ticks and
+#   the last instruction was still running at 400. Since FIND-032 an unfinished run is an
+#   error, so this read as a red file with no failed assert. 500 finishes it: 4 asserts held.
 #   the picture:  cargo run -q -- --offscreen --mission tutorial \
 #                     --script scripts/f170-objective.txt --ticks 300 \
 #                     --screenshot docs/images/f170-objective.png

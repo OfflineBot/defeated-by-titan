@@ -110,6 +110,56 @@ use crate::shared::{
     Side, WarpPlayer,
 };
 
+/// `B-004` — **the only way a rope is allowed to stop existing.**
+///
+/// A rope entity is never despawned directly. The [`DistanceJoint`] component comes off
+/// **first**, in its own command, and only then does the entity die. That single ordering is
+/// what makes the release survivable on *every* tick, and the argument is avian's, not ours.
+///
+/// avian has exactly four events that move a joint in or out of a
+/// [`PhysicsIsland`](avian3d::prelude::PhysicsIslands) — three of them abort the process if the
+/// joint's dynamic end is carrying [`RigidBodyDisabled`], because a disabled body has no
+/// `BodyIslandNode` and the rope's other end is `RigidBody::Static` and never had one:
+///
+/// | event | avian entry point | needs the body enabled |
+/// |---|---|---|
+/// | the joint component is **added** without [`JointDisabled`] | `add_joint_to_graph::<T, Add, T, Without<JointDisabled>>` → `merge_islands` | **yes** — else `islands/mod.rs:820` |
+/// | [`JointDisabled`] is **added** | `remove_joint_from_graph::<Add, (Disabled, JointDisabled)>` | **yes** — else `islands/mod.rs:786` |
+/// | [`JointDisabled`] is **removed** | `add_joint_to_graph::<T, Remove, JointDisabled, …>` → `merge_islands` | **yes** — else `islands/mod.rs:820` |
+/// | the joint component is **removed** | `remove_joint_from_graph::<Remove, T>` | only while the joint is still *in* the graph |
+///
+/// `combat::hitstop` keeps the first two safe by ordering its commands (`JointDisabled` before
+/// `RigidBodyDisabled` on the way in, the other way round on the way out). **The third one has
+/// no ordering that helps, because a despawn *is* the removal of `JointDisabled`** — and that
+/// is the abort a player hit by letting go of the hook inside the 0.12 s impact frame
+/// (`docs/BUGS.md` `B-004`, `docs/FINDINGS.md` FIND-072).
+///
+/// The fourth row is the one with a way out: `remove_joint_from_graph` starts with
+/// `joint_graph.get(entity)` and **returns** when the joint is not in the graph — which is
+/// exactly the state a `JointDisabled` joint is in. And once the [`DistanceJoint`] component is
+/// gone, the despawn's `Remove, JointDisabled` trigger finds nothing: that observer's query is
+/// `Query<(&T, …), With<JointComponentId>>` and no longer matches
+/// (`avian3d-0.7.0/src/dynamics/solver/joint_graph/plugin.rs:116-131`).
+///
+/// So one unconditional order covers **both** columns, and there is no `if frozen` branch that
+/// a later reader can get the wrong way round:
+///
+/// - **body enabled, joint live** → row 4 with the joint in the graph: the island's
+///   `joint_count` goes 1 → 0 with the island still there. Then the despawn triggers nothing.
+/// - **body disabled, joint `JointDisabled`** → row 4 with the joint *not* in the graph: an
+///   early return. Then the despawn triggers nothing.
+///
+/// ⚠️ **Two commands, not one `EntityCommands` chain that ends in `despawn`.** `Commands` are
+/// applied in the order they are queued and each one's hooks and observers run inside its own
+/// application, so the `remove` is fully processed — graph, island, `JointComponentId` — before
+/// the `despawn` is looked at. Putting the `despawn` first, or leaving the `remove` out, is the
+/// bug back.
+fn despawn_rope(commands: &mut Commands, joint: Entity, anchor: Entity) {
+    commands.entity(joint).remove::<DistanceJoint>();
+    commands.entity(joint).despawn();
+    commands.entity(anchor).despawn();
+}
+
 /// One rope, as a component on the joint entity.
 ///
 /// Carries [`PlayerId`] and [`BodyId`] — stable ids, not `Entity` (`docs/multiplayer.md`
@@ -170,8 +220,9 @@ pub fn attach_ropes(
         // and that is not a bug anybody would find from the outside.
         for (entity, rope) in &ropes {
             if rope.player == anchored.player && rope.side == anchored.side {
-                commands.entity(rope.anchor).despawn();
-                commands.entity(entity).despawn();
+                // `B-004`: through the choke point, because this branch can fire while the
+                // player is frozen — a second hook on the same side inside an impact frame.
+                despawn_rope(&mut commands, entity, rope.anchor);
             }
         }
 
@@ -291,8 +342,10 @@ pub fn detach_ropes(
                     rope.side, rope.player.0
                 );
             }
-            commands.entity(rope.anchor).despawn();
-            commands.entity(entity).despawn();
+            // `B-004`, the third face: this is the release the player actually makes, and on
+            // seven of every sixty ticks its player is frozen. `despawn_rope` is the only
+            // ordering that survives both states — see its own doc comment.
+            despawn_rope(&mut commands, entity, rope.anchor);
         }
     }
 }

@@ -331,13 +331,16 @@ fn run_script(mut run: ResMut<ScriptRun>, tick: Res<Tick>, time: Res<Time<Fixed>
             ScriptCommand::Assert { metric, comparison, value } => {
                 let actual = measure(metric, &world, tick.0);
                 run.checked += 1;
-                let holds = actual.is_some_and(|i| comparison.holds(i, value));
+                let holds = actual.is_ok_and(|i| comparison.holds(i, value));
                 if !holds {
                     let message = format!(
                         "line {}: assert {metric:?} {} {value} — measured {}",
                         instruction.line,
                         comparison.symbol(),
-                        actual.map_or("nothing (no player found)".to_string(), |i| format!("{i:.3}")),
+                        actual.map_or_else(
+                            |why| format!("nothing ({why})"),
+                            |i| format!("{i:.3}")
+                        ),
                     );
                     error!("{message}");
                     run.failures.push(message);
@@ -368,37 +371,51 @@ fn run_script(mut run: ResMut<ScriptRun>, tick: Res<Tick>, time: Res<Time<Fixed>
     }
 }
 
-/// What an `assert` can measure. `None` means "not measurable" and **counts as failed** —
-/// a check that found nothing is not a check that passed (§9).
-fn measure(metric: Metric, world: &DriverWorld, tick: u64) -> Option<f32> {
+/// Why a metric could not be measured. **Each missing link names itself.**
+///
+/// `assert kills` used to report `no player found` when it was the mission tally that was
+/// missing — the `?` chain has two links and the message named the first one whatever went
+/// wrong (`FIND-074`). A wrong error message is worse than none: it sends the reader to the
+/// player spawn for an hour when the answer is that `--mission` was not passed.
+const NO_PLAYER: &str = "no local player found";
+const NO_TALLY: &str = "no mission kill tally — is this run missing --mission?";
+const NO_HEALTH: &str = "the local player has no Health component";
+
+/// What an `assert` can measure. `Err` means "not measurable" and **counts as failed** —
+/// a check that found nothing is not a check that passed (§9) — and it carries the reason,
+/// which is printed instead of the number.
+fn measure(metric: Metric, world: &DriverWorld, tick: u64) -> Result<f32, &'static str> {
     match metric {
-        Metric::Titans => Some(world.titans.iter().count() as f32),
-        Metric::Tick => Some(tick as f32),
+        Metric::Titans => Ok(world.titans.iter().count() as f32),
+        Metric::Tick => Ok(tick as f32),
         // The line the mission job was left to fill in (`F-070`/`F-071`): the counter is a
         // component on the mission entity with per-`PlayerId` counts, so this hands back the
-        // **local player's** number. `None` when there is no mission or no player — a check
-        // that found nothing is not a check that passed.
+        // **local player's** number. Two ways to fail and two different messages: no player,
+        // or no mission running. A check that found nothing is not a check that passed.
         Metric::Kills => {
-            let (id, ..) = world.players.iter().next()?;
-            Some(world.tally.iter().next()?.of(*id) as f32)
+            let (id, ..) = world.players.iter().next().ok_or(NO_PLAYER)?;
+            let tally = world.tally.iter().next().ok_or(NO_TALLY)?;
+            Ok(tally.of(*id) as f32)
         }
         // Always measurable: the state is registered in every launch mode, and "no mission" is
         // the honest answer `Briefing` (0), not a missing one.
-        Metric::Phase => Some(world.phase.get().code() as f32),
+        Metric::Phase => Ok(world.phase.get().code() as f32),
         Metric::Speed | Metric::Height | Metric::Gas | Metric::Health | Metric::Rope => {
-            let (_, transform, gas, tempo, hook, health) = world.players.iter().next()?;
+            let (_, transform, gas, tempo, hook, health) =
+                world.players.iter().next().ok_or(NO_PLAYER)?;
             match metric {
-                Metric::Height => Some(transform.translation.y),
-                Metric::Gas => Some(gas.current),
-                Metric::Speed => Some(tempo.speed_m_s()),
+                Metric::Height => Ok(transform.translation.y),
+                Metric::Gas => Ok(gas.current),
+                Metric::Speed => Ok(tempo.speed_m_s()),
                 // The one metric that reads the Vector Gear itself. `Hook::anchored_count` and
                 // not a count of its own: `vector::hook` is the single writer of `Hook`, and a
                 // second definition of "anchored" living in a debugging tool is exactly the
                 // kind of drift that makes a green run mean nothing.
-                Metric::Rope => Some(hook.anchored_count() as f32),
-                // `None` and not `0.0`: a player with no `Health` component is not a player
-                // at zero health, it is a player nobody has measured.
-                Metric::Health => health.map(|h| h.current),
+                Metric::Rope => Ok(hook.anchored_count() as f32),
+                // Its own reason and not `0.0`: a player with no `Health` component is not a
+                // player at zero health, it is a player nobody has measured — and it is not a
+                // missing player either, which is what this used to say.
+                Metric::Health => health.map(|h| h.current).ok_or(NO_HEALTH),
                 Metric::Titans | Metric::Tick | Metric::Kills | Metric::Phase => {
                     unreachable!("handled above")
                 }

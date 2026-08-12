@@ -56,6 +56,19 @@
 //! | the two arm markers, left arm anchored and right arm ready | `scripts/f-001-hooks.txt --ticks 400` → `docs/images/f171-aim.png`, and the same run with `arm_aim::spawn_arm_aim` unregistered → `docs/images/f171-aim-control.png` |
 //! | the same pair with nothing hookable (sky) and with the tower in range | `scripts/f171-crosshair.txt --ticks 126` → `docs/images/f171-aim-free.png`, `--ticks 188` → `docs/images/f171-aim-ready.png` |
 //! | the three of them stacked, 4x, around the crosshair | `docs/images/f171-aim-crop.png` |
+//! | **the landing preview on two different anchors**, `Q` on (41.91, 7.73, −1.00) and `E` on (60.09, 7.73, −1.00) | `docs/images/f171-preview-two-anchors.png` |
+//! | the same pair after 9° of yaw — both markers travelled, the crosshair did not | `docs/images/f171-preview-turned.png` |
+//!
+//! The preview was decoded against the map instead of against a control run, which is the
+//! stronger check of the two: the two anchor coordinates come out of the game's own log, the
+//! projection was recomputed in Python from `maps.ron`'s block and `game.ron`'s `fov_deg: 60`,
+//! and the four predicted letter boxes land within **0.6, 2.4, 0.7 and 2.7 px** of the measured
+//! cyan. Between the two frames the `Q` marker moved **+114 px in x and +19 px in y** and the `E`
+//! marker **+135 px in x and −29 px in y** — different distances, opposite vertical directions,
+//! which no shared point and no fixed slot can produce. In the same pair of frames the four
+//! crosshair ticks changed **0 pixels**, and the `F-170` keep-out box holds **0 cyan pixels** in
+//! both. That is FIND-047 (*"the same pixels across four runs with four different aims"*)
+//! measured from the other side. Written up as `docs/FINDINGS.md` FIND-070.
 //!
 //! The objective line was decoded the same way the cyan was, against a control run of the same
 //! script **without `--mission`** — no mission, no `KillTally`, no line, everything else in the
@@ -131,6 +144,19 @@ impl Plugin for HudPlugin {
                 (arm_aim::sense_arm_aim, arm_aim::shape_arm_aim, arm_aim::paint_arm_aim)
                     .chain(),
             ),
+        )
+        // **The one HUD system that is not in `Update`**, and it has to be here. It projects a
+        // world point through the camera, so it needs the camera's `GlobalTransform` (written in
+        // `TransformSystems::Propagate`) and its viewport size (written in
+        // `CameraUpdateSystems`) — both are `PostUpdate`. Placed in `Update` it would draw the
+        // marker one frame behind the image: invisible standing still, and very visible
+        // mid-swing, which is the only moment the element has to be trusted.
+        .add_systems(
+            PostUpdate,
+            arm_aim::place_arm_aim
+                .after(bevy::transform::TransformSystems::Propagate)
+                .after(bevy::camera::CameraUpdateSystems)
+                .before(bevy::ui::UiSystems::Layout),
         );
     }
 }

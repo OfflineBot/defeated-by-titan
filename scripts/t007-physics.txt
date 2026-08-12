@@ -3,6 +3,18 @@
 #   cargo run -- --offscreen --script scripts/t007-physics.txt --ticks 200 \
 #       --screenshot docs/images/t007-physics.png
 #
+# and, as a SEPARATE run, the one that returns a usable exit code:
+#
+#   cargo run -q -- --headless --script scripts/t007-physics.txt --ticks 900
+#
+# ⚠️ **A `--screenshot` run is not a verdict.** `debug::screenshot::exit_when_written` owns the
+# ending and writes `AppExit::Success` the moment the PNG is on disk, without ever reading
+# `run.failures` — so the command above exits 0 even when the asserts in this file are RED, and
+# the assert summary never prints (`docs/FINDINGS.md` FIND-073). Only the `--headless` run
+# reports "N asserts held" and returns an exit code worth reading. Its tick count is
+# deliberately generous: overshooting the script's own end is free, undershooting truncates the
+# run and hides the summary (FIND-032).
+#
 # Since 2026-08-09 nothing catches the player at y = 0 any more. The hand-written
 # `translation += velocity * dt` and its hard-coded ground plane are gone; what carries him
 # is the collider of `maps.ron: blocks[0]`, whose top edge lies exactly at y = 0.

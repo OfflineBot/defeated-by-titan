@@ -28,7 +28,8 @@
 # `forward = (−sin yaw, 0, −cos yaw)` makes yaw 180 the +Z axis (the sign lesson of
 # `scripts/f-flight-cut.txt`, which cost that file nine red asserts).
 #
-#   refuel station   (0, 0,  6)   reach 4.0 m   `gear.ron: resupply.range_m`
+#   supply station  (-42, 0.15, ∓6.5)  reach 4.0 m — INSIDE the hall; stand at (-38.75, ·, -6.0)
+#                                 `gear.ron: resupply.range_m`, the racks of `maps.ron: ashgate`
 #   recruit pad      (0, 0, 16)   radius 3.0 m  straight ahead of the spawn point
 #   veteran pad     (−9, 0, 16)   elite pad (9, 0, 16)  — off to the sides, not on this line
 #
@@ -39,9 +40,10 @@
 # ---------------------------------------------------------------------------------------
 # ⚠️ WHAT THIS FILE DOES **NOT** CLAIM
 #
-# - **Not a hub you can look at.** The hub has no building of its own: it is three amber pads
-#   and three cyan ones laid out on whatever map `maps.ron: current` builds. There is no
-#   picture in this run and none is claimed — it is `--headless`.
+# - **Not a hub you can look at.** The hub is three amber deployment pads and **two** cyan
+#   supply racks, and since 2026-08-12 the racks stand **inside** the garrison headquarters of
+#   `maps.ron: ashgate` (`docs/FINDINGS.md` FIND-066). There is no picture in this run and none
+#   is claimed — it is `--headless`.
 # - **Not a cut a human could land.** The two kills are the fall-cut of
 #   `scripts/f030-cortex.txt`, arranged by arithmetic: `warp` to 18.5 m, fall, and the blade
 #   passes a husk standing 1.75 m to the side. Both husks are **spawned by the script**, and
@@ -79,12 +81,21 @@ assert gas < 285      # the tank really emptied: 300 − 36 = 264, and nothing r
 assert gas > 200      # it was being spent
 mark f072-gas-burnt
 
-look 180 0            # +Z — toward the station and the pads
-key W 1.3             # ~7 m: into the station's 4 m reach around (0, 0, 6)
+# ⚠️ `warp`, not `key W`. The station is no longer on the hub apron: it moved into the garrison
+# hall at x = −42 (FIND-066 §1), and **walking down the aisle refuels nothing** — the aisle is
+# z = −3..3 and both racks sit 6.5 m off it, so a player who walks straight in stays outside a
+# 4 m reach the whole way (FIND-066 §2). `(-38.75, ·, -6.0)` is the aisle-side spot at the east
+# end of the south rack: 3.29 m from its centre, 0.40 m of clearance off the rack and 0.65 m off
+# the roof post — the one place a 0.35 m capsule fits *and* trips the trigger.
+warp -38.75 1.0 -6.0  # into the hall, beside the south rack
+wait 0.6              # land and settle onto the depot floor (y 0.15)
 wait 1.6              # gear.ron: resupply.gas_per_s 40.0 — a second and a half covers 36
 
 assert gas > 299      # ⭐ 2. gas came back, at a station, and the tank is full again
 mark f072-refuelled
+
+warp 0 2 6            # back onto the hub apron, on the spawn line — so ACT 2 below is unchanged
+wait 1.0              # from the day the station still stood out here
 
 # =========================================================================================
 # ACT 2 — the door. A trigger volume you walk into, not a click.

@@ -19,11 +19,16 @@
 //! | deployment pad | a circle you stand in ([`DeploymentPoint`]) | the game has mouse-look and **no cursor while playing** (`menu`, `P4`) — a click is not available |
 //! | difficulty | one pad per level, out of `missions.ron: hub.deployments` | the choice is a door you walk to, so it costs no UI that does not exist |
 //! | refuel station | a circle that fills your tank ([`RefuelStation`]) | *„gas refillt nur im main gebäude an bestimmten stationen/objekten"* (`docs/QUESTIONS.md` Q-033) |
+//! | blade rack | a circle that fills your harness ([`BladeRack`]) | the other half of *„das main gebäude in dem der gas und schwert nachschub ist"* — and both of them stand **inside** the hall since 2026-08-12 evening, at the two racks of `maps.ron: ashgate` |
 //!
 //! ## What this module does **not** do
 //!
 //! - **It builds no building.** The hub is laid out on whatever map `maps.ron: current` builds;
-//!   only its pads are placed, out of `missions.ron: hub`. `maps.ron` belongs to another job.
+//!   only its pads are placed, out of `missions.ron: hub`. `maps.ron` belongs to another job —
+//!   including the two racks the supply stations now stand on. What this module guarantees is
+//!   that the *coordinates* come out of the file; that they are inside the hall is
+//!   `tests/mission.rs::f019_every_supply_station_stands_on_the_depot_floor_of_the_main_building`,
+//!   which finds the floor by its height and never by a literal.
 //! - **It does not touch `Gas` outside a station**, and it never adds a rate anywhere else. The
 //!   whole point of Q-033 is that gas is a place you go to.
 //! - **It has no lobby, no loadout, no NPCs, no persistence.** A hub in this build is three
@@ -48,6 +53,13 @@
 //! runs the station system with **no `vector` in the app at all** — the one shape the whole-app
 //! tests cannot distinguish (`FINDINGS.md` FIND-063).
 //!
+//! **The harness went the same way on the same day.** [`restock_at_stations`] sends
+//! [`BladeRestockRequest`](crate::shared::BladeRestockRequest) and
+//! `blades::resupply::apply_restock_requests` is the only caller of `restock` — `mission` holds
+//! no `&mut Blades` either. It was built as the seam from the first line rather than repaired
+//! into one, which is the whole value of FIND-063 having been written down.
+//! Guarded by `tests/mission.rs::f033_a_rack_asks_for_blades_and_never_writes_the_harness_itself`.
+//!
 //! **The cost, and it is one tick:** the request is written in `PostStep` and applied in the
 //! next tick's `Intent`, because a same-tick application would mean ordering a `vector` system
 //! against a `mission` system, which no domain may do. 16 ms of latency on a refuel at 40 gas/s
@@ -63,7 +75,7 @@
 use bevy::prelude::*;
 
 use crate::data::GameData;
-use crate::shared::{Block, PlayerId, RefuelRequest, Tick, WarpPlayer};
+use crate::shared::{BladeRestockRequest, Block, PlayerId, RefuelRequest, Tick, WarpPlayer};
 
 use super::phase::MissionPhase;
 use super::run::{to_ticks, MissionClock, Mission};
@@ -91,6 +103,26 @@ pub struct DeploymentPoint {
 pub struct RefuelStation {
     pub radius_m: f32,
     pub gas_per_s: f32,
+}
+
+/// Where **blades** come back — the other half of the supply, and the second half of the user's
+/// sentence *„auch das main gebäude in dem der gas und schwert nachschub ist"*.
+///
+/// **A separate component and not two more fields on [`RefuelStation`]**, although today every
+/// station carries both. The map already draws two racks and labels one of them gas and the
+/// other blades; the reason they are not split yet is that `data::StationPad` is a bare
+/// `center_m` with no way to say which, and `src/data/mod.rs` was not this hand's to widen
+/// (`docs/FINDINGS.md` FIND-066). The moment it gains a `kind`, a gas-only station is one that
+/// carries `RefuelStation` and no `BladeRack` — the component split is already the right shape,
+/// and only [`open_hub`]'s spawn has to change.
+///
+/// **It carries no rate.** `gear.ron: resupply.blade_pairs_per_s` and `sharpen_per_s` are
+/// `blades`' numbers and are read there; this rack knows only how far it reaches and sends the
+/// seconds. See [`BladeRestockRequest`](crate::shared::BladeRestockRequest) for why that is the
+/// one asymmetry against gas.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct BladeRack {
+    pub radius_m: f32,
 }
 
 /// On the mission entity: **this sortie was deployed from the hub, so it goes back there.**
@@ -173,14 +205,19 @@ pub fn open_hub(
         ));
     }
 
-    // Range and rate out of `gear.ron: resupply` — the same two numbers the blade resupply was
-    // given. `missions.ron` says *where* a station is, `gear.ron` says what a station does; two
-    // files, one number each, and no third truth.
+    // Range and rates out of `gear.ron: resupply`. `missions.ron` says *where* the supply is,
+    // `gear.ron` says what it gives back; two files, one number each, and no third truth.
+    //
+    // **Both components on one entity**: a supply point of the main building hands back gas and
+    // blades, because `data::StationPad` has no way to say which rack is which (FIND-066) and
+    // because `gear.ron: resupply` is one block with one `range_m` for all four numbers. The
+    // day the file can say it, this loop inserts one component or the other.
     let resupply = &data.gear.resupply;
     for station in &hub.refuel_stations {
         commands.spawn((
-            Name::new("refuel_station"),
+            Name::new("supply_station"),
             RefuelStation { radius_m: resupply.range_m, gas_per_s: resupply.gas_per_s },
+            BladeRack { radius_m: resupply.range_m },
             // Cyan: "gas, Vector Gear, anchor points" (`docs/conventions.md` §3).
             Block { size: pad_slab(resupply.range_m), color: cyan },
             Transform::from_translation(Vec3::from(station.center_m)),
@@ -209,7 +246,7 @@ pub fn open_hub(
     }
 
     info!(
-        "hub {:?}: {} deployment pad(s), {} refuel station(s), {} player(s) landed, \
+        "hub {:?}: {} deployment pad(s), {} supply station(s), {} player(s) landed, \
          {} finished mission(s) cleared",
         hub.name,
         hub.deployments.len(),
@@ -338,6 +375,40 @@ pub fn refuel_at_stations(
             continue;
         };
         requests.write(RefuelRequest { player: *id, amount: station.gas_per_s * dt });
+    }
+}
+
+/// **The only restock of a harness in this game** — and it *asks*, exactly like
+/// [`refuel_at_stations`].
+///
+/// Per tick and per player, one [`BladeRestockRequest`] over the tick's seconds while he stands
+/// inside a rack's circle. **This function does not touch `Blades`**, and it holds no
+/// `&mut Blades` at all: `blades::resupply::apply_restock_requests` is the only thing that ever
+/// calls `restock` (`docs/architecture.md`, authority table; `FINDINGS.md` FIND-066).
+///
+/// **A second system and not two messages out of one**, although both query the same players
+/// against the same positions. Gas and blades are two fields with two owners, and a station
+/// that stops giving one of them back one day is then a component that comes off the entity
+/// rather than a branch inside a loop — which is the whole point of the component split (see
+/// [`BladeRack`]). The cost is one extra pass over at most a handful of racks.
+pub fn restock_at_stations(
+    time: Res<Time<Fixed>>,
+    racks: Query<(&BladeRack, &Transform)>,
+    players: Query<(&PlayerId, &Transform)>,
+    mut requests: MessageWriter<BladeRestockRequest>,
+) {
+    let dt = time.delta_secs();
+    for (id, at) in &players {
+        if !racks
+            .iter()
+            .any(|(rack, pad)| at.translation.distance(pad.translation) <= rack.radius_m)
+        {
+            continue;
+        }
+        // One request per player per tick, never one per rack he is standing in — the same
+        // rule `refuel_at_stations` follows with its `find`. Two overlapping racks are still
+        // one supply point as far as the harness is concerned.
+        requests.write(BladeRestockRequest { player: *id, seconds: dt });
     }
 }
 

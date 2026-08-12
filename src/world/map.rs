@@ -39,6 +39,21 @@
 //! (touching does not count): a house stands at y = 0 on the slab whose top edge is at
 //! y = 0, and therefore only touches it. Not a special case, just geometry.
 //!
+//! ## A house is two cuboids, and the second one is the reason you can see the first
+//!
+//! Since 2026-08-12 a generated house is a **body plus a roof cap** — a smaller cuboid on the
+//! eaves, in its own colour. The user had just judged the version without it:
+//!
+//! > *„häuser sind alle ineinander! keine unterschiedliche höhen! es sieht überhaupt nicht
+//! > aus wie eine attack on titan map! viel zu kompakt!"*
+//!
+//! The cap does **not** make the district taller: the rolled height is the ridge and the roof
+//! is cut out of it downward (`data::Roof`). What it does is give every house a silhouette,
+//! and — with `Perimeter`'s per-house draws — stop eight equal boxes in a square from reading
+//! as one object. Both blocks carry the **same** `anchorable` bit, so the highest thing the
+//! player aims at answers the same way the wall below it does (`FIND-059`, from the other
+//! side).
+//!
 //! **No block is ever rotated.** An axis-aligned cuboid is exactly its AABB; a rotated
 //! `Cuboid` yields the enclosing, oversized one
 //! (`bevy_math-0.19.0/src/bounding/bounded3d/primitive_impls.rs:100-115`), and the hook
@@ -55,7 +70,7 @@ use crate::shared::{AnchorSurface, Block, Body, Rng};
 
 use super::index::mask_from;
 
-/// Four questions about the same lot, four streams.
+/// Every question about the same lot gets its **own** stream.
 ///
 /// [`Rng`] is stateless and computes out of `(seed, tick, stream)`; **two callers with the
 /// same stream get the same number** (`src/shared/rng.rs`). Were the height the same stream
@@ -68,6 +83,18 @@ const STREAM_BUILT: u64 = 0xF003_0001;
 const STREAM_HEIGHT: u64 = 0xF003_0002;
 const STREAM_COLOR: u64 = 0xF003_0003;
 const STREAM_ANCHORABLE: u64 = 0xF003_0004;
+/// Per **cell**: which height band this whole block sits in, and how far the ring is shifted
+/// off its grid position. The three reasons the district stopped being a checkerboard.
+const STREAM_LEVEL: u64 = 0xF003_0005;
+const STREAM_JITTER_X: u64 = 0xF003_0006;
+const STREAM_JITTER_Z: u64 = 0xF003_0007;
+/// Per **wing**: how wide the houses of this one run are.
+const STREAM_FRONTAGE: u64 = 0xF003_0008;
+/// Per **house**: alley, setback, depth, roof pitch.
+const STREAM_GAP: u64 = 0xF003_0009;
+const STREAM_SETBACK: u64 = 0xF003_000A;
+const STREAM_DEPTH: u64 = 0xF003_000B;
+const STREAM_RISE: u64 = 0xF003_000C;
 
 /// How many rng ticks one grid cell owns.
 ///
@@ -190,8 +217,19 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
             // whoever adds a block to `maps.ron` does not thereby shift the heights of
             // every house that follows.
             let lot = (iz * nx + ix) as u64;
-            let center_x = start_x + ix as f32 * period_m + r.lot_m * 0.5;
-            let center_z = start_z + iz as f32 * period_m + r.lot_m * 0.5;
+            // The ring is shifted off its grid position, and that is the only tool an
+            // unrotatable world has against a checkerboard: the street between two cells is
+            // `street_m + jitter(right) - jitter(left)` and therefore a different width at
+            // every crossing. `2 * cell_jitter_m < street_m` keeps it from closing.
+            let (jitter_x, jitter_z) = match &r.perimeter {
+                None => (0.0, 0.0),
+                Some(p) => (
+                    rng.range(lot, STREAM_JITTER_X, -p.cell_jitter_m, p.cell_jitter_m),
+                    rng.range(lot, STREAM_JITTER_Z, -p.cell_jitter_m, p.cell_jitter_m),
+                ),
+            };
+            let center_x = start_x + ix as f32 * period_m + r.lot_m * 0.5 + jitter_x;
+            let center_z = start_z + iz as f32 * period_m + r.lot_m * 0.5 + jitter_z;
 
             // One draw per CELL, not per house: a block is built or it is an open yard.
             // Were this per house, `density` would punch holes into the ring, and a hole in
@@ -210,9 +248,29 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                     size_x: r.lot_m,
                     size_z: r.lot_m,
                 }],
-                Some(p) => perimeter_houses(center_x, center_z, r.lot_m, p),
+                Some(p) => perimeter_houses(center_x, center_z, r.lot_m, p, &rng, lot),
             };
             let single = r.perimeter.is_none();
+
+            // **The block's own level**, one draw for the whole cell. The house then only
+            // varies inside `house_spread_m` around it. One draw per house over the whole
+            // window is white noise, and white noise averages out over a hundred metres —
+            // which is exactly how the first version came out flat.
+            //
+            // With `perimeter: None` this collapses, term for term, to the single draw the
+            // graybox made before: `min + fraction * (max - min)`.
+            let band_m = r.max_height_m - r.min_height_m;
+            let (level_m, spread_m) = match &r.perimeter {
+                None => (r.min_height_m, band_m),
+                Some(p) => {
+                    let spread = p.house_spread_m.min(band_m);
+                    (
+                        rng.range(lot, STREAM_LEVEL, r.min_height_m, r.max_height_m - spread),
+                        spread,
+                    )
+                }
+            };
+            let roof = r.perimeter.as_ref().and_then(|p| p.roof.as_ref());
 
             for (i, f) in footprints.iter().enumerate() {
                 // `lot` itself for the single box, so the graybox draws exactly what it drew
@@ -229,7 +287,14 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                     continue;
                 }
 
-                let height_m = rng.range(tick, STREAM_HEIGHT, r.min_height_m, r.max_height_m);
+                // The **ridge** — the whole house, the number the height window is about. The
+                // roof is then cut out of it downward, so a district that grows roofs does
+                // not thereby grow taller than `scale.ron` allows it to be.
+                let ridge_m = level_m + rng.range(tick, STREAM_HEIGHT, 0.0, spread_m);
+                let rise_m = roof.map_or(0.0, |k| {
+                    ridge_m * rng.range(tick, STREAM_RISE, k.min_rise_fraction, k.max_rise_fraction)
+                });
+                let height_m = ridge_m - rise_m;
                 // A house stands ON the ground: bottom edge y = 0, center at half its height.
                 let center_m = Vec3::new(f.center_x, height_m * 0.5, f.center_z);
                 let size_m = Vec3::new(f.size_x, height_m, f.size_z);
@@ -243,9 +308,16 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                 // clipped the corner of a block and deleted the whole ring, so the street
                 // measured 134 m facade to facade. Per house, an apron deletes exactly the
                 // houses standing on it and the rest of the ring keeps the street closed.
+                //
+                // ⚠️ And it is tested against the house **including its roof**: the aprons
+                // exist because a 14 m gallery hangs over the ground, and a roof cap that
+                // slipped under one would be a tagged surface with stone over it
+                // (`tests/world.rs::f003_no_anchorable_block_has_another_block_sitting_on_its_roof_centre`).
+                let ridge_center = Vec3::new(f.center_x, ridge_m * 0.5, f.center_z);
+                let ridge_half = Vec3::new(f.size_x * 0.5, ridge_m * 0.5, f.size_z * 0.5);
                 let blocked = plan[..placed]
                     .iter()
-                    .any(|g| overlaps(center_m, size_m * 0.5, g.center_m, g.half_size_m()));
+                    .any(|g| overlaps(ridge_center, ridge_half, g.center_m, g.half_size_m()));
                 if blocked {
                     continue;
                 }
@@ -256,17 +328,41 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                     .unwrap_or_else(|| {
                         panic!("maps.ron: layout.colors is empty — every house would be colorless")
                     });
+                // **The roof carries the same bit as its house.** Two different answers for
+                // one building is the FIND-059 bug from the other side: the player aims at
+                // the highest thing he sees, and that is the cap.
+                let anchorable = rng.chance(tick, STREAM_ANCHORABLE, r.anchorable_fraction);
 
                 plan.push(BlockPlan {
                     name: if single { format!("house_{lot}") } else { format!("house_{lot}_{i}") },
                     center_m,
                     size_m,
                     color: color_of(data, color),
-                    anchorable: rng.chance(tick, STREAM_ANCHORABLE, r.anchorable_fraction),
+                    anchorable,
                     // A house stops you. That is mechanics and not a tuning question — there
                     // is deliberately no `solid_fraction` in `maps.ron`.
                     solid: true,
                 });
+
+                if let Some(k) = roof {
+                    // The cap is pulled in on all four sides; what is left over is the ledge
+                    // the roof reads by and the strip you can still stand on.
+                    let keep = 1.0 - 2.0 * k.inset_fraction;
+                    assert!(
+                        keep > 0.0,
+                        "maps.ron: layout.perimeter.roof.inset_fraction = {} leaves the cap \
+                         no extent — a roof with a negative edge is an invisible collider",
+                        k.inset_fraction
+                    );
+                    plan.push(BlockPlan {
+                        name: format!("roof_{lot}_{i}"),
+                        center_m: Vec3::new(f.center_x, height_m + rise_m * 0.5, f.center_z),
+                        size_m: Vec3::new(f.size_x * keep, rise_m, f.size_z * keep),
+                        color: color_of(data, &k.color),
+                        anchorable,
+                        solid: true,
+                    });
+                }
             }
         }
     }
@@ -283,16 +379,43 @@ struct Footprint {
     size_z: f32,
 }
 
-/// A closed block: the ring of touching row houses around one cell's courtyard.
+/// A closed block: the ring of houses around one cell's courtyard — **and no two of them the
+/// same**.
 ///
-/// Four runs, and they do **not** overlap: north and south take the full `lot_m` in x and are
-/// `wing_depth_m` deep; west and east take only the strip between them. Every run is divided
-/// into whole houses of the same width, so two neighbours share a party wall and the gap
-/// between them is exactly zero — that is the single change that turns a suburb into a town.
+/// Four runs, and they do **not** overlap: north and south take the full `lot_m` in x and
+/// start at the street edge; west and east take only the strip between them. That much is
+/// unchanged. What changed on 2026-08-12 is everything about the individual house, and it
+/// changed because the version without it was judged:
+///
+/// > *„häuser sind alle ineinander! keine unterschiedliche höhen! [...] viel zu kompakt!"*
+///
+/// The first ring divided every run into houses of **exactly** the same width, gave each of
+/// them **exactly** `wing_depth_m` of depth, and set them flush against the street edge with
+/// a gap of **exactly** zero. Party walls are what the survey measured, and they were built
+/// correctly — but eight identical boxes in a square with no gap and no relief are, from ten
+/// metres up, one object. So now, out of the seed:
+///
+/// * the **frontage** is drawn per run, so the house widths of two facing rows differ;
+/// * a **gap** is taken off each house as a fraction of its slot — sometimes 0 (the party
+///   wall the survey wants), sometimes the full `gap_fraction` (an alley you can drop into);
+/// * a **setback** moves the facade off the street edge, so the frontage line is ragged;
+/// * the **depth** is cut behind that, so the courtyard side is ragged too.
+///
+/// `setback_max_m + depth_spread_m < wing_depth_m` is asserted rather than clamped: a clamp
+/// would silently give every house the same minimum depth again, which is the failure this
+/// function exists to avoid.
 ///
 /// The courtyard is what is left over, `lot_m - 2 * wing_depth_m` on a side. It is a **gap**,
-/// because this world has no subtraction (`docs/FINDINGS.md` FIND-056).
-fn perimeter_houses(cx: f32, cz: f32, lot_m: f32, p: &Perimeter) -> Vec<Footprint> {
+/// because this world has no subtraction (`docs/FINDINGS.md` FIND-056), and no setback or
+/// depth cut can eat into it — a house only ever grows *shallower*, never deeper.
+fn perimeter_houses(
+    cx: f32,
+    cz: f32,
+    lot_m: f32,
+    p: &Perimeter,
+    rng: &Rng,
+    lot: u64,
+) -> Vec<Footprint> {
     let w = p.wing_depth_m;
     let court_m = lot_m - 2.0 * w;
     assert!(
@@ -300,24 +423,59 @@ fn perimeter_houses(cx: f32, cz: f32, lot_m: f32, p: &Perimeter) -> Vec<Footprin
         "maps.ron: layout.perimeter.wing_depth_m = {w} leaves no courtyard in a {lot_m} m \
          block — the two wings would grow through each other"
     );
+    assert!(
+        p.setback_max_m + p.depth_spread_m < w,
+        "maps.ron: layout.perimeter setback_max_m {} + depth_spread_m {} is not less than \
+         wing_depth_m {w} — a house could come out with no depth at all",
+        p.setback_max_m,
+        p.depth_spread_m
+    );
+    assert!(
+        (0.0..1.0).contains(&p.gap_fraction),
+        "maps.ron: layout.perimeter.gap_fraction = {} is not in 0..1 — at 1.0 the house is \
+         the alley",
+        p.gap_fraction
+    );
 
-    let mut out = Vec::new();
-    // North and south: the street fronts. They carry the run along x.
-    let n = runs(lot_m, p.frontage_m);
-    let front_m = lot_m / n as f32;
-    for k in 0..n {
-        let x = cx - lot_m * 0.5 + (k as f32 + 0.5) * front_m;
-        out.push(Footprint { center_x: x, center_z: cz - lot_m * 0.5 + w * 0.5, size_x: front_m, size_z: w });
-        out.push(Footprint { center_x: x, center_z: cz + lot_m * 0.5 - w * 0.5, size_x: front_m, size_z: w });
-    }
-    // West and east: only the strip between the two fronts, or the corners would be built
-    // twice — and two cuboids in the same place are a z-fight and a doubled collider.
-    let m = runs(court_m, p.frontage_m);
-    let side_m = court_m / m as f32;
-    for k in 0..m {
-        let z = cz - court_m * 0.5 + (k as f32 + 0.5) * side_m;
-        out.push(Footprint { center_x: cx - lot_m * 0.5 + w * 0.5, center_z: z, size_x: w, size_z: side_m });
-        out.push(Footprint { center_x: cx + lot_m * 0.5 - w * 0.5, center_z: z, size_x: w, size_z: side_m });
+    let mut out: Vec<Footprint> = Vec::new();
+    // The wings in a fixed order, and the order is part of the seed: house `i` of a cell is
+    // the `i`-th footprint out of this loop, and that is the tick its height is drawn on.
+    // 0 north, 1 south (the runs along x), 2 west, 3 east (the strip between them).
+    for wing in 0..4u64 {
+        let along_x = wing < 2;
+        let run_m = if along_x { lot_m } else { court_m };
+        // One frontage per run, not per house: a row of houses is built by one builder in one
+        // decade, and the row opposite is not.
+        let frontage_m = p.frontage_m
+            + rng.range(
+                lot * TICKS_PER_LOT + wing,
+                STREAM_FRONTAGE,
+                -p.frontage_spread_m * 0.5,
+                p.frontage_spread_m * 0.5,
+            );
+        let n = runs(run_m, frontage_m);
+        let slot_m = run_m / n as f32;
+        for k in 0..n {
+            // The tick of the house that is about to be pushed — the same formula
+            // `plan_blocks` uses for its height, color and roof, and it only stays in step
+            // because `out.len()` is the index this footprint will have.
+            let tick = lot * TICKS_PER_LOT + out.len() as u64;
+            // Centred in its slot, so half the gap falls on either side: two neighbours are
+            // then `(gap_k + gap_k+1) / 2` apart and the block still ends at its own edge.
+            let gap_m = slot_m * rng.range(tick, STREAM_GAP, 0.0, p.gap_fraction);
+            let setback_m = rng.range(tick, STREAM_SETBACK, 0.0, p.setback_max_m);
+            let depth_m = w - setback_m - rng.range(tick, STREAM_DEPTH, 0.0, p.depth_spread_m);
+            let width_m = slot_m - gap_m;
+            let along = (k as f32 + 0.5) * slot_m - run_m * 0.5;
+            // Measured from the street edge inward, never from the courtyard outward.
+            let inset = lot_m * 0.5 - setback_m - depth_m * 0.5;
+            out.push(match wing {
+                0 => Footprint { center_x: cx + along, center_z: cz - inset, size_x: width_m, size_z: depth_m },
+                1 => Footprint { center_x: cx + along, center_z: cz + inset, size_x: width_m, size_z: depth_m },
+                2 => Footprint { center_x: cx - inset, center_z: cz + along, size_x: depth_m, size_z: width_m },
+                _ => Footprint { center_x: cx + inset, center_z: cz + along, size_x: depth_m, size_z: width_m },
+            });
+        }
     }
 
     assert!(
@@ -430,44 +588,87 @@ mod tests {
         assert!(in_clear_radius(0.0, 29.5, 5.5, 6.0, 24.0), "edge in z at 23.5 m, radius 24");
     }
 
+    /// The ring the district is built from, as of 2026-08-12.
+    fn ashgate_ring() -> Perimeter {
+        Perimeter {
+            frontage_m: 12.0,
+            wing_depth_m: 11.0,
+            frontage_spread_m: 5.0,
+            gap_fraction: 0.22,
+            setback_max_m: 1.6,
+            depth_spread_m: 3.2,
+            cell_jitter_m: 2.0,
+            house_spread_m: 2.4,
+            roof: None,
+        }
+    }
+
     #[test]
-    fn f003_a_closed_block_is_a_ring_with_no_gap_and_a_courtyard() {
-        // The whole point of the layout change. Red the moment a run stops dividing into
-        // whole houses — then the block has a slot in it and the street is no longer closed.
-        let p = Perimeter { frontage_m: 12.0, wing_depth_m: 11.0 };
-        let houses = perimeter_houses(0.0, 0.0, 36.0, &p);
-        assert_eq!(houses.len(), 8, "3 + 3 fronts and 1 + 1 flanks");
+    fn f003_a_closed_block_stays_inside_its_lot_and_keeps_its_courtyard() {
+        // The two invariants no amount of irregularity may break: nothing leaves the cell (or
+        // it grows into the street and there is no street left), and nothing reaches into the
+        // courtyard (or the two facing wings meet in the middle of the block).
+        let p = ashgate_ring();
+        let rng = Rng::new(3405691582);
+        let court_half = 36.0 * 0.5 - p.wing_depth_m; // 7.0
 
-        // The two street fronts: three houses each, touching, spanning the full 36 m.
-        let mut north: Vec<&Footprint> = houses.iter().filter(|f| f.center_z < -6.0).collect();
-        north.sort_by(|a, b| a.center_x.total_cmp(&b.center_x));
-        assert_eq!(north.len(), 3);
-        assert!((north[0].center_x - north[0].size_x * 0.5 + 18.0).abs() < 1e-4);
-        for pair in north.windows(2) {
-            let gap = (pair[1].center_x - pair[1].size_x * 0.5)
-                - (pair[0].center_x + pair[0].size_x * 0.5);
-            assert!(gap.abs() < 1e-4, "party wall, not a {gap} m gap");
-        }
-        assert!((north[2].center_x + north[2].size_x * 0.5 - 18.0).abs() < 1e-4);
-
-        // The courtyard really is empty: nothing overlaps the inner 14 x 14 m.
-        for f in &houses {
-            let clear = (f.center_x.abs() - f.size_x * 0.5).max(f.center_z.abs() - f.size_z * 0.5);
-            assert!(clear >= 7.0 - 1e-4, "{f:?} eats into the 14 m courtyard");
-        }
-
-        // And no two houses of a ring overlap — the corners belong to the fronts.
-        for (i, a) in houses.iter().enumerate() {
-            for b in &houses[i + 1..] {
-                let dx = (a.center_x - b.center_x).abs();
-                let dz = (a.center_z - b.center_z).abs();
+        for lot in 0..64u64 {
+            let houses = perimeter_houses(0.0, 0.0, 36.0, &p, &rng, lot);
+            assert!(houses.len() >= 6, "lot {lot}: {} houses in a ring", houses.len());
+            for f in &houses {
+                let out_x = f.center_x.abs() + f.size_x * 0.5;
+                let out_z = f.center_z.abs() + f.size_z * 0.5;
                 assert!(
-                    !(dx < (a.size_x + b.size_x) * 0.5 - 1e-4
-                        && dz < (a.size_z + b.size_z) * 0.5 - 1e-4),
-                    "{a:?} and {b:?} stand in the same place"
+                    out_x <= 18.0 + 1e-4 && out_z <= 18.0 + 1e-4,
+                    "lot {lot}: {f:?} sticks out of its 36 m cell"
                 );
+                let clear =
+                    (f.center_x.abs() - f.size_x * 0.5).max(f.center_z.abs() - f.size_z * 0.5);
+                assert!(clear >= court_half - 1e-4, "lot {lot}: {f:?} eats into the courtyard");
+            }
+            // And no two houses of a ring stand in the same place — two cuboids in one spot
+            // are a z-fight and a doubled collider, and neither shows up in the picture.
+            for (i, a) in houses.iter().enumerate() {
+                for b in &houses[i + 1..] {
+                    let dx = (a.center_x - b.center_x).abs();
+                    let dz = (a.center_z - b.center_z).abs();
+                    assert!(
+                        !(dx < (a.size_x + b.size_x) * 0.5 - 1e-4
+                            && dz < (a.size_z + b.size_z) * 0.5 - 1e-4),
+                        "lot {lot}: {a:?} and {b:?} stand in the same place"
+                    );
+                }
             }
         }
+    }
+
+    #[test]
+    fn f003_no_two_houses_of_a_ring_are_the_same_box() {
+        // ★ The user's verdict, as a test: *„häuser sind alle ineinander! keine
+        // unterschiedliche höhen!"*. Red again the moment somebody takes the per-house draws
+        // back out — then every footprint of a run is the same rectangle, which is precisely
+        // what one merged mass with a flat top is made of.
+        let p = ashgate_ring();
+        let rng = Rng::new(3405691582);
+        let houses = perimeter_houses(0.0, 0.0, 36.0, &p, &rng, 7);
+
+        let widths: Vec<f32> = houses.iter().map(|f| f.size_x.max(f.size_z)).collect();
+        let depths: Vec<f32> = houses.iter().map(|f| f.size_x.min(f.size_z)).collect();
+        let spread = |v: &[f32]| {
+            v.iter().copied().fold(f32::MIN, f32::max) - v.iter().copied().fold(f32::MAX, f32::min)
+        };
+        assert!(spread(&widths) > 0.5, "every house is {:.2} m wide", widths[0]);
+        assert!(spread(&depths) > 0.5, "every house is {:.2} m deep", depths[0]);
+
+        // And there is at least one real alley in the ring — a gap you can see from the
+        // street, not a party wall.
+        let mut north: Vec<&Footprint> = houses.iter().filter(|f| f.center_z < -7.0).collect();
+        north.sort_by(|a, b| a.center_x.total_cmp(&b.center_x));
+        let widest = north
+            .windows(2)
+            .map(|w| (w[1].center_x - w[1].size_x * 0.5) - (w[0].center_x + w[0].size_x * 0.5))
+            .fold(0.0f32, f32::max);
+        assert!(widest > 0.3, "the widest gap in the street front is {widest:.2} m");
     }
 
     #[test]

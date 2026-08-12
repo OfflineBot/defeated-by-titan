@@ -1,23 +1,38 @@
 # f170-hud — the HUD over a populated frame, with the F3 overlay beside it.
 #
-#   cargo run -q -- --offscreen --script scripts/f170-hud.txt --ticks 200 \
+#   cargo run -q -- --offscreen --script scripts/f170-hud.txt --ticks 320 \
 #       --screenshot docs/images/f170-hud.png
 #
 # and, as a separate run, the one that returns a usable exit code (see `scripts/f-001-hooks.txt`
 # for why the two cannot be one command):
 #
-#   cargo run -q -- --headless --script scripts/f170-hud.txt --ticks 600
+#   cargo run -q -- --headless --script scripts/f170-hud.txt --ticks 900
+#
+# ⚠️ The verdict tick moved with the boost: the script now ends at **613** (measured), and the
+# 600 that used to stand here truncated the run — "instruction 16 of 16 is still running", which
+# is an ERROR since FIND-032 and says nothing about the HUD.
 #
 # ## Why the tank is emptied before the picture is taken
 #
 # **A full bar is the one bar that proves nothing.** `F-170`'s named failure is "the bar that
 # is a picture of a bar" (`docs/PLAN-GAME.md` §8) — an element that is present, looks right,
 # and is wired to a constant. At 100 % gas a hard-coded bar and a working one are the same
-# pixels. So one second of boost goes out of the tank first: `game.ron` gives
-# `vector.gas_boost_per_s = 18`, the two asserts below hold the result to 82 ± 0.35 (the
-# bracket is one tick of boost wide, for the reason `scripts/f-018-gas.txt` sets out), and the
-# gas bar in the image has to be **82 % long, not full**. That is a number you can hold a
-# ruler against.
+# pixels. So gas goes out of the tank first: `game.ron` gives `vector.gas_boost_per_s = 18`,
+# the two asserts below hold the result to 246 ± 0.35 (the bracket is one tick of boost wide,
+# for the reason `scripts/f-018-gas.txt` sets out), and the gas bar in the image has to be
+# **82 % long, not full**. That is a number you can hold a ruler against.
+#
+# ⚠️ **THE BOOST IS THREE SECONDS AND IT USED TO BE ONE — the tank changed size under this
+# file.** `vector.gas_tank` was 100 when this script was cut, so one second of boost was
+# 100 − 18 = 82 and "82" was both the gas figure and the percentage. The tank is **300** since
+# Q-033, so that same second leaves 282 — the asserts read `< 82.35` against a measured
+# **281.701** and the run exited 1, and worse, a 282/300 bar is **94 % long**: a picture of an
+# almost-full bar, which is the exact failure the file was written to rule out. Three seconds
+# is 54 gas, 300 − 54 = 246, and 246/300 is **82 %** again. The ruler claim survives the
+# retune; the second one did not.
+#
+# ⚠️ That moved the ticks with it: +120, so the last mark is at t=312 and the picture is shot
+# at **320**, not 200. `docs/images/f170-hud.png` has to be retaken.
 #
 # The boost points straight up (`look 0 89`, `camera.pitch_limit_deg`) so that it has no
 # horizontal unknown in it; the viewpoint afterwards is the one `scripts/p1-overlay.txt`
@@ -35,17 +50,17 @@
 # number nobody produced is the failure this picture exists to rule out, so an empty corner is
 # the honest state of the build and not a missing feature.
 #
-# ⚠️ The 200 ticks belong to THIS file: the last mark falls at t=192. Whoever changes a `wait`
+# ⚠️ The 320 ticks belong to THIS file: the last mark falls at t=312. Whoever changes a `wait`
 # changes the image.
 
 wait 1.5                 # 90 ticks: world, camera, meshes and the render pipelines come up
 
 look 0 89                # straight up — the boost then has no horizontal component
-key Shift 1.0            # one second of gas: 100 - 18 = 82
-wait 1.0
-mark f170-tank-at-82
-assert gas < 82.35       # game.ron: vector.gas_boost_per_s = 18, plus/minus one tick
-assert gas > 81.65
+key Shift 3.0            # three seconds of gas: 300 - 54 = 246, and 246/300 is the 82 % bar
+wait 3.0
+mark f170-tank-at-82-percent
+assert gas < 246.35      # game.ron: vector.gas_boost_per_s = 18, plus/minus one tick
+assert gas > 245.65
 
 look 0 -26               # the viewpoint of scripts/p1-overlay.txt: a populated frame
 warp 0 70 130
@@ -54,7 +69,7 @@ wait 0.3                 # the warp takes effect one tick later than it is writt
 key F3 0.05              # the overlay on, so the digits stand in the same PNG as the bars
 wait 0.3
 mark f170-hud
-assert gas < 82.35       # unchanged: coasting is free, nothing is drawn while falling
-assert gas > 81.65
+assert gas < 246.35      # unchanged: coasting is free, nothing is drawn while falling
+assert gas > 245.65
 
 wait 5                   # keep the run alive: if it ends, the process ends before the image

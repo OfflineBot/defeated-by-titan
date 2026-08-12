@@ -12,7 +12,7 @@
 # for every rope longer than the anchor's height, and the church is the only anchor tall enough
 # to give a real one". The user, after playing it: „und mehr tuerme zum lang hangeln!".
 #
-# `assets/data/maps.ron` answers that with nine gate towers along z = 70, and the arithmetic
+# `assets/data/maps.ron` answers that with a line of gantries at a 35 m pitch, and the arithmetic
 # behind them stands in that file. The one line of it that decides everything:
 #
 #     arc bottom = H - L        (H = anchor height, L = rope length at the hook)
@@ -20,6 +20,39 @@
 # so a swing exists only while `L < H`, and since `L` is at least the horizontal distance to
 # the anchor, **a tower has to be taller than the gap to the next tower.** 200 m of
 # `hook_range_m` does not change that by one metre — it is not the range that is missing.
+#
+# ---------------------------------------------------------------------------------------
+# ⚠️ **RE-AIMED ONTO ASHGATE, 2026-08-12 — AND NOT ONE ASSERT MOVED.**
+#
+# This file was cut against the graybox's nine gate towers at z = 70, and it swung along **+X**
+# from (-30, 58, 70). `maps.ron: current` is `"ashgate"` since `F-003`, which has no gate
+# towers, so all five hooks found nothing and the run stood at **17 of 39 red**.
+#
+# Ashgate has the same lane, turned ninety degrees: the **gantry line over the main street**,
+# `maps.ron: ashgate` — "ten stations from z = 227.5 to -87.5 = 315 m of lane", crossbeams
+# `(0, 58, z)` of `44 x 4 x 8` at a **35 m pitch**, `anchorable: true`, carried on legs at
+# x = ±14 that stop at y = 56 and are not anchorable. So the run now starts at
+# `(0, 58, 257.5)` and swings along **-Z** (`look 0 0`; yaw 0 is -Z, `docs/conventions.md`).
+#
+# **The only thing that changed is the two warps and the yaw of five `look` lines.** Every
+# assert, every bracket and every wait is byte-identical to the graybox version, because the
+# geometry is: same 35 m pitch, same beam height. Measured on ashgate against the graybox
+# numbers this file has quoted since it was written:
+#
+#   leg                graybox            ashgate           bracket
+#   arc bottom         33.32 m / 31.4     33.328 / 31.376   33.0-33.7 / 31.0-31.7
+#   leg 1              33.41 m / 31.32    33.411 / 31.321   33.0-33.8 / 31.0-31.8
+#   leg 2              27.66 m / 34.78    27.660 / 34.784   27.3-28.0 / 34.4-35.2
+#   leg 3              19.30 m / 39.26    19.357 / 39.256   19.0-19.7 / 39.0-39.6
+#   leg 4              12.63 m / 42.52    12.629 / 42.523   12.3-13.0 / 42.2-42.9
+#   leg 5 caught       15.08 m / 41.35    15.109 / 41.339   14.5-15.6 / 40.9-41.8
+#
+# and the five anchors come back at 59.42, 56.25, 58.70, 57.75, 59.03 against the graybox's
+# 59.42, 56.25, 58.70, 57.76, 59.04 — sub-centimetre, on a different map. That is not a
+# coincidence to be admired, it is the check: **the claim was about the arithmetic of a
+# 35 m-pitch lane at 58 m, not about a particular row of boxes**, and it survived being moved
+# to a different row of boxes without a single bracket being widened.
+# ---------------------------------------------------------------------------------------
 #
 # ## The baselines every number here is read against
 #
@@ -29,8 +62,8 @@
 #
 # ## ACT 1 — one arc, and where its bottom is
 #
-# Gate 0's crossbeam is hooked from the air beside gate -35, level with it: anchor
-# (-4.00, 59.42, 70.00), rope **26.10 m**. `59.42 - 26.10 = 33.32`, and 33.32 m is what the
+# The crossbeam at z = 227.5 is hooked from the air one station behind it, level with it: anchor
+# (0.00, 59.42, 231.50), rope **26.10 m**. `59.42 - 26.10 = 33.32`, and 33.32 m is what the
 # arc bottom measures — **33 m above the ground and 22 m above the residential roofs**, not
 # 24 m underground. Peak **31.4 m/s at the bottom**, and the far side of the swing gives the
 # height back to within 0.4 m: the rope is not where the energy goes.
@@ -39,15 +72,15 @@
 #
 # Five hooks, five arcs, one after the other. Anchor, rope, lowest point, peak speed:
 #
-#   leg 1  gate   0   ( -4.00, 59.42)  L 26.10  low 33.32 m  31.4 m/s
-#   leg 2  gate  35   ( 31.00, 56.25)  L 33.89  low 27.66 m  34.8 m/s
-#   leg 3  gate  70   ( 66.00, 58.70)  L 41.79  low 19.30 m  39.3 m/s
-#   leg 4  gate 105   (101.00, 57.76)  L 47.96  low 11.03 m  43.3 m/s  = 7.2x running
-#   leg 5  gate 140   (136.00, 59.04)  L 45.27  caught at 13.8 m and 42.0 m/s, climbs to 41.9 m
+#   leg 1  beam 227.5  (231.50, 59.42)  L 26.10  low 33.41 m  31.3 m/s
+#   leg 2  beam 192.5  (196.50, 56.25)  L 33.89  low 27.66 m  34.8 m/s
+#   leg 3  beam 157.5  (161.50, 58.70)  L 41.79  low 19.36 m  39.3 m/s
+#   leg 4  beam 122.5  (126.50, 57.75)  L 47.96  low 11.03 m  43.3 m/s  = 7.2x running
+#   leg 5  beam  87.5  ( 91.50, 59.03)  L 45.27  caught at 15.1 m and 41.3 m/s, climbs to 43.1 m
 #
-# The horizontal positions are not measured directly — `Metric` has no x — but they follow from
-# the anchor, the rope and the height, and the bottom of an arc lies under its anchor: x = -30
-# at the start, 136 at the last hook, 178 at the top of leg 5. **208 m of chained swinging in
+# The along-lane positions are not measured directly — `Metric` has no z — but they follow from
+# the anchor, the rope and the height, and the bottom of an arc lies under its anchor: z = 257.5
+# at the start, 91.5 at the last hook, ~49 at the top of leg 5. **208 m of chained swinging in
 # 7.23 s (t=508 to t=942) = 28.7 m/s average, 4.8x running speed, and not one unit of gas.**
 #
 # The lowest point sinks from leg to leg because a release at the bottom spends the whole
@@ -58,7 +91,7 @@
 # ⚠️ The `look` angles are not decoration and they are not round by accident: each one was
 # swept until the ray hit the near face of the next crossbeam. One degree too high on leg 4
 # (45 instead of 44) still hits; two degrees (46) flies over the beam and the run reports
-# "found nothing anchorable" instead of failing an assert. Whoever moves a tower in `maps.ron`
+# "found nothing anchorable" instead of failing an assert. Whoever moves a gantry in `maps.ron`
 # re-sweeps these five numbers.
 
 wait 1.5                # world, camera, meshes and the render pipelines come up
@@ -66,8 +99,8 @@ wait 1.5                # world, camera, meshes and the render pipelines come up
 # ---------------------------------------------------------------------------------------
 # ACT 0 — the baseline. What the player is worth without a rope.
 # ---------------------------------------------------------------------------------------
-warp -30 0.5 70
-look -90 0
+warp 0 0.5 257.5
+look 0 0
 wait 0.3
 assert height < 0.5     # standing on the floor of the lane, not on a roof
 assert speed < 0.5
@@ -79,13 +112,13 @@ assert speed < 6.1
 wait 0.8
 
 # ---------------------------------------------------------------------------------------
-# ACT 1 — one arc on gate 0, from level with its crossbeam.
+# ACT 1 — one arc on the beam at z = 227.5, from level with its crossbeam.
 # ---------------------------------------------------------------------------------------
-warp -30 58 70
-look -90 0
+warp 0 58 257.5
+look 0 0
 wait 0.1
 mark f004-arc-start
-assert height > 57.5    # 57.96: dropped off beside gate -35, level with the beams
+assert height > 57.5    # 57.82: dropped off one station behind it, level with the beams
 assert speed < 3.0
 
 hook right 4.0          # the rope, and nothing else, for the next four seconds
@@ -108,15 +141,15 @@ assert speed < 4.0
 assert gas == 300       # not one unit spent: no boost, no reel
 
 # ---------------------------------------------------------------------------------------
-# ACT 2 — the chain. Five towers, five arcs, one after the other.
+# ACT 2 — the chain. Five gantries, five arcs, one after the other.
 # ---------------------------------------------------------------------------------------
 wait 0.6
-warp -30 58 70
-look -90 0
+warp 0 58 257.5
+look 0 0
 wait 0.1
 mark f004-chain-start
 
-hook right 2.0          # leg 1 — gate 0, released at the bottom of the arc
+hook right 2.0          # leg 1 — beam 227.5, released at the bottom of the arc
 wait 2.0
 mark f004-leg-1
 assert height > 33.0    # 33.41 m: the bottom, and the release
@@ -124,8 +157,8 @@ assert height < 33.8
 assert speed > 31.0     # 31.32 m/s
 assert speed < 31.8
 
-look -90 33
-hook left 0.95          # leg 2 — gate 35, hooked at 33.89 m, bottom 27.66 m
+look 0 33
+hook left 0.95          # leg 2 — beam 192.5, hooked at 33.89 m, bottom 27.66 m
 wait 0.95
 mark f004-leg-2
 assert height > 27.3
@@ -133,8 +166,8 @@ assert height < 28.0
 assert speed > 34.4     # 34.78 m/s
 assert speed < 35.2
 
-look -90 39
-hook right 0.90         # leg 3 — gate 70, hooked at 41.79 m, bottom 19.30 m
+look 0 39
+hook right 0.90         # leg 3 — beam 157.5, hooked at 41.79 m, bottom 19.36 m
 wait 0.90
 mark f004-leg-3
 assert height > 19.0
@@ -142,20 +175,20 @@ assert height < 19.7
 assert speed > 39.0     # 39.26 m/s
 assert speed < 39.6
 
-look -90 44             # ⚠️ swept. 46 degrees flies over the beam and hooks nothing.
-hook left 1.20          # leg 4 — gate 105, hooked at 47.96 m, bottom 11.03 m
+look 0 44            # ⚠️ swept. 46 degrees flies over the beam and hooks nothing.
+hook left 1.20          # leg 4 — beam 122.5, hooked at 47.96 m, bottom 11.03 m
 wait 1.20
 mark f004-leg-4
 # Released on the RISING side this time, not at the bottom: the bottom was 11.03 m and one
-# more release down there would need a 58.6 m rope on a 58 m tower — `L < H` fails and the
+# more release down there would need a 58.6 m rope on a 58 m beam — `L < H` fails and the
 # chain would end on the ground. Letting it come back up is the whole trick.
 assert height > 12.3
 assert height < 13.0    # 12.63 m
 assert speed > 42.2     # 42.52 m/s
 assert speed < 42.9
 
-look -90 63
-hook right 3.0          # leg 5 — gate 140, hooked at 45.27 m
+look 0 63
+hook right 3.0          # leg 5 — beam 87.5, hooked at 45.27 m
 wait 0.40
 mark f004-leg-5-caught
 # The catch. He arrives almost straight under the beam (a 45.27 m rope on an anchor 45.2 m

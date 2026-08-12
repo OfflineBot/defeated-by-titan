@@ -3,6 +3,20 @@
 #   cargo run -- --offscreen --mission tutorial --script scripts/f071-won.txt \
 #                --screenshot docs/images/f071-active.png --ticks 200
 #
+# and, as a SEPARATE run, the one that returns a usable exit code — note that `--mission
+# tutorial` belongs to BOTH commands: without it there is no mission and the `phase` asserts
+# below measure a game that was never started:
+#
+#   cargo run -q -- --headless --mission tutorial --script scripts/f071-won.txt --ticks 900
+#
+# ⚠️ **A `--screenshot` run is not a verdict.** `debug::screenshot::exit_when_written` owns the
+# ending and writes `AppExit::Success` the moment the PNG is on disk, without ever reading
+# `run.failures` — so the command above exits 0 even when the asserts in this file are RED, and
+# the assert summary never prints (`docs/FINDINGS.md` FIND-073). Only the `--headless` run
+# reports "N asserts held" and returns an exit code worth reading. Its tick count is
+# deliberately generous: overshooting the script's own end is free, undershooting truncates the
+# run and hides the summary (FIND-032).
+#
 # ⚠️ **This script cannot reach `Won` today, and it does not pretend to.** A win needs three
 # `TitanHit { zone: Cortex }`, and the only thing that produces those in a real run is
 # `combat`/`blades` — built in the same round, by another job, and not landed when this file

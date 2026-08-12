@@ -6,15 +6,23 @@
 #                     --script scripts/game-full.txt --ticks 1100 \
 #                     --screenshot docs/images/f071-won.png
 #
-# MEASURED on debian, 2026-08-10 — two headless runs agreed to the tick and to the digit:
+# MEASURED on offlinebot, 2026-08-12, in **ashgate** — the run says, in this order:
 #
-#   t=235   reel:  speed 46.414 m/s, height 13.064 m   -> `assert speed > 25` HOLDS
+#   t=235   reel:  speed 28.741 m/s, height 15.521 m   -> `assert speed > 25` HOLDS
+#   t=357   on the church roof: height 35.000 m, speed 0.000
 #   t=653   cut titan 2 Torso  at 30.00 m/s
 #   t=656   cut titan 2 Cortex at 30.33 m/s   -> kill: player 1 cut titan 2 — 1/3
 #   t=777   cut titan 3 Cortex at 30.33 m/s   -> 2/3
 #   t=898   cut titan 4 Cortex at 30.33 m/s   -> 3/3
 #   t=898   MISSION WON (decided_at_tick 898, deadline 19 800) — 3/3 kills, health 100
 #   headless: 23 asserts held, 1200 ticks, exit 0
+#
+# ⚠️ **THE MAP CHANGED UNDER THIS FILE ON 2026-08-12 AND IT WAS RE-AIMED, NOT LOOSENED.**
+# `maps.ron: current` is `"ashgate"`; the graybox watchtower ACT 1 hooked and the lot ACT 4
+# dropped into are both gone. Nine of 23 asserts were red. What changed here is **three
+# coordinates, one yaw/pitch pair and two waits that cancel** — no assert was touched, and the
+# four cut ticks (653/656, 774/777, 895/898) and the totals (23 asserts, 1200 ticks) are the
+# same numbers the graybox run produced. What each move was and why is written at its act.
 #   offscreen at tick 1100: the overlay reads `mission WON  kills 3/3`, and the PNG is
 #   bit-identical over two runs —
 #   sha256 5a4d359b28517882cd8c81ceab88f9d7577e54ca365c664c15f5344623488579
@@ -75,12 +83,27 @@ key F3 0.05       # the overlay carries pos, tick, phase and kills into the PNG
 # ACT 1 — the flight. Hook a landmark, reel, and be moving faster than the design assumes.
 # =========================================================================================
 #
-# `maps.ron` puts a 12 m watchtower at (24, 6, -40), so its near face is z = -34 and its roof
-# is y = 12. Standing 14 m in front of it at 34 degrees up, the ray lands at (24, 11.04, -34),
-# near the top of a face that carries `anchorable: true`.
+# ⚠️ **RE-AIMED 2026-08-12: the graybox watchtower does not exist in ashgate.** It stood at
+# (24, 6, -40) with its roof at y = 12; the old `look 0 34` / `warp 24 0 -20` now shoots over
+# an empty lot and every number in this act was red.
+#
+# **Ashgate's church is the replacement, and it is the same shape one storey taller.**
+# `maps.ron` puts a 14 x 35 x 14 `anchorable: true` block at (45, 17.5, -22) — x 38..52,
+# z -29..-15, **roof at y = 35**. Standing 14 m in front of its -Z face at 66.6 degrees up,
+# the ray lands at y = 1.65 + 14 x tan 66.6 = 33.95, one metre under the roof line — the same
+# aim the watchtower got (11.04 under a roof of 12), scaled to the taller face. Probed, one
+# shot: `anchored at (45.00, 34.00, -29.00)`.
+#
+# `warp 45 0 -43` is clear ground, and that had to be checked rather than assumed: the market
+# hall at x 38..64, z -15..-1 covers the stand the +Z face would have needed, and the HQ
+# covers x -47..-15, z -13..13. Measured `height 0.050` on the tick after the warp.
+#
+# **The roof is 35 m and not 12 m, and that only makes the act's own claim safer**: the
+# mission's own `husk#1` reaches the shoulder of a 10 m titan (`combat::strike`), so a perch
+# that was 2 m out of reach is now 25 m out of reach.
 
-look 0 34
-warp 24 0 -20
+look 180 66.6
+warp 45 0 -43
 wait 0.3          # the warp takes effect one tick later than it is written
 
 assert height > -0.1    # standing on the ground, not sunk into it
@@ -101,32 +124,47 @@ key Ctrl 5.0            # REEL_IN: the rope gets shorter and the player goes wit
 wait 0.6
 mark game-reeled
 
-# ***** docs/PLAN-GAME.md §3.1, Risk 1 — the tripwire, checked for the first time *****
+# ***** docs/PLAN-GAME.md §3.1, Risk 1 — the tripwire *****
 #
-# ⚠️⚠️ **THESE TWO ARE RED AS OF 2026-08-10, AND THEY ARE LEFT RED ON PURPOSE.**
+# ⚠️⚠️ **THESE TWO WERE RED FROM 2026-08-10 AND THEY ARE GREEN AGAIN — BUT READ WHY BEFORE
+# YOU BELIEVE THE RISK IS RETIRED, BECAUSE IT IS NOT.**
 #
-#     assert speed > 25    measured 46.414 m/s until this morning, measures **19.344** now
-#     assert height > 12   measured 13.064 m   until this morning, measures ** 9.881** now
+#     assert speed > 25    46.414 m/s (overshoot bug) -> 19.344 RED -> **28.741** now
+#     assert height > 12   13.064 m                   ->  9.881 RED -> **15.521** now
 #
-# Nothing in ACT 1 changed. What changed is underneath it: `B-004`'s take-up ratchet in
-# `src/player/rope.rs` (2026-08-10) makes the rope follow the real distance DOWN and never up,
-# so the player can no longer fly past his anchor. The 46.414 this file and
-# `scripts/f-001-hooks.txt` have quoted for a day was that overshoot — a reel that ended at
+# The red was real. `B-004`'s take-up ratchet in `src/player/rope.rs` (2026-08-10) makes the
+# rope follow the real distance DOWN and never up, so the player can no longer fly past his
+# anchor; the 46.414 this file quoted for a day was that overshoot — a reel that ended at
 # 54.18 m/s and then whipped (docs/QUESTIONS.md Q-032, docs/FINDINGS.md FIND-016). With the
-# rope kept taut the same reel arrives at 19.344 m/s and stops 2 m short of the roof line.
+# rope kept taut, the same shallow reel arrived at 19.344 m/s.
 #
-# **Loosening either line would delete the only tripwire this project has for Risk 1.** The
-# sentence "the whole combat design assumes a player who moves at 30 m/s" is either true of the
-# rope or it is not, and right now it is not — ACTS 2-4 below still cut at 30.00/30.33 m/s, but
-# every one of those is a FALL. The repair belongs to the rope/vector job, not to this file.
+# ⚠️ **NOTHING IN THE ROPE CODE CHANGED BETWEEN 19.344 AND 28.741. THE ANCHOR DID.** The
+# ratchet is still there. What moved is the geometry this act aims at: graybox reeled 34
+# degrees up onto a 12 m roof, ashgate reels **66.6 degrees up onto a 35 m roof**, and a reel
+# that is mostly vertical spends its shortening on height instead of on closing a horizontal
+# gap. Same `reel_speed_m_s`, same ratchet, +9.4 m/s.
+#
+# So the honest sentence is **not** "the rope now does 30 m/s". It is: **the rope delivers 25+
+# m/s when the anchor is steep, and 19 m/s when it is shallow, and this file only ever samples
+# one anchor.** `assert speed > 25` is therefore a tripwire on THIS geometry and not on the
+# vector gear — re-aiming it green is exactly the move that could retire Risk 1 without
+# earning it. Risk 1 stays open (`docs/FINDINGS.md` FIND-065); the number a player actually
+# gets over a district full of 8-11.5 m housing is unmeasured, and the housing is shallow.
+#
+# ACTS 2-4 below still cut at 30.00/30.33 m/s, and every one of those is a FALL.
 assert speed > 25       # "the rest of this plan is designed for a player who moves at 30 m/s"
 assert height > 12.0    # a jump reaches 1.056 m. Twelve metres is the rope and nothing else.
 assert gas < 300        # and the reel really was paid for out of the tank (`gas_tank` is 300
                         # since 2026-08-10 — the old `< 100` rebased, not loosened)
 
-wait 1.2
+wait 2.0                # 1.2 -> 2.0 on 2026-08-12: the 35 m roof is 23 m further up than the
+                        # watchtower's, so the reel is still running at the old mark. Measured
+                        # 8.411 m/s at t=309 and 0.000 at t=357. The 0.8 s is given back at
+                        # `wait 3.4` below, so every tick after `game-rope-released` — and the
+                        # whole of ACTS 2-4 — is where it was.
 mark game-on-the-roof
-assert height > 11.5    # he ends up standing on the watchtower roof: maps.ron, y = 12
+assert height > 11.5    # he ends up standing on the church roof: maps.ron, y = 35 — measured
+                        # 35.000. The bracket is the watchtower's and is left as it was.
 assert speed < 1.0
 assert phase == 2       # Active — the mission has been running the whole time
 assert kills == 0
@@ -141,11 +179,12 @@ assert kills == 0
 # fired, no hook message, nothing. Only the third cut landed, and it landed because it was the
 # first one after t=533.
 #
-# So: Act 1 stays verbatim (its numbers are `scripts/f-001-hooks.txt`'s measured ones) and the
-# fight waits the rope out. The husk of the mission's own first wave is 38 m away on the ground
-# and cannot reach a roof at y = 12 anyway (`combat::strike`'s ceiling is the shoulder,
+# So: the fight waits the rope out. The husk of the mission's own first wave is on the ground
+# and cannot reach a roof at y = 35 anyway (`combat::strike`'s ceiling is the shoulder,
 # 0.82 x 10 m).
-wait 4.2                # past t=533: both rope keys released, the joint is gone
+wait 3.4                # past t=534: both rope keys released, the joint is gone.
+                        # 4.2 -> 3.4 on 2026-08-12, the 0.8 s borrowed by `wait 2.0` above.
+                        # The mark still lands at t=563, 29 ticks after the release.
 mark game-rope-released
 assert speed < 1.0      # standing on the roof, attached to nothing
 assert height > 11.5
@@ -183,11 +222,24 @@ assert phase == 2       # two of three, still not won
 # =========================================================================================
 # ACT 4 — the third husk, and the verdict.
 # =========================================================================================
+#
+# ⚠️ **RE-AIMED 2026-08-12: this act used to drop into the HQ.** It was `warp -17.80 30.8
+# 12.55` / `spawn titan husk -16 0 12`, and ashgate puts its headquarters at x -47..-15,
+# z -13..13 with a roof at 11.5 m — so the husk spawned inside the building and the player
+# landed on its roof instead of on the nape. The symptom was the one ACT 1 of this file
+# predicts for a bad position: **no `cut titan 4` line at all**, and `assert kills == 3 —
+# measured 2.000`.
+#
+# The pass is moved to open pavement on the main street (x -15..15 is street the whole way)
+# at z = -40, which sits between the gantry stations at z = -17.5 and z = -52.5 and so has
+# nothing overhead in the 30.8 m fall column either. **The pass itself is untouched**: the
+# 1.80 m of -X offset, the 0.55 m of cortex set-back, the 30.8 m drop and every wait are ACT
+# 2's, and the cut lands on the same tick arithmetic — t=895 torso, t=898 cortex.
 
-warp -17.80 30.8 12.55
+warp -1.80 30.8 -39.45
 look 0 0
 wait 0.45
-spawn titan husk -16 0 12
+spawn titan husk 0 0 -40
 wait 0.90
 slash right 0.40
 wait 0.60
@@ -204,10 +256,13 @@ assert health > 0       # nor by going down: this is the winning half, not the l
 # back over the field he just cleared. A resting moment on purpose — `--offscreen` is only
 # bit-reproducible where the state changes slowly (`scripts/f-001-hooks.txt`).
 #
-# yaw -55: `forward = (-sin yaw, 0, -cos yaw)`, so from (-17.8, ., 12.55) that points back at
-# the origin and the grey city. The three cut husks have dissolved by then (`death_s` 1.0 s)
-# and `husk#1` is out of frame — what the PNG carries is the overlay's `mission WON  kills 3/3`
-# over the field, plus the whole HUD: gas bar, five blade pips, a full health bar, crosshair.
+# yaw -55: `forward = (-sin yaw, 0, -cos yaw)`, so from (-1.8, ., -39.45) — ACT 4's new stand
+# on the main street — that points back up the boulevard at the district and the wall behind
+# it. The three cut husks have dissolved by then (`death_s` 1.0 s), and what the PNG carries is
+# the overlay's `mission WON  kills 3/3`, plus the whole HUD: gas bar, five blade pips, a full
+# health bar, crosshair.
+# ⚠️ The framing changed with ACT 4's move and `docs/images/f071-won.png` was NOT retaken here
+# — that is a picture job, and this file's verdict is the headless run.
 wait 1.5
 look -55 2
 mark game-won

@@ -4,6 +4,18 @@
 #   cargo run --features wayland,audio -- \
 #       --script scripts/t006-shot-near.txt --ticks 110 --screenshot docs/images/t006-player-view.png
 #
+# and, as a SEPARATE run, the one that returns a usable exit code:
+#
+#   cargo run -q -- --headless --script scripts/t006-shot-near.txt --ticks 800
+#
+# ⚠️ **A `--screenshot` run is not a verdict.** `debug::screenshot::exit_when_written` owns the
+# ending and writes `AppExit::Success` the moment the PNG is on disk, without ever reading
+# `run.failures` — so the command above exits 0 even when the asserts in this file are RED, and
+# the assert summary never prints (`docs/FINDINGS.md` FIND-073). Only the `--headless` run
+# reports "N asserts held" and returns an exit code worth reading. Its tick count is
+# deliberately generous: overshooting the script's own end is free, undershooting truncates the
+# run and hides the summary (FIND-032).
+#
 # The actual purpose: **scale.** The block heights in assets/data/maps.ron are derived from
 # scale.ron and have never been seen to this day. An image from eye height is the only
 # check that can confirm or refute "4.5 m is a small house".

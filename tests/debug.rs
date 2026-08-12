@@ -21,6 +21,7 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::debug::gizmo::{GizmoToggle, GizmoCounts, GizmoSystems};
+use defeated_by_titan::debug::screenshot::shot_verdict;
 use defeated_by_titan::debug::script::parse;
 use defeated_by_titan::debug::{DebugOverlay, ScriptRun};
 use defeated_by_titan::player::spawn_player;
@@ -499,6 +500,35 @@ fn assert_kills_without_a_mission_measures_nothing_and_fails() {
 }
 
 #[test]
+fn assert_kills_names_the_missing_tally_and_not_the_player() {
+    // **The wrong link of the `?` chain.** `measure(Kills)` walks two of them — the local
+    // player, then the mission's `KillTally` — and the failure message named the *first* one
+    // whichever had gone missing: `measured nothing (no player found)` on a run that has a
+    // player and no mission. `docs/FINDINGS.md` records two runs (`p1-overlay`,
+    // `p1-no-overlay`) that read exactly that line with a player standing in the world, and
+    // the next reader spends the hour at the player spawn instead of on the missing
+    // `--mission`. A wrong error message is more expensive than no message.
+    let mut app = running_app();
+    // The premise: there IS a player, so "no player" would be a lie, and there is no mission,
+    // so the tally is the link that is really missing.
+    let _ = local_player(&mut app);
+
+    let (checked, failures) = run_line(&mut app, "assert kills == 0");
+    assert_eq!(checked, 1);
+    assert_eq!(failures.len(), 1, "no mission means nothing to measure");
+    assert!(
+        !failures[0].contains("player"),
+        "there is a player — the message must not blame one: {:?}",
+        failures[0]
+    );
+    assert!(
+        failures[0].contains("mission"),
+        "the missing link is the mission's kill tally and the message has to say so: {:?}",
+        failures[0]
+    );
+}
+
+#[test]
 fn assert_phase_without_a_mission_reads_briefing() {
     // The state is registered in **every** launch mode (`MissionPlugin`), so this one is
     // always measurable — and `Briefing` (0) is the honest reading of "no mission was
@@ -693,6 +723,71 @@ fn a_run_without_a_script_and_a_finished_script_both_stay_green() {
     assert!(
         !exit_of_a_run(6, "assert height > 0\nwait 0.02\nend\n").is_error(),
         "a script that reached its end with every assert holding must stay green"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// `--screenshot` and the verdict. The same false green as above, one file further on.
+// ---------------------------------------------------------------------------------------
+
+/// A [`ScriptRun`] in the state a screenshot run would hand to the verdict.
+///
+/// Built through `Default` and the public fields instead of a literal: `held` is private,
+/// and a test that mirrors the struct would stop testing the real resource the day a field
+/// is added.
+fn run_state(failures: &[&str], finished: bool) -> ScriptRun {
+    let mut run = ScriptRun::default();
+    run.plan = parse("assert height > 0\nwait 10\nmark late\n").expect("the probe script parses");
+    run.checked = 3;
+    run.failures = failures.iter().map(|f| f.to_string()).collect();
+    run.done = finished;
+    if finished {
+        run.at = run.plan.len();
+    }
+    run
+}
+
+#[test]
+fn a_failed_assert_is_red_on_the_screenshot_path_too() {
+    // **The bug this test exists for** (`FIND-074`). `exit_when_written` wrote
+    // `AppExit::Success` the moment the PNG was on disk, without ever looking at the script:
+    //
+    //   --offscreen --script scripts/f-001-hooks.txt --ticks 400 --screenshot /tmp/x.png
+    //     -> 4 asserts red, "image written (820429 bytes)", exit 0
+    //
+    // `FIND-032` fixed exactly this for `--ticks` and named this file as the other half. It
+    // is the worse half of the two: 16 of 35 scripts documented only a `--screenshot`
+    // command, so their whole recorded verdict came from a code path that could not report
+    // one.
+    assert!(
+        shot_verdict(&run_state(&["line 12: assert Speed > 35 — measured 20.147"], false))
+            .is_error(),
+        "a picture run with a red assert reported success — the one invariant is that a \
+         failed assert is never green, under any flag combination"
+    );
+    // And it must not depend on how the run ended: red is red, finished or cut off.
+    assert!(shot_verdict(&run_state(&["line 12: assert Rope == 2 — measured 0.000"], true)).is_error());
+}
+
+#[test]
+fn a_screenshot_that_cuts_its_script_short_is_not_an_error() {
+    // **The half that keeps the fix from being worse than the bug, and it is deliberately
+    // the opposite of `a_script_cut_off_before_its_end_is_not_a_green_run_either` above.**
+    // A `--ticks` run is cut off by accident — the number was too small and the run has not
+    // shown what the script claims. A screenshot run is cut off on purpose: `--ticks 152`
+    // picks the moment that is to be photographed and the instructions after it are not
+    // meant to run. If `shot_verdict` inherited `cutoff_verdict`'s second rule, **every**
+    // image run in this repository would exit 1 and `docs/ACCEPTANCE.md`'s "no image, no 🟧"
+    // would have no green command left to produce one with.
+    assert!(
+        !shot_verdict(&run_state(&[], false)).is_error(),
+        "a picture taken at a chosen tick is not a failed run — the script is supposed to be \
+         unfinished there"
+    );
+    assert!(!shot_verdict(&run_state(&[], true)).is_error(), "a clean finished run stays green");
+    assert!(
+        !shot_verdict(&ScriptRun::default()).is_error(),
+        "`--screenshot` without any `--script` is a picture, not a test that failed"
     );
 }
 

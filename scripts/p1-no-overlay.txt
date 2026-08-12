@@ -1,7 +1,17 @@
 # p1-no-overlay — the control image: identical run, overlay never switched on.
 #
 #   cargo run -q -- --offscreen \
-#       --script scripts/p1-overlay.txt --ticks 140 --screenshot docs/images/p1-overlay.png
+#       --script scripts/p1-no-overlay.txt --ticks 140 --screenshot docs/images/p1-no-overlay.png
+#
+# and, as a separate run, the one that returns a usable exit code — a `--screenshot` run exits 0
+# even with red asserts, because `src/debug/screenshot.rs::exit_when_written` never reads
+# `run.failures` (`docs/FINDINGS.md` FIND-073):
+#
+#   cargo run -q -- --headless --script scripts/p1-no-overlay.txt --ticks 800
+#
+# The 800 is deliberately generous and is NOT the 140 of the picture: the script's own end is
+# at **431 ticks** (measured), so `--ticks 140` would truncate the run and the assert summary
+# would never print. Overshooting is free; undershooting hides the verdict (FIND-032).
 #
 # This is not a feature script. It is the evidence route itself: `--offscreen` renders into
 # an `Image`, and `DefaultUiCamera` answers `None` for an image target unless the camera
@@ -10,9 +20,10 @@
 # HUD is missing from it. **An empty image that looks like evidence** is the trap this file
 # exists to catch (docs/PLAN-GAME.md §11, risk 3).
 #
-# Its twin `scripts/p1-no-overlay.txt` is the same run without the F3 line. The two PNGs
-# must differ, and they must differ ONLY in the top-left corner — that difference is what
-# proves the overlay is drawn, rather than the file merely having been written.
+# This is the CONTROL half of that pair. Its twin `scripts/p1-overlay.txt` is the identical
+# run **with** the F3 line. The two PNGs must differ, and they must differ ONLY in the
+# top-left corner — that difference is what proves the overlay is drawn, rather than the file
+# merely having been written.
 #
 # ⚠️ The 140 belong to THIS file: wait 1.5 = 90 ticks at 60 Hz, then 18 + 18. Whoever
 # changes a wait changes the image.
@@ -30,6 +41,9 @@ wait 0.3                # one frame is enough; the extra ticks make the tick num
 
 assert height > 65       # the warp really did take effect (measured 65.98 at tick 130)
 assert height < 67       # and the player has not fallen further than one wait
-assert kills == 0        # the new vocabulary, exercised in a real run
-mark p1-overlay
+# ⚠️ Was `assert kills == 0`, unmeasurable for the reason spelled out in `scripts/p1-overlay.txt`
+# at this same line: no `--hub`, no mission, no tally, and the driver counts an unmeasurable
+# check as failed. `phase` is always measurable.
+assert phase == 0        # the new vocabulary, exercised in a real run: no mission is running
+mark p1-no-overlay
 wait 5                  # keep the run alive: if it ends, the process ends before the image

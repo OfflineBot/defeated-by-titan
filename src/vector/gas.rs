@@ -131,12 +131,23 @@ pub fn gas_budget(
     // `tests/vector_gas.rs` goes red on it.
     let boost_cost = vector.gas_boost_per_s * dt;
     let reel_cost = vector.gas_reel_per_s * dt;
+    // **Not multiplied by `dt`, and that is the point of `F-008`.** The other two are rates and
+    // are billed per tick; a dodge is one impulse and is billed once, on the tick the double-tap
+    // lands. `gas_dodge` therefore has no `_per_s` in its name and must not grow one.
+    let dodge_cost = vector.gas_dodge;
 
     for (intent, hook, mut gas, mut grant) in &mut players {
         let wants_boost = intent.pressed(Buttons::BOOST);
         let wants_reel_in = intent.pressed(Buttons::REEL_IN) && hook.anchored_count() > 0;
+        // The same shape as the line above it, and for the same reason: **the cost follows the
+        // effect, not the button.** A double-tap with no movement key held has no direction to
+        // throw the player in (`boost::dodge_direction` answers `None`), so `vector::boost`
+        // would write zero — and billing 15 % of a tank for zero thrust is the invisible leak
+        // that whole detour exists to prevent. One rule, one function, two callers.
+        let wants_dodge =
+            intent.pressed(Buttons::DODGE) && super::boost::dodge_direction(intent).is_some();
 
-        if !wants_boost && !wants_reel_in {
+        if !wants_boost && !wants_reel_in && !wants_dodge {
             // Nobody wants anything, so **the tank is not touched at all** — not even to
             // write the same number back. `Changed<Gas>` is a signal the HUD and one day the
             // wire read, and a tank that reports a change every tick without changing is a
@@ -151,10 +162,8 @@ pub fn gas_budget(
         let mut tank = *gas;
         let booked = book(
             &vector.gas_priority,
-            wants_boost,
-            wants_reel_in,
-            boost_cost,
-            reel_cost,
+            Wants { boost: wants_boost, reel_in: wants_reel_in, dodge: wants_dodge },
+            Costs { boost: boost_cost, reel_in: reel_cost, dodge: dodge_cost },
             &mut tank,
         );
         gas.set_if_neq(tank);
@@ -170,14 +179,7 @@ pub fn gas_budget(
 /// Every consumer is served **at most once** per tick, whatever the list says. A duplicate
 /// entry in `gas_priority` is a data error — `tests/vector_gas.rs` names it — but it must not
 /// turn into a double debit in the meantime.
-pub fn book(
-    priority: &[GasConsumer],
-    wants_boost: bool,
-    wants_reel_in: bool,
-    boost_cost: f32,
-    reel_cost: f32,
-    gas: &mut Gas,
-) -> GasGrant {
+pub fn book(priority: &[GasConsumer], wants: Wants, costs: Costs, gas: &mut Gas) -> GasGrant {
     let mut grant = GasGrant::default();
     // **Exhaustive `match`, no `_` arm.** The day `GasConsumer` gets a third variant
     // (`F-008` dash is already written into `docs/features.ron`), this file has to stop
@@ -185,18 +187,50 @@ pub fn book(
     for consumer in priority {
         match consumer {
             GasConsumer::Boost => {
-                if wants_boost && !grant.boost {
-                    grant.boost = gas.try_spend(boost_cost);
+                if wants.boost && !grant.boost {
+                    grant.boost = gas.try_spend(costs.boost);
                 }
             }
             GasConsumer::ReelIn => {
-                if wants_reel_in && !grant.reel_in {
-                    grant.reel_in = gas.try_spend(reel_cost);
+                if wants.reel_in && !grant.reel_in {
+                    grant.reel_in = gas.try_spend(costs.reel_in);
+                }
+            }
+            GasConsumer::Dodge => {
+                if wants.dodge && !grant.dodge {
+                    grant.dodge = gas.try_spend(costs.dodge);
                 }
             }
         }
     }
     grant
+}
+
+/// Who wants gas this tick. **A struct and not three `bool` arguments** — [`book`] would
+/// otherwise take three `bool`s and three `f32`s in a row, and the day somebody swaps two of
+/// them the compiler says nothing and a dodge is billed a reel-in's price.
+///
+/// Every field is the *want*, already filtered by whether it can have an effect:
+/// `reel_in` is false without an anchored hook, `dodge` is false without a movement direction
+/// (`vector::boost::dodge_direction`). **The cost follows the effect, not the button.**
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Wants {
+    pub boost: bool,
+    pub reel_in: bool,
+    pub dodge: bool,
+}
+
+/// What one tick of each consumer costs, in gas.
+///
+/// ⚠️ **`boost` and `reel_in` are per-tick amounts** — the rate out of the file already
+/// multiplied by `dt` — **and `dodge` is not.** A dodge is one impulse and is billed whole, on
+/// the one tick its grant is true. Multiplying it by `dt` as well would make it 60 times
+/// cheaper and nobody would see why.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Costs {
+    pub boost: f32,
+    pub reel_in: f32,
+    pub dodge: f32,
 }
 
 #[cfg(test)]
@@ -206,6 +240,19 @@ mod tests {
     /// 60 Hz, the numbers from `game.ron` as of 2026-08-09: 18/s and 6/s.
     const BOOST: f32 = 18.0 / 60.0; // 0.3
     const REEL: f32 = 6.0 / 60.0; //  0.1
+    /// `F-008`, and **flat** — not divided by 60. The dodge is billed once, not per second.
+    const DODGE: f32 = 45.0;
+
+    /// The two continuous consumers as every test below spells them; `F-008` is off unless a
+    /// test says otherwise. A helper and not three literals per call, so that adding a fourth
+    /// consumer one day touches one line rather than nine.
+    fn wants(boost: bool, reel_in: bool) -> Wants {
+        Wants { boost, reel_in, dodge: false }
+    }
+
+    fn costs() -> Costs {
+        Costs { boost: BOOST, reel_in: REEL, dodge: DODGE }
+    }
 
     #[test]
     fn f018_the_file_decides_who_gets_the_last_drop() {
@@ -213,7 +260,7 @@ mod tests {
         // the case in which, without the booking, the system order would decide — and the
         // system order is not a design.
         let mut first = Gas { current: 0.35, ..Gas::full(100.0) };
-        let g = book(&[GasConsumer::Boost, GasConsumer::ReelIn], true, true, BOOST, REEL, &mut first);
+        let g = book(&[GasConsumer::Boost, GasConsumer::ReelIn], wants(true, true), costs(), &mut first);
         assert!(g.boost, "the file names Boost first, so Boost gets the drop");
         assert!(!g.reel_in, "and there is nothing left over for the second one");
         assert!((first.current - 0.05).abs() < 1e-6, "0.35 - 0.3 = 0.05, got {}", first.current);
@@ -221,7 +268,7 @@ mod tests {
         // The same tank, the other order — and the other one wins. If this holds, the order
         // really is a value from the file and not an `if` in the code.
         let mut second = Gas { current: 0.35, ..Gas::full(100.0) };
-        let g = book(&[GasConsumer::ReelIn, GasConsumer::Boost], true, true, BOOST, REEL, &mut second);
+        let g = book(&[GasConsumer::ReelIn, GasConsumer::Boost], wants(true, true), costs(), &mut second);
         assert!(g.reel_in, "ReelIn stands first here");
         assert!(!g.boost, "0.35 - 0.1 = 0.25 is not enough for a boost costing 0.3");
         assert!((second.current - 0.25).abs() < 1e-6, "got {}", second.current);
@@ -236,7 +283,7 @@ mod tests {
             [GasConsumer::ReelIn, GasConsumer::Boost],
         ] {
             let mut gas = Gas { current: 0.35, ..Gas::full(100.0) };
-            let g = book(&order, true, true, BOOST, REEL, &mut gas);
+            let g = book(&order, wants(true, true), costs(), &mut gas);
             assert_eq!(
                 u8::from(g.boost) + u8::from(g.reel_in),
                 1,
@@ -249,7 +296,7 @@ mod tests {
     fn f018_an_empty_tank_pays_for_no_half_boost() {
         // `F-018` in its own words: "at 0 no more flying, only ground movement".
         let mut gas = Gas { current: 0.1, ..Gas::full(100.0) };
-        let g = book(&[GasConsumer::Boost, GasConsumer::ReelIn], true, false, BOOST, REEL, &mut gas);
+        let g = book(&[GasConsumer::Boost, GasConsumer::ReelIn], wants(true, false), costs(), &mut gas);
         assert!(!g.boost, "0.1 does not cover a boost costing 0.3");
         assert!(
             (gas.current - 0.1).abs() < 1e-6,
@@ -261,7 +308,7 @@ mod tests {
     #[test]
     fn f018_whoever_does_not_want_gas_does_not_pay() {
         let mut gas = Gas::full(100.0);
-        let g = book(&[GasConsumer::Boost, GasConsumer::ReelIn], false, false, BOOST, REEL, &mut gas);
+        let g = book(&[GasConsumer::Boost, GasConsumer::ReelIn], wants(false, false), costs(), &mut gas);
         assert_eq!(g, GasGrant::default());
         assert!((gas.current - 100.0).abs() < 1e-6, "tank at {}", gas.current);
     }
@@ -270,7 +317,7 @@ mod tests {
     fn f018_the_sandbox_tank_grants_everything_and_stays_full() {
         // `--sandbox`: infinite gas, for looking around (§12a).
         let mut gas = Gas { unlimited: true, ..Gas::full(1.0) };
-        let g = book(&[GasConsumer::Boost, GasConsumer::ReelIn], true, true, BOOST, REEL, &mut gas);
+        let g = book(&[GasConsumer::Boost, GasConsumer::ReelIn], wants(true, true), costs(), &mut gas);
         assert!(g.boost && g.reel_in, "in the sandbox both get fuel: {g:?}");
         assert!((gas.current - 1.0).abs() < 1e-6, "and nothing leaves the tank");
         assert!(!gas.is_empty());
@@ -289,10 +336,8 @@ mod tests {
             for tick in 0..900 {
                 book(
                     &[GasConsumer::Boost, GasConsumer::ReelIn],
-                    wants_boost,
-                    wants_reel,
-                    BOOST,
-                    REEL,
+                    wants(wants_boost, wants_reel),
+                    costs(),
                     &mut gas,
                 );
                 assert!(
@@ -314,10 +359,8 @@ mod tests {
         let mut gas = Gas::full(100.0);
         let g = book(
             &[GasConsumer::Boost, GasConsumer::Boost, GasConsumer::ReelIn],
-            true,
-            false,
-            BOOST,
-            REEL,
+            wants(true, false),
+            costs(),
             &mut gas,
         );
         assert!(g.boost);

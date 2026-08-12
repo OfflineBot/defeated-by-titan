@@ -32,4 +32,131 @@
     // size class before the loader shouts. 0.15 m is a fifth of a stone course — visible in
     // the silhouette, and far below the smallest head (0.42 m on the small titan).
     cortex_tolerance_m: 0.15,
+
+    // -----------------------------------------------------------------------------------
+    // lighting — the sun, the sky and the fog. **The one thing every number here exists
+    // for: a roof, a wall in the sun and a wall in the shade have to be three different
+    // values.** Measured before this block existed (docs/FINDINGS.md FIND-071): a vertical
+    // wall face read luminance 183.2 and the ground beside it 183.3 — the same value, on
+    // two surfaces at right angles to each other, because with `illuminance 10 000` against
+    // the default exposure (ev100 9.7) **every face with NdotL > 0.73 clipped to white**.
+    // That is what "alles sehr flat" is, and it was arithmetic, not taste.
+    //
+    // No hue is invented here: the palette stays `maps.ron: palette`, and none of the three
+    // signal colours (cyan/amber/crimson) appears — the sky is slate and haze, the shadow
+    // fill is sky-blue bounce. This block is light and depth, nothing else
+    // (docs/gameplay/world.md, "Visual style").
+    lighting: (
+        sun: (
+            // Linear RGB, and warm only just — the tone is elegiac, not golden hour
+            // (docs/gameplay/world.md). It is a *tint*, not one of the signal colours.
+            color: (1.0, 0.945, 0.86),
+
+            // lux. 52 000 is a hazy-bright day (clear noon sun is ~100 000, overcast
+            // ~10 000 — which is what the old value was, and it was a *ceiling* against the
+            // exposure below, not a brightness).
+            //
+            // Chosen so that a stone_gray face (albedo 0.42) with NdotL = 1 lands at
+            //   0.42/pi * 52000 * exposure(13.0) = 0.72 linear
+            // — bright, and still under the clip.
+            illuminance_lux: 52000.0,
+
+            // Where the sun stands. **Compass degrees, our yaw convention**: 0 = -Z,
+            // +90 = +X (docs/conventions.md), and elevation is degrees above the horizon.
+            //
+            // 108 / 36 is not decoration, it is the whole separation. It puts the sun at
+            //   to_sun = (0.769, 0.588, 0.250)
+            // so the four faces of a box get four different NdotL:
+            //   +X wall 0.769 · roof 0.588 · +Z wall 0.250 · -X and -Z walls 0.0 (fill only)
+            // A sun straight overhead gives a bright roof and four identical walls; a sun on
+            // the diagonal gives two bright walls and two dark ones. This gives four steps.
+            azimuth_deg: 108.0,
+            // Low enough that a 11 m house throws a 15 m shadow across a 7 m street, high
+            // enough that the street is not one solid black slot: tan(36 deg) = 0.727.
+            elevation_deg: 36.0,
+
+            // **The expensive switch** (docs/lessons/performance.md rule 5). Measured here,
+            // with the number the lesson asked for and never had — FIND-071.
+            shadows: true,
+            // Shadow map edge in texels, per cascade. 2048 over a 4-cascade split holds the
+            // first cascade (40 m) at ~2 cm/texel; 4096 doubles the memory for a district
+            // that is boxes.
+            shadow_map_size: 2048,
+            // 4 cascades over 400 m: the district is 400 m across and the wall is 120 m, so
+            // the shadow range has to cover a whole quarter, not the ten metres in front of
+            // the nose — a flyer sees the roofscape, not a corridor.
+            cascades: 4,
+            first_cascade_far_bound_m: 40.0,
+            shadow_distance_m: 400.0,
+            cascade_overlap: 0.2,
+            // Acne bias. Bevy's defaults (0.02 / 1.8) are tuned for a metre-scale scene; a
+            // 400 m cascade stretches every texel, so both go up. Measured against the
+            // street canyons, which are the worst case: 7 m wide, 11 m tall.
+            shadow_depth_bias: 0.06,
+            shadow_normal_bias: 2.4,
+        ),
+
+        // The fill light. **Cool on purpose**: the sun is warm, the fill is sky-blue, and
+        // that warm/cool split is what makes an unlit face read as "in shadow" instead of
+        // "dark grey". No hue invented — this is the sky's own colour bouncing.
+        ambient: (
+            color: (0.45, 0.55, 0.80),
+            // cd/m^2. 3000 puts the fill at ~11 % of a sunlit face:
+            //   0.43 * 0.55 * 2400 * exposure(12.85) = 0.064 linear  vs  0.618 in the sun,
+            // = 10.4 %.
+            // Under 5 % a shadow is a hole you cannot read a rooftop out of at 30 m/s; over
+            // ~20 % the shadow stops being a shadow. The old value was 220 against an
+            // illuminance of 10 000 — a *ratio* of 2 %, which would have been contrasty if
+            // the sunlit side had not been clipping at white anyway.
+            brightness: 2400.0,
+        ),
+
+        // The sky is a dome, not a `ClearColor`. Three stops, linear RGB, vertically
+        // interpolated: zenith -> horizon over the upper half, horizon -> nadir over the
+        // lower. **The horizon stop is also the fog colour** (below), which is what makes a
+        // distant block dissolve into the sky instead of into a grey wall.
+        sky: (
+            // Deep slate blue. Dark enough that the silhouette of the wall reads against it.
+            zenith: (0.010, 0.018, 0.042),
+            // Pale warm haze. The one bright thing in the frame that is not a lit surface.
+            horizon: (0.115, 0.112, 0.104),
+            // Below the horizon — the ground haze the district stands in.
+            nadir: (0.030, 0.029, 0.027),
+            // Metres. The dome is pinned to the eye, so this only has to stay inside the
+            // camera's far plane (1000 m, `PerspectiveProjection` default) with room for the
+            // dome's own tessellation error. 900 would touch it on the diagonal.
+            radius_m: 820.0,
+            // Segments around / rings up. 32x16 is 512 quads for a surface that is a smooth
+            // gradient: more rings buy nothing, fewer show banding at the horizon.
+            segments: 32,
+            rings: 16,
+        ),
+
+        // Distance fog — "aggressive", and it does double duty: atmosphere and culling
+        // (docs/gameplay/world.md, "Lighting"). Linear falloff, because it is the only one
+        // whose two numbers mean something you can walk out and measure.
+        fog: (
+            // = `sky.horizon`. They must match, or the horizon becomes a visible seam.
+            color: (0.115, 0.112, 0.104),
+            // Metres. The far side of the district is ~400 m from the vantage and the wall
+            // crown ~450 m: the near quarter is untouched, the wall sits at 50 % and reads as
+            // a distance and not as a backdrop. 60/700 was tried first and was too much — half
+            // the frame went to haze and the palette went with it.
+            //
+            // **`end_m` has to stay under `sky.radius_m`.** The dome is opaque and pinned to
+            // the eye, so nothing beyond 820 m is ever visible: an `end` past it is a number
+            // the fog can never reach, and the horizon then never quite becomes the sky.
+            // 900 was in the file for one round and
+            // `tests/render.rs::f071_the_sky_casts_no_shadow_and_the_fog_meets_it_at_the_horizon`
+            // is what found it.
+            start_m: 120.0,
+            end_m: 780.0,
+        ),
+
+        // ev100. 12.85 sits between Bevy's OVERCAST (12.0) and SUNLIGHT (15.0) and is the
+        // number the two blocks above are solved against — moving it moves everything.
+        // Bevy's own default is BLENDER (9.7), which is 10x more exposure than this and is
+        // the direct cause of the clipping measured in FIND-071.
+        exposure_ev100: 12.85,
+    ),
 )

@@ -15,22 +15,28 @@
 //! (`docs/FINDINGS.md` FIND-063); this does not get to be the second one. So the arithmetic
 //! stands here, in the owning domain, and a rack that wants a player restocked **asks**.
 //!
-//! ## What the caller looks like, and why it is not written yet
+//! ## The caller, since 2026-08-12 evening
 //!
-//! The same shape gas ended up with, one message and one system:
+//! The same shape gas ended up with, one message and one system — and it is wired now:
 //!
 //! ```text
 //! shared::message   BladeRestockRequest { player: PlayerId, seconds: f32 }
-//! mission::hub      sends it while a player stands inside `gear.ron: resupply.range_m`
-//! blades::resupply  reads it in FixedUpdate and calls `restock` — the ONLY caller
+//! mission::hub      restock_at_stations (PostStep) — sends it while a player stands inside
+//!                   `gear.ron: resupply.range_m` of a rack
+//! blades::resupply  apply_restock_requests (Intent, next tick) — the ONLY caller of `restock`
 //! ```
 //!
-//! The message type belongs in `shared/message.rs` and the edge `mission -> shared` is free;
-//! **the message and the station are deliberately not in this hand.** `src/mission/hub.rs`,
-//! `src/shared/**` and `docs/architecture.md` were being written by other work at the time, and
-//! a request type invented over here instead would have opened a `mission -> blades` edge that
-//! `tests/domains.rs` falls over on. What is delivered is the arithmetic and its numbers; the
-//! wiring is one system and three lines of RON.
+//! The message type lives in `shared/message.rs` and the edge `mission -> shared` is free, so
+//! no domain edge was bought for it — exactly as with `RefuelRequest`. **`blades` reads the
+//! request and this domain does the arithmetic**, because `Blades` has one writer and it is
+//! this one (`docs/architecture.md`, authority table). The cost is one tick, for the same
+//! reason gas pays it: applying in the same tick would mean ordering a `blades` system against
+//! a `mission` system, which no domain may do. At 1.5 pairs/s a tick is 0.025 of a pair.
+//!
+//! **The falsifiable test is `tests/mission.rs::
+//! f033_a_rack_asks_for_blades_and_never_writes_the_harness_itself`**, which runs the rack with
+//! no `blades` in the app at all — the one shape a whole-app test cannot distinguish
+//! (`FINDINGS.md` FIND-063, and FIND-066 for this half).
 //!
 //! ## The accumulator is not decoration
 //!
@@ -41,8 +47,8 @@
 
 use bevy::prelude::*;
 
-use crate::data::ResupplyTuning;
-use crate::shared::Blades;
+use crate::data::{GameData, ResupplyTuning};
+use crate::shared::{BladeRestockRequest, Blades, PlayerId};
 
 /// The fraction of a blade pair a player has already been handed at a rack.
 ///
@@ -112,6 +118,60 @@ pub fn restock(
         }
     }
     changed
+}
+
+/// **The only caller of [`restock`] in the game**, and therefore the only thing that ever grows
+/// a harness.
+///
+/// A rack of the main building sends [`BladeRestockRequest`] while a player stands at it
+/// (`mission::hub::restock_at_stations`); this reads it one tick later and does the arithmetic
+/// **here**, in the domain that owns [`Blades`].
+///
+/// Three things that look like details and are not:
+///
+/// - **The tuning is read here, not sent.** `blade_pairs_per_s`, `sharpen_per_s` and the
+///   `blades.start_pairs` cap are this domain's numbers. A sender that multiplied them would be
+///   the second writer of `Blades` in everything but the `&mut` (see [`BladeRestockRequest`]).
+/// - **[`RestockCarry`] is inserted on first use.** It is the remainder of an integer division
+///   and nothing outside this file reads it, so no other system has a reason to put it on a
+///   player — and a player who has never stood at a rack does not need to carry one. The value
+///   the first request produced is what gets inserted, so nothing is lost.
+/// - **`set_if_neq` on the harness**, exactly as `vector::gas::apply_refuel_requests` does on
+///   the tank: a full harness at a full rack must not wake `Changed<Blades>` sixty times a
+///   second for a number that did not move (§6 rule 6).
+pub fn apply_restock_requests(
+    mut commands: Commands,
+    data: Res<GameData>,
+    mut requests: MessageReader<BladeRestockRequest>,
+    mut players: Query<(Entity, &PlayerId, &mut Blades, Option<&mut RestockCarry>)>,
+) {
+    let tuning = &data.gear.resupply;
+    let capacity = data.gear.blades.start_pairs;
+    for request in requests.read() {
+        for (entity, id, mut blades, carry) in &mut players {
+            if *id != request.player {
+                continue;
+            }
+            // On copies, so `Blades` is only marked changed when the harness really is
+            // different — `restock` says whether anything happened.
+            let mut harness = *blades;
+            let mut remainder = carry.as_deref().copied().unwrap_or_default();
+            let changed = restock(&mut harness, &mut remainder, tuning, capacity, request.seconds);
+            if changed {
+                blades.set_if_neq(harness);
+            }
+            match carry {
+                Some(mut held) => {
+                    held.set_if_neq(remainder);
+                }
+                // `insert` and not `Commands::spawn`: the component lands at the next sync
+                // point carrying the fraction this very request produced.
+                None => {
+                    commands.entity(entity).insert(remainder);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

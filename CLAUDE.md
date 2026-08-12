@@ -379,3 +379,23 @@ find the cause.
 
 # Technisches zu Claude in dem Projekt
 ```
+
+### The gate has a precondition, and the supervisor has now broken it three times
+
+`cargo test` at the round gate is only meaningful against a **settled** tree. Started while an agent
+is still writing, it measures a half-finished file and reports failures that mean nothing — on
+2026-08-12 that produced "276 failed" once and `unresolved import shot_verdict` twice, none of them
+real.
+
+**Before starting the gate, check that nothing is live:**
+
+```bash
+pgrep -f 'cargo (test|check|build)' | wc -l     # must be 0
+git status --short                              # and know whose every dirty path is
+```
+
+If either says otherwise, the round is not closed and the gate is premature. **A gate you have to
+explain is worse than one you did not run** — and worse still, the noise trains you to skim the next
+real failure.
+
+Same precondition for `git add`: stage explicit paths while agents are live, never `-A`.

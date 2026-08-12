@@ -49,6 +49,24 @@ hud -> mission     # the objective line draws the kill counter and the verdict, 
                    #  a HUD has to be right in the frame it is drawn in, so it needs the
                    #  STATE (`KillTally`, `State<MissionPhase>`), not a TitanHit that
                    #  fired three ticks ago. Read-only — `mission` stays the one writer.
+titan -> mission   # a titan's LIFETIME is his sortie: `titan::spawn_titan` hangs
+                   #  `DespawnOnExit(MissionPhase::Active)` on the rig root, so the bodies of a
+                   #  finished sortie stop existing in the same transition as its pending waves
+                   #  (`mission::open_the_field` carries the identical marker). Before it, a
+                   #  sortie that ended left every titan walking — through the debrief, into the
+                   #  hub, and onto the ring of the NEXT sortie (FIND-068).
+                   #  It is a component, not a read: no titan system queries mission state, the
+                   #  despawning is `bevy_state`'s own `despawn_entities_on_exit_state`, and
+                   #  `mission` stays the one writer of the phase while `titan` stays the one
+                   #  writer of titan bodies (authority table below) — which is the whole point,
+                   #  a despawn living in `mission` would be the rule-4 breach.
+                   #  A message will not do: `SortieEnded` would be read a tick after the
+                   #  verdict at best, so a wave released ON the deciding tick outlives the
+                   #  mission forever, and it would put a second lifetime mechanism beside the
+                   #  one this very transition already runs. It is also the first edge that
+                   #  points BACKWARDS along the plugin order below — harmless, because a
+                   #  component name creates no init-order requirement, and named here so that
+                   #  nobody has to rediscover it.
 ```
 
 **One line as of 2026-08-09**, and it was empty until then. `prompts/init.md` §5 names `render`

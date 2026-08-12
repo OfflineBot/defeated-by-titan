@@ -55,6 +55,37 @@
 //!   that shows it (`scripts/q030-reach.txt`). The head of that section in `tests/titan.rs`
 //!   carries the whole table, per class, and names where Q-030's own measurement came from.
 //!
+//! ## How long a titan lives — 2026-08-12, the hole the hub loop opened
+//!
+//! **A titan's life is his sortie's `Active` phase.** [`spawn_titan`] hangs
+//! `DespawnOnExit(MissionPhase::Active)` on the rig root, which is the same lifetime the
+//! mission's own [`WaveSchedule`](crate::mission::WaveSchedule) entity already carries — so at
+//! the verdict the pending waves and the standing bodies stop existing in one and the same
+//! transition, and the debrief happens on an empty field.
+//!
+//! Before that line existed the hub loop closed over a field it never cleared: a sortie that
+//! ended `Won` or `Lost` left every titan it had spawned walking, with his brain, his
+//! kinematic body and his cortex sensor intact. He walked through the 3.0 s debrief, through
+//! the transition, and stood in the hub next to the player who had just come home — and the
+//! **second** sortie of the session opened on a ring that still held the first one's. No test
+//! saw it, because every script we had either kills every titan it spawns or never leaves
+//! `Active` at all: the field is only wrong in the run that *survives* the verdict
+//! (`tests/titan.rs`, the `f072_` block; `docs/FINDINGS.md` FIND-068).
+//!
+//! **Why `titan` and not `mission`:** titan bodies have one writer and it is this domain
+//! (`docs/architecture.md`, authority table). `mission` says *the sortie is over* — by leaving
+//! `Active`, which it is the only writer of — and `titan` decides what that means for a body,
+//! exactly the way it decides what a [`TitanHit`](crate::shared::TitanHit) means for one.
+//! `tests/titan.rs::f072_the_field_is_cleared_by_titan_and_by_nothing_else` is the falsifiable
+//! half: it takes the marker off one titan and demands that the same transition then leave him
+//! standing, so a despawn that ever grows inside `mission` goes red here.
+//!
+//! A titan asked for **outside** a sortie (a `spawn titan` in a `--sandbox` script, in
+//! `Briefing`, in the hub) carries the same marker and is untouched by it: there is no `Active`
+//! for him to be exited from. One door, no branch — `spawn_titan` is the only place a rig is
+//! built, and a second rule for "was there a mission at the time" would be a second lifetime to
+//! keep in agreement.
+//!
 //! ## The four traps that are paid for here
 //!
 //! 1. **`RigidBody::Kinematic` needs `CustomPositionIntegration`** — otherwise the titan moves
@@ -99,6 +130,7 @@ use avian3d::prelude::PhysicsSystems;
 use bevy::prelude::*;
 
 use crate::data::{GameData, TitanKind};
+use crate::mission::MissionPhase;
 use crate::shared::{IdCounter, SimulationSystems, SpawnTitan, TitanId};
 
 use brain::{TitanClock, TitanGait, TitanTarget, TitanTiming, TitanTuning};
@@ -255,6 +287,16 @@ pub fn spawn_titan(
             windup_lean_deg: s.windup_lean_deg,
             strike_arm_deg: s.strike_arm_deg,
         },
+        // **A titan lives as long as the sortie he was spawned into, and not one tick
+        // longer.** See the module head, "How long a titan lives".
+        //
+        // On the ROOT, so the whole rig goes with him: `despawn_entities_on_exit_state` calls
+        // `try_despawn`, and a despawn in bevy 0.19 takes the entity's descendants with it —
+        // the pelvis, the four limbs, the torso, the head and the cortex sensor are all
+        // `add_child`ren of this entity (`rig::build_rig`). Despawning them one by one from a
+        // list would be the version that leaves a collider behind the day somebody adds a
+        // tenth part.
+        DespawnOnExit(MissionPhase::Active),
     ));
     Ok((root, id))
 }

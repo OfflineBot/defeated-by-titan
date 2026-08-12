@@ -20,7 +20,15 @@
 //! `docs/images/f004-rope.png` against `docs/images/f004-rope-released.png`, which is the same
 //! scene 30 ticks later with the arm let go.
 
+//! **The look, since 2026-08-12:** [`light`] holds the sun, the sky dome, the fog and the
+//! exposure, and every number of it is in `assets/data/art.ron: lighting`. It exists because
+//! the same complaint came in twice — *„alles sehr flat (auch farben, licht etc)"* — and the
+//! second time it was measured: a wall face and the ground beside it read luminance 183.2 and
+//! 183.3, because the old sun clipped every face with `NdotL > 0.73` to white
+//! (`docs/FINDINGS.md` FIND-071).
+
 pub mod camera;
+pub mod light;
 pub mod model;
 pub mod rope;
 
@@ -34,7 +42,10 @@ pub struct RenderPlugin;
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<model::ModelAssets>()
-            .add_systems(Startup, (setup_light, model::load_configured_models))
+            .add_systems(
+                Startup,
+                (light::setup_sun, light::setup_sky, model::load_configured_models),
+            )
             .add_observer(model::read_the_models_anchors)
             .add_systems(
                 Update,
@@ -42,6 +53,8 @@ impl Plugin for RenderPlugin {
                     attach_camera,
                     build_block_meshes,
                     camera::rotate_camera,
+                    light::follow_the_eye,
+                    log_frame_time.run_if(|| std::env::var_os("DBT_FRAMETIME").is_some()),
                     rope::draw_ropes,
                     // The model chain, in its own order: a file becomes handles, an entity
                     // becomes a name, a name becomes a body. `chain()` and not three separate
@@ -65,26 +78,46 @@ impl Plugin for RenderPlugin {
     }
 }
 
-/// Sun and ambient brightness.
+/// `DBT_FRAMETIME=1` — **the real frame time, and why wall clock cannot give it.**
 ///
-/// ⚠️ Shadows are **off**. They are the most expensive switch in the game — last of all, and
-/// then with a number beside it (`docs/lessons/performance.md`).
-fn setup_light(mut commands: Commands) {
-    commands.spawn((
-        Name::new("sun"),
-        DirectionalLight {
-            illuminance: 10_000.0,
-            // Shadows are the most expensive switch in the game — last of all, with a
-            // number. `shadow_maps_enabled` is the switch that really costs something.
-            // (`contact_shadows_enabled` is deliberately NOT here: on its own it does
-            // nothing at all — contact shadows additionally need a `ContactShadows`
-            // component on the camera. A field you take for a switch when it is none is
-            // worse than no field.)
-            shadow_maps_enabled: false,
-            ..default()
-        },
-        Transform::from_xyz(50.0, 100.0, 60.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
+/// `docs/lessons/performance.md` lists "no number for what shadows cost" as a gap and rule 5
+/// forbids switching them on without one. Timing a run does not answer it: a `--script` run
+/// lasts as long as its `wait` lines say, because `Time<Virtual>` tracks the wall clock — a
+/// 21.25 s script takes 21.25 s whether the renderer needs 2 ms or 12 ms a frame. Measured:
+/// 1275 ticks = 22.18 s wall, with and without shadows, to the second.
+///
+/// What does answer it is **how many frames fitted into those seconds**. Nothing paces the
+/// `Update` loop in an `--offscreen` run (no window, no vsync), so `frames / real seconds` is
+/// the true frame time — and that is exactly Bevy's own vsync warning in
+/// `docs/lessons/performance.md`: only measured without the ceiling does the number say
+/// anything.
+///
+/// Off unless the variable is set, like `DBT_GIZMOS` (`debug::gizmo`) — a diagnostic that runs
+/// when nobody asked for it is a cost, not a measurement.
+fn log_frame_time(
+    time: Res<Time<Real>>,
+    mut frames: Local<u32>,
+    mut since_s: Local<f32>,
+    mut window: Local<u32>,
+) {
+    *frames += 1;
+    *since_s += time.delta_secs();
+    // Every 2 real seconds, so a 20 s run gives ten samples and the first one (pipeline
+    // compilation, shader specialization, the first shadow map) can be thrown away.
+    if *since_s < 2.0 {
+        return;
+    }
+    *window += 1;
+    info!(
+        "FRAMETIME window {} — {} frames in {:.3} s = {:.3} ms/frame ({:.0} fps)",
+        *window,
+        *frames,
+        *since_s,
+        *since_s * 1000.0 / *frames as f32,
+        *frames as f32 / *since_s
+    );
+    *frames = 0;
+    *since_s = 0.0;
 }
 
 /// Hangs the camera on the local player.
@@ -152,7 +185,10 @@ fn attach_camera(
                 fov: k.fov_deg.to_radians(),
                 ..default()
             }),
-            AmbientLight { brightness: 220.0, ..default() },
+            // Ambient fill, distance fog and exposure — all three are per-view in Bevy 0.19,
+            // all three come out of `art.ron: lighting`, and they are only meaningful against
+            // each other (`render::light`).
+            light::camera_light_settings(&data.art.lighting),
             // The one component that keeps the UI in an `--offscreen` image — see above.
             IsDefaultUiCamera,
             // Eye height above the player's origin — which lies between the feet

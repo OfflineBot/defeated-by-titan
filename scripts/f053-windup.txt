@@ -9,6 +9,18 @@
 # python3 tools/two_panels.py docs/images/f053-windup-a.png docs/images/f053-windup-b.png \
 #                              docs/images/f053-windup.png
 #
+# and, as a THIRD and separate run, the one that returns a usable exit code:
+#
+#   cargo run -q -- --headless --script scripts/f053-windup.txt --ticks 1100
+#
+# ⚠️ **A `--screenshot` run is not a verdict.** `debug::screenshot::exit_when_written` owns the
+# ending and writes `AppExit::Success` the moment the PNG is on disk, without ever reading
+# `run.failures` — so **neither** of the two commands above can fail, no matter what the assert
+# in this file measures, and the assert summary never prints (`docs/FINDINGS.md` FIND-073).
+# Only the `--headless` run reports "N asserts held" and returns an exit code worth reading.
+# Its tick count is deliberately generous: overshooting the script's own end is free,
+# undershooting truncates the run and hides the summary (FIND-032).
+#
 # Both panels come out **bit-identical on two runs** (`sha256sum`), which is what a frame at a
 # resting or slowly-changing moment buys — see the caveat in `docs/ACCEPTANCE.md` about
 # `--offscreen` at speed.

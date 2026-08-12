@@ -153,9 +153,47 @@
         // For scale, the other consumer: reeling a full rope in from 90 m to the 3 m minimum
         // takes (90-3)/28 = 3.1 s and costs 18.6 gas — 6.2 % of the tank.
         gas_reel_per_s: 6.0,
+        // F-008, and the ONE gas number in this block that is not a rate: what a single dodge
+        // costs, billed once on the tick the double-tap lands. No `_per_s` in the name because
+        // there is no per second about it — vector/gas.rs does NOT multiply it by dt.
+        //
+        // ⚠️ UNTUNED. The user, 2026-08-12 (docs/NEXT.md §1c): "mit doppel leertaste boostet
+        // man stark in die lauf richtung (ein weiter dodge) DER VIEL GAS AUFBRAUCHT. das andere
+        // boosten VERBRAUCHT SEHR WENIG!" So these two numbers have to be far apart in a way
+        // somebody can feel, and the interesting question is: far apart measured how?
+        //
+        // NOT per second. 45 gas is 2.5 seconds of held boost, and "2.5 seconds" does not sound
+        // expensive. The honest comparison is GAS PER m/s OF SPEED BOUGHT, because speed is
+        // what both of them sell:
+        //
+        //     held boost   gas_boost_per_s / boost_m_s2     = 18 / 34 = 0.529 gas per m/s
+        //     dodge        gas_dodge / dodge_impulse_m_s    = 45 / 24 = 1.875 gas per m/s
+        //                                                    ---------------------------
+        //     the dodge costs 3.54x more gas for the same m/s
+        //
+        // THAT is the ratio, and it is what makes gas_boost_per_s: 18 demonstrably the cheap
+        // one (tests/vector_boost.rs::f008_the_dodge_is_the_expensive_boost_per_metre_per_second
+        // holds it and names 3.0 as the floor). What the dodge buys for the premium is TIME: it
+        // delivers its 24 m/s in ONE TICK, where the boost needs 24/34 = 0.71 s of held button
+        // to reach the same speed — 42x faster, for 3.54x the gas. That is a dodge: you pay for
+        // the instant, not for the speed.
+        //
+        // In tank terms: 300 gas is 16.67 s of held boost OR 6.67 dodges. Six dodges per run
+        // with no station in the world yet is deliberately tight — this is an emergency move,
+        // not a traversal move, and F-008 in the backlog calls it "kurz, hart, mit eigenem
+        // Cooldown". The cooldown is NOT built (see the report/FIND-067); the gas price is the
+        // whole limiter today, which is exactly what the user's sentence asks for.
+        gas_dodge: 45.0,
         // Who pays first when the tank is not enough for both? That is a GAME-VALUE
         // decision and not an `if` in the code (docs/QUESTIONS.md Q-017).
-        gas_priority: [Boost, ReelIn],
+        //
+        // Dodge is APPENDED, not inserted, and that is a decision with a number behind it: the
+        // order of the first two is the user's answer to Q-017 and nothing about F-008 revisits
+        // it. And the position of Dodge in this list is worth almost nothing — a dodge costs 45
+        // flat while boost+reel together cost 0.4 per tick, so being served last can cost a
+        // dodge at most 0.4 gas, i.e. 0.9 % of its own price. Putting it first would look like a
+        // decision and buy nothing.
+        gas_priority: [Boost, ReelIn, Dodge],
         boost_m_s2: 34.0,
         // How much of the boost DIRECTION comes from the rope instead of from the look
         // direction: 0.0 = pure look direction (the behaviour up to 2026-08-10), 1.0 = straight
@@ -179,6 +217,39 @@
         // bottom from 18.3 m underground to 14.8 m above it). Look-only boost cannot reach that
         // loop; this is what turns a dead leash into a swing.
         boost_rope_fraction: 0.5,
+        // F-008. How much speed ONE dodge adds, in m/s. A VELOCITY CHANGE, not an acceleration:
+        // vector/boost.rs divides it by the fixed timestep to get what avian wants, so this
+        // number stays the same speed if simulation_hz ever moves, and it is checkable against
+        // things a player knows — a pure swing runs 17-21 m/s (Q-018), max_speed_m_s is 75.
+        //
+        // ⚠️ UNTUNED. 24 m/s is chosen to be unmistakably "stark" and "ein weiter dodge": it is
+        // MORE than a whole swing's speed added in one tick, so a dodge out of a 20 m/s swing
+        // roughly doubles the speed and crosses a 7 m street in 0.3 s. Below about 12 it would
+        // be a nudge and nobody would pay 45 gas for it; above about 40 the max_speed_m_s clamp
+        // starts eating it whenever you dodge along your own velocity, which would make the
+        // number quietly stop meaning what it says.
+        //
+        // ⚠️ The one consequence to know: for ONE tick this is 24 * 60 = 1440 m/s² of
+        // acceleration, 42x boost_m_s2. That is what an impulse IS, and BoostAccel really does
+        // carry that spike for that tick. Nothing reads BoostAccel today except the tests; the
+        // day something does (a HUD "thrust" bar, a sound trigger), it has to expect it.
+        dodge_impulse_m_s: 24.0,
+        // F-008. How many TICKS may lie between the two Space presses for them to be one
+        // double-tap. In ticks, because the tick counter is the clock that measures it —
+        // Time<Virtual> is what --ticks and the seeded rng are held steady against and must not
+        // be read for gameplay, and a window in seconds would only be divided back into ticks
+        // with a rounding nobody can see.
+        //
+        // ⚠️ UNTUNED. 18 ticks = 0.300 s at simulation_hz: 60. Two bounds, and the lower one is
+        // measured rather than felt:
+        //   - a HUMAN double-tap is ~150-300 ms between presses, so much below ~12 ticks the
+        //     move stops being reachable;
+        //   - it MUST stay well under one jump, or bunny-hopping on the ground would fire an
+        //     expensive dodge by accident. jump_speed_m_s 6.5 against gravity_m_s2 -20 is
+        //     2*6.5/20 = 0.65 s of airtime = 39 ticks before Space can produce a second jump.
+        //     18 is 46 % of that, so a ground double-jump attempt can NEVER land inside the
+        //     window. (In the air the second tap is exactly what this is for.)
+        dodge_double_tap_window_ticks: 18,
         // Velocity clamp from day 1, not retrofitted (bible 6.4, risk of fling exploits)
         //
         // ⚠️ Computed against the city of the size table, and the numbers do not fit

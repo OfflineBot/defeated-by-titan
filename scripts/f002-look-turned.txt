@@ -5,6 +5,18 @@
 #       --script scripts/f002-look-turned.txt --ticks 130 \
 #       --screenshot docs/images/f002-look-turned.png
 #
+# and, as a SEPARATE run, the one that returns a usable exit code:
+#
+#   cargo run -q -- --headless --script scripts/f002-look-turned.txt --ticks 800
+#
+# ⚠️ **A `--screenshot` run is not a verdict.** `debug::screenshot::exit_when_written` owns the
+# ending and writes `AppExit::Success` the moment the PNG is on disk, without ever reading
+# `run.failures` — so the command above exits 0 even when the asserts in this file are RED, and
+# the assert summary never prints (`docs/FINDINGS.md` FIND-073). Only the `--headless` run
+# reports "N asserts held" and returns an exit code worth reading. Its tick count is
+# deliberately generous: overshooting the script's own end is free, undershooting truncates the
+# run and hides the summary (FIND-032).
+#
 # Counterpart to scripts/f002-look.txt: same position, same tick, only a different `look`.
 # If the two PNGs do not differ, src/render/camera.rs::rotate_camera does nothing — and
 # that is exactly what the state was until 2026-08-09.

@@ -51,10 +51,25 @@
 # had to move. For the other direction there is now `slash left|right`, because `parse_key`
 # cannot reach a mouse button at all.
 #
-# **Why the watchtower and not the 4 m block.** `assets/data/maps.ron` places a 12 m
-# `landmark` at (24, 6, -40), so its near face is z = -34 and its roof is y = 12. Standing 14 m
-# in front of it at 34 degrees up, the ray lands at (24, 11.04, -34) — near the top of a face
-# that carries `anchorable: true`.
+# **Why the church nave and not a market stall.** ⚠️ **RE-AIMED 2026-08-12: this file used to
+# shoot at the graybox watchtower** — a 12 m `landmark` at (24, 6, -40), near face z = -34,
+# roof y = 12, from (24, 0, -20). `maps.ron: current` is `"ashgate"` since `F-003` and ashgate
+# has no watchtower, so the ray flew over the district and both triggers reported
+# `found nothing anchorable`: **4 of 14 red, and 9.980 of those metres were simply the player
+# standing on the pavement.** That is the same failure mode the 2026-08-09 repair above was
+# written about, arriving a second time through the map instead of through the code.
+#
+# The ashgate equivalent is the **nave of the market-square church**: `(51, 5.75, -8)`,
+# `26 x 11.5 x 14`, `anchorable: true`. Its near face is z = -1 and its roof is y = 11.5 — a
+# flat roof half a metre lower than the watchtower's and 26 x 14 m wide instead of 12 x 12.
+# Standing 14 m in front of it at 34 degrees up — **the same standoff and the same pitch**, so
+# only the coordinates moved and not one claim — the ray lands at (51, 11.04, -1). Measured:
+# both hooks anchor on body 44 at **(51.00, 11.09, -1.00)**, and the player ends the run
+# standing on that roof at **11.500 m, speed 0.000**.
+#
+# Nothing is between him and it: the market stalls on that square are 2.5 m high and stand at
+# x = 32..48, the ray is at x = 51 and is already 7.7 m up as it passes their z, and the gantry
+# line over the main street spans x = -22..22 only.
 #
 # That height is the whole measurement. `assets/data/game.ron` gives `jump_speed_m_s` 6.5
 # against g = -20, so a jump reaches **1.056 m**, and `scripts/f-007-boost.txt` states the
@@ -62,8 +77,10 @@
 # and this script never presses Shift. **Every metre above 1.056 came out of the rope.**
 #
 # ⚠️ The 400 ticks belong to THIS file, and the number is **measured, not chosen**. At tick 400
-# the player stands still on the watchtower roof; three `--offscreen` runs then give one
-# sha256 (`231e7d86…`). At tick 200 he is in the air at 46 m/s and the same command gives
+# the player stands still on the roof (measured on ashgate: he is up and stationary from t=309,
+# so 400 still holds); three `--offscreen` runs then gave one sha256 (`231e7d86…`) — **that
+# hash is the graybox's and is void; the image has to be retaken on ashgate.** The property it
+# was proving is not: at tick 200 he is in the air and the same command gives
 # **two different files** — 38 828 of 921 600 pixels apart, the whole frame shifted. The
 # simulation is not what drifts: three `--headless` runs report 13.064 m and 46.414 m/s to the
 # last digit. What drifts is *which tick the shutter catches* under `--offscreen`, and one
@@ -72,9 +89,9 @@
 
 wait 1.5                # world, camera, meshes and the render pipelines come up (90 ticks)
 
-# 14 m in front of the watchtower, eye height, looking 34 degrees up at its upper face.
+# 14 m in front of the church nave, eye height, looking 34 degrees up at its upper face.
 look 0 34
-warp 24 0 -20
+warp 51 0 13
 wait 0.3                # the warp takes effect one tick later than it is written
 
 assert height > -0.1    # standing on the ground, not sunk into it
@@ -100,13 +117,20 @@ key Ctrl 5.0            # REEL_IN: the rope gets shorter and the player goes wit
 wait 0.6
 mark f-001-reeled
 # ⚠️⚠️ **`height > 12.0` and `speed > 35.0` ARE RED AS OF 2026-08-10 AND ARE LEFT RED.**
-# Measured now: **9.881 m** and **19.344 m/s**, against the 13.064 m and 46.414 m/s this file
-# has quoted for a day. Nothing above this line changed. `B-004`'s take-up ratchet in
-# `src/player/rope.rs` makes the rope follow the real distance down and never up, so the player
-# no longer flies past his anchor — and the old pair WAS that overshoot (Q-032: the reel ends at
-# 54.18 m/s and is then whipped; FIND-016). The rope-and-nothing-else claim still holds at
-# 9.881 m — a jump reaches 1.056 m — but the numbers are not these numbers any more.
+# Measured 2026-08-10 in the graybox: **9.881 m** and **19.344 m/s**, against the 13.064 m and
+# 46.414 m/s this file had quoted for a day. Nothing above that line had changed. `B-004`'s
+# take-up ratchet in `src/player/rope.rs` makes the rope follow the real distance down and never
+# up, so the player no longer flies past his anchor — and the old pair WAS that overshoot
+# (Q-032: the reel ends at 54.18 m/s and is then whipped; FIND-016). The rope-and-nothing-else
+# claim still holds — a jump reaches 1.056 m — but the numbers are not these numbers any more.
 # Rewriting the brackets here would hide a movement regression inside a hook test.
+#
+# ⚠️ **The 2026-08-12 re-aim onto ashgate is an independent confirmation of that, and it is the
+# reason the pair still stands.** A different map, a different anchor, a different building,
+# 27 m further from the origin: **9.980 m and 20.147 m/s**, within 0.1 m and 0.8 m/s of the
+# graybox figures. The shortfall travels with the code, not with the geometry — so this is
+# `B-004`'s regression being measured twice, and not a script that was aimed at the wrong wall.
+# The day the reel is repaired, these two go green on their own and nobody has to touch them.
 assert height > 12.0    # a jump reaches 1.056 m. Twelve metres is the rope, and nothing else.
 assert height < 14.0
 assert speed > 35.0     # measured 46.4 m/s [debian] — see the note below
@@ -117,8 +141,9 @@ assert gas < 300        # and the reel really was paid for out of the tank (`gas
 
 wait 1.2
 mark f-001-on-the-roof
-assert height > 11.5    # he ends up standing on the watchtower roof: maps.ron, y = 12
-assert height < 12.5
+assert height > 11.0    # he ends up standing on the church nave roof: maps.ron, y = 11.5.
+assert height < 12.0    # measured 11.500 exactly — the bracket is the old +-0.5, re-centred
+                        # from the watchtower's 12 onto the nave's 11.5, not widened.
 assert speed < 1.0
 
 # The camera still points 34 degrees up, and from the roof that is 1280x720 pixels of sky —

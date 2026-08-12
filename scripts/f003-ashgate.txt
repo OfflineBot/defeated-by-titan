@@ -163,42 +163,59 @@ wait 1.5                 # ⚠️ BEFORE the warp, not after: ACT 4's arm has to
                          # retracting, and 1.2 s of waiting in mid-air over a 7 m street is
                          # 1.2 s of falling — a first run measured `height -0.000` and read
                          # as "the street does not swing" when what it measured was gravity.
-warp 127 13 107.5
-look 90 -20              # yaw +90 = +X, across the street; -20 clears the near eaves and
-wait 0.05                # lands on the roof opposite, 10.76 m of rope away.
+warp 168.19 12.5 -50.12  # over the middle of a 4.30 m street, between two ridges of
+                         # 10.84 m (west) and 10.00 m (east). The pair is not chosen by eye:
+                         # `d < H` wants the widest arc bottom in the district, and
+                         # `bottom = H - L` picks it out of the 518 street samples the test
+                         # measures. The old ACT 5 stood at (127, 13, 107.5) — that pair no
+                         # longer exists, because the houses are no longer identical boxes.
+look 90 -25              # yaw +90 = +X, across the street; -25 clears the near ridge and
+wait 0.05                # lands on the roof cap opposite, ~5.9 m of rope away.
 mark f003-street-start
-assert height > 12.5     # 13.000 — airborne over the street, between two roofs
+assert height > 12.0     # 12.455 — airborne over the street, between two roofs
+assert height < 13.0
 assert speed < 2.0       # 1.333 — three ticks of falling, no more
 
 hook right 6.0
-wait 0.35
+wait 0.2
 mark f003-street-hooked
-assert rope == 1         # rope 10.76 m to an 11.303 m ridge
-assert height > 10.5     # 11.119
-assert height < 11.6
-assert speed > 7.0       # 8.667 — already falling into the canyon
+assert rope == 1         # the cap of the house opposite, and it holds — the caps carry the
+assert height > 11.0     # 11.598                       same anchor bit as their walls now
+assert speed > 5.0       # 6.000 — already falling into the canyon
 
-wait 0.25
+wait 0.1                 # ⚠️ two 0.1 and not one 0.2: `wait` does not divide evenly —
+wait 0.1                 # 0.1 s is 8 ticks, 0.2 s is 14, and the arc bottom is one tick wide
 mark f003-street-arc
-assert height > 7.0      # 7.897 m — over the pavement, and 4.5 m below the roofs
-assert speed > 13.0      # 14.278 m/s = 2.4x running, out of a 7 m street, on the rope alone
-assert speed < 15.5
+assert height > 9.0      # 9.299 m — still above the eaves
+assert speed > 10.0      # 11.306 m/s and rising
 
-wait 0.25
+wait 0.1
+mark f003-street-peak
+assert speed > 13.0      # 13.806 m/s = 2.3x running speed, out of a 4.3 m street, on the
+assert speed < 15.0      # rope alone. The graybox lane does 31.4; a street is a hop.
+
+wait 0.1
 mark f003-street-wall
-assert height > 5.5      # 5.915 — the arc bottom, and it is above the street
-assert height < 6.5
-assert speed < 1.0       # 0.032: the swing ended against the facade he was hanging from
-assert gas > 260         # 263.798 — unchanged since ACT 4: the whole street act runs on the
-assert gas < 268         # rope alone, no Shift and no Ctrl
+assert height > 5.8      # ★ 6.189 — THE ARC BOTTOM, and it is 6.2 m over the pavement.
+assert height < 6.8      # The old map measured 5.915 here: the town got more irregular and
+                         # the swing got BETTER, not worse. `d < H`: 4.30 m of street under
+                         # a 10.00 m ridge.
+assert speed < 1.0       # 0.205: the swing ended against the facade he was hanging from
+assert gas > 260         # 263.798 — unchanged since ACT 4: the whole street act runs on
+assert gas < 268         # the rope alone, no Shift and no Ctrl
 
 # ---------------------------------------------------------------------------------------
 # The vantage point for `--screenshot`: over the quarter east of the main street, looking
 # southwest across the roofscape at the wall. The old vantage looked down the main street
 # and photographed the gantries; what has to be visible now is the closed blocks.
 # ---------------------------------------------------------------------------------------
-warp 200 150 250         # north-east corner of the district, 150 m up, looking southwest
-look -25 -30             # over the quarters at the wall. yaw 0 = -Z, +90 = +X.
+warp 150 62 165          # north-east of the main street, 62 m up, looking southwest.
+look -28 -14             # ⚠️ 150 m and -30 degrees was the OLD vantage, and it is half the
+                         # reason the district read as a flat mosaic: from straight above,
+                         # a roof is a rectangle and a 4 m step between two ridges is
+                         # invisible. From 62 m at -14 degrees the houses have SIDES, the
+                         # roof caps have a silhouette, and the wall stands behind them as
+                         # the scale reference. yaw 0 = -Z, +90 = +X.
 wait 0.15                # ⚠️ SHORT: he is airborne here, and every tick is 20 m/s more of
 mark f003-vantage        # falling. **The picture is taken at this mark** — the `--ticks` of
 wait 1.5                 # the screenshot run has to land on it, not on the end of the

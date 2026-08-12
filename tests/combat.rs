@@ -1515,6 +1515,139 @@ fn b004_the_freeze_is_still_bit_identical_with_a_rope_attached() {
 }
 
 // ---------------------------------------------------------------------------
+// B-004 — the sweep. This is the test the two previous "fixes" would have failed.
+// ---------------------------------------------------------------------------
+
+/// What one release attempt did. A [`Release::Aborted`] is a **process abort**, not a failed
+/// assertion — avian's island bookkeeping panics, and the panic is caught here on purpose so
+/// that the sweep can report the whole bracket instead of stopping at its first tick.
+#[derive(Debug)]
+enum Release {
+    Clean,
+    Leaked(usize),
+    Aborted(String),
+}
+
+fn panic_text(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<panic with a non-string payload>".to_string()
+    }
+}
+
+/// Builds a fresh app, lands a cortex hit, waits `release_after` ticks and lets the rope go.
+///
+/// `attach_after`: `None` hangs the rope **before** the hit (the reported repro — a player who
+/// was already swinging when he cut). `Some(n)` hangs it `n` ticks **after** the hit, i.e.
+/// inside the impact frame, which is the joint that is born carrying `JointDisabled`.
+///
+/// A fresh `App` per tick and not one app swept in place: an aborted island bookkeeping is
+/// **world state**, so a second release in the same world would measure the first one's wreck.
+fn release_at(attach_after: Option<u64>, release_after: u64) -> Release {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut app = app();
+        place(&mut app, Vec3::new(0.0, LANE_Y, 0.0), Vec3::ZERO);
+        app.update();
+        if attach_after.is_none() {
+            hang_a_rope(&mut app, 9.0);
+        }
+        land_a_cortex_hit(&mut app);
+        match attach_after {
+            None => ticks(&mut app, release_after),
+            Some(n) => {
+                // `hang_a_rope` costs 2 ticks of its own; the sweep counts from the hit.
+                ticks(&mut app, n);
+                hang_a_rope(&mut app, 9.0);
+                ticks(&mut app, release_after.saturating_sub(n + 2));
+            }
+        }
+        let_the_rope_go(&mut app);
+        // Past the end of any freeze, so that a thaw that trips over a joint that is already
+        // gone is counted here too — the mirror of the abort this sweep is named after.
+        ticks(&mut app, 20);
+        joints(&mut app)
+    }));
+    match outcome {
+        Ok(0) => Release::Clean,
+        Ok(n) => Release::Leaked(n),
+        Err(payload) => Release::Aborted(panic_text(payload)),
+    }
+}
+
+/// Runs one sweep and returns the ticks that did not survive, with what killed them.
+fn sweep_releases(attach_after: Option<u64>, range: std::ops::RangeInclusive<u64>) -> Vec<(u64, String)> {
+    // avian's panic is expected on the red side of this test and prints a full backtrace line
+    // per tick. The hook is silenced for the sweep and restored right after it, so a genuine
+    // assertion failure inside `release_at` still arrives — through `Release::Aborted`.
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let mut dead = Vec::new();
+    for t in range {
+        match release_at(attach_after, t) {
+            Release::Clean => {}
+            Release::Leaked(n) => dead.push((t, format!("{n} joint(s) survived the release"))),
+            Release::Aborted(why) => dead.push((t, why)),
+        }
+    }
+    std::panic::set_hook(previous);
+    dead
+}
+
+/// ★ **`B-004`, and the reason it was closed wrong twice: the bracket, not a point.**
+///
+/// The player action is one thing — *cut a cortex while roped, then let go* — and the tick he
+/// lets go on is **not his choice**, it is whenever his thumb comes off the button. The impact
+/// frame is `round(hit_stop_cortex_s × simulation_hz)` = 7 ticks = an eighth of a second, so
+/// every release tick from the cut to well past the thaw is the same single action.
+///
+/// Both previous fixes passed a test that released on **one** side of that window:
+///
+/// | release | before fix 1 | after fix 1 | after fix 2 |
+/// |---|---|---|---|
+/// | inside the impact frame | clean | clean | **abort, `islands/mod.rs:820`** |
+/// | after the impact frame | **abort, `islands/mod.rs:786`** | clean | clean |
+///
+/// A point test cannot tell those three columns apart. This one sweeps `t = 0..=20` ticks after
+/// the hit and asserts that **all** of them survive, so a fix that moves the failure instead of
+/// removing it fails here by construction.
+#[test]
+fn b004_the_rope_may_be_let_go_on_any_tick_across_the_impact_frame() {
+    let dead = sweep_releases(None, 0..=20);
+    assert!(
+        dead.is_empty(),
+        "the release is not survivable on every tick of the bracket — {} of 21 ticks died:\n{}",
+        dead.len(),
+        dead.iter()
+            .map(|(t, why)| format!("  t+{t:<2} {why}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+/// The same sweep for the rope that is **born inside the impact frame** — a hook that bites
+/// while the player is frozen and is let go of again before he thaws.
+///
+/// That joint never reaches avian's joint graph at all (`attach_ropes` spawns it carrying
+/// `JointDisabled`), so it is a different row of the matrix than the sweep above and it is the
+/// one that is easiest to fix on one side only.
+#[test]
+fn b004_a_rope_born_inside_the_impact_frame_may_also_be_let_go_of_at_once() {
+    let dead = sweep_releases(Some(1), 3..=20);
+    assert!(
+        dead.is_empty(),
+        "a rope hung during the freeze cannot be let go of on every tick — {} died:\n{}",
+        dead.len(),
+        dead.iter()
+            .map(|(t, why)| format!("  t+{t:<2} {why}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+// ---------------------------------------------------------------------------
 // helpers that need the rig
 // ---------------------------------------------------------------------------
 

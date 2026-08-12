@@ -51,6 +51,11 @@
 //! back from the GPU. The run would end green and without a file. So when `--screenshot`
 //! is set, this file takes over the exit, and it exits only once the PNG is on disk and is
 //! not empty.
+//!
+//! Taking the exit over means owning the **verdict** too, and for a while it did not:
+//! [`exit_when_written`] wrote `AppExit::Success` unconditionally, so a picture run with red
+//! asserts ended at exit 0 (`FIND-074`). [`shot_verdict`] is that missing half, and it runs
+//! *after* the file is on disk — the image is worth more than the exit code's timing.
 
 use std::path::PathBuf;
 
@@ -59,6 +64,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{save_to_disk, Screenshot, ScreenshotCaptured};
 
+use crate::debug::ScriptRun;
 use crate::shared::{Cli, Tick};
 
 /// The resolution of the offscreen target.
@@ -266,12 +272,58 @@ fn on_screenshot_captured(_: On<ScreenshotCaptured>, mut job: ResMut<ScreenshotJ
     job.captured = true;
 }
 
+/// **The verdict of a screenshot run** — and the one rule that is deliberately *narrower*
+/// than [`crate::debug::cutoff_verdict`]'s.
+///
+/// Only one of the two facts that decide a `--ticks` run decides this one:
+///
+/// 1. **An assert failed → error, always.** This is the invariant that holds under every
+///    flag combination, and it is the whole reason this function exists (`FIND-074`):
+///    `exit_when_written` used to write [`AppExit::Success`] without ever looking at the
+///    script, so `--offscreen --script … --ticks 400 --screenshot x.png` reported **exit 0
+///    with red asserts in its own log** (measured: 2 red, 820 429 bytes written, exit 0) —
+///    the same false green as `FIND-032`, one file further on. That is
+///    `docs/HANDOVER.md` §2 a third time.
+/// 2. **The script did not reach its end → NOT an error here**, and that is the opposite of
+///    what `cutoff_verdict` does. The asymmetry is the point: a `--ticks` run is cut off
+///    *by accident* (the limit was written too small and the run has not shown what the
+///    script claims), a screenshot run is cut off *on purpose* — `--ticks 152` picks the
+///    one moment that is to be photographed, and the instructions after it are not meant to
+///    run. Applying rule 2 here would make **every** picture run exit 1 and the workflow
+///    that `docs/ACCEPTANCE.md` demands the images from useless. The narrow invariant is
+///    all that is needed: a failed assert is never green.
+///
+/// Called **after** the PNG is on disk, never before. An early guard would end the run at
+/// the failing assert and destroy the image the run exists for — losing the picture would
+/// be the worse bug (`FIND-032`, last paragraph).
+pub fn shot_verdict(run: &ScriptRun) -> AppExit {
+    let failed = run.failures.len();
+    if failed == 0 {
+        return AppExit::Success;
+    }
+    error!(
+        "screenshot run: {failed} of {} asserts failed — the image was written, the run is \
+         still RED. (The script was not required to reach its end; a shot tick cuts it off \
+         on purpose.)",
+        run.checked
+    );
+    for m in &run.failures {
+        error!("  {m}");
+    }
+    AppExit::error()
+}
+
 /// Ends the run — but only once the file is really there.
 ///
 /// **Not "the screenshot was triggered".** A run that ends because it requested something
 /// proves nothing about the result (§9). What is checked is the file: it exists and it is
-/// not empty. Only then exit 0.
-fn exit_when_written(mut job: ResMut<ScreenshotJob>, mut exit: MessageWriter<AppExit>) {
+/// not empty. Only then the script's own verdict decides ([`shot_verdict`]) — in that
+/// order, so a red run still leaves its picture behind.
+fn exit_when_written(
+    mut job: ResMut<ScreenshotJob>,
+    run: Res<ScriptRun>,
+    mut exit: MessageWriter<AppExit>,
+) {
     if !job.triggered {
         return;
     }
@@ -281,7 +333,7 @@ fn exit_when_written(mut job: ResMut<ScreenshotJob>, mut exit: MessageWriter<App
         match std::fs::metadata(&job.path) {
             Ok(m) if m.len() > 0 => {
                 info!("image written: {} ({} bytes)", job.path.display(), m.len());
-                exit.write(AppExit::Success);
+                exit.write(shot_verdict(&run));
                 return;
             }
             Ok(_) => {

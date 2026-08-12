@@ -153,6 +153,13 @@ pub struct AimPoint {
 pub struct GasGrant {
     pub boost: bool,
     pub reel_in: bool,
+    /// `F-008` dodge — **true on exactly one tick per double-tap**, never on two in a row.
+    ///
+    /// The other two are grants for a *held* button and stay true while it is held. This one
+    /// is a grant for an *edge*: `net::local::read_input` presses `Buttons::DODGE` on the tick
+    /// the second `Space` press lands and on no other, so a reader may treat `true` as "the
+    /// impulse happens now" and needs no edge detection of its own.
+    pub dodge: bool,
 }
 
 /// Contribution of ground run and air control, in m/s².

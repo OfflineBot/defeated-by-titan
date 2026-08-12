@@ -307,14 +307,14 @@ fn t005_gas_priority_names_every_consumer_exactly_once() {
     // Who pays when the tank runs low is a game-value decision (docs/QUESTIONS.md Q-017).
     // If a consumer is missing it never gets gas, and nobody goes looking for it in the RON.
     let r = &data().game.vector.gas_priority;
-    for who in [GasConsumer::Boost, GasConsumer::ReelIn] {
+    for who in [GasConsumer::Boost, GasConsumer::ReelIn, GasConsumer::Dodge] {
         assert_eq!(
             r.iter().filter(|x| **x == who).count(),
             1,
             "gas_priority = {r:?} — {who:?} must appear exactly once"
         );
     }
-    assert_eq!(r.len(), 2, "gas_priority = {r:?} — exactly two consumers, no more");
+    assert_eq!(r.len(), 3, "gas_priority = {r:?} — exactly three consumers, no more");
 }
 
 #[test]

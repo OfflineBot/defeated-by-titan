@@ -96,6 +96,32 @@ pub struct RefuelRequest {
     pub amount: f32,
 }
 
+/// **Hand a player blades back at a rack** — the same seam as [`RefuelRequest`], for the other
+/// half of the supply.
+///
+/// [`Blades`](super::state::Blades) has exactly one writer, `blades` (`docs/architecture.md`,
+/// authority table). A rack is hub furniture, i.e. `mission`, so it cannot restock a harness
+/// itself without becoming a second authority on one field — the mistake `Gas` cost a repair for
+/// on 2026-08-12 (`FINDINGS.md` FIND-063). The rack sends this and
+/// `blades::resupply::apply_restock_requests` is the only thing that ever calls
+/// [`restock`](crate::blades::resupply::restock).
+///
+/// **It carries `seconds`, not an amount — and that is the one place it differs from
+/// [`RefuelRequest`].** Gas is one scalar with one rate, so the station can multiply by `dt`
+/// itself and the receiver needs to know nothing. A harness is three numbers
+/// (`gear.ron: resupply.blade_pairs_per_s`, `sharpen_per_s`, and the `blades.start_pairs` cap)
+/// plus an integer accumulator, because `Blades::pairs_left` is a `u8` and 1.5 pairs/s at 60 Hz
+/// is 0.025 of a pair per tick. Putting that arithmetic in the sender would move `blades`'
+/// tuning into `mission`'s hands, which is the authority violation wearing a different hat. So
+/// the rack sends the one thing it actually knows — **how long the player stood there** — and
+/// the owning domain does the rest.
+#[derive(Message, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BladeRestockRequest {
+    pub player: PlayerId,
+    /// One tick's worth of standing at the rack, in seconds.
+    pub seconds: f32,
+}
+
 /// One line in the log to line a screenshot up against (`mark anchored`).
 #[derive(Message, Clone, Debug, Serialize, Deserialize)]
 pub struct Mark {

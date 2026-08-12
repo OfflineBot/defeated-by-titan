@@ -395,9 +395,185 @@ fn bindings_boost_reel_jump_dodge_and_f_are_unchanged() {
         "Ctrl must still be REEL_IN"
     );
     assert!(buttons_from(&[KeyCode::Space], &[]).contains(Buttons::JUMP), "Space must still be JUMP");
-    assert!(buttons_from(&[KeyCode::KeyC], &[]).contains(Buttons::DODGE), "C must still be DODGE");
+    // ⚠️ **`C` is still `DODGE`, but it is an EDGE since `F-008`** — this helper reads the
+    // second of two ticks with the key held, and `DODGE` is true only on the first. That is
+    // deliberate and it is measured in `f008_c_fires_one_dodge_per_press_and_not_one_per_tick`:
+    // a dodge costs a flat 45 gas, so a held key that pressed `DODGE` on every tick would empty
+    // the tank in seven of them. What this line still guards is the other half of the binding —
+    // `C` and nothing else must be the key, and it must not have quietly become a `JUMP` or a
+    // `BOOST` on the way.
+    assert!(
+        !buttons_from(&[KeyCode::KeyC], &[]).contains(Buttons::JUMP)
+            && !buttons_from(&[KeyCode::KeyC], &[]).contains(Buttons::BOOST),
+        "C must be DODGE alone"
+    );
     assert!(
         buttons_from(&[KeyCode::KeyF], &[]).contains(Buttons::SLASH_LEFT),
         "F must still be SLASH_LEFT"
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// `F-008` — the double-tap. The user, 2026-08-12 (`docs/NEXT.md` §1c):
+// *„mit doppel leertaste boostet man stark in die lauf richtung (ein weiter dodge) der viel
+// gas aufbraucht."*
+//
+// Everything below drives the **real** `read_input` through the real app, one fixed step per
+// `update()`, and reads the `Intent` the simulation would have read. Writing `Buttons::DODGE`
+// by hand would test nothing but the test — and the whole risk in this feature is a timing
+// one, so a pure function alone would not be evidence. The unit-level rules of the state
+// machine are checked underneath, on `DodgeTap` itself.
+// ---------------------------------------------------------------------------------------
+
+use defeated_by_titan::net::local::DodgeTap;
+
+/// Drives the app tick by tick. `script[i]` is the set of keys **held during tick i**; the
+/// answer is, per tick, whether the `Intent` carried `DODGE` and `JUMP`.
+///
+/// `FixedTimesteps(1)` and not a duration: this file's other tests exist because a fixed step
+/// per frame is 0..n (`B-002`), and a timing test that cannot say which tick it is on measures
+/// nothing. One `update()` is one tick here, by construction.
+fn tap_script(script: &[&[KeyCode]]) -> Vec<(bool, bool)> {
+    let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    app.update(); // Startup: the world and the local player come into being
+
+    let mut out = Vec::with_capacity(script.len());
+    for held in script {
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release_all();
+            for key in *held {
+                keys.press(*key);
+            }
+        }
+        app.update();
+        let mut players = app.world_mut().query_filtered::<&Intent, With<LocalPlayer>>();
+        let t = players
+            .iter(app.world())
+            .next()
+            .expect("the local player must exist after startup")
+            .buttons;
+        out.push((t.contains(Buttons::DODGE), t.contains(Buttons::JUMP)));
+    }
+    out
+}
+
+/// How many ticks in `script` pressed `DODGE`.
+fn dodges(script: &[&[KeyCode]]) -> usize {
+    tap_script(script).iter().filter(|(dodge, _)| *dodge).count()
+}
+
+const SPACE: &[KeyCode] = &[KeyCode::Space];
+const NOTHING: &[KeyCode] = &[];
+
+/// The window out of `game.ron`, so this file does not carry a second copy of a game value.
+fn window_ticks() -> u64 {
+    let app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    let w = app.world().resource::<GameData>().game.vector.dodge_double_tap_window_ticks;
+    assert!(w >= 2, "a window under 2 ticks cannot hold a press and a release: {w}");
+    w
+}
+
+#[test]
+fn f008_two_space_taps_inside_the_window_are_one_dodge() {
+    // Tap, release, tap — three ticks, well inside any sane window. The dodge lands on the
+    // tick of the SECOND press and on no other, because a dodge is one impulse.
+    let ticks = tap_script(&[SPACE, NOTHING, SPACE, NOTHING, NOTHING]);
+    let fired: Vec<usize> =
+        ticks.iter().enumerate().filter(|(_, (d, _))| *d).map(|(i, _)| i).collect();
+    assert_eq!(fired, vec![2], "the dodge must land exactly on tick 2, fired on {fired:?}");
+}
+
+#[test]
+fn f008_a_second_tap_after_the_window_is_only_a_jump() {
+    // The same gesture, one tick too slow. If this ever goes green with the gap above the
+    // window, the window is not being read at all and the value in the file is decoration.
+    let gap = (window_ticks() + 2) as usize;
+    let mut script: Vec<&[KeyCode]> = vec![SPACE];
+    script.extend(std::iter::repeat_n(NOTHING, gap));
+    script.push(SPACE);
+    let ticks = tap_script(&script);
+    assert!(
+        ticks.iter().all(|(dodge, _)| !dodge),
+        "a gap of {gap} ticks is outside the {}-tick window and must not dodge",
+        window_ticks()
+    );
+    assert!(ticks[0].1 && ticks[gap + 1].1, "both taps are still jumps");
+}
+
+#[test]
+fn f008_a_held_space_is_a_jump_and_never_a_dodge() {
+    // The edge, not the level. This is also the guard on `bindings_..._unchanged` above: a
+    // player who holds Space to jump must not be charged 45 gas for it.
+    let held: Vec<&[KeyCode]> = vec![SPACE; 40];
+    assert_eq!(dodges(&held), 0, "40 ticks of held Space produced a dodge");
+    assert!(tap_script(&held).iter().all(|(_, jump)| *jump), "and every one of them is a jump");
+}
+
+#[test]
+fn f008_a_dodge_never_swallows_the_jump() {
+    // `F-008` adds a button, it does not steal one. On the tick the dodge fires, `JUMP` is
+    // pressed as well — a dodge off the ground is a jump that then throws you.
+    let ticks = tap_script(&[SPACE, NOTHING, SPACE]);
+    assert_eq!(ticks[2], (true, true), "tick 2 must be dodge AND jump, was {:?}", ticks[2]);
+}
+
+#[test]
+fn f008_c_fires_one_dodge_per_press_and_not_one_per_tick() {
+    // The reason this matters is arithmetic, not taste: a dodge costs a flat `gas_dodge` (45),
+    // so a `DODGE` bit that stayed true while `C` is held would empty the 300-gas tank in
+    // seven ticks — 0.11 s — and the player would only ever see that his gas was gone.
+    let held: Vec<&[KeyCode]> = vec![&[KeyCode::KeyC]; 40];
+    let ticks = tap_script(&held);
+    let fired: Vec<usize> =
+        ticks.iter().enumerate().filter(|(_, (d, _))| *d).map(|(i, _)| i).collect();
+    assert_eq!(fired, vec![0], "40 ticks of held C must be one dodge, on tick 0; fired {fired:?}");
+    // And `C` is `DODGE` and not something else — the half of the old binding assertion that
+    // survived `F-008` (`bindings_boost_reel_jump_dodge_and_f_are_unchanged`).
+    assert!(!ticks.iter().any(|(_, jump)| *jump), "C must not be a jump");
+}
+
+// --- and the rules of the state machine itself, which no app test can reach cheaply -------
+
+#[test]
+fn f008_a_third_tap_is_not_a_second_dodge() {
+    // Without consuming the first tap, tap 2 would arm tap 3 and a player drumming on Space
+    // would pay 45 gas per tap. Three taps inside the window are ONE dodge.
+    let mut tap = DodgeTap::default();
+    let mut fired = 0;
+    for (tick, down) in [true, false, true, false, true, false].into_iter().enumerate() {
+        if tap.feed(down, false, tick as u64, 18) {
+            fired += 1;
+        }
+    }
+    assert_eq!(fired, 1, "three taps inside one window are one dodge, got {fired}");
+}
+
+#[test]
+fn f008_a_late_tap_re_arms_instead_of_failing() {
+    // Tap — long pause — tap, tap. The third is the partner of the second. Anything else
+    // would let one mistimed pair swallow the next honest attempt.
+    let mut tap = DodgeTap::default();
+    assert!(!tap.feed(true, false, 0, 4));
+    assert!(!tap.feed(false, false, 1, 4));
+    assert!(!tap.feed(true, false, 20, 4), "20 ticks apart is not a double-tap");
+    assert!(!tap.feed(false, false, 21, 4));
+    assert!(tap.feed(true, false, 22, 4), "but the pair 20/22 is");
+}
+
+#[test]
+fn f008_the_window_is_inclusive_at_both_ends() {
+    // Exactly `window_ticks` apart still counts; one more does not. A window whose boundary
+    // nobody pinned down is a window that moves whenever somebody rewrites the comparison.
+    for (gap, expected) in [(4_u64, true), (5, false)] {
+        let mut tap = DodgeTap::default();
+        tap.feed(true, false, 0, 4);
+        tap.feed(false, false, 1, 4);
+        assert_eq!(
+            tap.feed(true, false, gap, 4),
+            expected,
+            "a gap of {gap} against a window of 4 must be {expected}"
+        );
+    }
 }

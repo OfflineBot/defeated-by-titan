@@ -22,6 +22,30 @@
 //! ⚠️ **`Q` and `E` no longer mean what a `--script` written before 2026-08-10 thinks they
 //! mean**, and `hook left|right` presses a *mouse* button (`src/debug/mod.rs:220-224`) — which
 //! is now a blade. Which scripts that touches is a finding, not a thing this file fixes.
+//!
+//! ## `F-008`: the double-tap is detected **here**, and that is the seam working
+//!
+//! *„mit doppel leertaste boostet man stark in die lauf richtung"* (user, 2026-08-12,
+//! `docs/NEXT.md` §1c). A double-tap is a property of a **key**, not of the simulation, so it
+//! is resolved on this side of the `Intent` and the simulation never learns that `Space` exists
+//! — it reads `Buttons::DODGE`, which was declared on day one and written by nobody until now.
+//! A script therefore reaches the dodge with `press dodge`, and one day a network client sends
+//! the same bit. Both of those are the reason the seam is here at all.
+//!
+//! **The clock is [`Tick`], and it has to be.** `Time<Virtual>` is what `--ticks` and the seeded
+//! rng are held steady against; reading it here would make the window a different length under
+//! `--headless` than on a machine with a window. The tick counter is the one clock that ticks
+//! once per simulation step by definition.
+//!
+//! **The edge is taken per tick, not with `just_pressed`, and that is `B-002` again.**
+//! `ButtonInput::just_pressed` is a *per-frame* flag, cleared in `PreUpdate`. This system runs
+//! in `FixedPreUpdate`, i.e. **0..n times per frame** — so on a catch-up frame with two fixed
+//! steps `just_pressed` would be true in **both** of them and a single press would be a
+//! double-tap in two ticks; on a frame with no fixed step the press would be dropped entirely.
+//! That is exactly the failure [`gather_mouse_motion`] exists for, in another dress. Hence
+//! [`SpaceEdge`]: the state of `Space` **at the previous tick**, kept by this system, compared
+//! per tick. Every other button in this file is sampled with `pressed()` per tick as well, so
+//! `Space` now behaves like all of them and no differently.
 
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
@@ -47,6 +71,7 @@ pub fn read_input(
     mut inbox: ResMut<Inbox>,
     mut look_override: ResMut<LookOverride>,
     mut look: Local<Look>,
+    mut space: Local<DodgeTap>,
     local: Query<&PlayerId, With<LocalPlayer>>,
 ) {
     // There is no such thing as "the player" — but there is exactly one that is ME. If he
@@ -71,8 +96,20 @@ pub fn read_input(
             .clamp(-k.pitch_limit_deg.to_radians(), k.pitch_limit_deg.to_radians());
     }
 
+    let jump = keys.pressed(KeyCode::Space);
+    let dodge = space.feed(
+        jump,
+        keys.pressed(KeyCode::KeyC),
+        tick.0,
+        data.game.vector.dodge_double_tap_window_ticks,
+    );
+
     let mut t = Buttons::NONE;
-    t.set(Buttons::JUMP, keys.pressed(KeyCode::Space));
+    // The first tap of a dodge is **still a jump**, and so is the second. Nothing here consumes
+    // `Space` — a dodge on the ground is a jump that then throws you, and swallowing the jump
+    // would make the move feel like it ate an input. `F-008` adds a button, it does not steal
+    // one.
+    t.set(Buttons::JUMP, jump);
     t.set(Buttons::BOOST, keys.pressed(KeyCode::ShiftLeft));
     // `Ctrl` **and** `S`. The user, 2026-08-12 (`docs/NEXT.md` §1a): *„mit s »spannt« man nur
     // das seil!"* — in the air `S` is the one WASD key that produces no thrust
@@ -84,7 +121,15 @@ pub fn read_input(
         Buttons::REEL_IN,
         keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::KeyS),
     );
-    t.set(Buttons::DODGE, keys.pressed(KeyCode::KeyC));
+    // **`C` stays, and it is not a leftover.** Two routes to one bit, exactly like `F` next to
+    // the left mouse button above:
+    //   - a double-tap is a **gesture**, and the bible asks for accessibility (3.5) — a player
+    //     who cannot tap twice inside 0.3 s must still be able to dodge, and a gesture is not
+    //     rebindable in an options menu the way a key is;
+    //   - `C` is what survives when the bindings become a RON file; the double-tap is what
+    //     survives as the *feel* the user asked for. Neither replaces the other.
+    // Both arrive as **one tick** of `DODGE` — see [`DodgeTap`] for why a held `C` may not.
+    t.set(Buttons::DODGE, dodge);
     // The ropes are on the keyboard and the blades are on the mouse (user, 2026-08-10, after
     // the first time a human played this: the ropes have to be **steerable**). A hand can hold
     // `Q` and `E` and still aim; it cannot hold both mouse buttons and still aim. `MARK` had to
@@ -116,6 +161,65 @@ pub fn read_input(
         },
         tick.0,
     );
+}
+
+/// `F-008`'s edge memory: what `Space` and `C` did **last tick**, and when `Space` was last
+/// tapped.
+///
+/// A `Local` and not a `Resource`, like [`Look`] and for the same reason — this belongs to
+/// [`read_input`] and to nobody else. It is per **machine**, not per player: there is one
+/// keyboard here the same way there is one mouse, and everything past the `Intent` is per
+/// player again.
+#[derive(Default)]
+pub struct DodgeTap {
+    /// `Space` at the end of the previous tick. Not `just_pressed` — see the file header,
+    /// `B-002`.
+    space_down: bool,
+    /// `C` at the end of the previous tick.
+    dodge_key_down: bool,
+    /// The tick of the last **first** tap that is still waiting for its partner. `None` once it
+    /// has been spent or has expired.
+    armed_at: Option<u64>,
+}
+
+impl DodgeTap {
+    /// Whether `Buttons::DODGE` is pressed **this** tick. True on at most one tick per gesture.
+    ///
+    /// Three properties, and each one is a test in `tests/input.rs`:
+    ///
+    /// - **Both routes are edges.** A held `C` fires once, not sixty times a second. It has to
+    ///   be that way: a dodge costs a flat `vector.gas_dodge` (45), so a `DODGE` bit that stayed
+    ///   true while a key is held would empty a 300-gas tank in **seven ticks** — 0.11 s — and
+    ///   the player would only ever see that his gas was gone. The rate limit is the edge, not a
+    ///   cooldown; `F-008`'s own cooldown is a separate thing and is not built.
+    /// - **The first tap is consumed.** Three taps inside the window are **one** dodge, not two.
+    ///   Without `armed_at.take()` the second tap would arm the third, and a player drumming on
+    ///   `Space` would pay 45 gas per tap.
+    /// - **A late second tap re-arms rather than failing.** Tap, wait a second, tap, tap: the
+    ///   third is the partner of the second. Anything else would make a mistimed pair swallow
+    ///   the next honest attempt.
+    ///
+    /// `saturating_sub` and `<=`: the window is inclusive, and a tick counter that ever went
+    /// backwards (a rewind, one day) yields `0` and a dodge rather than an underflow panic in
+    /// the input path.
+    pub fn feed(&mut self, space: bool, dodge_key: bool, tick: u64, window_ticks: u64) -> bool {
+        let space_edge = space && !self.space_down;
+        let key_edge = dodge_key && !self.dodge_key_down;
+        self.space_down = space;
+        self.dodge_key_down = dodge_key;
+
+        let mut fired = key_edge;
+        if space_edge {
+            match self.armed_at {
+                Some(first) if tick.saturating_sub(first) <= window_ticks => {
+                    self.armed_at = None;
+                    fired = true;
+                }
+                _ => self.armed_at = Some(tick),
+            }
+        }
+        fired
+    }
 }
 
 /// The look lives between the frames — it is the accumulated mouse motion, not its delta.

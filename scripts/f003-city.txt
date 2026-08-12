@@ -3,6 +3,18 @@
 #   cargo run -- --offscreen \
 #       --script scripts/f003-city.txt --ticks 110 --screenshot docs/images/f003-city.png
 #
+# and, as a SEPARATE run, the one that returns a usable exit code:
+#
+#   cargo run -q -- --headless --script scripts/f003-city.txt --ticks 800
+#
+# ⚠️ **A `--screenshot` run is not a verdict.** `debug::screenshot::exit_when_written` owns the
+# ending and writes `AppExit::Success` the moment the PNG is on disk, without ever reading
+# `run.failures` — so the command above exits 0 even when the asserts in this file are RED, and
+# the assert summary never prints (`docs/FINDINGS.md` FIND-073). Only the `--headless` run
+# reports "N asserts held" and returns an exit code worth reading. Its tick count is
+# deliberately generous: overshooting the script's own end is free, undershooting truncates the
+# run and hides the summary (FIND-032).
+#
 # The evidence for F-003 "the map comes out of the file": until 2026-08-09 the image showed
 # the four hard-wired placeholder blocks out of src/world/mod.rs. What has to be visible
 # here is something else — a layout of blocks and streets, the nine placed blocks inside

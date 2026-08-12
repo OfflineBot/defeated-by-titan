@@ -247,6 +247,16 @@ pub struct VectorTuning {
     pub gas_tank: f32,
     pub gas_boost_per_s: f32,
     pub gas_reel_per_s: f32,
+    /// `F-008`. **⚠️ UNTUNED.** What **one** dodge costs — a flat amount, not a rate, and the
+    /// only gas number in this block without a `_per_s`. That is the whole difference between
+    /// the two boosts the user asked for (`docs/NEXT.md` §1c): `Shift` bills a rate for as long
+    /// as you hold it, the dodge bills once for one impulse.
+    ///
+    /// **The comparison that makes `gas_boost_per_s` the cheap one is per m/s of speed bought,
+    /// not per second**: the dodge pays `gas_dodge / dodge_impulse_m_s`, the held boost pays
+    /// `gas_boost_per_s / boost_m_s2`. `tests/vector_boost.rs` holds the ratio, and the numbers
+    /// and the argument stand in `assets/data/game.ron`.
+    pub gas_dodge: f32,
     // ⚠️ **There is deliberately no `gas_regen_per_s` / `gas_regen_delay_s` here** — the tank
     // has no regeneration rate, because gas refills only at the stations of the main building
     // (`docs/QUESTIONS.md` Q-033, the user on 2026-08-12). `deny_unknown_fields` above is what
@@ -267,6 +277,24 @@ pub struct VectorTuning {
     /// No `serde(default)`: at `0.0` this is the old behaviour, and that has to be a decision
     /// somebody wrote into the file, not a value nobody noticed was missing.
     pub boost_rope_fraction: f32,
+    /// `F-008`. **⚠️ UNTUNED.** How much speed **one** dodge adds, in m/s — a velocity change,
+    /// not an acceleration and not a force.
+    ///
+    /// **m/s and not m/s² on purpose.** `vector::boost::gas_boost` divides it by the fixed
+    /// timestep to get the acceleration avian wants, so the number in the file is what a player
+    /// can actually check against `max_speed_m_s` and against a swing (17–21 m/s, `Q-018`) —
+    /// and it stays the same speed if `simulation_hz` ever moves. Mass never enters it, for the
+    /// reason [`boost_m_s2`](Self::boost_m_s2) is an acceleration.
+    pub dodge_impulse_m_s: f32,
+    /// `F-008`. **⚠️ UNTUNED.** How many **ticks** may lie between the two `Space` presses for
+    /// them to count as one double-tap (`net::local::read_input`).
+    ///
+    /// **Ticks and not seconds, because the tick counter is the clock that measures it.**
+    /// `Time<Virtual>` is not usable here — it is what `--ticks` and the seeded rng are held
+    /// steady against — and a window in seconds would have to be divided back into ticks with
+    /// a rounding nobody can see. The conversion belongs in the comment, not in the code:
+    /// `18` is 0.300 s at `simulation_hz: 60`.
+    pub dodge_double_tap_window_ticks: u64,
     pub max_speed_m_s: f32,
 }
 
@@ -278,6 +306,10 @@ pub enum GasConsumer {
     Boost,
     /// `F-005` reel-in.
     ReelIn,
+    /// `F-008` dodge. **The one consumer that is not a rate** — it bills
+    /// [`gas_dodge`](VectorTuning::gas_dodge) once, on the tick the double-tap lands, and
+    /// nothing on any other tick.
+    Dodge,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -384,10 +416,21 @@ pub struct Layout {
     pub colors: Vec<String>,
 }
 
-/// The closed block: how one grid cell is turned into a ring of touching houses.
+/// The closed block: how one grid cell is turned into a ring of houses.
 ///
 /// The courtyard is `lot_m - 2 * wing_depth_m` on a side and it is a **gap between blocks**,
 /// not a hole cut into one — this world has no subtraction (`docs/FINDINGS.md` FIND-056).
+///
+/// ## Everything below `wing_depth_m` exists because the first version of this ring was
+/// ## judged and failed
+///
+/// The user, 2026-08-12: *„häuser sind alle ineinander! keine unterschiedliche höhen! es
+/// sieht überhaupt nicht aus wie eine attack on titan map! viel zu kompakt!"* — a ring of
+/// identically wide, identically deep, identically tall houses with **zero** gap between
+/// them, repeated on a perfect square grid, reads as one merged mass with a flat top. Every
+/// number here is one axis of irregularity, and every one of them is drawn from the seed:
+/// per **cell** (`cell_jitter_m`, `house_spread_m`), per **wing** (`frontage_spread_m`) or
+/// per **house** (`gap_fraction`, `setback_max_m`, `depth_spread_m`, `roof`).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Perimeter {
@@ -396,6 +439,57 @@ pub struct Perimeter {
     pub frontage_m: f32,
     /// How deep the ring is. `2 * wing_depth_m < lot_m`, or there is no courtyard left.
     pub wing_depth_m: f32,
+    /// Full width of the window the frontage is drawn from, per **wing**: one run is divided
+    /// into houses of `frontage_m ± frontage_spread_m / 2`. Two runs facing each other then
+    /// no longer have the same number of houses at the same joints.
+    pub frontage_spread_m: f32,
+    /// The alley, as a fraction of one slot, drawn per **house**: `0` is a party wall,
+    /// `gap_fraction` is the widest gap. A fraction and not a metre so that a narrow flank
+    /// house cannot be given a gap wider than itself.
+    pub gap_fraction: f32,
+    /// How far a house may stand back from the street edge, drawn per **house**. This is what
+    /// makes the frontage line ragged instead of flush.
+    pub setback_max_m: f32,
+    /// How much depth a house may lose behind the frontage, drawn per **house**.
+    /// `setback_max_m + depth_spread_m < wing_depth_m`, or a house would have no depth left.
+    pub depth_spread_m: f32,
+    /// How far the whole ring may be shifted in x and z against its grid cell, drawn per
+    /// **cell**. This is the only thing that breaks the perfect orthogonal grid — no block is
+    /// ever rotated (`world::map`), so a wobbling street is the available substitute.
+    /// `2 * cell_jitter_m < street_m`, or two rings grow into each other.
+    pub cell_jitter_m: f32,
+    /// How much the houses of **one** block differ in height. The rest of
+    /// `min_height_m..max_height_m` is the block's own level, drawn per cell: houses next to
+    /// each other differ a little, quarters next to each other differ a lot. One draw over
+    /// the whole window instead gives white noise, which from a distance is a flat average —
+    /// exactly the "keine unterschiedliche höhen" the user saw.
+    pub house_spread_m: f32,
+    /// The pitched cap on top of the walls. `None` = flat roofs.
+    pub roof: Option<Roof>,
+}
+
+/// The roof, as the one block a box world can build it from: a smaller cuboid on the eaves.
+///
+/// `Layout::min_height_m..max_height_m` stays the **ridge** — the total height of the house,
+/// the number `scale.ron: architecture.heights_m` names and `tests/data.rs` holds to the
+/// residential band. The roof is cut **out of** it, not added on top: eaves = ridge - rise.
+/// Nothing gets taller because the houses grew roofs.
+///
+/// The rise is a **fraction of the house**, because that is the shape the user's own numbers
+/// have: `scale.ron: architecture.eaves_m` gives 3.0 m of eaves on a 4.5 m house (rise 1/3)
+/// and 6.0 m on an 8.0 m house (rise 1/4). A fixed rise in metres would put a 1/3 roof on a
+/// small house and a 1/8 roof on a large one.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Roof {
+    pub min_rise_fraction: f32,
+    pub max_rise_fraction: f32,
+    /// How far the cap is pulled in on each side, as a fraction of the house's footprint.
+    /// `< 0.5`, or the cap has no extent. The remainder is the ledge you land on.
+    pub inset_fraction: f32,
+    /// Its color key out of [`Maps::palette`] — the roofscape is the route, and a route the
+    /// player cannot tell apart from the wall below it is not a route.
+    pub color: String,
 }
 
 /// One explicitly placed box. Origin at the center, like `shared::Block`.
@@ -729,6 +823,8 @@ pub struct Art {
     /// A model that misses it by more than this breaks `F-030`: the cut lands where the
     /// silhouette says and the kill zone is somewhere else.
     pub cortex_tolerance_m: f32,
+    /// Sun, sky, fog and exposure — `render::light` reads nothing else.
+    pub lighting: Lighting,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -764,6 +860,86 @@ pub enum ModelSource {
     /// and it is written here so that no file name ever stands in Rust (§7,
     /// `tools/norms.py`).
     Gltf(String),
+}
+
+/// The sun, the sky and the fog — **every number of the look that is not a hue**.
+///
+/// The hues stay where they were (`maps.ron: palette` and `maps.ron: signals`); this is light
+/// and depth. It lives in `art.ron` and not in Rust for the same reason a gas cost does
+/// (rule 2), and it is one struct and not six loose fields because the values are only
+/// meaningful **against each other**: `ambient.brightness` says nothing without
+/// `sun.illuminance_lux` and `exposure_ev100`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Lighting {
+    pub sun: Sun,
+    pub ambient: Ambient,
+    pub sky: Sky,
+    pub fog: Fog,
+    /// Camera exposure. The scale everything else is solved against — see `art.ron`.
+    pub exposure_ev100: f32,
+}
+
+/// The one directional light. **Its position is spherical, not cartesian**, because that is
+/// how a sun is actually chosen: you pick where it stands, not a point in metres.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sun {
+    /// Linear RGB.
+    pub color: (f32, f32, f32),
+    pub illuminance_lux: f32,
+    /// Compass degrees in **our yaw convention**: 0 = -Z, +90 = +X
+    /// (`docs/conventions.md`). This is the direction the light comes **from**.
+    pub azimuth_deg: f32,
+    /// Degrees above the horizon.
+    pub elevation_deg: f32,
+    /// **The expensive switch** (`docs/lessons/performance.md` rule 5). A `bool` in a file so
+    /// that the cost can be measured with two runs of the *same binary*.
+    pub shadows: bool,
+    /// Edge of one cascade's shadow map, in texels.
+    pub shadow_map_size: usize,
+    pub cascades: usize,
+    pub first_cascade_far_bound_m: f32,
+    pub shadow_distance_m: f32,
+    pub cascade_overlap: f32,
+    pub shadow_depth_bias: f32,
+    pub shadow_normal_bias: f32,
+}
+
+/// The fill. Cool against a warm sun — that split is what makes a shaded face read.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ambient {
+    /// Linear RGB.
+    pub color: (f32, f32, f32),
+    /// cd/m². Only meaningful as a ratio against [`Sun::illuminance_lux`].
+    pub brightness: f32,
+}
+
+/// The sky dome — three stops interpolated over the vertical, not one `ClearColor`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sky {
+    /// Linear RGB, straight up.
+    pub zenith: (f32, f32, f32),
+    /// Linear RGB, at eye level. **Has to equal [`Fog::color`]** or the horizon is a seam.
+    pub horizon: (f32, f32, f32),
+    /// Linear RGB, straight down.
+    pub nadir: (f32, f32, f32),
+    /// Metres. Has to stay inside the camera's far plane — the dome is pinned to the eye.
+    pub radius_m: f32,
+    pub segments: u32,
+    pub rings: u32,
+}
+
+/// Distance fog. Linear falloff: two numbers, both in metres, both walkable.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fog {
+    /// Linear RGB. = [`Sky::horizon`].
+    pub color: (f32, f32, f32),
+    pub start_m: f32,
+    pub end_m: f32,
 }
 
 // ---------------------------------------------------------------------------

@@ -42,6 +42,12 @@
         "brick_red": (0.45, 0.26, 0.20),
         "olive_green": (0.29, 0.33, 0.20),
         "sand_brown": (0.55, 0.47, 0.33),
+        // Added 2026-08-12 for the roofscape. The roofs are the route the player actually
+        // flies (`docs/gameplay/`), and until today they were the same colour as the wall
+        // under them — from twenty metres up the district was one flat mosaic. Darker and
+        // slightly cooler than `stone_gray`, so a roof reads as a roof at speed and against
+        // a sand-brown street. **Not a signal colour**: those three are gameplay only.
+        "roof_slate": (0.24, 0.23, 0.24),
     },
 
     // The three signal colors, linear RGB. Until 2026-08-09 they existed only as PROSE
@@ -443,37 +449,106 @@
                 // 7.0 and not 8.0: `scale.ron: reference.min_street_m/max_street_m` is
                 // 6..8 and the survey's residential median is 7.7. 7 m against the 11.5 m
                 // ridge is 0.61 : 1 — the measured proportion, to two digits.
-                street_m: 7.0,
+                street_m: 6.0,
                 // 4.5 -> 8.0. The survey counts storeys: 2 storeys 167 buildings,
                 // 3 storeys 65, **1 storey 9**. A one-storey house is 4 % of the stock, and
                 // in a 7 m street a 4.5 m house is a 1.6 : 1 clearing, not a canyon. So the
                 // band is `house_town` (8.0) .. `house_large` (11.5) out of scale.ron — both
                 // the user's numbers, neither invented, and 3.5 m of spread is a real old
                 // town's roofline rather than a sawtooth.
-                min_height_m: 8.0,
+                // ## 8.0 -> 6.5, and this is the reversal the user ordered
+                //
+                // 2026-08-12, after seeing the rebuilt district: *„häuser sind alle
+                // ineinander! keine unterschiedliche höhen! es sieht überhaupt nicht aus wie
+                // eine attack on titan map! viel zu kompakt!"*
+                //
+                // The survey was not wrong — 2 storeys are 68 % of the stock — but a band of
+                // 8.0..11.5 is **3.5 m of spread on a 700 m district**, and from twenty metres
+                // up that is one flat top. The band is now 5.0 m wide and it is spent twice:
+                // `house_spread_m` inside one block, the rest as the block's own level. Two
+                // quarters next to each other therefore sit at visibly different heights,
+                // which is what a skyline is made of, while two neighbours still differ.
+                //
+                // 6.5 is the floor and not 4.5, because the ratio is still the rule: a 4.5 m
+                // house across a 7 m street is a 1.6 : 1 clearing and the rope has no arc in
+                // it (FIND-041). Below the band, height comes from the roof and not from the
+                // wall.
+                min_height_m: 6.5,
+                // The **ridge**, not the eaves: `scale.ron: architecture.heights_m
+                // house_large` is the upper limit of normal building and the roof is cut out
+                // of the house downward, not added on top of it. Nothing in this district got
+                // taller than the user's own number when the roofs came back.
                 max_height_m: 11.5,
-                // 0.72 -> 0.78. The draw is now per BLOCK, not per house: a cell is either a
-                // closed ring or an open yard, and 0.78 of 43 x 43 m cells at 59.5 % built
-                // area inside a ring gives **46 %** coverage over the built-up quarters,
-                // which the aprons (field, main street, square, boulevard, quays) pull down
-                // to the surveyed ~39 % over the walled area. Higher and the town has no
-                // yards at all; lower and single blocks start standing alone again.
-                density: 0.78,
-                // 0.55 -> 0.85. With the roofscape as the route, a roof you cannot hook is a
-                // hole in the route and not a detail. 15 % untagged is still enough that
-                // F-003 ("no hook on an untagged part") is checkable in this map.
-                anchorable_fraction: 0.85,
+                // 0.78 -> 0.80. The ring now has alleys in it, so a built cell no longer
+                // covers its whole outline: about 8 % of the footprint is gap. 0.80 puts the
+                // built area back where the survey wants it (~39 % over the walled area).
+                density: 0.86,
+                // 0.85 -> 1.0. The user, 2026-08-12: *„man soll überall seinen haken inmachen
+                // können! auch an den boden oder dächer, alles!"*. Every house and every roof
+                // of this district holds a hook. F-003 ("no hook on an untagged part") stays
+                // falsifiable on the wall, the gatehouses and the gantry legs, which are the
+                // 100+ untagged blocks left in `blocks` below.
+                anchorable_fraction: 1.0,
                 clear_radius_m: 24.0,
-                // The closed block: a ring of touching row houses around a courtyard.
+                // The closed block — a ring of row houses around a courtyard, and since
+                // 2026-08-12 **no two of them the same box**. Everything after
+                // `wing_depth_m` is one axis of irregularity; without them the ring was eight
+                // identical cuboids with a zero gap, and that is what „alle ineinander" was.
                 perimeter: Some((
                     // 12 m of frontage. Survey median longest wall 13.1 m (p25 10.9,
-                    // p75 16.7); 12 divides 36 into three whole houses with no remainder,
-                    // and a remainder would be a gap in the perimeter.
+                    // p75 16.7).
                     frontage_m: 12.0,
                     // 11 m deep — survey ordinary house 11 x 13 m. It is also what fixes the
                     // courtyard at 14 m: `d < H` wants the courtyard under the 11.5 m ridge,
                     // and 36 - 2*11 = 14 is the last width that still qualifies.
                     wing_depth_m: 11.0,
+                    // The frontage is drawn per RUN out of 9.5..14.5 — the survey's p25..p75
+                    // is 10.9..16.7, and the lower half of it is what fits a 36 m run in
+                    // whole houses (2, 3 or 4 of them). Two rows facing each other then no
+                    // longer have their joints at the same x.
+                    frontage_spread_m: 5.0,
+                    // Up to 22 % of a slot is alley. Drawn per house, so a run has party
+                    // walls (the survey's finding, and it stays the common case) AND gaps you
+                    // can see down — which is the half the first version left out.
+                    gap_fraction: 0.22,
+                    // Up to 1.6 m off the street edge. A ragged frontage line is what the
+                    // survey means by "irregular"; ours was a drawn straight line.
+                    setback_max_m: 1.6,
+                    // And up to 3.2 m off the depth behind it, so the courtyard side is
+                    // ragged too. setback_max_m + depth_spread_m = 4.8 < wing_depth_m 11.0 —
+                    // `world::map::perimeter_houses` asserts exactly that, because a house
+                    // with no depth left is a wall.
+                    depth_spread_m: 3.2,
+                    // The whole ring moves up to 2 m off its grid cell. **This is the only
+                    // tool this world has against a checkerboard** — nothing may be rotated
+                    // (`world::map`), so the street has to wobble instead of run. The street
+                    // is then 3..11 m wide instead of 7.00 m everywhere, and
+                    // 2 * 2.0 < street_m 7.0 keeps two rings from touching.
+                    cell_jitter_m: 1.5,
+                    // Of the 5.0 m band, 2.4 m are spent inside one block and the remaining
+                    // 2.6 m are the block's own level. Both halves are needed: only the first
+                    // gives a sawtooth that averages flat over a hundred metres, only the
+                    // second gives terraces of identical houses.
+                    house_spread_m: 2.4,
+                    // The pitched cap. It died in the 2026-08-12 rebuild because an untagged
+                    // cap over a tagged wall is FIND-059 — so it is back with the SAME anchor
+                    // bit as its house, and `tests/world.rs` measures that instead of
+                    // forbidding caps.
+                    roof: Some((
+                        // A fraction, out of the user's own two eaves figures
+                        // (`scale.ron: architecture.eaves_m`): 3.0 m of eaves on a 4.5 m house
+                        // is a 1/3 roof, 6.0 m on 8.0 m is a 1/4 roof. 0.22..0.33 is that
+                        // pair, widened by one notch at the shallow end. **A number in metres
+                        // would put a 1/3 roof on a small house and a 1/8 roof on a large
+                        // one.**
+                        min_rise_fraction: 0.22,
+                        max_rise_fraction: 0.33,
+                        // 12 % pulled in per side, so a 12 m house keeps a 1.4 m ledge all
+                        // round: the step is what makes the roof read as a roof from above,
+                        // and the ledge is what you can still stand on next to the cap.
+                        inset_fraction: 0.12,
+                        color: "roof_slate",
+                    )),
                 )),
                 colors: ["stone_gray", "brick_red", "sand_brown"],
             ),
@@ -481,24 +556,39 @@
             blocks: [
 
                 // ---- Ground, canal and paving ------------------------------------------
+                // ## Every one of these is anchorable since 2026-08-12, and that OVERRULES the
+                // ## note the graybox still carries ("not anchorable: otherwise you hook into
+                // ## the ground slabs")
+                //
+                // The user, 2026-08-12: *„man soll überall seinen haken inmachen können! auch
+                // an den boden oder dächer, alles!"*.
+                //
+                // The old reason was real, and it is worth writing down what was accepted
+                // rather than pretending it went away: a 700 x 700 m slab is the largest
+                // target in the map, so a crosshair that is even slightly below the horizon
+                // now hits *ground* where it used to fly past it to a facade behind — and a
+                // rope into the ground pulls you down into it instead of over it. Accepted,
+                // because the alternative is the thing he actually complained about: a shot
+                // that answers NoAnchor for no reason the player can see.
+                //
                 // the two ground slabs. The gap between them is the channel, and that is the only
-                (center_m: (-217.5, -0.1, 0.0), size_m: (265.0, 0.2, 700.0), color: "sand_brown", anchorable: false, solid: true, landmark: false),
+                (center_m: (-217.5, -0.1, 0.0), size_m: (265.0, 0.2, 700.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
                 // way to get a hole into a box world: leave it out. **Sand, not green: the ground BETWEEN
-                (center_m: (147.5, -0.1, 0.0), size_m: (405.0, 0.2, 700.0), color: "sand_brown", anchorable: false, solid: true, landmark: false),
+                (center_m: (147.5, -0.1, 0.0), size_m: (405.0, 0.2, 700.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
                 // the channel floor 4 m down — no water in this game, so the river is a lowered lane.
                 // ⚠️ 16 -> 10 m of channel, and it is not taste. The quays are what deletes a grid
-                (center_m: (-70.0, -4.1, 0.0), size_m: (10.0, 0.2, 700.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-70.0, -4.1, 0.0), size_m: (10.0, 0.2, 700.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
                 // house standing over the water, and since 2026-08-12 that test runs per HOUSE and not
-                (center_m: (-80.0, -1.8, 0.0), size_m: (10.0, 4.4, 700.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-80.0, -1.8, 0.0), size_m: (10.0, 4.4, 700.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
                 // per cell: a 12 x 11 m row house fits into a 16 m gap and would hang in the air over
                 // the channel. It does not fit into 10. The quays are 10 m for the same arithmetic.
-                (center_m: (-60.0, -1.8, 0.0), size_m: (10.0, 4.4, 700.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-60.0, -1.8, 0.0), size_m: (10.0, 4.4, 700.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
                 // the lots IS the street network, and a green one made the district read as houses on a lawn. Green stays outside the wall, where it is a field.
-                (center_m: (0.0, -0.1, -336.25), size_m: (700.0, 0.3, 27.5), color: "olive_green", anchorable: false, solid: true, landmark: false),
-                (center_m: (-235.0, -0.1, -232.5), size_m: (230.0, 0.3, 180.0), color: "olive_green", anchorable: false, solid: true, landmark: false),
-                (center_m: (235.0, -0.1, -232.5), size_m: (230.0, 0.3, 180.0), color: "olive_green", anchorable: false, solid: true, landmark: false),
+                (center_m: (0.0, -0.1, -336.25), size_m: (700.0, 0.3, 27.5), color: "olive_green", anchorable: true, solid: true, landmark: false),
+                (center_m: (-235.0, -0.1, -232.5), size_m: (230.0, 0.3, 180.0), color: "olive_green", anchorable: true, solid: true, landmark: false),
+                (center_m: (235.0, -0.1, -232.5), size_m: (230.0, 0.3, 180.0), color: "olive_green", anchorable: true, solid: true, landmark: false),
                 // the boulevard along the wall: the cleared strip the wall gallery swings over
-                (center_m: (0.0, -0.1, -83.75), size_m: (700.0, 0.3, 27.5), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (0.0, -0.1, -83.75), size_m: (700.0, 0.3, 27.5), color: "stone_gray", anchorable: true, solid: true, landmark: false),
                 // the main street — the two-gate axis, and the lane the gantries straddle.
                 // ⚠️ 48 -> 30 m, and the number is not free: the apron deletes every grid
                 // house that TOUCHES it, so its width decides where the frontage stands. At
@@ -507,12 +597,12 @@
                 // **31 m** — one metre wider than the apron, and wide enough for the 28 m
                 // gates it connects. Anything between 31 and 47 buys nothing and costs a row
                 // of houses.
-                (center_m: (0.0, -0.1, -13.75), size_m: (30.0, 0.3, 527.5), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (0.0, -0.1, -37.5), size_m: (30.0, 0.3, 575.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
                 // the market square. **Dead zone 1, on purpose** (and the church tower beside
                 // it is the way across): 76 m of open stone against an 11.5 m roofscape is
                 // `d < H` failing by a factor of six. Traversal that works everywhere is not
                 // a skill.
-                (center_m: (62.0, -0.1, -22.0), size_m: (76.0, 0.3, 76.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (62.0, -0.1, -22.0), size_m: (76.0, 0.3, 76.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
                 // ---- Aprons under the projecting galleries ------------------------------
                 // The 60 m gallery and the 120 m crown corbel hang 14 m and 12 m out over
                 // the ground. A house under them has something standing on its roof centre,
@@ -521,9 +611,9 @@
                 // Along the main wall the boulevard already keeps that strip clear; the two
                 // flanks and the outer wall had nothing, and the hand-placed pocket houses
                 // stood under the west gallery. 20.4 m = the union of gallery and corbel.
-                (center_m: (-97.8, -0.1, -210.0), size_m: (20.4, 0.3, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
-                (center_m: (97.8, -0.1, -210.0), size_m: (20.4, 0.3, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
-                (center_m: (0.0, -0.1, -277.8), size_m: (240.0, 0.3, 20.4), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-96.0, -0.1, -210.0), size_m: (24.0, 0.3, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                (center_m: (96.0, -0.1, -210.0), size_m: (24.0, 0.3, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                (center_m: (0.0, -0.1, -277.8), size_m: (240.0, 0.3, 20.4), color: "stone_gray", anchorable: true, solid: true, landmark: false),
 
                 // ---- The wall: 120 m, battered 45 m -> 28 m, one course per 15 m band --
                 // main wall
@@ -711,13 +801,44 @@
                 // its crown — an anchorable surface — had 47 m of stone over it.
                 (center_m: (-50.0, 6.0, -180.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
                 (center_m: (-48.0, 6.0, -220.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
-                // six bridges. The channel is not anchorable, the bridges are.
+                // six bridges. Since 2026-08-12 the channel, the quays and the bridges are
+                // all anchorable — the user: *„man soll überall seinen haken inmachen
+                // können! auch an den boden oder dächer, alles!"*. What that costs is
+                // written at the ground slabs above.
                 (center_m: (-70.0, -0.1, -240.0), size_m: (36.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
                 (center_m: (-70.0, -0.1, -180.0), size_m: (36.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
                 (center_m: (-70.0, -0.1, -60.0), size_m: (36.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
                 (center_m: (-70.0, -0.1, 20.0), size_m: (36.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
                 (center_m: (-70.0, -0.1, 110.0), size_m: (36.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
                 (center_m: (-70.0, -0.1, 190.0), size_m: (36.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                // ---- Bell towers — the skyline, and the only legal way to build one ----
+                // The user, 2026-08-12: *„keine unterschiedliche höhen!"*. The residential
+                // band cannot answer that on its own: `scale.ron: architecture.heights_m`
+                // stops at **11.5 m** for a house and the next entry is the **35 m** church —
+                // there is nothing in between (docs/QUESTIONS.md Q-036, still the user's to
+                // answer). 5 m of spread over 700 m of town is invisible from the air, and
+                // widening it downward would break the one proportion that makes the rope
+                // swing (`d < H`).
+                //
+                // So the vertical comes from **landmarks**, which is what `maps.ron` claimed
+                // about itself from the beginning — and until today the whole district had
+                // exactly one of them inside the wall. Eight bell towers at the church's own
+                // 35 m, scattered across the quarters, are what turns a uniform roofscape
+                // into a silhouette. Every one of them is a HEIGHT OUT OF scale.ron, not an
+                // invented number, and `landmark: true` says so.
+                //
+                // They also do a second job the roofscape needs: an anchor 35 m up over the
+                // middle of a quarter is a lane that no 11 m ridge can give
+                // (`d < H` — FIND-041), and it is the answer to the gantries the main street
+                // still needs (FIND-060).
+                (center_m: (-140.0, 17.5, 40.0), size_m: (8.0, 35.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-200.0, 17.5, 180.0), size_m: (8.0, 35.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-30.0, 17.5, 150.0), size_m: (8.0, 35.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (120.0, 17.5, 90.0), size_m: (8.0, 35.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (230.0, 17.5, -30.0), size_m: (8.0, 35.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (60.0, 17.5, 250.0), size_m: (8.0, 35.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-110.0, 17.5, 280.0), size_m: (8.0, 35.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (280.0, 17.5, 200.0), size_m: (8.0, 35.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 // market stalls
                 (center_m: (32.0, 1.25, -50.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
                 (center_m: (40.0, 1.25, -50.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),

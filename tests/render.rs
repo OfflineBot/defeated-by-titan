@@ -44,6 +44,10 @@ use bevy::window::PrimaryWindow;
 use bevy::world_serialization::{WorldAsset, WorldAssetRoot};
 use defeated_by_titan::data::{GameData, Model, ModelSource};
 use defeated_by_titan::debug::gizmo::GizmoToggle;
+use bevy::camera::Exposure;
+use bevy::light::NotShadowCaster;
+use bevy::mesh::VertexAttributeValues;
+use defeated_by_titan::render::light::{to_sun, SkyDome};
 use defeated_by_titan::render::model::{
     load_configured_models, ModelAnchors, ModelAssets, ModelBody, ModelName, PendingScene,
     PrimitiveFallback, CORTEX_ANCHOR,
@@ -1006,5 +1010,286 @@ fn f030_the_anchors_come_out_of_a_spawned_instance() {
         None,
         "an empty the model does not carry must be ABSENT, never Vec3::ZERO — that would be a \
          kill zone between the feet"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// FIND-071 — the light. **"alles sehr flat"**, and it was arithmetic.
+//
+// The user said it twice, once in the first window session and again on 2026-08-12. The second
+// time it was measured out of `docs/images/f003-light-before.png`: a vertical wall face read
+// luminance 183.2 and the ground beside it 183.3 — the same value on two surfaces at right
+// angles, because `illuminance 10_000` against Bevy's default `Exposure::BLENDER` (ev100 9.7)
+// puts every face with NdotL > 0.73 **over 1.0**, and a clipped face has neither colour nor
+// orientation left.
+//
+// These tests do not check that the picture is pretty. They check the three things that decide
+// whether it *can* be: the sun points where the file says, the four faces of a box get four
+// different amounts of light and none of them clips, and the sky is more than one colour.
+// ---------------------------------------------------------------------------
+
+/// Albedo of `stone_gray` — the most common surface in the district (`maps.ron: palette`).
+/// The reference surface every luminance below is computed for.
+const STONE_GRAY_G: f32 = 0.43;
+
+/// Lambert: what a face with this normal gets, in **linear output units after exposure**.
+/// 1.0 is the clip. This is Bevy's own path, shortened to the diffuse term:
+/// `albedo/pi * illuminance * NdotL * exposure` (`bevy_pbr .. pbr_functions.wgsl:863`).
+fn lit(sun_dir: Vec3, normal: Vec3, illuminance: f32, exposure: f32) -> f32 {
+    let n_dot_l = (-sun_dir).dot(normal).max(0.0);
+    STONE_GRAY_G / core::f32::consts::PI * illuminance * n_dot_l * exposure
+}
+
+/// The one `DirectionalLight` and the transform it was aimed with.
+fn the_sun(app: &mut App) -> (DirectionalLight, GlobalTransform) {
+    let mut q = app.world_mut().query::<(&DirectionalLight, &GlobalTransform)>();
+    let found: Vec<_> = q.iter(app.world()).map(|(l, t)| (l.clone(), *t)).collect();
+    assert_eq!(found.len(), 1, "there is exactly one sun, spawned by render::light::setup_sun");
+    found.into_iter().next().unwrap()
+}
+
+#[test]
+fn f071_the_sun_stands_where_art_ron_says() {
+    // `to_sun` is the whole aiming convention in one function, and it is the game's convention
+    // and not Bevy's: yaw 0 = -Z, +90 = +X (docs/conventions.md). A flipped sign here lights the
+    // district from below and nobody notices, because a uniformly lit box looks the same as a
+    // uniformly unlit one once the exposure clips.
+    let up = to_sun(0.0, 90.0);
+    assert!(up.abs_diff_eq(Vec3::Y, 1e-5), "elevation 90 is straight up, got {up}");
+    let north = to_sun(0.0, 0.0);
+    assert!(north.abs_diff_eq(Vec3::NEG_Z, 1e-5), "azimuth 0 is -Z, got {north}");
+    let east = to_sun(90.0, 0.0);
+    assert!(east.abs_diff_eq(Vec3::X, 1e-5), "azimuth 90 is +X, got {east}");
+
+    let mut app = app();
+    let k = app.world().resource::<GameData>().art.lighting.sun.clone();
+    let (_, transform) = the_sun(&mut app);
+
+    // The light travels the OTHER way from the direction the sun stands in.
+    let want = -to_sun(k.azimuth_deg, k.elevation_deg);
+    let got = transform.forward().as_vec3();
+    assert!(
+        got.abs_diff_eq(want, 1e-4),
+        "the sun points {got}, art.ron says {want} (azimuth {} deg, elevation {} deg) — a sun \
+         aimed anywhere else makes every NdotL below a different number",
+        k.azimuth_deg,
+        k.elevation_deg
+    );
+    assert!(
+        got.y < 0.0,
+        "the light has to travel DOWNWARD; it travels {got} and the district is lit from below"
+    );
+}
+
+#[test]
+fn f071_a_roof_a_sunlit_wall_and_a_shaded_wall_are_three_different_values() {
+    // **This is the test the user's sentence turns into.** Four faces of one box, four numbers,
+    // and the gap between them is what "not flat" means. It falls over for the old settings
+    // (illuminance 10_000, ev100 9.7 -> roof and sunlit wall both clip at 1.0 and become one
+    // value), and it falls over for a sun straight overhead (all four walls identical).
+    let mut app = app();
+    let (light, transform) = the_sun(&mut app);
+    let exposure = {
+        let mut q = app.world_mut().query_filtered::<&Exposure, With<Camera3d>>();
+        *q.iter(app.world()).next().expect("the camera carries an Exposure out of art.ron")
+    };
+    let dir = transform.forward().as_vec3();
+    let e = exposure.exposure();
+
+    let roof = lit(dir, Vec3::Y, light.illuminance, e);
+    let east = lit(dir, Vec3::X, light.illuminance, e);
+    let south = lit(dir, Vec3::Z, light.illuminance, e);
+    let west = lit(dir, Vec3::NEG_X, light.illuminance, e);
+    let north = lit(dir, Vec3::NEG_Z, light.illuminance, e);
+
+    // 1. Nothing clips. This is the actual bug: with the old pair the brightest face landed at
+    //    1.10 and every face above NdotL 0.73 came out the same white.
+    let brightest = roof.max(east).max(south);
+    assert!(
+        brightest < 1.0,
+        "the brightest stone_gray face is at {brightest:.3} of the clip — over 1.0 it has no \
+         colour and no orientation left, which is exactly the state FIND-071 measured \
+         (illuminance {}, ev100 {})",
+        light.illuminance,
+        exposure.ev100
+    );
+
+    // 2. Three lit faces, three values, and the gaps are big enough to see. 0.08 in linear
+    //    output is roughly 20 sRGB steps at these levels — a visible step, not dithering.
+    for (a, an, b, bn) in
+        [(roof, "roof", east, "+X wall"), (roof, "roof", south, "+Z wall"), (east, "+X wall", south, "+Z wall")]
+    {
+        assert!(
+            (a - b).abs() > 0.08,
+            "{an} is at {a:.3} and {bn} at {b:.3} — that is one value, and one value is what \
+             the user calls flat"
+        );
+    }
+
+    // 3. Two faces get no sun at all and live on the fill alone. Without them there is no
+    //    "wall in shade" to be a third value.
+    assert_eq!((west, north), (0.0, 0.0), "every wall of a box gets sun — then none of them reads as shaded");
+
+    // 4. And the fill is a real fraction of the sun, not a floor and not a second sun.
+    let ambient = {
+        let mut q = app.world_mut().query_filtered::<&AmbientLight, With<Camera3d>>();
+        q.iter(app.world()).next().expect("the camera carries an AmbientLight").clone()
+    };
+    let fill = STONE_GRAY_G * ambient.color.to_linear().green * ambient.brightness * e;
+    let ratio = fill / brightest;
+    assert!(
+        (0.04..=0.20).contains(&ratio),
+        "the shaded side sits at {:.1} % of the sunlit side ({fill:.3} vs {brightest:.3}) — \
+         under 4 % a shadow is a hole you cannot read a roof out of at 30 m/s, over 20 % it is \
+         not a shadow",
+        ratio * 100.0
+    );
+    // And it is COOL against a warm sun — that split is half of what makes a face read as
+    // shaded rather than as dark grey.
+    let fill_rgb = ambient.color.to_linear();
+    let sun_rgb = light.color.to_linear();
+    assert!(
+        fill_rgb.blue > fill_rgb.red && sun_rgb.red >= sun_rgb.blue,
+        "fill {fill_rgb:?} against sun {sun_rgb:?} — the fill has to be the cooler of the two"
+    );
+}
+
+#[test]
+fn f071_the_sky_is_a_gradient_and_not_one_colour() {
+    // The `ClearColor` the district used to stand against was a single flat value; the user
+    // named it in the same breath as the light. The dome carries its gradient in vertex
+    // colours, so this reads the mesh the app actually built.
+    let mut app = app();
+    let k = app.world().resource::<GameData>().art.lighting.sky.clone();
+
+    let handle = {
+        let mut q = app.world_mut().query_filtered::<&Mesh3d, With<SkyDome>>();
+        q.iter(app.world()).next().expect("render::light::setup_sky spawns exactly one dome").0.clone()
+    };
+    let meshes = app.world().resource::<Assets<Mesh>>();
+    let mesh = meshes.get(&handle).expect("the dome's mesh is loaded");
+    let colors = match mesh.attribute(Mesh::ATTRIBUTE_COLOR) {
+        Some(VertexAttributeValues::Float32x4(c)) => c.clone(),
+        other => panic!("the dome has no per-vertex colour ({other:?}) — then it IS one colour"),
+    };
+
+    // One colour per ring, `rings + 1` rings. Fewer distinct values than rings means somebody
+    // collapsed the gradient.
+    let mut distinct: Vec<[u32; 3]> =
+        colors.iter().map(|c| [c[0].to_bits(), c[1].to_bits(), c[2].to_bits()]).collect();
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert!(
+        distinct.len() as u32 >= k.rings,
+        "the sky has {} distinct colours over {} rings — that is a flat sky with extra triangles",
+        distinct.len(),
+        k.rings
+    );
+
+    // The stops land where they are named: first vertex at the zenith, last at the nadir.
+    let first = colors.first().expect("the dome has vertices");
+    let last = colors.last().unwrap();
+    assert!(
+        (first[0] - k.zenith.0).abs() < 1e-5 && (last[0] - k.nadir.0).abs() < 1e-5,
+        "top vertex {first:?} / bottom vertex {last:?} do not match art.ron's zenith {:?} and \
+         nadir {:?} — the gradient is upside down",
+        k.zenith,
+        k.nadir
+    );
+    assert!(
+        k.zenith.2 > k.zenith.0 && k.horizon.0 > k.zenith.0,
+        "the sky has to be darker and bluer at the top than at the horizon, or it reads as a wall"
+    );
+}
+
+#[test]
+fn f071_the_sky_casts_no_shadow_and_the_fog_meets_it_at_the_horizon() {
+    // Two failures that are invisible in the code and catastrophic on screen.
+    //
+    // A 820 m sphere inside the shadow cascade puts the WHOLE district in permanent night, and
+    // the symptom ("everything went dark") points at the sun, not at the sky.
+    let mut app = app();
+    let dome = {
+        let mut q = app.world_mut().query_filtered::<Entity, With<SkyDome>>();
+        q.iter(app.world()).next().expect("there is a dome")
+    };
+    assert!(
+        app.world().get::<NotShadowCaster>(dome).is_some(),
+        "the sky dome casts a shadow — it encloses the district, so the district is in the dark"
+    );
+
+    // And the fog colour has to BE the horizon stop. If it is not, the horizon is a visible
+    // seam: geometry fades to one colour and the sky behind it is another.
+    let k = app.world().resource::<GameData>().art.lighting.clone();
+    assert_eq!(
+        (k.fog.color.0, k.fog.color.1, k.fog.color.2),
+        (k.sky.horizon.0, k.sky.horizon.1, k.sky.horizon.2),
+        "fog colour and sky horizon differ — that line is a seam across the whole screen"
+    );
+
+    let fog = {
+        let mut q = app.world_mut().query_filtered::<&DistanceFog, With<Camera3d>>();
+        q.iter(app.world()).next().expect("the camera carries the fog out of art.ron").clone()
+    };
+    match fog.falloff {
+        FogFalloff::Linear { start, end } => {
+            assert_eq!((start, end), (k.fog.start_m, k.fog.end_m));
+            assert!(
+                end < k.sky.radius_m,
+                "fog ends at {end} m and the dome stands at {} m — the dome would be inside the \
+                 fog and the sky would go back to one colour",
+                k.sky.radius_m
+            );
+        }
+        other => panic!("the fog is {other:?}, and only Linear has two numbers you can walk out"),
+    }
+}
+
+#[test]
+fn f071_the_sky_is_wound_so_you_see_it_from_the_inside() {
+    // **The failure this catches has no symptom.** The first build wound the dome the other
+    // way round, so `cull_mode: Some(Face::Front)` threw away the side facing the eye. There
+    // was no warning, no error, no missing entity and no missing mesh — the sky simply stayed
+    // the default `ClearColor` (43, 44, 47) pixel for pixel, and the four tests above were all
+    // green while nothing was on screen. It cost a build and a render to find.
+    //
+    // So: take a real triangle off the equator and check which way its face normal points.
+    // wgpu's front face is counter-clockwise, so `(v1-v0) x (v2-v0)` has to point AWAY from
+    // the centre — then the front face is the outside and culling it leaves the inside.
+    let mut app = app();
+    let handle = {
+        let mut q = app.world_mut().query_filtered::<&Mesh3d, With<SkyDome>>();
+        q.iter(app.world()).next().expect("there is a dome").0.clone()
+    };
+    let meshes = app.world().resource::<Assets<Mesh>>();
+    let mesh = meshes.get(&handle).expect("the dome's mesh is loaded");
+
+    let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+        Some(VertexAttributeValues::Float32x3(p)) => p.clone(),
+        other => panic!("the dome has no positions ({other:?})"),
+    };
+    let indices: Vec<u32> = mesh.indices().expect("the dome is indexed").iter().map(|i| i as u32).collect();
+
+    // Every triangle, not just one: a sphere that is right at the equator and wrong at the
+    // poles is still a hole in the sky.
+    let mut outward = 0;
+    for t in indices.chunks_exact(3) {
+        let v: Vec<Vec3> = t.iter().map(|&i| Vec3::from(positions[i as usize])).collect();
+        let normal = (v[1] - v[0]).cross(v[2] - v[0]);
+        // The centroid is the outward direction at that spot — the dome is centred on origin.
+        let centroid = (v[0] + v[1] + v[2]) / 3.0;
+        if normal.dot(centroid) > 0.0 {
+            outward += 1;
+        }
+    }
+    let total = indices.len() / 3;
+    // The two polar rings are degenerate (all three vertices of the pole coincide), so their
+    // normal is zero and they count neither way. Everything else has to be outward.
+    let degenerate = 2 * 32; // segments, at the north and the south pole
+    assert!(
+        outward >= total - degenerate,
+        "{outward} of {total} triangles wind outward — the rest face inward, and wgpu's \
+         `Face::Front` cull then throws away the side you stand on. The sky is invisible and \
+         nothing reports it"
     );
 }

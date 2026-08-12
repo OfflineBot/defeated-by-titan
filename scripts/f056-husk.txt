@@ -3,6 +3,18 @@
 # cargo run -- --offscreen --script scripts/f056-husk.txt --ticks 240 \
 #              --screenshot docs/images/f056-husk.png
 #
+# and, as a SEPARATE run, the one that returns a usable exit code:
+#
+#   cargo run -q -- --headless --script scripts/f056-husk.txt --ticks 900
+#
+# ⚠️ **A `--screenshot` run is not a verdict.** `debug::screenshot::exit_when_written` owns the
+# ending and writes `AppExit::Success` the moment the PNG is on disk, without ever reading
+# `run.failures` — so the command above exits 0 even when the asserts in this file are RED, and
+# the assert summary never prints (`docs/FINDINGS.md` FIND-073). Only the `--headless` run
+# reports "N asserts held" and returns an exit code worth reading. Its tick count is
+# deliberately generous: overshooting the script's own end is free, undershooting truncates the
+# run and hides the summary (FIND-032).
+#
 # ## Why the player stands on the far side of the map for the first 3.8 s
 #
 # `titan.ron: husk.aggro_radius_m` is 45 m. A husk closer than that turns to face the player

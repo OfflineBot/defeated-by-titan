@@ -4,6 +4,18 @@
 # cargo run -- --offscreen --script scripts/f030-cortex.txt --ticks 68 \
 #              --screenshot docs/images/f030-cortex.png
 #
+# and, as a SEPARATE run, the one that returns a usable exit code:
+#
+#   cargo run -q -- --headless --script scripts/f030-cortex.txt --ticks 700
+#
+# ⚠️ **A `--screenshot` run is not a verdict.** `debug::screenshot::exit_when_written` owns the
+# ending and writes `AppExit::Success` the moment the PNG is on disk, without ever reading
+# `run.failures` — so the command above exits 0 even when the asserts in this file are RED, and
+# the assert summary never prints (`docs/FINDINGS.md` FIND-073). Only the `--headless` run
+# reports "N asserts held" and returns an exit code worth reading. Its tick count is
+# deliberately generous: overshooting the script's own end is free, undershooting truncates the
+# run and hides the summary (FIND-032).
+#
 # ## Why the player FALLS instead of flying
 #
 # `gear.ron: blades.min_speed_m_s` is 8.0 and `game.ron: player.run_speed_m_s` is 6.0 — a

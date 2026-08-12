@@ -1187,11 +1187,15 @@ fn f171_the_arm_markers_cost_no_ray_and_no_sweep() {
     let sense = app.world_mut().register_system(arm_aim::sense_arm_aim);
     let shape = app.world_mut().register_system(arm_aim::shape_arm_aim);
     let paint = app.world_mut().register_system(arm_aim::paint_arm_aim);
+    // The projection is in here too. It is the only one of the four that touches the camera, so
+    // it is the only one that could quietly start costing something.
+    let place = app.world_mut().register_system(arm_aim::place_arm_aim);
 
     // Warm up: the first call builds the system state, and that cost is paid once ever.
     for _ in 0..100 {
         app.world_mut().run_system(sense).expect("the system runs");
         app.world_mut().run_system(shape).expect("the system runs");
+        app.world_mut().run_system(place).expect("the system runs");
         app.world_mut().run_system(paint).expect("the system runs");
     }
     let rounds = 2_000;
@@ -1199,13 +1203,332 @@ fn f171_the_arm_markers_cost_no_ray_and_no_sweep() {
     for _ in 0..rounds {
         app.world_mut().run_system(sense).expect("the system runs");
         app.world_mut().run_system(shape).expect("the system runs");
+        app.world_mut().run_system(place).expect("the system runs");
         app.world_mut().run_system(paint).expect("the system runs");
     }
     let per_frame_us = start.elapsed().as_secs_f64() * 1e6 / f64::from(rounds);
-    println!("f171 arm markers: {per_frame_us:.3} us per frame for all three systems");
+    println!("f171 arm markers: {per_frame_us:.3} us per frame for all four systems");
     assert!(
         per_frame_us < 50.0,
-        "the three arm-marker systems cost {per_frame_us:.3} us per frame — that is the order of \
+        "the four arm-marker systems cost {per_frame_us:.3} us per frame — that is the order of \
          a spatial query, and this element is not allowed to cast one"
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// F-171 — the landing preview: the marker stands on a WORLD point, and it MOVES
+//
+// The user, after playing on 2026-08-12:
+//   *"es soll previewd werden wo der aktuelle haken landen würde! also sollte richtig
+//    angezeigt werden. nicht nur am fadenkreuz. weil das stimmt auch nicht."*
+//   *"zudem sollen diese weiter auseinander sein. also weiter rechts und links!"*
+//
+// `FINDINGS.md` FIND-047 measured why he is right: the two markers were pinned at fixed screen
+// percentages and photographed at **the same pixels across four runs with four different
+// aims**. The tests below are the ones that could not have passed then.
+// ---------------------------------------------------------------------------------------
+
+/// Where the local player is standing and looking, in one call.
+///
+/// `Intent` and not the camera `Transform`: `render::camera::rotate_camera` is what turns the
+/// camera, out of exactly this `Intent`, and a test that turned the camera itself would be
+/// measuring its own arithmetic instead of the game's (`tests/render.rs`).
+fn stand_and_look(app: &mut App, at_m: Vec3, yaw_deg: f32, pitch_deg: f32) {
+    use defeated_by_titan::shared::Intent;
+    let player = local_player(app);
+    {
+        let mut e = app.world_mut().entity_mut(player);
+        let mut t = e.get_mut::<Transform>().expect("the player has a `Transform`");
+        t.translation = at_m;
+    }
+    {
+        let mut e = app.world_mut().entity_mut(player);
+        let mut intent = e.get_mut::<Intent>().expect("the player has an `Intent`");
+        intent.yaw = yaw_deg.to_radians();
+        intent.pitch = pitch_deg.to_radians();
+    }
+}
+
+/// Anchors one arm at a **world** point and tells the marker about it.
+fn anchor_arm_at(app: &mut App, side: Side, world_m: Vec3) {
+    let player = local_player(app);
+    let mut hook = app
+        .world_mut()
+        .entity_mut(player)
+        .get::<Hook>()
+        .copied()
+        .expect("the player carries a `Hook`");
+    hook.arms[side.index()].state =
+        HookState::Anchored { body: BodyId(1), local_m: Vec3::ZERO };
+    hook.arms[side.index()].tip_m = world_m;
+    app.world_mut().entity_mut(player).insert(hook);
+}
+
+/// Runs the whole HUD the way the game runs it, then lays the UI out.
+///
+/// `Update` and `PostUpdate` by hand and never `app.update()` — the reason is the file header:
+/// `First` fills `Time<Virtual>` off the wall clock, a fixed step then falls inside the frame
+/// depending on the machine's mood, and `vector::aim` writes a real raycast into `AimPoint`
+/// underneath a test that just set it.
+fn run_hud(app: &mut App) {
+    app.world_mut().run_schedule(Update);
+    app.world_mut().run_schedule(PostUpdate);
+    app.world_mut().run_schedule(PostUpdate);
+}
+
+/// The centre of one arm's **glyph** on screen, in physical pixels.
+fn glyph_centre(app: &mut App, side: Side) -> Vec2 {
+    use defeated_by_titan::hud::arm_aim::MarkerPart;
+    let mut q = app
+        .world_mut()
+        .query::<(&ArmMarker, &Node, &ComputedNode, &UiGlobalTransform)>();
+    for (marker, node, computed, at) in q.iter(app.world()) {
+        if marker.side != side
+            || marker.part != MarkerPart::Glyph
+            || node.display == Display::None
+        {
+            continue;
+        }
+        let (min_x, min_y, max_x, max_y) = rect(computed, at);
+        return Vec2::new((min_x + max_x) * 0.5, (min_y + max_y) * 0.5);
+    }
+    panic!("the {side:?} glyph is not on screen");
+}
+
+#[test]
+fn f171_a_free_aim_point_projects_onto_the_crosshair() {
+    // ★ **The measurement the whole design hangs on, and it is not a wish.**
+    //
+    // `vector::aim` casts from `translation + Y·eye_height_m` along `intent.look_dir()`.
+    // `render::attach_camera` hangs the camera on the player at exactly
+    // `Transform::from_xyz(0, eye_height_m, 0)`, and `rotate_camera` gives it
+    // `Ry(yaw)·Rx(pitch)` — so the ray's origin **is** the camera's position and its direction
+    // **is** the camera's forward. Every point on that ray therefore projects onto the same
+    // pixel, and that pixel is the middle of the screen.
+    //
+    // That is why "preview where the free hook would land" cannot be drawn anywhere but on the
+    // crosshair, and why two DIFFERENT idle points need `F-023`'s hemispheres first. This test
+    // measures it instead of arguing it: two points at 8 m and at 90 m along the look ray, at
+    // two different look angles, all four on the centre pixel.
+    use defeated_by_titan::shared::Intent;
+    let mut app = app();
+    attach_screen(&mut app);
+
+    let eye_height_m = app.world().resource::<GameData>().game.player.eye_height_m;
+    let (w, h) = screen(&mut app);
+    let centre = Vec2::new(w * 0.5, h * 0.5);
+
+    for (yaw_deg, pitch_deg) in [(0.0_f32, 0.0_f32), (37.0, -12.0), (-140.0, 25.0)] {
+        stand_and_look(&mut app, Vec3::new(4.0, 0.0, -9.0), yaw_deg, pitch_deg);
+        run_hud(&mut app);
+
+        let player = local_player(&mut app);
+        let (intent, transform) = {
+            let e = app.world().entity(player);
+            (*e.get::<Intent>().unwrap(), *e.get::<Transform>().unwrap())
+        };
+        let eye = transform.translation + Vec3::Y * eye_height_m;
+
+        let (camera, cam_at) = {
+            let mut q = app
+                .world_mut()
+                .query_filtered::<(&Camera, &GlobalTransform), With<Camera3d>>();
+            let (c, t) = q.iter(app.world()).next().expect("there is a 3D camera");
+            (c.clone(), *t)
+        };
+
+        for distance_m in [8.0_f32, 90.0] {
+            let point = eye + intent.look_dir() * distance_m;
+            let px = camera
+                .world_to_viewport(&cam_at, point)
+                .expect("a point in front of the camera projects");
+            let off = (px * (w / camera.logical_viewport_size().unwrap().x) - centre).length();
+            println!(
+                "f171 free aim: yaw {yaw_deg}, pitch {pitch_deg}, {distance_m} m -> \
+                 {px:?}, {off:.3} px off centre"
+            );
+            assert!(
+                off < 1.5,
+                "the free aim point at {distance_m} m projects {off:.1} px away from the \
+                 crosshair. If that is really true, a per-arm landing preview for an IDLE arm \
+                 is drawable without F-023 — and the whole argument in `hud::arm_aim` for why \
+                 it is not has to be rewritten"
+            );
+        }
+    }
+}
+
+#[test]
+fn f171_an_anchored_marker_follows_its_anchor_across_the_screen() {
+    // ★ **The user's sentence, as a test.** *"nicht nur am fadenkreuz. weil das stimmt auch
+    // nicht."* FIND-047 measured the markers at the same pixels in four runs with four
+    // different aims, because `node_for` pinned them to `top 65 %` / `left|right 52 %`.
+    //
+    // An anchored arm is holding a real point in the world — the one `render::rope` draws to.
+    // Turn the head and that point has to travel across the screen. Goes red against a marker
+    // that is a badge in a fixed slot.
+    let mut app = app();
+    attach_screen(&mut app);
+    stand_and_look(&mut app, Vec3::new(0.0, 0.0, 0.0), 0.0, 0.0);
+
+    // 30 m ahead, 18 m up: comfortably inside the frustum at every yaw the loop uses.
+    let anchor = Vec3::new(0.0, 18.0, -30.0);
+    anchor_arm_at(&mut app, Side::Left, anchor);
+    anchor_arm_at(&mut app, Side::Right, anchor);
+
+    let mut seen: Vec<(f32, Vec2)> = Vec::new();
+    for yaw_deg in [-14.0_f32, -7.0, 0.0, 7.0, 14.0] {
+        stand_and_look(&mut app, Vec3::ZERO, yaw_deg, 0.0);
+        run_hud(&mut app);
+        let at = glyph_centre(&mut app, Side::Left);
+        println!("f171 anchor follow: yaw {yaw_deg} -> glyph at {at:?}");
+        seen.push((yaw_deg, at));
+    }
+
+    // **The direction is asserted, not just the movement.** `yaw = 0` looks towards −Z and
+    // `Intent::look_dir` is `(-sin y·cos p, sin p, -cos y·cos p)`, so a rising yaw turns the head
+    // to the LEFT — and a fixed point in front of you then travels to the RIGHT across the
+    // screen, monotonically. A marker that moved the wrong way would pass a test that only asked
+    // whether it moved at all, and it would be unusable in exactly the way FIND-047 describes.
+    for pair in seen.windows(2) {
+        let (yaw_a, a) = pair[0];
+        let (yaw_b, b) = pair[1];
+        assert!(
+            b.x > a.x + 10.0,
+            "yaw went {yaw_a} -> {yaw_b} and the anchored marker moved from {a:?} to {b:?}. \
+             A marker that does not travel with its anchor is a badge in a fixed slot, and that \
+             is exactly what the player called out (FIND-047)"
+        );
+    }
+    let travel = seen.last().unwrap().1.x - seen.first().unwrap().1.x;
+    println!("f171 anchor follow: 28 deg of yaw moved the marker {travel:.1} px");
+    assert!(travel > 100.0, "28 deg of yaw only moved the marker {travel:.1} px");
+}
+
+#[test]
+fn f171_two_anchors_put_the_two_markers_on_two_different_points() {
+    // ★ *"zudem sollen diese weiter auseinander sein. also weiter rechts und links!"*
+    //
+    // Two arms holding two different buildings are two different world points — the one case in
+    // which the pair is genuinely two points today, and the case FIND-039 says free aiming
+    // cannot produce. The gap between the two markers has to be the gap between the two
+    // anchors, and it has to CHANGE when the anchors do. A fixed pair of slots gives a constant.
+    let mut app = app();
+    attach_screen(&mut app);
+    stand_and_look(&mut app, Vec3::ZERO, 0.0, 0.0);
+
+    let mut gaps = Vec::new();
+    for spread_m in [10.0_f32, 22.0, 40.0] {
+        anchor_arm_at(&mut app, Side::Left, Vec3::new(-spread_m, 14.0, -34.0));
+        anchor_arm_at(&mut app, Side::Right, Vec3::new(spread_m, 14.0, -34.0));
+        run_hud(&mut app);
+        let left = glyph_centre(&mut app, Side::Left);
+        let right = glyph_centre(&mut app, Side::Right);
+        assert!(
+            left.x < right.x,
+            "the anchor at -{spread_m} m drew right of the anchor at +{spread_m} m \
+             ({left:?} against {right:?}) — the two markers are swapped"
+        );
+        let gap = right.x - left.x;
+        println!("f171 two anchors: +-{spread_m} m -> gap {gap:.1} px ({left:?} {right:?})");
+        gaps.push(gap);
+    }
+    for pair in gaps.windows(2) {
+        assert!(
+            pair[1] > pair[0] + 20.0,
+            "the anchors moved apart and the gap went {:.1} -> {:.1} px. The markers are not \
+             standing on the anchors",
+            pair[0],
+            pair[1]
+        );
+    }
+}
+
+#[test]
+fn f171_the_idle_pair_stands_wide_of_the_keep_out_box() {
+    // *"zudem sollen diese weiter auseinander sein"* for the case the projection cannot help
+    // with: two idle arms share one aim point on the camera axis (the test above measures that
+    // it lands on the crosshair), so the only honest thing left is WHICH SIDE each one is on.
+    //
+    // The pair therefore parts around `F-170`'s keep-out box instead of huddling 55 px apart
+    // under the crosshair. The number is not free: it is the box, which is the one rectangle
+    // this HUD already may not cover.
+    let mut app = app();
+    attach_screen(&mut app);
+    stand_and_look(&mut app, Vec3::ZERO, 0.0, 0.0);
+    set_arm(&mut app, Side::Left, HookState::Idle);
+    set_arm(&mut app, Side::Right, HookState::Idle);
+    run_hud(&mut app);
+
+    let (w, _h) = screen(&mut app);
+    let left = glyph_centre(&mut app, Side::Left);
+    let right = glyph_centre(&mut app, Side::Right);
+    let gap = right.x - left.x;
+    let box_w = w * (KEEP_OUT_HIGH_PCT - KEEP_OUT_LOW_PCT) / 100.0;
+    println!("f171 idle pair: gap {gap:.1} px, keep-out box {box_w:.1} px, screen {w:.0} px");
+    assert!(
+        gap >= box_w,
+        "the two idle markers stand {gap:.1} px apart and the box they are supposed to part \
+         around is {box_w:.1} px wide. That is the huddle the player asked to be undone"
+    );
+}
+
+#[test]
+fn f170_an_anchor_dead_ahead_does_not_cover_the_middle() {
+    // ★ **The trap, sprung on purpose.** `f170_nothing_covers_the_middle_of_the_screen` is a
+    // proven 🟧 claim, and a marker that follows a world point will sooner or later be aimed
+    // straight at — that is not an edge case, it is what a player does before he shoots.
+    //
+    // Measured while writing this: with the keep-out push taken out of `layout_for`, the whole
+    // `--test hud` suite stayed **green**, because in a bare test app the aim ray finds nothing
+    // and the pair sits in its side slots. The unit sweep caught it and no integration test did.
+    // This is that hole, closed at the level where the rects are real.
+    let mut app = app();
+    attach_screen(&mut app);
+    let eye_height_m = app.world().resource::<GameData>().game.player.eye_height_m;
+    stand_and_look(&mut app, Vec3::ZERO, 0.0, 0.0);
+
+    // Straight ahead at eye height: this projects onto the exact centre pixel — the one place
+    // the HUD may not draw.
+    let dead_ahead = Vec3::new(0.0, eye_height_m, -30.0);
+    anchor_arm_at(&mut app, Side::Left, dead_ahead);
+    anchor_arm_at(&mut app, Side::Right, dead_ahead);
+    run_hud(&mut app);
+
+    let (w, h) = screen(&mut app);
+    let box_min_x = w * KEEP_OUT_LOW_PCT / 100.0;
+    let box_max_x = w * KEEP_OUT_HIGH_PCT / 100.0;
+    let box_min_y = h * KEEP_OUT_LOW_PCT / 100.0;
+    let box_max_y = h * KEEP_OUT_HIGH_PCT / 100.0;
+
+    let mut seen = 0;
+    let mut q = app
+        .world_mut()
+        .query_filtered::<(&Name, &Node, &ComputedNode, &UiGlobalTransform), Or<(With<ArmMarker>, With<ArmMarkerLabel>)>>();
+    for (name, node, computed, at) in q.iter(app.world()) {
+        if node.display == Display::None {
+            continue;
+        }
+        let (min_x, min_y, max_x, max_y) = rect(computed, at);
+        if max_x - min_x <= 0.0 || max_y - min_y <= 0.0 {
+            continue;
+        }
+        seen += 1;
+        let overlaps =
+            min_x < box_max_x && max_x > box_min_x && min_y < box_max_y && max_y > box_min_y;
+        assert!(
+            !overlaps,
+            "{name} sits at x {min_x:.1}..{max_x:.1}, y {min_y:.1}..{max_y:.1} with both arms \
+             anchored dead ahead — inside the box x {box_min_x:.1}..{box_max_x:.1}, \
+             y {box_min_y:.1}..{box_max_y:.1}. F-170 is a claim the player has already seen \
+             hold; a landing preview does not get to break it"
+        );
+    }
+    assert!(seen >= 4, "only {seen} arm nodes were measured — the test is looking at nothing");
+
+    // And the pair still says which arm is which, even squeezed against the box.
+    let left = glyph_centre(&mut app, Side::Left);
+    let right = glyph_centre(&mut app, Side::Right);
+    println!("f170 dead ahead: {seen} nodes, Q at {left:?}, E at {right:?}");
+    assert!(left.x < right.x, "Q was pushed right of E: {left:?} against {right:?}");
 }

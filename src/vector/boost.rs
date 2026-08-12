@@ -75,10 +75,73 @@
 //! Without a grant the drive holds `Vec3::ZERO` and the acceleration is exactly zero, not a
 //! fraction (`F-018`: at 0 there is no more flying).
 //!
-//! `F-006` Swerve and `F-008` Dash dock on here later: one system more, not one type more.
+//! `F-006` Swerve landed in `player::locomotion` as its own component ([`RunAccel`]) — the
+//! note that once stood here is stale for it. **`F-008` Dodge did dock on**, and it is one
+//! system less than that note promised: it is a second term inside [`gas_boost`], not a system
+//! of its own, because [`BoostAccel`] has **one** writer and two systems assigning one
+//! component is the rule-4 violation §4 is about.
+//!
+//! ## The second boost — `F-008`, the user's words, 2026-08-12 (`docs/NEXT.md` §1c)
+//!
+//! > *„mit doppel leertaste boostet man stark in die lauf richtung (ein weiter dodge) der viel
+//! > gas aufbraucht. das andere boosten verbraucht sehr wenig!"*
+//!
+//! Two boosts that differ in **three** ways at once, and every one of them is deliberate:
+//!
+//! | | `Shift` — the cheap one | double-tap `Space` — the dodge |
+//! |---|---|---|
+//! | billed | a rate, per second, while held | a flat amount, once per double-tap |
+//! | direction | look, blended toward the rope | **the movement input** (`W`/`A`/`D`) |
+//! | shape | an acceleration you steer for seconds | one tick's velocity change |
+//!
+//! **The direction is the whole point of the feature.** *„in die lauf richtung"* — not where
+//! the camera points. In a fast swing you are looking down at the street you are about to
+//! cross, and a dodge along the look vector would put you into it. `A`/`D` are how you leave
+//! the plane of the rope (`docs/NEXT.md` §1a: *„das a d sorgt dafür dass man nicht immer direkt
+//! zum seil gezogen wird"*), and the dodge is that same steering spent in one tick.
+//! [`dodge_direction`] is the rule and it is a free function, so it can be checked without an
+//! app — and so that `vector::gas` can ask the **same** question this file answers.
+//!
+//! **Why the direction rule lives here twice over.** It is deliberately the same shape as
+//! `player::locomotion::air_thrust`, and it is deliberately **not** a call into it: `vector` may
+//! not `use crate::player` (`docs/architecture.md`, allow list), and the edge is not worth
+//! buying for four lines of trigonometry. The duplication is knowing, and it is a finding
+//! (`docs/FINDINGS.md` FIND-067) rather than a thing pretended not to exist — the fix, when
+//! somebody wants it, is one helper in `shared::math`, which no domain has to ask permission
+//! for.
+//!
+//! ## Why it is an *impulse* and what the file therefore holds
+//!
+//! `vector.dodge_impulse_m_s` is **m/s** — a velocity change — and this file divides it by the
+//! fixed timestep to get the acceleration avian is handed. That is not a detour, it is the only
+//! way the number in the file means the same thing at another tick rate: avian multiplies
+//! `linear_increment` by the substep delta once (`integrator/mod.rs:308-309`) and then adds it
+//! in **every** substep (`IntegrationSystems::Velocity` runs in the `SubstepSchedule`), so an
+//! acceleration written once per tick is worth exactly `accel * fixed_dt` of velocity. Dividing
+//! by `fixed_dt` here makes that product the number out of the file, bit for bit.
+//!
+//! ⚠️ **The consequence is a genuinely large acceleration for one tick** — 24 m/s at 60 Hz is
+//! 1440 m/s², forty-two times [`boost_m_s2`]-sized. That is what "impulse" means and it is not
+//! a bug; what it does mean is that anything which ever comes to read [`BoostAccel`] as "how
+//! hard is he boosting" must not be surprised by one tick in seven hundred that is two orders
+//! of magnitude larger. Nothing reads it today except the tests.
+//!
+//! ## Where the dodge's gas is booked, and why not here
+//!
+//! In `vector::gas`, with the other two, through `GasConsumer::Dodge` — same contract, same
+//! reason: **the debit and the thrust have to be one decision.** That has one sharp consequence
+//! for [`dodge_direction`]: the "no movement input, no dodge" rule cannot live only in this
+//! file. If it did, `gas_budget` would bill the full flat cost for a double-tap with no `W`,
+//! and this system would write `ZERO` — a player paying 15 % of his tank for nothing, which is
+//! precisely the invisible leak the header above forbids. So `gas_budget` asks
+//! [`dodge_direction`] the same question before it spends, exactly as it asks
+//! `hook.anchored_count()` before it bills a reel-in. **One rule, one function, two callers.**
 //!
 //! Seen: `scripts/f-007-boost.txt` · `docs/images/f-007-boost.png` ·
 //! measured in `tests/vector_boost.rs`.
+//!
+//! [`RunAccel`]: crate::shared::RunAccel
+//! [`boost_m_s2`]: crate::data::VectorTuning::boost_m_s2
 
 use avian3d::prelude::{Forces, WriteRigidBodyForces};
 use bevy::prelude::*;
@@ -143,6 +206,40 @@ pub fn boost_direction(look_dir: Vec3, rope_dir: Option<Vec3>, rope_fraction: f3
     direction(look_dir.lerp(rope, w)).unwrap_or(look_dir)
 }
 
+/// Where a dodge throws you (`F-008`): the **movement input**, as a unit vector, or `None`
+/// when there is no movement input at all.
+///
+/// `None` is not an error and not a fallback — it is the answer *"then there is no dodge"*, and
+/// `vector::gas` reads it as *"then it costs nothing"*. The alternatives were both worse: a
+/// dodge along the look direction is the one thing the user's sentence rules out, and a dodge
+/// straight forward off the yaw would fire an expensive, uncontrolled lunge out of a button a
+/// player pressed while standing still.
+///
+/// The three keys, and each of the three is `docs/NEXT.md` §1a rather than a choice made here:
+///
+/// - **`W` goes where you look**, with the pitch in it — the dodge climbs and dives with the
+///   camera, which is the only way a dodge can leave a street it is flying down.
+/// - **`A`/`D` are horizontal**, off the yaw and never off the pitch. A lateral dodge that
+///   tilted with the pitch would drive into the ground in exactly the situation it is for.
+/// - **`S` is not a direction.** *„mit s »spannt« man nur das seil"* — hence `.max(0.0)`, and
+///   hence `S` alone yields `None` and no dodge at all, rather than a backwards one.
+///
+/// `direction` (and not `normalize`) is what makes the zero case a `None` instead of a NaN, and
+/// the whole rest of this file exists to keep NaN out of a `Transform` (§9d).
+///
+/// **Deliberately the same shape as `player::locomotion::air_thrust`** — the dodge has to go
+/// where WASD was already pushing, or it is a second control scheme. It is copied and not
+/// called for the reason in the header: `vector -> player` is not on the allow list.
+/// The one difference is the last step: `air_thrust` uses `clamp_length_max(1.0)`, so a
+/// half-pressed axis thrusts half; here the length is normalised away, because the **strength**
+/// of a dodge is `vector.dodge_impulse_m_s` and nothing else. `W`+`D` is one dodge at 45°, not
+/// 1.41 of them and not 0.71 of one.
+pub fn dodge_direction(intent: &Intent) -> Option<Vec3> {
+    let (sin, cos) = intent.yaw.sin_cos();
+    let right = Vec3::new(cos, 0.0, -sin);
+    direction(intent.look_dir() * intent.move_y.max(0.0) + right * intent.move_x)
+}
+
 /// Writes [`BoostAccel`] = [`boost_direction`] * `vector.boost_m_s2`, or `ZERO`, and hands the
 /// same vector to avian as a linear acceleration.
 ///
@@ -160,12 +257,19 @@ pub fn boost_direction(look_dir: Vec3, rope_dir: Option<Vec3>, rope_fraction: f3
 /// the value of the tick before — the one thing its "written every tick, even when it is zero"
 /// contract exists to prevent (`shared::gear`).
 pub fn gas_boost(
+    time: Res<Time<Fixed>>,
     data: Res<GameData>,
     mut players: Query<(&Intent, &GasGrant, &Hook, &Transform, &mut BoostAccel, Option<Forces>)>,
 ) {
     let strength_m_s2 = data.game.vector.boost_m_s2;
     let rope_fraction = data.game.vector.boost_rope_fraction;
     let eye_height_m = data.game.player.eye_height_m;
+    // `Time<Fixed>` and not `1.0 / simulation_hz`, for `vector::gas::gas_budget`'s reason: the
+    // timestep is set from that very number in `src/lib.rs`, and a value derived twice is a
+    // value that drifts once. Dividing by it is what turns the m/s in the file into the
+    // acceleration avian integrates back into exactly that m/s (see the header).
+    let dt = time.delta_secs();
+    let dodge_m_s2 = if dt > 0.0 { data.game.vector.dodge_impulse_m_s / dt } else { 0.0 };
 
     for (intent, grant, hook, transform, mut drive, forces) in &mut players {
         // The hand is the eye — the same point `vector::hook` flies the tip from and to, and
@@ -176,7 +280,21 @@ pub fn gas_boost(
         // the whole yaw/pitch range); `boost_direction` keeps it one and never returns a NaN,
         // which is what the two degenerate cases in its doc comment are about (§9d).
         let dir = boost_direction(intent.look_dir(), rope_dir(hand_m, hook), rope_fraction);
-        let wanted = if grant.boost { dir * strength_m_s2 } else { Vec3::ZERO };
+        let held = if grant.boost { dir * strength_m_s2 } else { Vec3::ZERO };
+        // `grant.dodge` is already "the double-tap landed **and** the flat cost is paid" — the
+        // same contract `grant.boost` carries, so there is no second condition here either.
+        // `dodge_direction` is asked again rather than remembered: `gas_budget` only spends
+        // when it answers `Some`, so on a granted tick this branch cannot be `None` — and
+        // `unwrap_or(ZERO)` is the honest way to say that without a panic in the simulation.
+        let dodge = if grant.dodge {
+            dodge_direction(intent).unwrap_or(Vec3::ZERO) * dodge_m_s2
+        } else {
+            Vec3::ZERO
+        };
+        // **Summed, not chosen.** Holding `Shift` through a dodge is a thing a player will do
+        // in his first minute, and either of the two winning over the other would be a rule
+        // nobody can see. Two accelerations add; that is all that happens.
+        let wanted = held + dodge;
 
         // `set_if_neq`: a component that reports itself changed on all sixty ticks makes every
         // `Changed<BoostAccel>` filter behind it worthless — and a player who is not boosting

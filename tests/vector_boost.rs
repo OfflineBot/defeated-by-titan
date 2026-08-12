@@ -596,3 +596,268 @@ fn f007_in_the_running_game_at_zero_a_hooked_boost_is_the_pure_look_direction() 
         "at boost_rope_fraction = 0 a hooked player no longer boosts where he looks"
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// 6. `F-008` — the SECOND boost. The user, 2026-08-12 (`docs/NEXT.md` §1c):
+//
+//   *„mit doppel leertaste boostet man stark in die lauf richtung (ein weiter dodge) der viel
+//    gas aufbraucht. das andere boosten verbraucht sehr wenig!"*
+//
+// Three claims live in that sentence and each one gets its own test below: the direction is
+// the RUN direction and not the camera; it is one hard impulse and not a rate; and it is the
+// expensive one, where `Shift` is the cheap one. The double-tap that triggers it is `net`'s
+// and is measured in `tests/input.rs`.
+// ---------------------------------------------------------------------------------------
+
+use defeated_by_titan::data::GasConsumer;
+use defeated_by_titan::vector::boost::dodge_direction;
+use defeated_by_titan::vector::gas::{book, Costs, Wants};
+
+/// Aim the camera and hold a movement axis, without touching a button.
+fn steer(app: &mut App, e: Entity, yaw_deg: f32, pitch_deg: f32, move_x: f32, move_y: f32) {
+    let mut intent = app.world_mut().get_mut::<Intent>(e).expect("a player has an intent");
+    intent.yaw = yaw_deg.to_radians();
+    intent.pitch = pitch_deg.to_radians();
+    intent.move_x = move_x;
+    intent.move_y = move_y;
+}
+
+/// Press or release `DODGE` on the intent. **The grant is not written here** — unlike
+/// [`boost`], which seeds it: `vector::gas::gas_budget` books the dodge from this button in the
+/// same tick, so seeding the grant by hand would hide whether the booking works at all, and the
+/// booking is half of this feature.
+fn set_dodge(app: &mut App, e: Entity, on: bool) {
+    let mut intent = app.world_mut().get_mut::<Intent>(e).expect("a player has an intent");
+    intent.buttons.set(Buttons::DODGE, on);
+}
+
+fn tank(app: &App, e: Entity) -> f32 {
+    app.world().get::<Gas>(e).expect("a player carries a tank").current
+}
+
+/// One tick with `DODGE` pressed, measured against a **twin flier** that does everything the
+/// same except press it. Gravity, drag and the clamp are then subtracted rather than argued
+/// away, and what is left over is the dodge alone.
+fn impulse_of_one_dodge(yaw_deg: f32, pitch_deg: f32, move_x: f32, move_y: f32) -> (Vec3, f32) {
+    let mut app = app();
+    let e = flier(&mut app, 0.0);
+    let twin = flier(&mut app, 60.0);
+    ticks(&mut app, 5); // let both settle into the same free fall
+
+    steer(&mut app, e, yaw_deg, pitch_deg, move_x, move_y);
+    steer(&mut app, twin, yaw_deg, pitch_deg, move_x, move_y);
+    set_dodge(&mut app, e, true);
+
+    let before = velocity(&app, e);
+    let before_twin = velocity(&app, twin);
+    let full = tank(&app, e);
+    app.update();
+    let spent = full - tank(&app, e);
+    ((velocity(&app, e) - before) - (velocity(&app, twin) - before_twin), spent)
+}
+
+#[test]
+fn f008_a_dodge_goes_where_the_movement_input_points_not_where_the_camera_does() {
+    // THE test of this feature, and the sharpest form of the user's sentence: the camera looks
+    // 60° DOWN and the only movement key is `D`. A dodge along the look vector would put two
+    // thirds of 24 m/s into the street; the run direction is `A`/`D`'s horizontal right, so the
+    // whole impulse has to sit in +X and nothing at all in Y.
+    let d = data(&app());
+    let want = d.game.vector.dodge_impulse_m_s;
+    let (dv, _) = impulse_of_one_dodge(0.0, -60.0, 1.0, 0.0);
+
+    assert!(
+        (dv.x - want).abs() < want * 0.01,
+        "the dodge put {:.4} m/s into +X; game.ron: vector.dodge_impulse_m_s = {want}",
+        dv.x
+    );
+    assert!(
+        dv.y.abs() < want * 0.01,
+        "the camera looks 60° down and the dodge followed it: {:.4} m/s of Y",
+        dv.y
+    );
+    assert!(
+        (dv.length() - want).abs() < want * 0.01,
+        "the impulse is {:.4} m/s long instead of {want}",
+        dv.length()
+    );
+}
+
+#[test]
+fn f008_one_dodge_is_one_impulse_and_not_a_rate() {
+    // A `* dt` smuggled into the chain shows up here as 0.4 m/s instead of 24, and a `/ dt`
+    // missing shows up as 1440. Both are silent otherwise.
+    let d = data(&app());
+    let want = d.game.vector.dodge_impulse_m_s;
+    let dt = 1.0 / d.game.simulation_hz as f32;
+    let (dv, spent) = impulse_of_one_dodge(0.0, 0.0, 0.0, 1.0);
+
+    assert!(
+        (dv.length() - want).abs() < want * 0.01,
+        "one tick of dodge is worth {:.4} m/s; {want} was asked for, {:.4} would be a rate \
+         billed per tick and {:.1} an acceleration that forgot the timestep",
+        dv.length(),
+        want * dt,
+        want / dt
+    );
+    // And the gas is flat for exactly the same reason.
+    assert!(
+        (spent - d.game.vector.gas_dodge).abs() < 1e-3,
+        "one dodge took {spent:.4} gas; game.ron: vector.gas_dodge = {} — {:.4} would be the \
+         rate mistake on the cost side",
+        d.game.vector.gas_dodge,
+        d.game.vector.gas_dodge * dt
+    );
+}
+
+#[test]
+fn f008_a_dodge_with_no_movement_key_costs_nothing_and_does_nothing() {
+    // The leak this rule exists to close: if `vector::boost` refused the dodge for want of a
+    // direction while `vector::gas` had already billed it, the player would pay 15 % of his
+    // tank for nothing — and a leak you cannot see is worse than one you can. So BOTH sides
+    // ask `dodge_direction`, and both have to answer no here.
+    for (move_x, move_y, what) in [(0.0, 0.0, "nothing held"), (0.0, -1.0, "S alone")] {
+        let (dv, spent) = impulse_of_one_dodge(0.0, 0.0, move_x, move_y);
+        assert!(dv.length() < 1e-3, "{what} still threw him {:.4} m/s", dv.length());
+        assert!(spent.abs() < 1e-4, "{what} still cost {spent:.4} gas");
+    }
+}
+
+#[test]
+fn f008_a_held_shift_and_a_dodge_add_up_instead_of_one_winning() {
+    // Holding the cheap boost through a dodge is what a player does in his first minute.
+    // Either of the two overriding the other would be a rule nobody can see; two accelerations
+    // simply add. `yaw = 0` looks along −Z and `D` runs along +X, so the two land on different
+    // axes and the sum is readable.
+    let mut app = app();
+    let d = data(&app);
+    let e = flier(&mut app, 0.0);
+    let dt = 1.0 / d.game.simulation_hz as f32;
+
+    boost(&mut app, e, 0.0, 0.0); // Shift held, grant seeded
+    steer(&mut app, e, 0.0, 0.0, 1.0, 0.0); // and `D`
+    set_dodge(&mut app, e, true);
+    ticks(&mut app, 1);
+
+    let got = drive(&app, e);
+    let want = Vec3::new(
+        d.game.vector.dodge_impulse_m_s / dt,
+        0.0,
+        -d.game.vector.boost_m_s2,
+    );
+    assert!(
+        (got - want).length() < want.length() * 0.001,
+        "BoostAccel is {got:?}, expected {want:?} — the held boost along −Z plus the dodge \
+         along +X, summed"
+    );
+}
+
+// --- the direction rule as a pure function, where the degenerate cases live ---------------
+
+#[test]
+fn f008_without_a_movement_input_there_is_no_dodge_direction() {
+    // `None` is the answer "then there is no dodge", not a fallback. `S` is in here because
+    // `docs/NEXT.md` §1a says `S` is not a thrust at all — it tensions the rope — so `S` alone
+    // must not produce a backwards dodge.
+    for (move_x, move_y, what) in [(0.0, 0.0, "no key"), (0.0, -1.0, "S"), (0.0, -0.4, "half S")] {
+        let intent = Intent { move_x, move_y, yaw: 0.7, pitch: -0.3, ..default() };
+        assert_eq!(dodge_direction(&intent), None, "{what} produced a dodge direction");
+    }
+}
+
+#[test]
+fn f008_the_dodge_direction_is_a_unit_vector_at_every_angle() {
+    // The strength is `dodge_impulse_m_s` and nothing else — a direction that is not unit
+    // length would make the number in the file quietly depend on which keys are held.
+    // `W`+`D` is one dodge at 45°, not 1.41 of them and not 0.71 of one.
+    for yaw in [-3.0_f32, -0.7, 0.0, 1.9, 3.1] {
+        for pitch in [-1.5_f32, -0.3, 0.0, 0.8, 1.5] {
+            for (move_x, move_y) in [(1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (-1.0, 1.0), (0.3, 0.2)] {
+                let intent = Intent { move_x, move_y, yaw, pitch, ..default() };
+                let dir = dodge_direction(&intent).expect("a movement key is held");
+                assert!(
+                    (dir.length() - 1.0).abs() < 1e-5,
+                    "yaw {yaw} pitch {pitch} keys ({move_x}, {move_y}) gave {dir:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn f008_a_lateral_dodge_stays_horizontal_and_a_forward_one_does_not() {
+    // The asymmetry is the spec, not an oversight (`docs/NEXT.md` §1a): `W` flies where you
+    // look, pitch included, so a dodge can climb out of a street; `A`/`D` come off the yaw
+    // alone, because a strafe that tilted with the pitch would drive into the ground in
+    // exactly the situation it is for — a fast swing, looking down.
+    let down = Intent { move_x: 1.0, pitch: -1.0, ..default() };
+    assert!(
+        dodge_direction(&down).expect("D is held").y.abs() < 1e-6,
+        "a lateral dodge picked up the pitch"
+    );
+    let forward = Intent { move_y: 1.0, pitch: -1.0, ..default() };
+    assert!(
+        dodge_direction(&forward).expect("W is held").y < -0.5,
+        "a forward dodge has to follow the look direction downwards"
+    );
+}
+
+// --- and the balance claim: which of the two boosts is the cheap one ----------------------
+
+#[test]
+fn f008_the_dodge_is_the_expensive_boost_and_shift_is_the_cheap_one() {
+    // *„der viel gas aufbraucht. das andere boosten verbraucht sehr wenig!"* — measured the
+    // only way the two are comparable, in GAS PER m/s OF SPEED BOUGHT. Per second they cannot
+    // be compared at all: one is a rate and the other is an impulse.
+    let v = data(&app()).game.vector;
+    let per_m_s_dodge = v.gas_dodge / v.dodge_impulse_m_s;
+    let per_m_s_boost = v.gas_boost_per_s / v.boost_m_s2;
+    let ratio = per_m_s_dodge / per_m_s_boost;
+    assert!(
+        ratio >= 3.0,
+        "a dodge costs {per_m_s_dodge:.4} gas per m/s and a held boost {per_m_s_boost:.4} — \
+         a factor of {ratio:.2}. Under 3 the difference between 'viel gas' and 'sehr wenig' \
+         is not in the file any more (game.ron: gas_dodge {}, dodge_impulse_m_s {}, \
+         gas_boost_per_s {}, \
+         boost_m_s2 {})",
+        v.gas_dodge,
+        v.dodge_impulse_m_s,
+        v.gas_boost_per_s,
+        v.boost_m_s2
+    );
+    // The crude form of the same sentence: one dodge costs more than a whole second of boost.
+    assert!(
+        v.gas_dodge > v.gas_boost_per_s,
+        "one dodge ({}) has to cost more than a second of held boost ({})",
+        v.gas_dodge,
+        v.gas_boost_per_s
+    );
+    // And a tank still has to hold a handful of them, or the move is decoration.
+    let per_tank = v.gas_tank / v.gas_dodge;
+    assert!(
+        (3.0..=15.0).contains(&per_tank),
+        "a full tank is {per_tank:.2} dodges — under 3 the move is unusable, over 15 it is not \
+         expensive at all"
+    );
+}
+
+#[test]
+fn f008_the_priority_list_can_refuse_a_dodge_the_tank_cannot_pay() {
+    // The booking, straight through `book`, on a tank that covers a boost tick but not a
+    // dodge. The dodge has to be refused **whole** — `Gas::try_spend` is atomic, so a half
+    // dodge is not a thing that can happen, and this pins that it stays so.
+    let mut gas = Gas { current: 1.0, ..Gas::full(300.0) };
+    let g = book(
+        &[GasConsumer::Boost, GasConsumer::ReelIn, GasConsumer::Dodge],
+        Wants { boost: true, reel_in: false, dodge: true },
+        Costs { boost: 0.3, reel_in: 0.1, dodge: 45.0 },
+        &mut gas,
+    );
+    assert!(g.boost, "1.0 gas covers a boost tick of 0.3");
+    assert!(!g.dodge, "1.0 gas does not cover a dodge of 45");
+    assert!(
+        (gas.current - 0.7).abs() < 1e-6,
+        "the refused dodge took gas anyway — tank at {}",
+        gas.current
+    );
+}

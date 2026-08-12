@@ -37,7 +37,7 @@ pub use ids::{IdCounter, BodyId, LocalPlayer, PlayerId, TitanId, TitanKindName};
 pub use intent::{LookOverride, Intent, Buttons};
 pub use message::{
     Impact, HookReleased, HookAnchored, BodyGone, HitZone, ReleaseReason, Mark,
-    RefuelRequest, WarpPlayer, TitanHit, SpawnTitan,
+    BladeRestockRequest, RefuelRequest, WarpPlayer, TitanHit, SpawnTitan,
 };
 pub use spatial::{IndexEntry, SpatialIndex, RayResult, RayHit};
 pub use rope::{rope_reel_in, rope_step, RopeConstraint, ConstraintResult};

@@ -14,13 +14,16 @@
     // The hub — the main building. Positions in meters, origin at the player's spawn.
     // -----------------------------------------------------------------------------------
     //
-    // ⚠️ The hub's **pads** are still laid out on open ground: they are placed here and on
-    // whatever map `maps.ron: current` builds. Since 2026-08-12 the district does have a main
-    // building — the garrison headquarters, `maps.ron: ashgate`, door at (-15, ., 0) — but
-    // none of the furniture below has moved into it yet; see `refuel_stations`. Every
-    // coordinate below has to stay inside `maps.ron: layout.clear_radius_m` (24.0 m),
-    // which is the circle the city generator keeps free — and on **+Z**, because the graybox
-    // has an explicitly placed house at (0, 2, −12).
+    // The hub is laid out on whatever map `maps.ron: current` builds, and it has two kinds of
+    // furniture with two different rules:
+    //
+    //   deployments      OUTSIDE, on open ground. They have to stay inside
+    //                    `maps.ron: layout.clear_radius_m` (24.0 m), the circle the city
+    //                    generator keeps free, and on **+Z**, because the graybox has an
+    //                    explicitly placed house at (0, 2, −12).
+    //   refuel_stations  INSIDE the garrison headquarters (`maps.ron: ashgate`, the hall at
+    //                    x = −47..−15, |z| ≤ 13, door at (−15, ., 0)). „drinnen sind die
+    //                    nachschübe" — the user, 2026-08-12. See `refuel_stations` below.
     hub: (
         name: "The Rookery",
 
@@ -45,34 +48,45 @@
             (mission: "skirmish", difficulty: "elite",   center_m: ( 9.0, 0.0, 16.0), radius_m: 3.0),
         ],
 
-        // ---- The gas ------------------------------------------------------------------
+        // ---- The supply — INSIDE the main building --------------------------------------
         //
         // „gas refillt nur im main gebäude an bestimmten stationen/objekten" (user,
-        // 2026-08-12, docs/QUESTIONS.md Q-033). These three points are the whole answer:
-        // there is no regeneration anywhere else in the game, and `Gas::refill` has no other
-        // caller. **How fast and how far stands in `gear.ron: resupply`**, not here — this
-        // file says where the stations are, that file says what a station does.
+        // 2026-08-12, docs/QUESTIONS.md Q-033) and „in das gebäude muss man rein laufen
+        // können. drinnen sind die nachschübe" (the same day). These two points are the whole
+        // answer: there is no regeneration anywhere else in the game, `Gas::refill` has no
+        // other caller, and `blades::resupply::restock` has no other caller either.
+        // **How fast and how far stands in `gear.ron: resupply`**, not here — this file says
+        // where the supply is, that file says what it gives back.
         //
-        // ⚠️ **These three still stand on the pavement, and the building exists now.**
-        // `maps.ron: ashgate` carries the garrison headquarters since 2026-08-12: a 32 x 26 m
-        // hall at x = -47..-15, z = -13..13, floor at 0.15 m, a 6 x 4.5 m gate on the main
-        // street at (-15, ., 0) — 15 m in front of the spawn point and straight ahead of it.
-        // The two racks inside it are furniture until somebody moves these coordinates onto
-        // them, and **that is the one line this file still owes the user's sentence** („drinnen
-        // sind die nachschübe"). The interior positions the racks are built for:
+        // The two coordinates are the two racks of `maps.ron: ashgate`, to the centimetre:
         //
-        //     gas    (-42.0, 0.15, -6.5)   the south rack
-        //     blades (-42.0, 0.15,  6.5)   the north rack — needs the blade station type
-        //                                  (`blades::resupply`, `gear.ron: resupply`)
+        //     (-42.0, 0.15, -6.5)   the south rack — the gas tanks
+        //     (-42.0, 0.15,  6.5)   the north rack — the blades
         //
-        // It was NOT done in the same hand as the building, on purpose: `scripts/f070-hub.txt`
-        // walks 6 m up +Z onto the station at (0, 0, 6) and asserts `gas > 299` there, and
-        // moving the station without re-cutting that script turns a green feature red for a
-        // reason that is not in the game. **Rollback point: these three lines.**
+        // ⚠️ **0.15 is not decoration, it is the proof.** It is the top face of the depot floor
+        // slab, and no other block in the district has that height (ground 0.0, aprons 0.05,
+        // quays and bridges 0.4). A station at 0.15 m is standing on that floor and nowhere
+        // else, which is what makes „drinnen" a test and not a description —
+        // `tests/mission.rs::f019_every_supply_station_stands_on_the_depot_floor_of_the_main_building`
+        // finds the floor by that height alone, and `scripts/f019-hq.txt` reads the same number
+        // from the player's side as `assert height > 0.10`.
+        //
+        // ⚠️ **Both racks give back both things, and that is a deviation from the model.**
+        // `maps.ron` labels the south rack "gas tanks" and the north one "blades", but a
+        // `StationPad` in `src/data/mod.rs` is a bare `center_m` with nothing to say which —
+        // and that file is not this hand's to widen (`docs/FINDINGS.md` FIND-066). So a station
+        // is a **supply point**: it asks for gas and it asks for blades, which is also the
+        // shape `gear.ron: resupply` already has — one block, one `range_m`, four numbers.
+        // Walk to either rack and you leave with a full tank and a full harness.
+        // **Rollback point if the user wants one rack per resource: these two lines plus the
+        // `BladeRack` insert in `src/mission/hub.rs::open_hub`.**
+        //
+        // ⚠️ The three positions these replaced — (0, 0, 6), (±14, 0, 6) — stood on the
+        // pavement outside, and `scripts/f070-hub.txt` walks onto the first of them. That
+        // script has to be re-cut with the walk into the hall; it is not this hand's file.
         refuel_stations: [
-            (center_m: (  0.0, 0.0, 6.0)),
-            (center_m: (-14.0, 0.0, 6.0)),
-            (center_m: ( 14.0, 0.0, 6.0)),
+            (center_m: (-42.0, 0.15, -6.5)),
+            (center_m: (-42.0, 0.15,  6.5)),
         ],
     ),
 

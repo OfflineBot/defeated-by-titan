@@ -317,3 +317,61 @@ Content-wise the branch contains everything `origin/main` has; the difference is
 +21572/-6760. Whoever continues either merges the branch, or force-pushes it onto `main`
 after checking that nothing on the remote is worth keeping — **check first, the seventeen
 commits are real work.**
+
+---
+
+## 2026-08-12 — the district, the hub, and three bugs that had been "fixed" and were not
+
+**Start at [`NEXT.md`](NEXT.md).** It is the queue, in order, and its `## ✅ DONE` section at the
+bottom says what has since closed. This section is only the state.
+
+### What a player can now do that he could not
+
+- **Deploy from a hub and come back.** `hub → walk onto a pad → sortie at a chosen difficulty → win →
+  hub`, measured end to end: `scripts/f070-hub.txt`, 20 asserts, exit 0. Gas refuels at a rack
+  **inside the headquarters building**, which you walk into through a real 6 × 4.5 m doorway
+  (`F-019`, `FIND-064`).
+- **Fly through a district instead of a graybox.** `ashgate` is the shipped map: a wall across the
+  horizon, two aligned gates, a canal with bridges, ~1000 blocks, separated buildings with varied
+  heights **and shadows** (`FIND-071` — there was no directional light at all before, so a thousand
+  cuboids all rendered at one brightness).
+- **Steer in the air.** WASD while roped: 10 m/s² lateral, half that on an empty tank (`F-006`).
+- **Cut a titan while roped without killing the process** (`B-004`, finally — see below).
+
+### The three "fixed" things that were not
+
+1. **`B-004` was fixed twice and each fix MOVED the panic.** Out of the impact frame, then back into
+   it — and each was verified on the side it had just made safe. **A point test cannot catch a defect
+   that relocates.** The real cause was neither freeze: it is the rope's **despawn** inside the
+   freeze, which is one of avian's four island transitions and the one that cannot be ordered. The
+   repair is one unbranched line (`remove::<DistanceJoint>()` before `despawn()`), so a live joint
+   and a disabled joint take the *same* path. Proven by a **21-tick sweep across the whole frame**:
+   7 of 21 dead before, 0 after, 7 dead again when the line comes out.
+2. **`--screenshot` runs exited 0 with failed asserts**, and **16 of 35 scripts documented only a
+   screenshot command** — so they had no verdict at all and four were red behind a green exit code.
+   Both halves are now fixed (`FIND-073`, `FIND-074`).
+3. **The whole script corpus was still aimed at the graybox** after the map flip, including
+   `f-flight-cut.txt`, which is the *only* evidence the flight half of this game has ever had. It
+   anchored nothing for a day. 8 scripts repaired, `f004-towers` from 17/39 red to **39/39 with zero
+   asserts touched**.
+
+### The one thing that is designed and NOT built
+
+**The rope is not an engine.** It is an avian `DistanceJoint` with `limits = (0, L)` — it can only
+stop you leaving, never pull you in, and it adds no energy ever. That is why pressing W while
+connected **walks** you. The user asked for the opposite in his own words, and research into the
+reference work settled the architecture question: **its hook is a velocity drive toward the anchor**,
+blended with momentum that survives the unhook (`docs/gameplay/references.md`).
+Three designs were drawn and judged; the build order is in `NEXT.md` §5b/§5f/§5g. **Check it against
+§5g before building** — the reference research landed after the design round and contradicts parts
+of it.
+
+### What is still open and whose it is
+
+- **`Q-036` is the user's and it blocks two things**: a 24–28 m structure class would let the swing
+  lanes be architecture instead of scaffolding, and `house_large` has no eaves entry, which is why
+  every large house is a flat box.
+- `Q-031` (does a titan's facing matter — today the strike is a cylinder), `Q-032`, `Q-033` ✅,
+  `Q-035`.
+- Three evidence images photograph a city that no longer exists (`NEXT.md` §6).
+- The sky is one flat colour — the remaining half of *"alles sehr flat"*.

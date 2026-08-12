@@ -571,7 +571,15 @@ fn f071_no_wave_walks_into_a_decided_mission() {
     // wrong measure: the three we cut dissolve away in the meantime, so the number goes down on
     // its own. `IdCounter` hands out ids in order, so "no id above the highest one we have
     // seen" is the question that actually means "nothing spawned".
-    let highest = *titan_ids(&mut app).last().expect("bodies are still standing");
+    //
+    // ⚠️ The watermark is taken from the ids this test **created**, not from the bodies still
+    // standing after the verdict. It used to read `titan_ids(...).last()`, which quietly assumed
+    // a titan outlives his own sortie — and on 2026-08-12 `titan::spawn_titan` gained
+    // `DespawnOnExit(MissionPhase::Active)`, the field emptied at the verdict, and this test
+    // panicked with "bodies are still standing" on a claim that has nothing to do with waves
+    // (`docs/FINDINGS.md` FIND-066 §3). `mine` holds the three highest ids in the game either
+    // way, so the question survives whichever lifetime a body ends up having.
+    let highest = *mine.iter().max().expect("this test spawned three titans");
     ticks(&mut app, 5_500);
     let late: Vec<TitanId> =
         titan_ids(&mut app).into_iter().filter(|id| *id > highest).collect();
@@ -644,7 +652,7 @@ fn f071_the_waves_come_out_of_the_file_at_the_ticks_the_file_says() {
 //    `f072_gas_comes_back_at_a_station_and_nowhere_else`).
 
 use defeated_by_titan::mission::{DeploymentPoint, RefuelStation, ReturnToHub};
-use defeated_by_titan::shared::{Gas, RefuelRequest};
+use defeated_by_titan::shared::{BladeRestockRequest, Blades, Gas, RefuelRequest};
 
 /// The hub's layout out of `missions.ron` — never a literal in this file.
 fn hub_layout(app: &App) -> defeated_by_titan::data::HubLayout {
@@ -1100,4 +1108,334 @@ fn f072_a_station_asks_for_gas_and_never_writes_the_tank_itself() {
         "a second in the station gave {after} of the station's own 40.0 gas/s — the request is \
          written but nothing applies it"
     );
+}
+
+// ---------------------------------------------------------------------------
+// F-019 — the supply is INSIDE the building
+// ---------------------------------------------------------------------------
+//
+// The user, 2026-08-12: „auch das main gebäude in dem der gas und schwert nachschub ist muss da
+// sein (in das gebäude muss man rein laufen können. drinnen sind die nachschübe)". The building
+// landed first and the stations stayed out on the pavement at y = 0.0, which is a hub that has a
+// headquarters *and* a supply dump in front of it. The two tests below are what "drinnen" means
+// as a number.
+
+/// Every explicitly placed **solid** block of `maps.ron: current`, as `(min, max)` in meters.
+///
+/// The generated layout is not in here and does not need to be: the depot floor is an apron, and
+/// `world` drops a generated house as soon as a placed block overlaps its lot (`maps.ron`, the
+/// base slab's second job).
+fn solid_boxes(d: &GameData) -> Vec<(Vec3, Vec3)> {
+    let map = d.current_map().expect("maps.ron: current names a map that is not in the file");
+    map.blocks
+        .iter()
+        .filter(|b| b.solid)
+        .map(|b| {
+            let c = Vec3::from(b.center_m);
+            let half = Vec3::from(b.size_m) * 0.5;
+            (c - half, c + half)
+        })
+        .collect()
+}
+
+/// The floor the supply stations stand on, as `(min, max)`.
+///
+/// Found by its **height and nothing else**: the one block of the map whose top face is exactly
+/// at the stations' `center_m.1`. That is what makes "inside the building" a testable
+/// coordinate instead of a description — `maps.ron` puts the depot floor of the garrison
+/// headquarters at 0.15 m and gives no other block in the district that height (ground 0.0,
+/// aprons 0.05, quays and bridges 0.4), so a station at that height stands on that floor and
+/// nowhere else. `scripts/f019-hq.txt` reads the same number from the other side, as
+/// `assert height > 0.10`.
+fn floor_under_the_stations(d: &GameData) -> (Vec3, Vec3) {
+    let stations = &d.missions.hub.refuel_stations;
+    assert!(!stations.is_empty(), "the hub has no supply station at all");
+    let y = stations[0].center_m.1;
+    for station in stations {
+        assert_eq!(
+            station.center_m.1, y,
+            "two supply stations at two heights — {:?} against {y}; they stand on one floor \
+             or 'inside' is not one place",
+            station.center_m
+        );
+    }
+    let floors: Vec<(Vec3, Vec3)> = solid_boxes(d)
+        .into_iter()
+        .filter(|(_, max)| (max.y - y).abs() < 1e-4)
+        .collect();
+    assert_eq!(
+        floors.len(),
+        1,
+        "the stations stand at y = {y}, and {} block(s) of maps.ron have their top face there. \
+         Exactly one has to, or the height proves nothing about which building you are in",
+        floors.len()
+    );
+    floors[0]
+}
+
+/// Can a 1.8 m player on a 0.35 m capsule stand here without being inside geometry?
+///
+/// The body is sampled from just above the floor to the top of the head, so the floor slab
+/// itself is not what makes every spot in the hall unstandable.
+fn standable(at: Vec3, d: &GameData, solids: &[(Vec3, Vec3)]) -> bool {
+    let r = d.game.player.radius_m;
+    let min = Vec3::new(at.x - r, at.y + 0.05, at.z - r);
+    let max = Vec3::new(at.x + r, at.y + d.game.player.height_m, at.z + r);
+    !solids
+        .iter()
+        .any(|(lo, hi)| min.x < hi.x && max.x > lo.x && min.y < hi.y && max.y > lo.y && min.z < hi.z && max.z > lo.z)
+}
+
+#[test]
+fn f019_every_supply_station_stands_on_the_depot_floor_of_the_main_building() {
+    // ⭐ „drinnen sind die nachschübe" as an assert. Before 2026-08-12 evening the three
+    // stations stood at y = 0.0 on the street; the building had been standing since that
+    // morning. Nothing in the game said so — the hub worked, the gas came back, and the one
+    // sentence the user wrote was not true.
+    let d = data(&started(None));
+    let (floor_min, floor_max) = floor_under_the_stations(&d);
+    let inset = d.game.player.radius_m;
+
+    for station in &d.missions.hub.refuel_stations {
+        let at = Vec3::from(station.center_m);
+        assert!(
+            at.x > floor_min.x + inset && at.x < floor_max.x - inset,
+            "station {at:?} is not over the depot floor in x ({} .. {})",
+            floor_min.x,
+            floor_max.x
+        );
+        assert!(
+            at.z > floor_min.z + inset && at.z < floor_max.z - inset,
+            "station {at:?} is not over the depot floor in z ({} .. {})",
+            floor_min.z,
+            floor_max.z
+        );
+    }
+}
+
+/// The grid step the standing-room scan uses. A cell is 0.0625 m², so 16 of them are a square
+/// metre — a player standing still with room to turn.
+const APPROACH_STEP_M: f32 = 0.25;
+
+/// Every spot on the depot floor a player can **stand** on and still be inside a station's
+/// reach, nearest first.
+///
+/// This is the question a coordinate check cannot ask. A station's trigger is a 3D distance to
+/// its centre, and its centre is the middle of a 5 x 9 m solid rack — so "inside the building"
+/// and "usable by a human being" are two different claims, and only the second one is the
+/// feature. The scan is a grid and not arithmetic because the obstacles are the map's: the rack
+/// itself, the four roof posts, the back wall.
+fn approaches_to(station: Vec3, d: &GameData) -> Vec<Vec3> {
+    let (floor_min, floor_max) = floor_under_the_stations(d);
+    let solids = solid_boxes(d);
+    let range = d.gear.resupply.range_m;
+    let inset = d.game.player.radius_m;
+    let steps = (range / APPROACH_STEP_M).ceil() as i32;
+    let mut found: Vec<Vec3> = Vec::new();
+    for ix in -steps..=steps {
+        for iz in -steps..=steps {
+            let spot = station
+                + Vec3::new(ix as f32 * APPROACH_STEP_M, 0.0, iz as f32 * APPROACH_STEP_M);
+            if spot.distance(station) > range {
+                continue;
+            }
+            let on_the_floor = spot.x > floor_min.x + inset
+                && spot.x < floor_max.x - inset
+                && spot.z > floor_min.z + inset
+                && spot.z < floor_max.z - inset;
+            if on_the_floor && standable(spot, d, &solids) {
+                found.push(spot);
+            }
+        }
+    }
+    found.sort_by(|a, b| {
+        a.distance(station).partial_cmp(&b.distance(station)).expect("a NaN coordinate")
+    });
+    found
+}
+
+#[test]
+fn f019_a_supply_station_has_floor_you_can_actually_stand_on_inside_its_reach() {
+    // ⭐ The half that makes the one above worth having. A station whose centre sits in the
+    // middle of a solid rack is "inside the building" by every coordinate check and cannot be
+    // used by anybody: the trigger is a 3D distance to the centre, the rack is 5 x 9 m of
+    // collider, and a player who walks up to it stands 5 m from the number that decides.
+    let d = data(&started(None));
+    const NEEDED: usize = 16;
+
+    for station in &d.missions.hub.refuel_stations {
+        let at = Vec3::from(station.center_m);
+        let room = approaches_to(at, &d);
+        assert!(
+            room.len() >= NEEDED,
+            "the station at {at:?} has {} standable 0.25 m cells inside its {} m reach \
+             ({:.2} m\u{b2} of floor) — a player cannot walk up to it",
+            room.len(),
+            d.gear.resupply.range_m,
+            room.len() as f32 * APPROACH_STEP_M * APPROACH_STEP_M
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// One writer of `Blades` — the same shape, built in rather than repaired in
+// ---------------------------------------------------------------------------
+
+/// A bare app with **only the hub's rack system in it** — no `blades` anywhere.
+///
+/// Same construction as [`a_station_and_a_player`] and for the same reason: the real app carries
+/// both halves, so it cannot tell "the rack asks and blades restocks" from "the rack restocks
+/// itself". Here the applier is simply absent, and a harness that still grows can only have been
+/// written by `mission`.
+///
+/// The player carries an **empty** harness (`pairs_left: 0`, `sharpness: 0.0`), because a full
+/// one cannot grow and would make both halves of the test pass for nothing.
+fn a_rack_and_a_player(with_blades: bool) -> (App, Entity) {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    app.insert_resource(Time::<Fixed>::from_hz(60.0));
+    app.add_message::<BladeRestockRequest>();
+    app.add_systems(FixedUpdate, defeated_by_titan::mission::hub::restock_at_stations);
+    if with_blades {
+        // `GameData` only for the half that actually applies: the rack does not read it, and a
+        // test that hands it to both halves would hide a rack that started reading the tuning.
+        app.insert_resource(GameData::load(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/data"
+        ))));
+        app.add_systems(
+            FixedUpdate,
+            defeated_by_titan::blades::resupply::apply_restock_requests
+                .after(defeated_by_titan::mission::hub::restock_at_stations),
+        );
+    }
+
+    app.world_mut().spawn((
+        defeated_by_titan::mission::BladeRack { radius_m: 4.0 },
+        Transform::from_translation(Vec3::ZERO),
+    ));
+    let player = app
+        .world_mut()
+        .spawn((
+            PlayerId(1),
+            Transform::from_translation(Vec3::ZERO),
+            Blades { pairs_left: 0, sharpness: 0.0 },
+        ))
+        .id();
+    (app, player)
+}
+
+fn harness(app: &App, player: Entity) -> Blades {
+    *app.world().entity(player).get::<Blades>().expect("the player carries a harness")
+}
+
+#[test]
+fn f033_a_rack_asks_for_blades_and_never_writes_the_harness_itself() {
+    // ⭐ The rule-4 test for the other field. `docs/architecture.md`'s authority table says
+    // `Blades` is written by `blades` and by nothing else. So a player standing at a rack of a
+    // game **without** `blades::resupply` must come out with the harness he went in with.
+    //
+    // This is the one shape every whole-app test is blind to — it is what let a second writer of
+    // `Gas` stand for a day (`docs/FINDINGS.md` FIND-063).
+    let (mut app, player) = a_rack_and_a_player(false);
+    for _ in 0..60 {
+        app.update();
+    }
+    assert_eq!(
+        harness(&app, player),
+        Blades { pairs_left: 0, sharpness: 0.0 },
+        "a second at a rack restocked the harness with no `blades` in the app — `mission` is \
+         writing `Blades` itself (docs/architecture.md, authority table; rule 4)"
+    );
+
+    // The other half, or the first one proves only that nothing works: the SAME rack and the
+    // SAME player, with the applier added, do get restocked. Both numbers come out of
+    // `gear.ron: resupply` — 1.5 pairs/s and 2.0 sharpness/s over one second.
+    let (mut app, player) = a_rack_and_a_player(true);
+    let tuning = app.world().resource::<GameData>().gear.resupply.clone();
+    for _ in 0..60 {
+        app.update();
+    }
+    let after = harness(&app, player);
+    assert_eq!(
+        after.pairs_left,
+        tuning.blade_pairs_per_s.floor() as u8,
+        "a second at the rack gave {} pair(s) of the file's {} per second — the request is \
+         written but nothing applies it",
+        after.pairs_left,
+        tuning.blade_pairs_per_s
+    );
+    assert_eq!(after.sharpness, 1.0, "the pair in the harness was not honed: {after:?}");
+}
+
+#[test]
+fn f033_a_rack_is_a_hub_thing_and_the_harness_does_not_refill_in_the_field() {
+    // The blade half of Q-033's rule. Standing where a rack stands, in a running sortie, gives
+    // nothing back — carried by `DespawnOnExit(MissionPhase::Hub)` on the station and by the
+    // `run_if` on the system, the same two mechanisms the gas half has.
+    let mut app = in_the_hub();
+    let rack = Vec3::from(hub_layout(&app).refuel_stations[0].center_m);
+    let pad = pad_center(&app, "recruit");
+    place_players(&mut app, pad);
+    ticks(&mut app, 10);
+    assert_eq!(phase(&app), MissionPhase::Active, "this test needs a running sortie");
+
+    place_players(&mut app, rack);
+    let mut q = app.world_mut().query_filtered::<&mut Blades, With<PlayerId>>();
+    for mut blades in q.iter_mut(app.world_mut()) {
+        *blades = Blades { pairs_left: 0, sharpness: 0.0 };
+    }
+    ticks(&mut app, 60);
+    let mut q = app.world_mut().query_filtered::<&Blades, With<PlayerId>>();
+    let after = *q.iter(app.world()).next().expect("no player carries a harness");
+    assert_eq!(
+        after,
+        Blades { pairs_left: 0, sharpness: 0.0 },
+        "the harness refilled itself inside a mission, at the place a rack stands in the hub"
+    );
+}
+
+#[test]
+fn f033_a_player_at_a_rack_of_the_hub_walks_away_restocked() {
+    // The positive one, in the real app and at the real coordinate out of `missions.ron` — the
+    // one that says the wiring is connected end to end and not only in a hand-built app.
+    let mut app = in_the_hub();
+    let rack = Vec3::from(hub_layout(&app).refuel_stations[0].center_m);
+    let capacity = data(&app).gear.blades.start_pairs;
+
+    // Away from every rack first: an empty harness stays empty. Without this the test is
+    // satisfied by a restock that runs everywhere, which is exactly the cooldown the design
+    // replaced with an economy.
+    let outside = nowhere_in_particular(&app, Vec3::new(0.0, 2.0, -6.0));
+    place_players(&mut app, outside);
+    let mut q = app.world_mut().query_filtered::<&mut Blades, With<PlayerId>>();
+    for mut blades in q.iter_mut(app.world_mut()) {
+        *blades = Blades { pairs_left: 0, sharpness: 0.0 };
+    }
+    ticks(&mut app, 60);
+    let mut q = app.world_mut().query_filtered::<&Blades, With<PlayerId>>();
+    let away = *q.iter(app.world()).next().expect("no player carries a harness");
+    assert_eq!(
+        away,
+        Blades { pairs_left: 0, sharpness: 0.0 },
+        "the harness restocked itself away from any rack — economy instead of cooldowns"
+    );
+
+    // And at the rack the harness comes back, up to the cap and no further. **Not at the
+    // station's centre**, which is the middle of a solid rack — at the nearest spot on the
+    // depot floor a player could actually be standing (`approaches_to`). That is the difference
+    // between "the trigger works" and "you can use it", and it is also where
+    // `scripts/f070-hub.txt` has to put the player.
+    let approach = approaches_to(rack, &data(&app))[0];
+    assert!(
+        approach.distance(rack) <= data(&app).gear.resupply.range_m,
+        "the approach {approach:?} is outside the reach it was scanned in"
+    );
+    place_players(&mut app, approach);
+    ticks(&mut app, 600);
+    let mut q = app.world_mut().query_filtered::<&Blades, With<PlayerId>>();
+    let full = *q.iter(app.world()).next().expect("no player carries a harness");
+    assert_eq!(full.pairs_left, capacity, "ten seconds at the rack gave {full:?}");
+    assert_eq!(full.sharpness, 1.0);
 }

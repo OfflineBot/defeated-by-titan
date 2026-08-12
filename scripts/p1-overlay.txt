@@ -3,6 +3,18 @@
 #   cargo run -q -- --offscreen \
 #       --script scripts/p1-overlay.txt --ticks 140 --screenshot docs/images/p1-overlay.png
 #
+# and, as a SEPARATE run, the one that returns a usable exit code:
+#
+#   cargo run -q -- --headless --script scripts/p1-overlay.txt --ticks 800
+#
+# ⚠️ **A `--screenshot` run is not a verdict.** `debug::screenshot::exit_when_written` owns the
+# ending and writes `AppExit::Success` the moment the PNG is on disk, without ever reading
+# `run.failures` — so the command above exits 0 even when the asserts in this file are RED, and
+# the assert summary never prints (`docs/FINDINGS.md` FIND-073). Only the `--headless` run
+# reports "N asserts held" and returns an exit code worth reading. Its tick count is
+# deliberately generous (measured end: 431 ticks): overshooting the script's own end is free,
+# undershooting truncates the run and hides the summary (FIND-032).
+#
 # This is not a feature script. It is the evidence route itself: `--offscreen` renders into
 # an `Image`, and `DefaultUiCamera` answers `None` for an image target unless the camera
 # carries `IsDefaultUiCamera` (bevy_ui-0.19.0/src/ui_node.rs:2991-3003). Without that
@@ -30,6 +42,12 @@ wait 0.3                # one frame is enough; the extra ticks make the tick num
 
 assert height > 65       # the warp really did take effect (measured 65.98 at tick 130)
 assert height < 67       # and the player has not fallen further than one wait
-assert kills == 0        # the new vocabulary, exercised in a real run
+# ⚠️ This line was `assert kills == 0` and it could not be measured: `Metric::Kills` reads the
+# per-`PlayerId` tally off the **mission entity** (`src/debug/mod.rs::measure`), and this run
+# launches without `--hub` and without a mission, so there is no tally to read. The driver
+# counts an unmeasurable check as FAILED — correctly — and reported `measured nothing (no
+# player found)`, which named the wrong half of the `?` chain. `phase` is the metric that is
+# always measurable: `measure` documents "no mission" as the honest answer Briefing = 0.
+assert phase == 0        # the new vocabulary, exercised in a real run: no mission is running
 mark p1-overlay
 wait 5                  # keep the run alive: if it ends, the process ends before the image

@@ -3,6 +3,19 @@
 #   cargo run --features wayland,audio -- --offscreen --script scripts/f-007-boost.txt \
 #       --ticks 300 --screenshot docs/images/f-007-boost.png
 #
+# and, as a SEPARATE run, the one that returns a usable exit code:
+#
+#   cargo run -q -- --headless --script scripts/f-007-boost.txt --ticks 900
+#
+# ⚠️ **A `--screenshot` run is not a verdict.** `debug::screenshot::exit_when_written` owns the
+# ending and writes `AppExit::Success` the moment the PNG is on disk, without ever reading
+# `run.failures` — so the command above exits 0 even when the asserts in this file are RED, and
+# the assert summary never prints (`docs/FINDINGS.md` FIND-073). That is not hypothetical here:
+# this file sat at **2 of 13 red behind an exit 0** until 2026-08-12, because `gas_tank` grew
+# from 100 to 300 under it and only the headless run could say so. Its tick count is
+# deliberately generous: overshooting the script's own end is free, undershooting truncates the
+# run and hides the summary (FIND-032).
+#
 # **The height IS the measurement.** `assets/data/game.ron` says it in so many words next to
 # `jump_speed_m_s`: 6.5 m/s against g = -20 give an apex of 1.056 m — "without gas you get on
 # top of nothing in this city". There is no second source of upward motion in this build, so
@@ -18,7 +31,18 @@
 # `ClearColor`, which is a true photograph of nothing.
 #
 # ---------------------------------------------------------------------------------------
-# The image is a MEASUREMENT, and this is how to re-check it `[offlinebot]`
+# ⚠️ **THE IMAGE HALF OF THIS FILE IS STALE AND THE ASSERT HALF IS NOT.** The block below
+# projects the three explicitly placed cubes of the **graybox** map. `maps.ron: current` is
+# `"ashgate"` since 2026-08-12 (`F-003`), so those cubes are not under the camera any more and
+# every pixel figure below describes a photograph that can no longer be taken. It is kept, not
+# deleted, because it is the worked example of how a picture gets held to a number — whoever
+# retakes `docs/images/f-007-boost.png` re-derives the same three rows against ashgate's own
+# blocks and replaces this block wholesale.
+#
+# **The asserts are unaffected and they are the verdict**: height, speed and gas out of a boost
+# fired straight up from the spawn point do not depend on what is standing underneath.
+# ---------------------------------------------------------------------------------------
+# The image is a MEASUREMENT, and this is how to re-check it `[offlinebot]` — FOR THE GRAYBOX
 #
 # Camera at (0, 48.354 + 1.6, ~ -2.9), looking 89 degrees down, vertical FOV 60 degrees over
 # 720 rows. Project the three explicitly placed blocks of `assets/data/maps.ron` and compare
@@ -44,7 +68,7 @@ wait 1.5                 # 90 ticks: world, camera, meshes, pipelines — and th
 mark f-007-on-the-ground
 assert height < 0.05     # standing, not still falling
 assert height > -0.05    # and not sunk into the ground
-assert gas == 100        # full tank, nothing spent yet
+assert gas == 300        # full tank, nothing spent yet — game.ron: vector.gas_tank
 
 look 0 89                # straight up; 89 is camera.pitch_limit_deg
 key Shift 2.0            # BOOST is ShiftLeft (src/net/local.rs) — held, not tapped
@@ -55,8 +79,8 @@ assert height > 28.5     # a jump reaches 1.056 m. 28.9 m is gas, and nothing el
 assert height < 29.5
 assert speed > 27.5      # 13.99 m/s^2 net over 121 ticks
 assert speed < 28.5
-assert gas > 63.5        # 121 ticks at gas_boost_per_s / 60 = 0.3 -> 36.3 out of 100
-assert gas < 64.0
+assert gas > 263.5       # 121 ticks at gas_boost_per_s / 60 = 0.3 -> 36.3 out of 300
+assert gas < 264.0       # measured 263.701
 
 look 0 -89               # turn the camera down onto the spot he took off from
 wait 1.4                 # coast on: at 27.9 m/s the apex is 1.40 s away
@@ -65,6 +89,6 @@ mark f-007-apex
 assert height > 48.0     # 45 times the height of a jump
 assert height < 48.7
 assert speed < 2.0       # apex: what is left is the 1.2 m/s of drift from the 1 degree tilt
-assert gas > 63.5        # the climb after the button is free — nothing is drawn while coasting
+assert gas > 263.5       # the climb after the button is free — nothing is drawn while coasting
 
 wait 5                   # keep the run alive: it must not end before the image is read back

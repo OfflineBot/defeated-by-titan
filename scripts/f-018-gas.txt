@@ -4,12 +4,17 @@
 #   the picture:  cargo run -q -- --offscreen --script scripts/f-018-gas.txt --ticks 1118 \
 #                     --screenshot docs/images/f-018-gas.png
 #
-# ⚠️ **TWO DIFFERENT TICK COUNTS, and neither is free to choose.** The verdict needs a number
-# ABOVE the script's own end (measured: it finishes at t=1362) or the run is cut off and
-# `--ticks` exits 0 without the assert summary ever printing. The picture needs the exact tick
-# of `f018-dry`, **1118**, because `--screenshot` fires at `--ticks` and the tank does not stay
-# empty: the closing `wait 3` puts 30 gas back at 10/s. Shooting at 1500 writes nothing at all
-# (the process is already gone) and shooting at 1362 photographs a tank that has refilled.
+# ⚠️ **TWO DIFFERENT TICK COUNTS, and the verdict's is not free to choose.** The verdict needs
+# a number ABOVE the script's own end (measured: it finishes at t=1362) or the run is cut off
+# and `--ticks` exits 0 without the assert summary ever printing. The picture is shot at the
+# tick of `f018-dry`, **1118**, because `--screenshot` fires at `--ticks` and shooting at 1500
+# writes nothing at all — the process is already gone.
+#
+# ⚠️ **1118 used to be forced for a second reason that is now void.** It read "the tank does
+# not stay empty: the closing `wait 3` puts 30 gas back at 10/s". Since Q-033 (see ACT 4) the
+# tank stays at 0.300 to the end of the run, so any tick from 1118 to 1362 photographs the
+# same empty bar. 1118 is kept because `docs/images/f-018-gas.png` was shot there and an image
+# whose tick moves is an image whose diff means nothing.
 #
 # ⚠️ WHAT THE IMAGE SHOWS NOW: `src/hud/gas_bar.rs` is no longer a stub, so at t=1118 the bar
 # in the bottom left is drawn EMPTY — the same claim as `assert gas < 0.3`, in pixels. That
@@ -24,26 +29,27 @@
 #   gas_tank          = 300   (was 100 until 2026-08-10 — docs/QUESTIONS.md Q-033)
 #   gas_boost_per_s   =  18   -> 0.3    per tick at 60 Hz
 #   gas_reel_per_s    =   6   -> 0.1    per tick at 60 Hz
-#   gas_regen_per_s   =  10   -> 0.1667 per tick at 60 Hz      NEW
-#   gas_regen_delay_s = 0.5   -> 30 ticks after the last WANT  NEW
+#
+#   there is NO gas_regen_per_s and NO gas_regen_delay_s. They existed on 2026-08-10, this
+#   file measured them, and the user deleted the mechanism with Q-033: „gas refillt nur im
+#   main gebäude". `game.ron` carries the ⚠️⚠️ block that says so; ACT 4 is the run that
+#   would go red if they came back.
 #
 # A `key Shift <s>` holds the key for <s> seconds of FIXED time, so 1.0 is 60 ticks and 60
 # ticks are 18 gas. If somebody multiplies by dt a second time, one tick costs 18/3600 =
 # 0.005 instead of 0.3, the second assert below measures 299.7 instead of 282, and the run
 # exits 1.
 #
-# ⚠️ **A `wait` IS NO LONGER FREE, and that is the trap this file walks into first.**
-# `vector::gas::refill_tank` puts 10/s back during any tick in which **nothing wants gas**,
-# starting 30 ticks after the last tick that did. Every `wait` line below therefore has to be
-# accounted for:
+# ⚠️ **A `wait` IS FREE AGAIN, and the history of that sentence is the point of ACT 4.**
+# Between 2026-08-10 and 2026-08-12 it was not: `vector::gas::refill_tank` put 10/s back
+# during any tick in which nothing wanted gas, so every `wait` line below had to be accounted
+# for and the pairing of `key Shift <s>` with `wait <s>` — the same seconds, the button down
+# for every tick of the wait — was what kept the arithmetic of ACTS 2 and 3 honest.
 #
-#   - ACTS 2, 3 and 4 are covered by their own held key: the `key Shift <s>` and the
-#     `wait <s>` next to it are the SAME seconds, so the button is down for every tick of the
-#     wait and `arm_pause` re-arms the 30 ticks on each of them. Not one drop goes back.
-#     That is `gas_budget`'s documented rule "the pause follows the WANT, not the spend" —
-#     it holds even in ACT 4, where the tank is empty and the held button buys nothing.
-#   - ACT 5 is the opposite on purpose: nothing wants gas there, so the refill runs and the
-#     assert measures it. See the act.
+# That pairing is kept, because it still says what it says: the boost costs 18/s for exactly
+# as long as the button is down. But nothing puts gas back any more, so a `wait` no longer
+# changes a tank. **Q-033 turned this file's hardest constraint into a free choice**, and the
+# only place that still measures the difference is ACT 4.
 #
 # ⚠️ The brackets are ~0.35 wide, and that is not sloppiness — it is exactly ONE TICK of boost
 # (0.3) plus a little. The driver counts a held key down in f32 (`run.held` in
@@ -90,30 +96,40 @@ assert gas >= 0          # a tank never goes negative
 assert gas < 0.3         # and what is left over is less than one tick's cost: no half boost
 
 # =========================================================================================
-# ACT 4 — the refill, and the proof that reel-in without a hook still wants nothing.
+# ACT 4 — and it STAYS dry. A tank that only ever falls.
 # =========================================================================================
 #
-# Both claims are in the same number, and that is why they are asserted together:
+# ⚠️ **RE-CUT 2026-08-12, and the old act was measuring a mechanism that no longer exists.**
+# This act used to read `assert gas > 5.4` / `< 6.2` around a measured 5.800, because
+# `vector::gas::refill_tank` put 10/s back after a 0.5 s pause. **That is gone** — the user
+# closed `docs/QUESTIONS.md` Q-033 with „gas refillt nur im main gebäude", the two keys
+# `gas_regen_per_s` and `gas_regen_delay_s` were deleted out of `game.ron`, and `game.ron`
+# now carries an explicit ⚠️⚠️ block saying they must not come back. Against a tank that only
+# falls, `> 5.4` is not a hard bracket, it is an assertion that the deleted feature is still
+# running: **measured 0.300, exit 1**.
+#
+# So the act keeps its second claim, drops the one the game no longer makes, and turns into
+# the regression guard for Q-033 itself:
 #
 #   - `key Ctrl` with no anchored hook does NOT want gas (`gas_budget`: `wants_reel_in =
-#     pressed(REEL_IN) && hook.anchored_count() > 0`). So the tank is in the "nobody wants
-#     anything" branch for all 60 ticks and the refill is free to run.
-#   - The refill spends the first ~30 of those ticks counting the 0.5 s pause down and the
-#     rest putting 0.1667 back each.
+#     pressed(REEL_IN) && hook.anchored_count() > 0`). A reel that DID cost gas cannot be
+#     caught here any more — an empty tank cannot be emptied twice — so that claim now lives
+#     where it can still go red: `tests/vector_gas.rs::
+#     f018_reeling_in_without_an_anchored_hook_costs_nothing`.
+#   - **Nothing puts gas back.** Sixty idle ticks with a key held and 180 more with nothing
+#     held at all, and the number does not move off the floor. Re-introduce a 10/s regen and
+#     the last assert reads ~35 instead of 0.300 and this file exits 1 — which is exactly the
+#     job the old ACT 4 used to do for the opposite claim.
 #
-# **MEASURED: 5.800**, twice, to the digit — 34 refilled ticks on top of the 0.133 the dry
-# tank had left over. Predicted 4.833 (30 pause + 30 refill) and it is not that, because the
-# pause is armed on the last tick that WANTED gas and the driver's f32 key countdown does not
-# land on the same tick as its `wait` (the note at the top of this file). The bracket below is
-# therefore drawn around the measurement, ±0.4 = two and a half refilled ticks.
-#
-# A reel that DID cost gas would fail this in the loudest possible way: it would re-arm the
-# pause on every tick, the refill would never start, and the tank would read 0.
+# The bracket is one tick of boost wide (0.35), for the reason set out at the top of the file:
+# `f32` key countdowns do not land on a whole tick, and the dry tank reads 0.300, not 0.000.
 
 key Ctrl 1.0             # reel-in without an anchored hook pulls on nothing
 wait 1.0
 mark f018-reel-without-a-hook
-assert gas > 5.4         # measured 5.800 — the refill ran
-assert gas < 6.2
+assert gas < 0.35        # ⭐ measured 0.300 — a held key put nothing back
+assert gas >= 0          # and it did not go negative either
 
-wait 3                   # keep the run alive: if it ends, the process ends before the image
+wait 3                   # three idle seconds: the old regen would have paid 30 gas over these
+mark f018-still-dry
+assert gas < 0.35        # ⭐ Q-033: gas comes back at a station and NOWHERE else

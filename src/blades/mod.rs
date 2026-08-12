@@ -44,19 +44,27 @@
 pub mod cut;
 /// **The way back.** `F-033`: blades go blunt and break, and until 2026-08-12 nothing in the
 /// game ever gave one back. The arithmetic stands in this domain because `blades` is the only
-/// writer of `Blades`; the station that calls it is `mission`'s and is not built yet — see the
-/// module's own header for the exact caller.
+/// writer of `Blades`; the rack that asks for it is `mission`'s and sends
+/// [`BladeRestockRequest`](crate::shared::BladeRestockRequest).
 pub mod resupply;
 pub mod swing;
 
 use bevy::prelude::*;
 
-use crate::shared::SimulationSystems;
+use crate::shared::{BladeRestockRequest, SimulationSystems};
 
 pub struct BladesPlugin;
 
 impl Plugin for BladesPlugin {
     fn build(&self, app: &mut App) {
+        // The channel a supply rack asks over. Registered **here** and not in `src/lib.rs` with
+        // the other messages, for the same reason `VectorPlugin` registers `RefuelRequest`: it
+        // is a write path into `Blades`, this domain is the only writer of `Blades`
+        // (`docs/architecture.md`, authority table), and a channel into a field must not be
+        // able to exist without the one system that applies it. Registering a message twice is
+        // a no-op in Bevy, so moving the line to `lib.rs` later costs nothing.
+        app.add_message::<BladeRestockRequest>();
+
         app.add_systems(
             FixedUpdate,
             // `Intent`: the swing is a booking off a button, never a force. `.chain()`,
@@ -66,6 +74,22 @@ impl Plugin for BladesPlugin {
             (swing::equip, swing::advance)
                 .chain()
                 .in_set(SimulationSystems::Intent),
+        )
+        .add_systems(
+            FixedUpdate,
+            // `Intent`, one tick after `mission::hub::restock_at_stations` wrote the request in
+            // `PostStep` — the same seam and the same one tick of latency
+            // `vector::gas::apply_refuel_requests` pays, and for the same reason: applying in
+            // the same tick would mean ordering a `blades` system against a `mission` system,
+            // which is a hidden edge past the allow list of `docs/architecture.md`.
+            //
+            // **Deliberately not chained against the swing.** This is today the only writer of
+            // `Blades` in the whole simulation — the wear half of `F-033` is not built, so
+            // nothing lowers a harness yet and there is no order to get wrong. The day
+            // `cut::cut` starts booking `gear.ron: blades.wear_per_hit` it will do it in
+            // `PostStep`, which is a different set, and the order is still fixed by the
+            // schedule rather than by a `.chain()` here.
+            resupply::apply_restock_requests.in_set(SimulationSystems::Intent),
         )
         .add_systems(
             FixedUpdate,

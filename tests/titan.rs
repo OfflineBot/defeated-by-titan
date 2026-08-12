@@ -36,6 +36,7 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::debug::DebugOverlay;
+use defeated_by_titan::mission::MissionPhase;
 use defeated_by_titan::shared::{
     Cli, HitZone, PlayerId, SpawnTitan, StateClock, TitanHit, TitanId, TitanKindName, TitanState,
 };
@@ -1569,5 +1570,167 @@ fn f030_a_models_cortex_anchor_beats_the_computed_position() {
     println!(
         "F-030 anchor: scale.ron {computed:.2} m -> model {:.2} m, cortex measured at {:.2} m",
         anchor.y, after.y
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F-072 · the sortie's titans do not outlive the sortie
+//
+// The hub loop closed on 2026-08-12 (hub → pad → sortie → verdict → hub) and left a hole
+// nobody could see from inside `mission`: **a sortie that ends does not take its titans with
+// it.** They keep their rig, their `RigidBody::Kinematic` and their brain, so they keep walking
+// — through the debrief, through the transition, and into the hub, where the player lands next
+// to the enemies of the mission he just finished. A second sortie then starts on a field that
+// still holds the first one's.
+//
+// It is invisible to every test that existed, because all of them either kill every titan they
+// spawn (`f070-hub.txt`, `f030-cortex.txt`) or never leave `Active` at all. The field is only
+// wrong in the run that *survives* the verdict.
+//
+// Who clears it is a rule-4 question, not a taste question: `titan` owns titan bodies
+// (`docs/architecture.md`, authority table), so `titan` is what ends them. The second test
+// below is the falsifiable half — it takes `titan`'s own lifetime marker off one titan and
+// demands that the very same transition then leaves him standing. If `mission` ever grows a
+// system that reaches into a rig, that test is what goes red.
+// ---------------------------------------------------------------------------
+
+/// Sets the mission phase from the outside and lets the `StateTransition` schedule apply it.
+///
+/// One `update()` is enough: bevy runs `StateTransition` exactly once per frame
+/// (`bevy_state-0.19.0/src/app.rs:335`), and `despawn_entities_on_exit_state` runs inside it,
+/// so what this returns is the world **after** the transition's despawns have been flushed.
+fn set_phase(app: &mut App, phase: MissionPhase) {
+    app.world_mut().resource_mut::<NextState<MissionPhase>>().set(phase);
+    app.update();
+    assert_eq!(
+        *app.world().resource::<State<MissionPhase>>().get(),
+        phase,
+        "the phase did not take — a NextState set from outside is applied in the next frame"
+    );
+}
+
+/// Every entity that belongs to some titan's rig — root, pelvis, legs, torso, arms, head,
+/// cortex. A despawned root that left its limbs behind is nine orphans with colliders in them,
+/// and `titan_roots` alone would call that a cleared field.
+fn rig_parts(app: &mut App) -> usize {
+    let mut q = app.world_mut().query_filtered::<Entity, With<TitanPart>>();
+    q.iter(app.world()).count()
+}
+
+#[test]
+fn f072_a_finished_sortie_leaves_no_titans_standing() {
+    let mut app = app();
+    set_phase(&mut app, MissionPhase::Active);
+
+    // Two, and one of them far outside `aggro_radius_m`: what is under test is the lifetime,
+    // and a titan that walks into the player would end for a different reason.
+    spawn(&mut app, "husk", Vec3::new(0.0, 0.0, -60.0));
+    spawn(&mut app, "husk", Vec3::new(30.0, 0.0, -200.0));
+    ticks(&mut app, 2);
+    assert_eq!(titan_roots(&mut app).len(), 2, "the field is supposed to be full first");
+    let parts_before = rig_parts(&mut app);
+    assert!(parts_before >= 16, "two rigs are at least sixteen parts, found {parts_before}");
+
+    // The verdict falls. `Active` is exited, and with it every body that was fighting in it.
+    set_phase(&mut app, MissionPhase::Won);
+
+    assert_eq!(
+        titan_roots(&mut app).len(),
+        0,
+        "the sortie is over and its titans are still standing — they walk through the debrief \
+         and into the hub"
+    );
+    let parts_after = rig_parts(&mut app);
+    assert_eq!(
+        parts_after, 0,
+        "the roots are gone but {parts_after} rig part(s) are left behind — limbs and cortex \
+         sensors with no titan on them"
+    );
+}
+
+#[test]
+fn f072_a_lost_sortie_clears_the_field_too() {
+    // `Lost` is the arm nobody writes a script for, and it is the one the bug actually bites
+    // in: a mission lost on the clock has by definition NOT killed its titans.
+    let mut app = app();
+    set_phase(&mut app, MissionPhase::Active);
+    spawn(&mut app, "husk", Vec3::new(0.0, 0.0, -60.0));
+    ticks(&mut app, 2);
+    assert_eq!(titan_roots(&mut app).len(), 1);
+
+    set_phase(&mut app, MissionPhase::Lost);
+    assert_eq!(
+        titan_roots(&mut app).len(),
+        0,
+        "a lost sortie leaves its titans standing — the ones that beat you follow you home"
+    );
+}
+
+#[test]
+fn f072_the_field_is_cleared_by_titan_and_by_nothing_else() {
+    // ⭐ The rule-4 half, and the only one that cannot be faked. The claim is not "the field is
+    // empty after the verdict" — that a `mission` system reaching into a rig would satisfy just
+    // as well. The claim is **`titan` is what ends a titan**: the lifetime hangs on the rig
+    // root, put there by `titan::spawn_titan`, and taking it off has to be enough to make the
+    // very same transition leave the body alone.
+    let mut app = app();
+    set_phase(&mut app, MissionPhase::Active);
+    spawn(&mut app, "husk", Vec3::new(0.0, 0.0, -60.0));
+    ticks(&mut app, 2);
+    let root = the_titan(&mut app);
+
+    assert!(
+        app.world().get::<DespawnOnExit<MissionPhase>>(root).is_some(),
+        "the rig root carries no lifetime at all — nothing scopes a titan to its sortie"
+    );
+    app.world_mut().entity_mut(root).remove::<DespawnOnExit<MissionPhase>>();
+
+    set_phase(&mut app, MissionPhase::Won);
+    assert_eq!(
+        titan_roots(&mut app).len(),
+        1,
+        "a titan without `titan`'s own lifetime marker died at the verdict anyway — something \
+         outside `titan` is despawning titan bodies (docs/architecture.md, authority table)"
+    );
+}
+
+#[test]
+fn f072_a_second_sortie_starts_on_an_empty_field() {
+    // The acceptance of the round, and the shape the player actually meets: fly one sortie,
+    // ride the verdict back to the hub, deploy again. Before this lifetime existed the second
+    // sortie's `Active` began with the first sortie's titans already on the ring.
+    let mut app = app();
+
+    set_phase(&mut app, MissionPhase::Active);
+    for i in 0..3 {
+        spawn(&mut app, "husk", Vec3::new(20.0 * i as f32, 0.0, -80.0));
+    }
+    ticks(&mut app, 2);
+    let first_sortie = titan_roots(&mut app);
+    assert_eq!(first_sortie.len(), 3, "sortie 1 has three titans in it");
+
+    // Counted by IDENTITY and not by number: standing on a pad in the hub can order a real
+    // sortie, and sortie 2's own first wave arriving would make a plain `== 0` green for the
+    // wrong reason on the day somebody edits `missions.ron`. What is under test is whether
+    // sortie 1's three bodies are still there.
+    let survivors = |app: &App| -> usize {
+        first_sortie.iter().filter(|e| app.world().get_entity(**e).is_ok()).count()
+    };
+
+    set_phase(&mut app, MissionPhase::Won);
+    set_phase(&mut app, MissionPhase::Hub);
+    assert_eq!(
+        survivors(&app),
+        0,
+        "the player walks into the hub next to the titans of the sortie he just left"
+    );
+
+    set_phase(&mut app, MissionPhase::Deploying);
+    set_phase(&mut app, MissionPhase::Active);
+    assert_eq!(
+        survivors(&app),
+        0,
+        "sortie 2 opens on a field that still holds sortie 1 — the ring is full before the \
+         first wave is released"
     );
 }

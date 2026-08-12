@@ -3,6 +3,26 @@
 #   cargo run -- --offscreen --mission tutorial --script scripts/f070-lost.txt \
 #                --screenshot docs/images/f070-lost.png --ticks 19950
 #
+# and, as a SEPARATE run, the one that returns a usable exit code:
+#
+#   cargo run -q -- --headless --mission tutorial --script scripts/f070-lost.txt --ticks 21000
+#
+# ⚠️ **21 000, and 19 950 IS WRONG FOR THE VERDICT — that was this file's own bug.** Until
+# 2026-08-12 the only command documented here was the `--screenshot` one, and running it
+# headless reported `instruction 7 of 7 is still running`, **exit 1** — a red run that says
+# nothing about the mission. 19 950 is the right tick for the PICTURE and stays: it is 30 ticks
+# after the asserts, and `--screenshot` fires at `--ticks` and then exits. It is the wrong tick
+# for the RUN, because the script does not end there. **Measured: the script ends at 20 525** —
+# `key F3 0.5` (30) + `look` (1) + `wait 332` (19 920) + three asserts + the closing `wait 10`
+# (600) — so 19 950 was 575 ticks short. Cutting a run off before its last instruction has been
+# an ERROR since FIND-032, and correctly so. Verified at `--ticks 21000`: 3 asserts held.
+#
+# ⚠️ **A `--screenshot` run is not a verdict either way.** `debug::screenshot::exit_when_written`
+# writes `AppExit::Success` the moment the PNG is on disk and never reads `run.failures`, so the
+# picture command exits 0 whatever the three asserts below do (`docs/FINDINGS.md` FIND-073).
+#
+# ⚠️ Both runs take 5-6 REAL minutes. See the note further down: that is not a hang.
+#
 # 330 s x 60 Hz = 19 800 ticks (assets/data/missions.ron: tutorial.target_duration_s).
 # The verdict is decided at tick 19 800 and is readable as a phase from 19 801 on — a
 # `NextState` set in FixedUpdate is applied by the StateTransition schedule of the next

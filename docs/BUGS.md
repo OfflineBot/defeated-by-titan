@@ -476,3 +476,104 @@ script rebuilt for the current map. **The `hook right 0.74` dodge in that file's
 longer needed** — the bug it dodges is gone — but the file needs re-aiming for Ashgate before
 any of its numbers, including the 74.70 m/s cut, can be measured again. `scripts/` is not this
 job's to edit. → `docs/FINDINGS.md` FIND-062.
+
+---
+
+### ⚠️ `B-004` REOPENED 2026-08-12 — the fix INVERTED the panic, it did not remove it
+
+**The `FIXED` block above is wrong and must not be trusted.** An independent refutation round
+(it did not write the fix) found a third face that is **player-reachable**.
+
+| | before the fix | after the fix |
+|---|---|---|
+| release **inside** the 0.12 s impact frame | clean | **PANIC, exit 101** |
+| release **after** the impact frame | PANIC, exit 101 | clean |
+
+**Repro, one line, against the shipped script:**
+
+```bash
+sed 's/^hook right 4.0/hook right 0.74/' scripts/f-flight-cut.txt > /tmp/b004.txt
+./target/debug/defeated_by_titan --headless --script /tmp/b004.txt --ticks 400 >/dev/null 2>&1; echo $?
+```
+
+`let go: Released (t=157)` → `panicked at avian3d-0.7.0/src/dynamics/solver/islands/mod.rs:820:
+Neither body 1461v0 nor 439v0 is in an island`, **exit 101**.
+Bracketed: **t=157 panics**; t=161, 167, 173, 185, 353 are all clean. The cortex cut is at t=153 and
+`gear.ron: hit_stop_cortex_s` is 0.12 s = 7.2 ticks — **so the panic window is exactly the impact
+frame.** Note the assertion is at `:820` (`add_joint` merging an island-less body), not the original
+`:786` (`joint_count > 0`): a different assertion, the same root.
+
+**Why the `FIXED` evidence missed it:** its "in the running game" run released **293 ticks after**
+the impact frame — the safe side of the new bracket. And the shipped `scripts/f-flight-cut.txt` now
+holds the hook for `4.0 s`, which releases ~200 ticks late and hides it in every run of the corpus.
+
+**In one sentence, the thing a player does:** cut a titan's cortex while roped and let go of the
+hook within an eighth of a second. That is not an edge case — it is the natural follow-through.
+
+**Do not close this again without a bracket that sweeps the release tick ACROSS the impact frame**,
+from before it to after it, in one script. The previous two fixes each moved the failure and were
+each verified on the side they had moved it to.
+
+---
+
+### ✅ `B-004` FIXED 2026-08-12 (third attempt) — the despawn, not the freeze
+
+**Both `FIXED` blocks above are superseded.** They are kept because the history of this bug is
+the interesting part: it was closed twice and each close **moved** the abort instead of removing
+it, because each was verified on the side of the bracket it had just made safe.
+
+| release | original | after fix 1 (`JointDisabled`) | after fix 2 (order) | **now** |
+|---|---|---|---|---|
+| **inside** the 0.12 s impact frame | clean | clean | **abort `:820`** | clean |
+| **after** the impact frame | **abort `:786`** | clean | clean | clean |
+
+**The cause, in one sentence.** While the player carries `RigidBodyDisabled` he has no
+`BodyIslandNode` and the rope's anchor is `RigidBody::Static` and never had one, so **any** avian
+island transition on that joint aborts the process — and **despawning the rope entity is such a
+transition that no ordering can avoid, because a despawn removes `JointDisabled` and removing
+`JointDisabled` *is* the transition** (`joint_graph/plugin.rs:106`). Full matrix of body ×
+joint-marker × transition, all four avian triggers, and why the freeze itself is not the problem:
+`docs/FINDINGS.md` **FIND-072**.
+
+**The fix — `src/player/rope.rs::despawn_rope`, one choke point, no `if frozen` branch.**
+
+```rust
+commands.entity(joint).remove::<DistanceJoint>();   // ← the fix, and it is this one line
+commands.entity(joint).despawn();
+commands.entity(anchor).despawn();
+```
+
+Removing the joint component first is a **no-op** when the joint is disabled
+(`remove_joint_from_graph` early-returns on `joint_graph.get(entity)`) and the **ordinary**
+removal when it is live (`joint_count` 1 → 0 with the island still standing). Either way the
+despawn that follows finds no joint to re-register: avian's `Remove, JointDisabled` observer
+queries `(&DistanceJoint, …)` and no longer matches. **Both columns of the table above are the
+same code path now**, which is the property the last two fixes did not have. Both despawn sites
+go through it — `detach_ropes` and `attach_ropes`'s defensive "a second rope on the same side".
+
+**`F-034` was not traded away.** The freeze is still avian's `RigidBodyDisabled`; `Position` is
+still bit-identical for exactly `round(0.12 × 60)` = 7 ticks **with a taut rope**
+(`tests/combat.rs::b004_the_freeze_is_still_bit_identical_with_a_rope_attached`, unchanged and
+green). The three alternatives that would have stopped disabling the body — `LockedAxes`,
+`RigidBody::Kinematic`, and stomping `Position` back after the step — all make `combat` a writer
+of `LinearVelocity` or `Position` and are argued down in FIND-072.
+
+**The guard, and it is the deliverable: `tests/combat.rs` now sweeps the bracket.**
+
+- `b004_the_rope_may_be_let_go_on_any_tick_across_the_impact_frame` — a **fresh app per tick**,
+  release at `t+0 … t+20` after the cortex hit, all 21 must survive.
+- `b004_a_rope_born_inside_the_impact_frame_may_also_be_let_go_of_at_once` — the same for a rope
+  that is hung *during* the freeze and let go of before the thaw, `t+3 … t+20`.
+
+**Do not close this a fourth time on a point test.** On today's code, taking the one line out of
+`despawn_rope` kills `t+0 … t+6` — precisely the impact frame — and leaves `t+7 … t+20` green.
+Any test that releases at a single tick has a 2-in-3 chance of sitting in the green part.
+
+**Evidence.**
+
+| | |
+|---|---|
+| **Red** | `7 of 21 ticks died: t+0 … t+6 Neither body 1453v0 nor … is in an island`; sweep B `4 died: t+3 … t+6`. |
+| **Green** | `cargo test --test combat b004` → **5 passed** (the two sweeps plus the three older point tests). |
+| **Red again** | `remove::<DistanceJoint>()` taken out of `despawn_rope`: `7 of 21 ticks died: t+0 … t+6`, sweep B `4 died: t+3 … t+6`. Same bracket, to the tick. |
+| **In the running game** | the documented repro — `sed 's/^hook right 4.0/hook right 0.74/' scripts/f-flight-cut.txt` — **exit 101 → exit 0**. |

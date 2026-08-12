@@ -2390,3 +2390,1175 @@ supplies inside that you walk into.
 were taken and thrown away first: the gantry spine stands at x = +-14 over the whole main street,
 so every angle that shows the hall as a solid has a 56 m column across the foreground. That is the
 map, not the building — but it means nobody has yet *seen* the headquarters as an object.
+
+---
+
+## FIND-068 — a sortie that ends does not take its titans with it, and the hub loop is what made that visible
+
+**2026-08-12 · `titan`, `mission` · found by reading the hub agent's own report, confirmed in
+`tests/titan.rs`**
+
+### 1. The symptom
+
+`--hub` closes the loop since 2026-08-12: hub → pad → sortie → verdict → 3.0 s debrief → hub.
+What it does **not** do is clear the field. `titan::spawn_titan` built a rig and nothing anywhere
+ever ended one except [`brain::dissolve`], which runs only on a titan whose cortex was cut.
+
+So a titan that is **not** killed simply keeps living. He keeps his `RigidBody::Kinematic`, his
+brain, his `TitanTarget` and his cortex sensor, and none of those are gated on a mission phase —
+`TitanPlugin` adds its systems to `FixedUpdate` unconditionally. He therefore walks:
+
+- through the verdict,
+- through the 3.0 s debrief (`missions.ron: hub.debrief_s`),
+- through the transition into `MissionPhase::Hub`,
+- and he is standing **in the hub**, next to the player who just came home, still winding up.
+
+And the second sortie of the session opens on a ring that already holds the first one's bodies.
+
+### 2. Why no test and no script saw it
+
+Every script we own does one of two things: it kills every titan it spawns
+(`f070-hub.txt`, `f030-cortex.txt`, `f034-hitstop.txt`, `f-flight-cut.txt` — all of them assert
+`titans == 0` at the end and get it because the blade went through), or it never leaves `Active`
+at all (`f071-won.txt` stops at `assert phase == 2`). **The field is only wrong in the run that
+survives the verdict without having emptied it** — a mission lost on the clock, a mission won
+with three of five husks still walking. Nothing in the repository flew one.
+
+That is the general shape and it is worth writing down: *a leak is invisible to every test whose
+happy path already frees the thing.* `f070-hub.txt` asserts `titans == 0` in the hub and passes
+today — for the wrong reason.
+
+### 3. The fix, and why it belongs to `titan`
+
+One line, on the rig root, in `titan::spawn_titan`:
+
+```rust
+DespawnOnExit(MissionPhase::Active),
+```
+
+That is the same lifetime `mission::open_the_field` already hangs on the `WaveSchedule` entity,
+so the pending waves and the standing bodies now stop existing in **one** transition — the
+debrief happens on an empty field, and there is no second mechanism that can disagree with the
+first.
+
+**Who despawns is a rule-4 question.** `titan` is the writer of titan bodies
+(`docs/architecture.md`, authority table); `mission` is the writer of the phase. A despawn loop
+inside `mission` would have been the cheap version and a second writer on a rig — the exact shape
+FIND-063 had to undo for `Gas`. So `mission` says *the sortie is over* by leaving `Active`, and
+`titan` decides what that means for a body, the same way it decides what a `TitanHit` means.
+
+It costs an allow-list line (`titan -> mission`), written out with its reason in
+`docs/architecture.md`. Two things about it are worth knowing:
+
+- **It is a component, not a read.** No titan system queries mission state; the despawning is
+  `bevy_state`'s own `despawn_entities_on_exit_state`
+  (`bevy_state-0.19.0/src/state_scoped.rs`), which calls `try_despawn` — and a despawn in bevy
+  0.19 takes the entity's descendants, so the pelvis, four limbs, torso, head and cortex sensor
+  go with the root without a list anybody has to maintain.
+- **A message would not do here**, which is the standard the allow list demands. A `SortieEnded`
+  read in the tick after the verdict leaves a wave released *on* the deciding tick alive forever,
+  and it needs a writer inside `mission` for a lifetime bevy already models.
+
+It is the first edge in the list that points **backwards** along the plugin order
+(`… → titan → combat → mission → …`). That is harmless — naming a component type creates no
+init-order requirement — but it is named in the allow list so nobody has to rediscover it.
+
+### 4. The falsifiable half
+
+`tests/titan.rs::f072_the_field_is_cleared_by_titan_and_by_nothing_else` does not assert "the
+field is empty after the verdict" — a `mission` system reaching into a rig would satisfy that
+just as well. It takes the marker **off** one titan and demands that the very same transition
+then leave him standing. The day a despawn grows inside another domain, that test is what goes
+red. (`docs/lessons/supervision.md`: an authority rule is invisible to a test that runs the whole
+app the intended way.)
+
+### 5. What this does NOT fix — the other half of the reset
+
+Gear and health still do not reset between sorties. Gas comes back, and only at a station
+(`vector::gas::apply_refuel_requests`). **Health is untouched**: `combat::health::give_health`
+inserts `Health::full(game.ron: player.health)` only on a player who has **no** `Health` yet, so
+a player who limps into the hub deploys again on the same hit points he came home with, forever,
+with nothing in the hub able to change that.
+
+It belongs on **deploy**, not on return — a player who limps home should *see* that he limped
+home; the debrief is the only moment the number means anything. The reset is one system in
+`combat` (the writer of `Health`), on `OnEnter(MissionPhase::Deploying)`, setting
+`h.current = h.max` for every `PlayerId`. It is **not** built: `src/combat/health.rs` was outside
+this round's file ownership. → `docs/NEXT.md`.
+
+## FIND-067 — `F-008`: two boosts exist now, and building the second one cost four files nobody assigned
+
+**2026-08-12 [offlinebot], `F-008`.** The user's `docs/NEXT.md` §1c is built: double-tap `Space`
+throws the player **24.0000 m/s in one tick along the movement input**, measured in the running app
+against a twin flier that did everything the same except press it (`tests/vector_boost.rs::
+f008_a_dodge_goes_where_the_movement_input_points_not_where_the_camera_does`, camera pitched 60°
+down, whole impulse in +X, 0.0000 in Y). Seven counter-checks, each one line, each red and restored:
+direction → look direction; `/ dt` removed; `gas_dodge * dt`; the movement gate removed from
+`gas_budget`; `C` level instead of edge; the window comparison removed; `armed_at` not consumed.
+
+### 1. The commission's file list could not build the feature it asked for, and that is the finding
+
+Commissioned: `src/vector/boost.rs`, `src/net/local.rs`, `tests/vector_boost.rs`, `tests/input.rs`,
+`assets/data/game.ron`. **A new RON key cannot exist in any of them.** `deny_unknown_fields` (§4,
+and rightly) means `vector.gas_dodge` crashes the game on load until `VectorTuning` has the field —
+so `src/data/mod.rs` was unavoidable. And the dodge *costs gas*, which is the whole of the user's
+sentence; `Gas` has one writer and it is `vector::gas` (`architecture.md`, red-tested in
+`tests/mission.rs::f072_...`), so `src/vector/gas.rs` and `GasGrant` in `src/shared/gear.rs` were
+unavoidable too. Four foreign files, all additive:
+
+| file | what | why it could not be avoided |
+|---|---|---|
+| `src/data/mod.rs` | 3 `VectorTuning` fields, `GasConsumer::Dodge` | `deny_unknown_fields` |
+| `src/shared/gear.rs` | `GasGrant.dodge` | the grant *is* the contract between debit and thrust |
+| `src/vector/gas.rs` | books the flat cost | `Gas` has exactly one writer |
+| `tests/data.rs`, `tests/vector_gas.rs` | `[Boost, ReelIn]` → `+ Dodge`, `len 2` → `3` | forced by the data change; both are two-line edits |
+
+**The rule to take out of it:** a commission that adds a **game value** owns `src/data/mod.rs` for
+that value, or it cannot be executed. A commission that adds a **gas consumer** owns `vector/gas.rs`
+and `shared/gear.rs`, or it has to ship a rule-4 violation. Neither is a judgement call and both are
+mechanical to spot before the fan-out.
+
+### 2. `just_pressed` in `FixedPreUpdate` is `B-002` in a second dress — and it was one line away
+
+The obvious way to detect a tap is `keys.just_pressed(KeyCode::Space)`. It is **wrong here for
+exactly `B-002`'s reason**: `just_pressed` is a per-*frame* flag cleared in `PreUpdate`, and
+`read_input` runs 0..n times per frame. On a catch-up frame with two fixed steps a single press
+would be `just_pressed` in **both** — a double-tap out of one press — and on a frame with no fixed
+step the press vanishes. Nobody would ever have seen it at 60 fps, which is the one rate this game
+gets run at. `net::local::DodgeTap` keeps the previous **tick's** key state instead, so `Space`
+behaves like every other button in that file. **Anything that ever wants an input edge in this
+project has this trap in front of it**, and `B-002`'s entry does not mention `ButtonInput`.
+
+### 3. Two things a reader will trip over, neither of them a bug
+
+- **`BoostAccel` carries 1440 m/s² for one tick per dodge** — 42× `boost_m_s2`. That is what an
+  impulse is: `dodge_impulse_m_s` is m/s and `vector::boost` divides by the fixed timestep, because
+  avian multiplies `linear_increment` by the substep delta once and adds it in every substep, so
+  `accel * fixed_dt` is the velocity that arrives. Nothing reads `BoostAccel` today except the
+  tests. The day a HUD thrust bar or a sound trigger does, it must expect that spike.
+- **`player::locomotion::air_thrust`'s direction rule is now written twice**, here and in
+  `vector::boost::dodge_direction`, because `vector -> player` is not on the allow list and the
+  edge is not worth four lines of trigonometry. The clean fix is one helper in `shared::math`,
+  which no domain has to ask permission for. Knowing duplication, not an oversight — but if the
+  two ever disagree, WASD and the dodge become two control schemes.
+
+### 4. What is NOT built, and the numbers that are guesses
+
+- **No cooldown, and `F-008` in the backlog asks for one** (*"kurzer, harter Impuls mit eigenem
+  Cooldown. Anzahl der Dashes ist ein Stat"*). The gas price is the whole limiter today — 300 / 45
+  = **6.67 dodges per tank** — which is what the *user's* sentence asks for and not what the backlog
+  asks for. The two specs disagree; the user's wins (§EXTRA), but the disagreement is his to close.
+- **All three new values are ⚠️ UNTUNED**: `dodge_impulse_m_s: 24.0`, `gas_dodge: 45.0`,
+  `dodge_double_tap_window_ticks: 18`. The one that is *measured* rather than felt is the window:
+  a jump is `2 * 6.5 / 20` = 0.65 s = **39 ticks** of airtime, so 18 ticks (0.300 s) can never be
+  hit by a ground double-jump attempt.
+- **The cheap/expensive claim is only defensible per m/s**, not per second: 45 gas is 2.5 s of held
+  boost, which sounds cheap. Per m/s of speed bought the dodge is `45/24` = 1.875 against the
+  boost's `18/34` = 0.529 — a factor of **3.54**, held at ≥ 3.0 by
+  `f008_the_dodge_is_the_expensive_boost_and_shift_is_the_cheap_one`. Whoever retunes any of the
+  four numbers has to keep that ratio meaning something or the user's two sentences stop being in
+  the file.
+- **No image, so 🟨 and not 🟧.** A script *can* reach it — `debug::script::parse_key` already
+  knows `Space` and `C`, and the driver presses real keys, so the double-tap goes through the real
+  detection — but `scripts/` and `docs/images/` were outside this commission. The missing step is
+  one script and two runs.
+
+---
+
+## FIND-066 — the supply moved into the building, and the blade half of the resupply got its caller
+
+**2026-08-12, evening. Machine B (offlinebot).** Two things the user asked for in one sentence —
+*„auch das main gebäude in dem der gas und schwert nachschub ist muss da sein (in das gebäude muss
+man rein laufen können. drinnen sind die nachschübe)"* — and neither of them was true yet after the
+building landed (`FIND-064`).
+
+### §1 The stations were outside the building they belong to, and nothing said so
+
+`missions.ron: hub.refuel_stations` stood at `(0, 0, 6)` and `(±14, 0, 6)`: on the pavement, on the
++Z side of the spawn point, 45 m from the garrison headquarters that had been standing since that
+morning. Every test was green, the hub worked, gas came back — and the user's sentence was still
+false. **A feature can be complete in the code and absent from the game**, and the only thing that
+catches it is a test that measures a *place*.
+
+They are now the two racks of `maps.ron: ashgate`, to the centimetre:
+
+```
+(-42.0, 0.15, -6.5)   the south rack — the gas tanks
+(-42.0, 0.15,  6.5)   the north rack — the blades
+```
+
+**0.15 is the whole proof and it was designed to be.** It is the top face of the depot floor slab,
+and no other block in the district carries that height (ground 0.0, aprons 0.05, quays and bridges
+0.4). `tests/mission.rs::f019_every_supply_station_stands_on_the_depot_floor_of_the_main_building`
+finds the floor **by that height alone** — it never mentions the hall's coordinates — and then
+demands the station be over its footprint. Move a station back onto the street and the test does
+not merely fail, it fails with the reason ("two supply stations at two heights").
+
+### §2 The lesson the coordinate check does **not** carry: "inside" is not "usable"
+
+A station's trigger is a 3D distance to its centre, and its centre is the middle of a **5 x 9 m
+solid rack**. Every coordinate assertion in §1 passes for a trigger that no human being can ever
+enter. So there is a second test, and it is the one with the teeth:
+`f019_a_supply_station_has_floor_you_can_actually_stand_on_inside_its_reach` samples the depot
+floor on a 0.25 m grid, rejects every cell a 1.8 m / 0.35 m capsule cannot occupy (the rack, the
+four roof posts, the back wall) and demands at least 1 m² inside `gear.ron: resupply.range_m`.
+
+**Measured: 57 cells = 3.56 m² per rack.** They are not where you would guess:
+
+| approach | spot | distance | clearance |
+|---|---|---|---|
+| east end, aisle side — **the one to use** | `(-38.75, 0.15, -6.0)` | 3.29 m | 0.40 m off the rack, 0.65 m off the post |
+| east end, nearest | `(-39.0, 0.15, -6.5)` | 3.00 m | 0.15 m off the post |
+| **behind** the rack, against the back wall | `(-45.0, 0.15, -6.5)` | 3.00 m | 0.15 m each side — a 1 m slot |
+
+⚠️ **Walking straight down the aisle refuels nothing.** The aisle is `z = -3..3` and the racks are
+6.5 m off it, so a player who walks in through the gate and keeps going — which is exactly what
+`scripts/f019-hq.txt` does — stays 6.5 m from both centres and never trips a trigger. You have to
+step sideways to a rack. That is a design property, not a bug, but nobody had written it down.
+
+### §3 The blade resupply had an API and no caller, and now it has exactly one
+
+`blades::resupply::restock` had been written, tested and left unwired (`FIND-064`). It is now
+called, and it is called the way `Gas` was **repaired** into on the same day (`FIND-063`) — except
+this one was built as the seam from the first line:
+
+```
+mission::hub::restock_at_stations       (PostStep)  →  shared::BladeRestockRequest { player, seconds }
+blades::resupply::apply_restock_requests (Intent, next tick)  →  the ONLY caller of restock
+```
+
+`mission` holds no `&mut Blades` anywhere; the message lives in `shared`, so no domain edge was
+bought (`tests/domains.rs` green). The message is registered in `BladesPlugin` and not in
+`src/lib.rs`, the same deliberate deviation `VectorPlugin` makes for `RefuelRequest`: a channel
+into a field must not be able to exist without the system that applies it.
+
+**The one asymmetry against gas, and it is deliberate: this message carries `seconds`, not an
+amount.** Gas is one scalar with one rate, so the station can multiply by `dt` and the receiver
+needs to know nothing. A harness is three numbers (`blade_pairs_per_s`, `sharpen_per_s`, the
+`blades.start_pairs` cap) **plus an integer accumulator** — `pairs_left` is a `u8` and 1.5 pairs/s
+at 60 Hz is 0.025 of a pair per tick. Putting that arithmetic in the sender would move `blades`'
+tuning into `mission`'s hands, which is the authority violation wearing a different hat.
+
+The falsifiable half is `tests/mission.rs::f033_a_rack_asks_for_blades_and_never_writes_the_harness_itself`,
+which runs the rack **with no `blades` in the app at all**. Verified by breaking it: one line of
+`&mut Blades` inside `restock_at_stations` and it goes red with
+`left: Blades { pairs_left: 0, sharpness: 1.0 }`.
+
+### §4 Both racks give back both things — a deviation, with its rollback point
+
+`maps.ron` labels the south rack "gas tanks" and the north one "blades". The game cannot: a
+`data::StationPad` is a bare `center_m`, and `src/data/mod.rs` was not this commission's file.
+So a station is a **supply point** and carries `RefuelStation` *and* `BladeRack` — which is also
+the shape `gear.ron: resupply` already has (one block, one `range_m`, four numbers).
+
+`ASSUMPTION:` one rack per resource is flavour, not mechanics. **Rollback if the user wants the
+split:** add `kind` to `StationPad` (`src/data/mod.rs`), the two lines in
+`missions.ron: hub.refuel_stations`, and the `BladeRack` insert in `mission::hub::open_hub`. The
+component split is already the right shape — a gas-only station is one that carries no
+`BladeRack`, and only the spawn changes.
+
+### §5 What is still not true
+
+- **`scripts/f070-hub.txt` is red, on purpose, and it is one line.** Measured:
+  `1 of 20 asserts failed · line 86: assert Gas > 299 — measured 263.701 · exit 1`. The rest of
+  the hub loop still closes (`f072-won` at t=753, `f072-home` at t=955). The fix is in §6.
+- **Nothing wears a blade down.** `player::spawn_local_player` hands out `Blades::fresh(5)` and no
+  system in the game ever lowers `pairs_left` or `sharpness` — `gear.ron: blades.wear_per_hit` has
+  no reader. So the restock is correct, tested end to end, and **invisible in a real session**: a
+  player cannot get into the state it repairs. `F-033`'s wear half is the missing piece, and until
+  it exists this cannot go above 🟨 no matter how many tests are green.
+- **No image.** `--headless` only, and `scripts/` was not this commission's to cut.
+
+### §6 The exact repair `scripts/f070-hub.txt` needs (not this commission's file)
+
+| line | now | has to become |
+|---|---|---|
+| 31 | `#   refuel station   (0, 0,  6)   reach 4.0 m` | `#   supply station  (-42, 0.15, ∓6.5)  reach 4.0 m — INSIDE the hall; stand at (-38.75, ·, -6.0)` |
+| 42–44 | "three amber pads and three cyan ones", "the hub has no building of its own" | there is a building, and there are **two** cyan pads, inside it |
+| 82–84 | `look 180 0` / `key W 1.3` / `wait 1.6` | `warp -38.75 1.0 -6.0` / `wait 0.6` / `wait 1.6` |
+| after 87 | — | `warp 0 2 6` / `wait 1.0` — back onto the hub apron, so ACT 2 (lines 96 ff.) stays byte-identical |
+
+`warp` and not a walk on purpose: the 39 m walk in and 45 m back would add ~15 s and push the run
+past `--ticks 2000`, and **the walk-in is already claimed by `scripts/f019-hq.txt`** (`key W 9.0`,
+`assert height > 0.10`), which is the file that owns that sentence. `(-38.75, 1.0, -6.0)` is a
+0.85 m drop onto the depot floor; the coordinate is the one the scan in §2 validated, not a guess.
+
+### §7 A cross-agent collision, recorded because it cost a round
+
+`tests/mission.rs::f071_no_wave_walks_into_a_decided_mission` went red mid-commission with
+`bodies are still standing` — a panic that has nothing to do with waves. Cause: another agent
+landed `DespawnOnExit(MissionPhase::Active)` on titans (`FIND-068`) while this work was live, and
+the test took its id watermark from `titan_ids(...).last()`, **quietly assuming a titan outlives
+his own sortie.** The watermark now comes from the three ids the test itself created, so the
+question survives whichever lifetime a body ends up having. Neither change is wrong; the test was
+coupled to an assumption it never stated.
+
+---
+
+## FIND-065 — the map flip left the whole script corpus aimed at a city that is gone, and 20 of 35 scripts cannot report it
+
+**Measured 2026-08-12 on offlinebot, every script in `scripts/` run once, filtered.** `maps.ron:
+current` went `graybox -> ashgate` on 2026-08-12. The scripts were not re-aimed with it. This
+entry is the inventory, the repair of the two that matter, and **one bug that is worse than the
+map flip** and was found only because the inventory ran.
+
+### 1. 🔴 An `--offscreen --screenshot` run exits 0 with failed asserts. Twenty scripts are affected.
+
+`scripts/game-full.txt`'s header has known since 2026-08-10 that "an `assert` **after the shot
+tick** never reaches the exit code". **The real behaviour is much wider: an assert that fails
+*before* the shot tick does not reach it either.** Measured, unmodified:
+
+```
+./target/debug/defeated_by_titan --offscreen --script scripts/f-001-hooks.txt \
+    --ticks 400 --screenshot /tmp/x.png
+  line 110: assert Height > 12    — measured 0.050
+  line 112: assert Speed  > 35    — measured 0.000
+  line 114: assert Gas    < 300   — measured 300.000
+  line 120: assert Height > 11.5  — measured 0.050
+  image written: /tmp/x.png (788405 bytes)
+  exit 0
+```
+
+Four red asserts at t=110..120, the shot at t=400, **exit 0**. `debug::screenshot::
+exit_when_written` writes `AppExit::Success` when the PNG lands and never consults
+`run.failures`, so the invariant `src/debug/mod.rs:cutoff_verdict` states in its own doc comment
+— *"An assert failed. Then the run is red, always, under every flag combination. This is the
+invariant — nothing below may soften it."* — **is false for every screenshot run.**
+
+This is not a corner: **20 of 35 scripts document `--offscreen … --screenshot` as their verdict
+command.** Their asserts have been decorative for as long as the flag has existed. It also means
+the map flip's damage was invisible in exactly the half of the corpus that produces the images
+🟧 depends on. `f-001-hooks.txt` is the one that hurts — its player never leaves the ground in
+ashgate (`height 0.050` where it claims 12), and it reports success.
+
+**Not repaired here — it is `src/debug/screenshot.rs`, and this job owned only `scripts/`.** It
+wants the same treatment `cutoff_verdict` got: the exit is `run.failures.is_empty()`, whatever
+wrote it. Until then: **run a script headless for its verdict, offscreen only for its picture**,
+which is what `game-full.txt` already told everyone to do and nothing enforced.
+
+### 2. The inventory, before the repair
+
+Run as each file's own header documents. "silent" = red asserts reported as exit 0 (§1).
+
+| script | exit | asserts | first failure |
+|---|---|---|---|
+| `f-flight-cut` | 1 | **9 of 21 red** | `hook … found nothing anchorable (t=112)` |
+| `game-full` | 1 | **9 of 23 red** | `line 122: assert Speed > 25 — measured 0.000` |
+| `f004-towers` | 1 | **17 of 39 red** | `line 96: assert Height > 33 — measured 13.182` |
+| `f-001-hooks` | **0 silent** | 4 red | `line 110: assert Height > 12 — measured 0.050` |
+| `f-007-boost` | **0 silent** | 2 red | `line 47: assert Gas == 100 — measured 300.000` |
+| `f170-hud` | **0 silent** | 2 red | `line 47: assert Gas < 82.35 — measured 281.701` |
+| `p1-overlay`, `p1-no-overlay` | **0 silent** | 1 red each | `assert Kills == 0 — measured nothing (no player found)` |
+| `f-018-gas` | 1 | 1 of 9 red | `line 116: assert Gas > 5.4 — measured 0.300` |
+| `f070-hub` | 1 | 1 of 20 red | `line 86: assert Gas > 299 — measured 263.701` |
+| `f170-objective` | 1 | 0 red, **truncated** | needs 457 ticks, header said 400 |
+| green: `b001-anchor` `f003-ashgate` `f019-hq` `f071-won` `p3-mouse` `t007-first-run` `t019-latency` `f030-cortex` `f002-look`(+turned) `f003-city` `f-002-aiming` `f034-hitstop` `f050-states` `f053-windup` `f056-husk` `f171-crosshair` `p5-downed` `q030-reach` `t006-shot-far`(+near) `t007-physics` `f070-lost` | | | |
+
+⚠️ The green column is only trustworthy for the seven headless files in it. The rest are
+screenshot runs and §1 says what their exit code is worth.
+
+### 3. `f-flight-cut` re-aimed: the core loop is proven again, and the cut speed is real now
+
+The graybox church (60, 17.5, -60) is gone. **Ashgate's gantry lane replaces it**: ten stations
+over the main street, each an `anchorable: true` beam at `(0, 58, z)`, 44 x 4 x 8 — so its
+**underside is a flat anchorable ceiling at y = 56.00** over open pavement, which is what a
+near-vertical rope needs. From `(0, 0, 232)`, `look 0 85` anchors at `(0.00, 56.00, 227.24)`,
+rope 56.15 m, 5.0 degrees off vertical (predicted 227.245 — right to the centimetre).
+
+**The number this re-aim was asked for.** With `B-004` fixed the `hook right 0.74` dodge is gone
+(`hook right 4.0`, released at t=353, no panic) and the cortex is cut **with the rope still on
+the player**:
+
+```
+t=149  cut titan 1 Torso  at 28.08 m/s
+t=153  cut titan 1 Cortex at 28.09 m/s      (was 74.70 = the max_speed_m_s clamp)
+```
+
+**74.70 m/s was never a speed** — it was `shorten_ropes` storing rope through the impact frame
+and paying it back in one tick (FIND-062). The honest cut speed of a roped cortex pass is
+**28.09 m/s**, 0.01 under the torso cut four ticks earlier. Everything downstream shrank with
+it and **downward is the honest direction**: t=179 was 31.546 m at 66.585 m/s, now 15.958 m at
+28.065 m/s; t=241 was 89.666 m, now 44.813 m.
+
+**Not one assert was loosened, and not one had to be** — every bracket in the file was wide
+enough for the real number, which means the clamp artefact had been sitting inside them the
+whole time. Four `assert rope >= 1` were **added**: the file's central claim ("the rope is on
+him at the cut") was a gas-ledger proxy because the old run released the rope four ticks before
+the cut. It no longer has to be. `25 asserts held, 363 ticks, exit 0`.
+
+### 4. `game-full` re-aimed — and ⚠️ the Risk-1 tripwire went green for a reason nobody should bank
+
+Three coordinates moved; **no assert was touched**; the four cut ticks (653/656, 774/777,
+895/898) and the totals (`23 asserts held, 1200 ticks`) are the graybox run's own numbers.
+
+- **ACT 1** hooked a 12 m watchtower. Ashgate's church — 14 x 35 x 14, `anchorable`, at
+  (45, 17.5, -22), roof y = 35 — replaces it: stand `(45, 0, -43)`, `look 180 66.6`, anchor
+  `(45.00, 34.00, -29.00)`, land on the roof at **35.000 m, 0.000 m/s**.
+- **ACT 4 dropped into the HQ.** `warp -17.80 30.8 12.55` / `spawn titan husk -16 0 12` sits
+  inside x -47..-15, z -13..13 — the husk spawned in the building and the player landed on its
+  11.5 m roof. Symptom: **no `cut titan 4` line at all**, `assert kills == 3 — measured 2.000`.
+  Moved to open main street at z = -40 (between the gantry stations at -17.5 and -52.5, so the
+  30.8 m fall column is clear too). The pass itself — 1.80 m offset, 0.55 m cortex set-back,
+  30.8 m drop — is untouched.
+- Two waits swapped 0.8 s between them (`1.2 -> 2.0`, `4.2 -> 3.4`) because the 35 m roof is
+  23 m further up than the watchtower's and the reel was still running at the old mark. **They
+  cancel**, so every tick from `game-rope-released` onward is where it was.
+
+⚠️ **The finding, and it is a warning.** `assert speed > 25` / `assert height > 12` were left
+red on purpose on 2026-08-10 as the project's only tripwire for `docs/PLAN-GAME.md` §3.1 Risk 1
+("the design assumes a player who moves at 30 m/s"): they measured **19.344 m/s / 9.881 m**.
+They now measure **28.741 m/s / 15.521 m** and are green.
+
+**Nothing in the rope code changed between those two numbers. The anchor did.** The take-up
+ratchet is still there; graybox reeled **34 degrees** up onto a 12 m roof, ashgate reels **66.6
+degrees** up onto a 35 m roof, and a mostly-vertical reel spends its shortening on height
+instead of on closing a horizontal gap. Same `reel_speed_m_s`, +9.4 m/s.
+
+So the sentence this file now supports is **not** "the rope does 30 m/s". It is: **the rope
+delivers 25+ m/s off a steep anchor and 19 m/s off a shallow one, and the file samples exactly
+one anchor.** Re-aiming a tripwire green is the move that retires a risk without earning it —
+**Risk 1 stays open.** What a player gets over a district whose generated housing is
+`min_height_m 8.0 … max_height_m 11.5` — i.e. shallow anchors everywhere — is unmeasured, and
+that, not the church, is the number Risk 1 is about.
+
+### 5. Still red, and not repaired here
+
+`f004-towers` (17 of 39 — it hooks graybox gate towers at z = 70), `f-018-gas`, `f070-hub`
+(both one gas assert, and both look like the 300-tank rebase rather than the map),
+`f-001-hooks` / `f-007-boost` / `f170-hud` / `p1-overlay` / `p1-no-overlay` (§1: they report
+exit 0 today, so nothing will notice them until §1 is fixed). `f170-objective`'s header was
+fixed here: `--ticks 400 -> 500`, the run needs 457.
+
+---
+
+## FIND-072 — `B-004`'s three faces are one invariant, and a despawn is the one avian trigger that no ordering can move
+
+**Measured 2026-08-12**, after the bug had been closed twice and each close **inverted** it
+instead of removing it. This entry is the matrix that was missing both times.
+
+### The invariant
+
+> **While a body carries `RigidBodyDisabled`, none of its joints may undergo an island
+> transition.**
+
+A disabled body has no `BodyIslandNode` (`islands/mod.rs:127-136`, the
+`On<Insert, (Disabled, RigidBodyDisabled)>` observer), and the rope's other end is
+`RigidBody::Static`, which never had one (`islands/mod.rs:138-150`). So *both* ends of a rope on
+a frozen player are island-less, and every avian code path that wants an island aborts the
+process.
+
+### The four triggers, and which of them the two previous fixes covered
+
+avian has exactly **four** entry points that move a joint in or out of an island. All four are
+observers registered in `avian3d-0.7.0/src/dynamics/solver/joint_graph/plugin.rs:70-107`.
+
+| # | trigger | avian entry point | needs the body enabled? | abort if not |
+|---|---|---|---|---|
+| E1 | joint component **added** without `JointDisabled` | `add_joint_to_graph::<T, Add, T, Without<JointDisabled>>` → `merge_islands` | **yes** | `islands/mod.rs:820` *Neither body … is in an island* |
+| E2 | `JointDisabled` **added** | `remove_joint_from_graph::<Add, (Disabled, JointDisabled)>` → `remove_joint` | **yes** | `islands/mod.rs:786` `joint_count > 0` |
+| E3 | `JointDisabled` **removed** — **including by a despawn** | `add_joint_to_graph::<T, Remove, JointDisabled, With<JointComponentId>>` → `merge_islands` | **yes** | `islands/mod.rs:820` |
+| E4 | joint component **removed** | `remove_joint_from_graph::<Remove, T>` → `remove_joint` | only while the joint is **in** the graph | `islands/mod.rs:786` |
+
+### The full matrix — body × joint marker × transition
+
+| body | joint marker | transition | path | verdict |
+|---|---|---|---|---|
+| enabled | live | add (E1) | body has an island, merge is a no-op | ✅ |
+| enabled | live | remove / despawn (E4) | `joint_count` 1 → 0, island still there | ✅ |
+| enabled | live → disabled (E2) | — | `joint_count` 1 → 0 | ✅ |
+| enabled | disabled → live (E3) | — | merge onto a body that has an island | ✅ |
+| enabled → **disabled** | live | the freeze itself | `BodyIslandNode::on_remove` throws the island away **while `joint_count` is still 1** and never looks at the joints (`islands/mod.rs:1338-1385`); the thaw **recycles that slot** at 0 | ❌ later, at E4 → `:786` — **fix 1's face** |
+| enabled → **disabled** | disabled | the freeze itself | island is empty and clean when it goes | ✅ — fix 1 |
+| **disabled** | live | add (E1) | both ends island-less | ❌ `:820` — a hook that bites during the freeze |
+| **disabled** | live | E2 (marker added late) | island already gone / recycled | ❌ `:786` |
+| **disabled** | **disabled** | **despawn** (E3, then E4) | the despawn **removes `JointDisabled`**, which *is* E3 | ❌ `:820` — **fix 2's face, the one a player reaches** |
+| **disabled** | **disabled** | despawn, joint component removed first | E4 early-returns (not in the graph); E3's query no longer matches | ✅ — **the fix** |
+
+Read down the ❌ rows: **fix 1 satisfied the "body disabled / joint live" column, fix 2
+satisfied the "freeze and thaw boundary" column, and neither looked at the despawn.** That is
+the whole history of this bug in one table.
+
+### Why no ordering could have saved fix 2
+
+`combat::hitstop` fixed E1/E2/E3 at the *boundaries* by ordering its commands — `JointDisabled`
+before `RigidBodyDisabled` going in, the reverse coming out. That works because both components
+are ours to order. **A despawn is not orderable against E3, because a despawn *is* E3**: Bevy
+fires `Remove` for every component on the entity, `JointDisabled` among them, and avian's
+observer for that does not check whether the body still has an island. There is no third command
+to slot in between.
+
+### The way out, and it is in avian's own source
+
+E4's handler opens with
+
+```rust
+let Some(joint) = joint_graph.get(entity) else { return; };
+```
+
+(`joint_graph/plugin.rs:163-175`) — and a `JointDisabled` joint is **not in the graph**, because
+E2 took it out. So removing the joint component while frozen is a **no-op**, not a transition.
+And once `DistanceJoint` is gone, E3 cannot fire either: its query is
+`Query<(&T, Has<JointCollisionDisabled>), With<JointComponentId>>` (`plugin.rs:116-131`) and no
+longer matches the entity.
+
+So **one unconditional order covers both columns** — `remove::<DistanceJoint>()`, then
+`despawn()` — and, crucially, **it needs no `if frozen` branch**. On an enabled body it is the
+ordinary E4 (`joint_count` 1 → 0, island intact) followed by a despawn that triggers nothing; on
+a frozen body it is an early return followed by a despawn that triggers nothing. The two columns
+that broke the last two fixes are the *same code path* here, which is why this one cannot be
+verified on the wrong side of the bracket.
+
+`src/player/rope.rs::despawn_rope` is that choke point, and both despawn sites
+(`detach_ropes`, and `attach_ropes`'s defensive second-rope-on-one-side branch) go through it.
+
+### Why the body is still `RigidBodyDisabled`
+
+The commission asked this to be argued rather than assumed. Three alternatives were considered
+and all three trade a **proven** `F-034` for something that has to be re-proven:
+
+- **`LockedAxes::ALL_LOCKED` + zero the velocity, restore on thaw** — keeps the island, but
+  `combat` becomes a writer of `LinearVelocity`, which today has exactly one writer per context
+  (`src/player/locomotion.rs:177`, `src/player/mod.rs:206`, `src/titan/brain.rs:374`). That is
+  rule 3, and `F-034`'s "the impact frame costs time, not momentum" then depends on a save and a
+  restore instead of on nothing being written at all.
+- **`RigidBody::Kinematic` for the freeze** — keeps the island (only `is_static()` strips the
+  node, `islands/mod.rs:138-150`), but a kinematic body is still integrated from its velocity,
+  so it needs the same save/restore, plus a mass-property recomputation twice per cut.
+- **Let the step run and stomp `Position` back afterwards** — makes `combat` a writer of
+  `Position` *and* of `LinearVelocity`, and `SimulationSystems::Integrate` is documented as the
+  **only** writer of a player's `Transform` (`src/shared/schedule.rs:60-63`).
+
+`RigidBodyDisabled` writes nothing, so `Position` is bit-identical for free and the velocity the
+player carried into the cut is untouched. The bug was never the freeze — it was the *rope's*
+lifecycle inside it, and that is where the fix belongs.
+
+### Evidence
+
+| | |
+|---|---|
+| **Red first** | `tests/combat.rs::b004_the_rope_may_be_let_go_on_any_tick_across_the_impact_frame` — *7 of 21 ticks died*, `t+0 … t+6`, every one *Neither body 1453v0 nor … is in an island*. `b004_a_rope_born_inside_the_impact_frame_may_also_be_let_go_of_at_once` — 4 died, `t+3 … t+6`. **The dead ticks are exactly `round(0.12 × 60)` = 7**, i.e. the impact frame and nothing else. |
+| **Green** | both sweeps pass, and the three older `b004` point tests with them — including `b004_the_freeze_is_still_bit_identical_with_a_rope_attached`, so `F-034`'s 7 bit-identical ticks with a **taut** rope survived the fix. |
+| **Red again** | the single line `commands.entity(joint).remove::<DistanceJoint>();` taken out of `despawn_rope`: *7 of 21 ticks died*, `t+0 … t+6`; sweep B *4 died*, `t+3 … t+6`. The same bracket, to the tick. |
+| **In the running game** | `scripts/f-flight-cut.txt` with the `hook right 0.74` dodge — the documented repro — went from **exit 101** to **exit 0**. |
+
+### The lesson, and it is about the test and not about the code
+
+**A point test cannot tell a fix from an inversion.** Both previous fixes were verified on the
+side of the bracket they had just made safe, and both reports were honest — they measured what
+they measured. What was missing was a test whose *shape* matches the player's action: the tick a
+thumb comes off a button is not a choice, so the criterion is "**every** tick of the window", not
+"a tick". The sweep is 21 fresh apps and runs in **2.7 s** — it was never a cost question.
+
+**A fresh `App` per tick is part of it.** A corrupted island is world state; sweeping one app in
+place would have measured the first abort's wreck from the second tick on. And the sweep catches
+the panic per tick (`catch_unwind` + a silenced hook) so that it reports the whole bracket
+instead of stopping at its first casualty — which is what turned "t+157 panics" into "t+0…t+6
+panic, and 7 is `hit_stop_cortex_s × simulation_hz`".
+
+## FIND-073 — sixteen scripts had no verdict at all, and the map flip cost less than it looked
+
+**2026-08-12, machine B (offlinebot). Owner: the `scripts/` job.** Follow-up to `FIND-065`, which
+counted the damage the ashgate flip did to the script corpus. This is the repair round, and the
+two headline numbers are: **8 red scripts down to 1 deliberate red**, and **16 scripts that could
+not have reported a failure if they had one.**
+
+### §1 The one that matters beyond this round: a `--screenshot` run cannot fail
+
+`src/debug/screenshot.rs::exit_when_written` owns the ending under `--screenshot` and writes
+`AppExit::Success` the moment the PNG is on disk. **It never reads `run.failures`.** The script is
+not finished at that point, its assert summary never prints, and the process exits 0.
+
+Sixteen of the thirty-five scripts documented **only** a `--screenshot` command in their header.
+Every one of the sixteen carries real asserts — between 1 and 13 of them:
+
+```
+f002-look-turned 3 · f003-city 3 · f-007-boost 13 · f030-cortex 2 · f034-hitstop 2
+f050-states 1 · f053-windup 1 · f056-husk 1 · f070-lost 3 · f071-won 5 · q030-reach 2
+t006-shot-far 3 · t006-shot-near 2 · t007-physics 3 · p1-overlay 3 · p1-no-overlay 3
+```
+
+So **51 asserts had no way to report a failure**, and four of the sixteen were in fact red behind
+their exit 0: `f-007-boost` (2 of 13), `p1-overlay` and `p1-no-overlay` (1 of 3 each), and
+`f070-lost` (truncating). Nobody had done anything wrong — each file documents the command that
+produces its evidence, and the evidence is a picture. The gap is that **a picture is not a
+verdict**, and the header never said so.
+
+All sixteen now carry a second, separate `--headless` line with its own tick count and the reason
+in three sentences. `p4-cursor.txt` is the only script without one and correctly so: it is
+documented windowed-only.
+
+**The tick count is the trap inside the trap.** The screenshot tick is by construction *at* the
+interesting moment, i.e. **before** the script ends — so copying it into the headless command
+truncates the run, which is an ERROR since `FIND-032` and reports nothing. Three of the sixteen
+demonstrated this: `f070-lost` at its documented 19 950 against a real end of ~20 554,
+`f170-hud` at 600 against 613, and `p1-no-overlay` at 140 against 431. The verdict tick is
+therefore deliberately generous everywhere: **overshooting is free, undershooting hides the
+verdict.**
+
+### §2 `f004-towers`: the graybox swing lane transfers to ashgate with ZERO assert changes
+
+This was the round's worst-looking red — 17 of 39 — and the expectation going in (stated in the
+commission) was that it might have to stay red with an honest header, because ashgate has no gate
+towers. It does have the same lane: the **gantry line over the main street**, crossbeams
+`(0, 58, z)` at a **35 m pitch**, `anchorable: true`, ten stations over 315 m.
+
+Turning the run ninety degrees — two `warp`s and the yaw of five `look` lines, from `+X` at z = 70
+to `-Z` at x = 0 — makes **all 39 asserts hold, with not one bracket touched**:
+
+| leg | graybox | ashgate | bracket (unchanged) |
+|---|---|---|---|
+| arc bottom | 33.32 m / 31.4 m/s | **33.328 / 31.376** | 33.0–33.7 / 31.0–31.7 |
+| leg 1 | 33.41 / 31.32 | **33.411 / 31.321** | 33.0–33.8 / 31.0–31.8 |
+| leg 2 | 27.66 / 34.78 | **27.660 / 34.784** | 27.3–28.0 / 34.4–35.2 |
+| leg 3 | 19.30 / 39.26 | **19.357 / 39.256** | 19.0–19.7 / 39.0–39.6 |
+| leg 4 | 12.63 / 42.52 | **12.629 / 42.523** | 12.3–13.0 / 42.2–42.9 |
+| leg 5 caught | 15.08 / 41.35 | **15.109 / 41.339** | 14.5–15.6 / 40.9–41.8 |
+
+and the five anchor heights come back at 59.42 / 56.25 / 58.70 / 57.75 / 59.03 against the
+graybox's 59.42 / 56.25 / 58.70 / 57.76 / 59.04 — sub-centimetre, on a different map, out of a
+different generator.
+
+**The lesson is about what the assert was ever measuring.** A bracket that survives being moved to
+an unrelated row of boxes was never a claim about those boxes: it was a claim about the arithmetic
+of a 35 m-pitch lane at 58 m. `FIND-065` counted this file among the map flip's casualties, and it
+was — but the casualty was the *aim*, not the *claim*, and those cost very different amounts to
+repair. **Before writing a header that says "this cannot be claimed here any more", check whether
+the new map contains the same geometry under a different name.** It took one probe run to find out.
+
+### §3 `f-001-hooks`: the re-aim turned a broken script into a second measurement of `B-004`
+
+Same story, different ending. The file hooked the graybox's 12 m watchtower; ashgate's equivalent
+is the **nave of the market-square church**, `(51, 5.75, -8)`, roof y = 11.5, `anchorable: true`,
+hooked from the same 14 m standoff at the same 34° pitch. Both hooks anchor at
+`(51.00, 11.09, -1.00)` against a predicted 11.04.
+
+The re-aim fixes 2 of the 4 reds outright and **leaves 2 red on purpose** — `height > 12.0` and
+`speed > 35.0`, the pair this file has carried since 2026-08-10 as a standing marker for `B-004`'s
+take-up ratchet. Measured on ashgate: **9.980 m and 20.147 m/s**, against 9.881 m and 19.344 m/s
+measured on the graybox two days earlier.
+
+**That agreement is the finding.** A different map, a different building, 27 m further from the
+origin, and the shortfall reproduces to 0.1 m and 0.8 m/s. The regression travels with
+`src/player/rope.rs`, not with the geometry — which is exactly what a deliberate red is supposed
+to be able to tell you, and it could not have been said before there were two maps to say it in.
+The bracket stays untouched; the day the reel is repaired these two go green by themselves.
+
+### §4 `f-018-gas` ACT 4 was asserting that a deleted feature still ran
+
+Its brackets were `gas > 5.4` / `< 6.2` around a measured 5.800 — the shape of
+`vector::gas::refill_tank` putting 10/s back after a 0.5 s pause. The user deleted that mechanism
+closing `Q-033` („gas refillt nur im main gebäude"), and `game.ron` now carries an explicit ⚠️⚠️
+block saying the two keys must not come back. Against a tank that only ever falls, `> 5.4` is not
+a hard bracket — **it is an assertion that the deleted feature is still running**, and it measured
+0.300.
+
+The act was re-cut into the regression guard for `Q-033` itself: 60 ticks with a key held and 180
+idle, and the tank does not move off 0.300. Re-introduce a 10/s regen and it reads ~35 and the run
+exits 1 — the same job the old act did, for the opposite claim. The half of the old act that can
+no longer be measured here at all (reel-in without an anchored hook costs nothing — an empty tank
+cannot be emptied twice) was not deleted but **relocated to where it can still go red**:
+`tests/vector_gas.rs::f018_reeling_in_without_an_anchored_hook_costs_nothing`.
+
+⚠️ **This is the second file caught asserting the 100-gas tank**, after `f-007-boost`
+(`gas == 100`, measured 300) and `f170-hud` (`gas < 82.35`, measured 281.701). A tuning value that
+triples silently invalidates every script that quoted it, and nothing in the build says which
+those are. `game.ron: gas_tank` went 100 → 300 on 2026-08-10; three scripts were still on 100 two
+days later, and two of them could not report it (§1).
+
+**`f170-hud` is the one where re-centring the bracket would have been the wrong fix.** Its picture
+claim is "the gas bar has to be 82 % long, not full" — the file exists to defeat "the bar that is
+a picture of a bar". On a 300-tank its one second of boost leaves 282, i.e. a **94 %** bar: a
+photograph of an almost-full bar, which is the exact failure it was written to rule out. Fixing
+only the numbers would have produced a green run and a worthless image. The boost went to three
+seconds (54 gas, 300 − 54 = 246, **82 %** again), the ruler claim survived, and the picture tick
+moved 200 → 320 — `docs/images/f170-hud.png` has to be retaken.
+
+### §5 `p1-overlay` / `p1-no-overlay`: an unmeasurable check, and a misleading message
+
+Both failed on `assert kills == 0` with `measured nothing (no player found)`. There was a player.
+`Metric::Kills` in `src/debug/mod.rs::measure` is a two-step `?` chain — the local player, then the
+**mission tally** — and these two scripts launch without `--hub` and without a mission, so the
+second `?` returns. The driver counting an unmeasurable check as failed is right and documented;
+the *message* names the first link of the chain regardless of which one gave up.
+
+The assert was replaced with `assert phase == 0`, which `measure` documents as the honest answer
+for "no mission" (Briefing), and the reason is written at the line. **The message is worth one
+line of repair in `src/debug/mod.rs` and belongs to that file's owner, not to `scripts/`** — a
+diagnostic that names the wrong cause costs more than a missing one, because it sends the next
+reader to look at the player.
+
+`p1-no-overlay.txt` also carried a copy-paste header: its verdict command, its PNG path and its
+"Its twin …" line all named `p1-overlay`, and its `mark` did too. A control image whose header
+describes the experiment is not a control image.
+
+### §6 What went unseen
+
+- **No pictures were retaken.** `f170-hud` (tick 200 → 320), `f-001-hooks` (the `231e7d86…` sha is
+  the graybox's and is void) and `f-007-boost` (its whole projected-pixel block is graybox
+  geometry) all need a new `--offscreen` run. The stale blocks are marked ⚠️ in place rather than
+  deleted, because each is the worked example of how a picture gets held to a number. **Every 🟧
+  that rests on one of those three images is currently resting on a picture of a city that is
+  gone.**
+- **`f070-lost` is verified, and the derivation was close but not exact.** Measured: **3 asserts
+  held, 20 525 ticks, exit 0** at `--ticks 21000`, against ~20 554 derived from the script text. The
+  documented 19 950 was 575 ticks short, which is why it reported `instruction 7 of 7 is still
+  running` and exit 1. Each run of this file costs 5½ real minutes.
+- **The verdict ticks in the sixteen headers are generous, not measured**, for the eight scripts
+  whose end tick was not separately measured. That is the safe direction — too high wastes seconds,
+  too low hides the verdict — but it is an estimate and it is labelled as one here.
+- **Nothing was done about the cause of §1.** The scripts now document a second command; the hole
+  in `exit_when_written` is untouched and belongs to `src/debug/`. A header is a convention, and
+  the next script written from a template will reproduce the bug. **The real fix is that
+  `--screenshot` reads `run.failures` before it writes `AppExit::Success`.**
+- **The round ran on a tree two other agents were writing to.** Twice, runs died on a data-schema
+  desync between `src/data/mod.rs` and `assets/data/*.ron` (`Unexpected field 'lighting' in 'Art'`,
+  then `missing field 'frontage_spread_m' in 'Perimeter'`) — transient, foreign, and not repaired
+  here. It cost one rebuild and a blocked measurement window, and it is worth naming because
+  **"the script is red" and "the tree is mid-flight" look identical from inside a script run.**
+
+## FIND-070 — A free hook lands on the crosshair, measured: the landing preview is only drawable where the two arms already differ
+
+**The user, 2026-08-12:** *"es soll previewd werden wo der aktuelle haken landen würde! also sollte
+richtig angezeigt werden. nicht nur am fadenkreuz. weil das stimmt auch nicht."* and *"zudem sollen
+diese weiter auseinander sein. also weiter rechts und links!"* He is right on both counts, and both
+halves are now measured rather than argued.
+
+### 1. The measurement that governs the whole design
+
+`tests/hud.rs::f171_a_free_aim_point_projects_onto_the_crosshair` casts the ray `vector::aim` casts
+and projects the result through the real camera. At **three look angles × two distances**, all six
+land **0.000 px from the centre of the screen**:
+
+```
+yaw 0    pitch 0     8 m -> Vec2(640.0, 360.0)     90 m -> Vec2(640.0, 360.0)
+yaw 37   pitch -12   8 m -> Vec2(640.00006, 360.0) 90 m -> Vec2(640.00006, 360.0)
+yaw -140 pitch 25    8 m -> Vec2(639.99994, 360.0) 90 m -> Vec2(639.99994, 360.0)
+```
+
+The cause is a chain of equalities the repo already leans on: `vector::aim` starts at
+`translation + Y·eye_height_m`, `render::attach_camera` hangs the camera on the player at exactly
+`Transform::from_xyz(0, eye_height_m, 0)`, and `tests/render.rs` nails
+`Transform::forward() == Intent::look_dir()`. **The aim ray is the view ray**, so every point on it
+is the crosshair pixel — the same wall `render::rope` hit when it could not draw a rope from the
+hand.
+
+**Consequence, and it is the answer to the design question:** *"preview where the hook would land"*
+and *"put the two further apart"* are **one requirement, not two**. There is no honest way to move
+an idle arm's marker off the crosshair without first moving that arm's hook off the camera axis.
+Cosmetic separation of two markers that share one target is FIND-047 a second time.
+
+### 2. What was built, and what it is worth
+
+`src/hud/arm_aim.rs` now projects **each arm's own world target** (`Camera::world_to_viewport`) and
+puts the marker there. For `Anchored`, `Flying` and `Retracting` the arm has a point of its own —
+`HookArm::tip_m`, the same one `render::rope` draws to — so the marker travels with it and the two
+arms genuinely stand on two places. For an idle arm it falls back to the shared `AimPoint`, which
+§1 proves is the crosshair, and then only the **side** is honest: the pair parts around `F-170`'s
+keep-out box (~256 px apart at 1280 px) instead of huddling ~55 px under the crosshair.
+
+**Evidence, decoded against the map and not against a control run** — the stronger of the two,
+because nothing in the check comes from the code under test. Two hooks anchored on the ashgate
+church nave, the game's own log reporting `41.91 7.73 -1.00` and `60.09 7.73 -1.00` (18.18 m
+apart). The projection was recomputed in Python from `maps.ron`'s block and `game.ron`'s
+`fov_deg: 60`; the four predicted letter boxes land within **0.6, 2.4, 0.7 and 2.7 px** of the
+measured cyan.
+
+| between the two frames (9° of yaw) | moved |
+|---|---|
+| `Q` marker | **+114 px x, +19 px y** |
+| `E` marker | **+135 px x, −29 px y** |
+| the four crosshair ticks | **0 px** |
+| cyan inside the `F-170` keep-out box | **0 px, both frames** |
+
+Different distances and **opposite vertical directions** — which neither a shared point nor a fixed
+slot can produce. Against FIND-047's *"the same pixels (x 595–612 / 667–684) in four runs with four
+different aims"*, that is the claim inverted and measured.
+Pictures: `docs/images/f171-preview-two-anchors.png`, `docs/images/f171-preview-turned.png`.
+
+### 3. The hole this round found in its own guard, and closed
+
+With the keep-out push disabled, **the whole `--test hud` suite stayed green** — because in a bare
+test app the aim ray finds nothing and the pair sits in its side slots, so no integration test ever
+saw a marker aimed at the middle. Only the pure sweep in `hud::arm_aim` caught it.
+`tests/hud.rs::f170_an_anchor_dead_ahead_does_not_cover_the_middle` is that hole closed at the level
+where the rects are real; it was re-checked red (`hud_arm_label_Left` at x 612..621, y 353..371,
+inside the box x 512..768, y 288..432).
+
+### 4. What is still missing, precisely — and it is not only `F-021`
+
+The idle pair cannot become two points until `F-023` (*Kandidatensuche mit Hemisphaeren-Aufteilung*)
+splits the candidate set left/right of the camera forward axis. That is blocked twice over:
+
+1. **`F-021` (discrete anchor points) is ⬜.** There is no candidate set to split — `vector::aim`
+   produces one ray hit, and `vector::hook::update_hooks` hands that one `AimPoint` to both arms
+   (FIND-039).
+2. **The spread angle is a tuning number, and its home was not writable this session.** Under
+   `CLAUDE.md` rule 2 it belongs in `assets/data/game.ron` under `vector:` — which another workflow
+   owned for the whole round, and `assets/data/*.ron` is the main head's file besides. A hemisphere
+   spread hard-coded in Rust would have been a rule-2 violation shipped to make a picture look
+   better. **It was not done.**
+
+**`ASSUMPTION:` the idle pair's honest answer is "which side", not "which point", until F-023
+lands.** Rollback point if the user disagrees: `hud::arm_aim::layout_for`'s `slot_x` fallback and
+the tie-break in the `lean_right` branch — nothing else depends on it.
+
+**The script that made the pictures has no home.** `scripts/` belonged to another workflow, so it
+ran from `/tmp/f171-preview.txt`. It needs to land as `scripts/f171-preview.txt`:
+
+```
+wait 1.5
+warp 51 0 13
+look 0 20
+wait 0.3
+look 33 20
+wait 0.3
+hook left 12.0
+wait 0.7
+mark left-anchored
+look -33 20
+wait 0.3
+hook right 12.0
+wait 0.7
+mark right-anchored
+look 0 20
+wait 0.8
+mark preview-a
+assert rope > 0.5
+look 9 20
+wait 0.8
+mark preview-b
+assert rope > 0.5
+```
+
+Shots: `--offscreen --script scripts/f171-preview.txt --ticks 285|335 --screenshot <path>`.
+Note `assert hooks` does **not** exist — the measurable metrics are
+`speed, height, gas, titans, tick, health, kills, phase, rope`.
+
+## FIND-071 — "Alles sehr flat" was arithmetic: the sun clipped, and a clipped face has no orientation
+
+**Date:** 2026-08-12 · **Files:** `assets/data/art.ron` (new `lighting:` block), `src/render/light.rs`
+(new), `src/render/mod.rs`, `src/data/mod.rs` (`Lighting`/`Sun`/`Ambient`/`Sky`/`Fog`),
+`tests/render.rs` (+5) · **Evidence:** `docs/images/f003-light-before.png` against
+`docs/images/f003-light-after.png` — same binary, same map (`maps.ron` md5 a0ffa9fc…), same frame,
+**the only difference is the `lighting:` block**.
+
+**Symptom.** The user, twice, five days apart:
+
+> *„aktuell sieht man nicht so viel unterschiede. alles sehr flat (auch farben, licht etc)"*
+
+The first time it was written down and nothing was done.
+
+**The cause, and it is not taste.** Two patches out of the old frame, on surfaces at right angles
+to each other:
+
+| patch | mean RGB | luminance |
+|---|---|---|
+| a vertical wall face | 182.6 / 183.8 / 179.5 | **183.2** |
+| the ground beside it | 182.7 / 183.8 / 179.6 | **183.3** |
+
+One number apart. `setup_light` used `illuminance: 10_000` against Bevy's default exposure
+(`Exposure::BLENDER`, ev100 9.7), and
+
+```text
+0.43/pi * 10000 * exposure(9.7) = 1.07      # exposure(ev) = 2^-ev / 1.2
+```
+
+so **every face with `NdotL > 0.73` was over 1.0 and clipped to white.** A clipped face has neither
+colour nor orientation left. Measured on the old frame: **29.8 % of the district sat above
+luminance 200, and one single tone held 25.2 % of it.** A quarter of the picture was one value —
+that is what "flat" is, and the number was one line of arithmetic away the whole time.
+
+**What was built.** `render::light`, every number in `art.ron: lighting`, no hue invented (the
+palette and the three signal colours are untouched — this is light and depth only):
+
+1. **Exposure and illuminance as one solved pair** — 52 000 lux at ev100 12.85. Brightest
+   stone_gray face 0.618 of the clip, not 1.07.
+2. **A sun at azimuth 108° / elevation 36°**, chosen so the four faces of a box get four different
+   `NdotL`: `+X wall 0.769 · roof 0.588 · +Z wall 0.250 · -X and -Z walls 0.0`. A sun overhead gives
+   one bright roof and four identical walls; a sun on the diagonal gives two and two.
+3. **Cascaded shadows**, 4 cascades over 400 m at 2048 texels — a flyer sees the roofscape, not a
+   corridor.
+4. **A cool fill against a warm sun**, 10.4 % of the sunlit value, so an unlit face reads as
+   *in shadow* and not as *dark grey*.
+5. **A sky dome with a three-stop vertical gradient** in vertex colours, and a `DistanceFog` whose
+   colour *is* the dome's horizon stop, so the horizon has no seam.
+
+**Measured, same frame, district region only (rows 290–700, cols 0–900):**
+
+| | before | after |
+|---|---|---|
+| distinct RGB triples, whole frame | 5 021 | **13 290** (2.65x) |
+| distinct RGB triples, district | 4 470 | **12 434** (2.78x) |
+| tones holding ≥1 % of the district | 15 | **24** |
+| the single biggest tone | **25.2 %** | 16.4 % |
+| pixels above luminance 200 (near-clip) | **29.78 %** | **0.97 %** |
+| mean saturation | 0.0920 | 0.1027 |
+| sky wedge: distinct RGB / luminance range | **8** / 46..47 | **104** / 84..94 |
+
+**And honestly, by eye:** the after frame has depth the before frame does not. Every building throws
+a cast shadow onto the ground and onto its neighbour, so block heights read as heights and the
+courtyards inside the closed blocks read as recessed; the 120 m wall reads against a haze band
+instead of against a flat slab. What the numbers do *not* say: the frame is **darker and greyer**
+than before, brick red is muted, and in this particular shot (pitch −30°) the sky is a large
+near-uniform wedge because the camera only sees the horizon band — the gradient is strong when you
+look up and subtle here.
+
+**The shadow cost — the number `docs/lessons/performance.md` has been asking for since it was
+written.** `[offlinebot, RTX 3080]`, `--offscreen`, ashgate with 2064 blocks, ten 2 s windows each,
+via the new `DBT_FRAMETIME=1`:
+
+| | ms/frame |
+|---|---|
+| `shadows: true` | **4.23** |
+| `shadows: false` | **4.23** |
+| `shadows: true`, 8192-texel maps, 1600 m range | **4.22** |
+
+Not "about the same" — the same to the third digit. ⚠️ **And that is a bounded statement, not a
+cost.** The `--offscreen` loop has a **240 fps ceiling** (`ScheduleRunnerPlugin::run_loop(1/240)`,
+`src/lib.rs`), the `--novsync` flag only touches a window's `present_mode` and does not lift it, and
+this GPU never approaches it. The instrument is **not** blind — a 900×450 sky dome in the same
+harness moves it to 4.67–4.80 ms — so the null result is real; it just means the shadow pass costs
+less than the headroom on an RTX 3080. **On the minimum profile (entry-level laptop, integrated
+graphics) it has to be measured again.**
+
+**Two failures that had no symptom**, both found by rendering and not by reasoning, both now nailed
+down by a test:
+
+- **The dome was wound inside out.** `(a, b, a+1)` winds the *inside* counter-clockwise, so
+  `cull_mode: Some(Face::Front)` threw away the side the eye is on. No warning, no error, no missing
+  entity, no missing mesh — the sky simply stayed the default `ClearColor` (43, 44, 47) pixel for
+  pixel while four tests were green.
+  → `tests/render.rs::f071_the_sky_is_wound_so_you_see_it_from_the_inside`
+- **`fog.end_m` past `sky.radius_m`.** The dome is opaque and pinned to the eye, so nothing beyond
+  820 m is ever visible: an `end` of 900 is a value the fog can never reach and the horizon never
+  quite becomes the sky. 780 now.
+  → `tests/render.rs::f071_the_sky_casts_no_shadow_and_the_fog_meets_it_at_the_horizon`
+
+**Red-checked.** `art.ron` was set back to the old numbers (10 000 lux / ev100 9.7 / white fill 220
+/ one-colour sky / no fog) and 3 of the 5 tests went red, the payload one with
+`the brightest stone_gray face is at 1.071 of the clip` — the predicted number, from the file, on
+the real app. That same config **is** `f003-light-before.png`: the control and the red check are the
+same run.
+
+**Stage 🟨 → 🟧** for the light: picture, number and a red-checked test. Not ✅ — only the user sets
+that, and what he actually has to judge is whether a darker, greyer, deeper district is the trade he
+wanted.
+
+**Open:**
+- The probe script lives in `/tmp/f071-light.txt` and **belongs in `scripts/f071-light.txt`** —
+  `scripts/**` was owned by another stream this round. Contents (the same eye as
+  `f003-ashgate.txt`'s final `--screenshot` mark, with none of its acts, so the frame does not move
+  when that script's timing does):
+  `wait 1.2` · `warp 200 150 250` · `look -25 -30` · `wait 0.15` · `mark f071-vantage`.
+  Screenshot run `--ticks 84`, verdict run `--ticks 200` (exit 0).
+- Shadow bias (`0.06 / 2.4`) is reasoned against a 7 m street canyon, **not measured in one**. Acne
+  and peter-panning were only inspected from 150 m up.
+- `docs/gameplay/world.md` still says *"Neither exists yet"* about the directional light and the
+  fog, and `docs/lessons/performance.md` still lists *"No number for what shadows cost"* as a gap.
+  Both are now wrong. Neither file was mine this round.
+
+---
+
+## FIND-069 — The merged district: the survey was right about the street and wrong about the house, and the skyline is blocked by a hole in `scale.ron`
+
+**Date:** 2026-08-12 · **Files:** `assets/data/maps.ron`, `src/world/map.rs`, `src/data/mod.rs`,
+`tests/world.rs`, `scripts/f003-ashgate.txt` · **Evidence:** `docs/images/f003-ashgate.png`,
+`tests/world.rs` (16 green), `tests/data.rs` (47 green), script 40/40 asserts, exit 0.
+
+**The verdict.** The user, after playing the rebuilt district:
+
+> *„häuser sind alle ineinander! keine unterschiedliche höhen! es sieht überhaupt nicht aus wie
+> eine attack on titan map! viel zu kompakt!"*
+
+FIND-058's rebuild had closed the streets to the surveyed 0.62 : 1 street : ridge using **party
+walls with zero gaps** and a **closed block perimeter**, and raised `min_height_m` 4.5 → 8.0. Every
+one of those measurements was correct. The result was still one merged mass with a flat top, and
+that is the finding: **the survey constrained the street and said nothing about the individual
+house, so the generator built the same house 800 times.** A ring of eight identical cuboids in a
+square with a zero gap, on a perfect 43 m grid, is one object from ten metres up — no matter what
+the median street width measures.
+
+**What was actually wrong, in order of how much it cost the picture:**
+
+1. **One draw per house over the whole height window is white noise, and white noise averages
+   flat.** Over a hundred metres the eye sees the mean. Fixed by drawing at two scales: a **block
+   level** per cell (`STREAM_LEVEL`) plus `house_spread_m` inside it. Measured after: block-mean
+   ridge p10 7.99 m, p90 10.21 m — **2.23 m of relief between quarters** where there was none.
+2. **A zero gap is a party wall in a survey and a merged mesh in a renderer.** `gap_fraction`
+   takes 0..22 % of a slot off each house. Measured: **889 alleys, median 2.31 m**, against 507
+   street samples.
+3. **Identical footprints.** `frontage_spread_m` per run (2, 3 or 4 houses per 36 m front instead
+   of always 3), `setback_max_m` and `depth_spread_m` per house.
+4. **A perfect orthogonal grid.** `cell_jitter_m` moves the whole ring ±1.5 m, so the street is
+   3..11 m wide instead of 7.00 m everywhere. Nothing may be rotated in this world, so this is the
+   only available substitute.
+5. **The roofs were deleted by a test that was right about the bug and wrong about the rule.**
+   See below.
+
+**The pitched roof and FIND-059, from the other side.** `f003_no_anchorable_block_has_another_block_sitting_on_its_roof_centre`
+forbade anything over a tagged roof centre — which forbids **pitched roofs**, and that is why the
+rebuild had none. But the lie FIND-059 describes is not the cap, it is the **answer**: the player
+aims at the highest thing he sees and gets `NoAnchor` because *that* block is untagged. A cap that
+carries the same anchor bit as its wall answers correctly. The invariant is now
+**whatever caps a tagged surface must itself be tagged**, it no longer stops at the first capping
+block, and it is paired with a converse that fails if the roofs are deleted again.
+
+**Two real map bugs the stricter test then found**, both invisible in every picture:
+
+* the two flank aprons sat with their centre **0.3 m inside the wall plinth** (x ±97.8 against a
+  plinth edge at ±97.5) — every hook at that point answered `NoAnchor`;
+* **a house stood inside the outer gate passage.** The gate is a gap in the wall courses, and the
+  main street apron stopped at the wall's inner face — so the one place the whole map exists to
+  let you through had a building in it, with 10 m of untagged lintel over its roof.
+
+**The measurement, before and after** (`cargo test --test world -- --nocapture`):
+
+| | before (judged) | after |
+|---|---|---|
+| generated houses | 812 | 926 (+ 926 roof caps) |
+| median street, facade to facade | 7.00 m everywhere | **7.38 m**, 3..11 m |
+| median street : ridge | 0.61 : 1 | **0.87 : 1** |
+| alleys between neighbours | **0** | **889**, median 2.31 m |
+| ridge range | 8.0 .. 11.5 m | **6.66 .. 11.41 m** |
+| relief between blocks (p90 − p10 of block means) | none — one draw | **2.23 m** |
+| swing arc bottom over the pavement | 5.92 m | **6.19 m** at 13.81 m/s peak |
+
+**`d < H` did not get worse — it got better.** The re-aimed ACT 5 hooks across a **4.30 m** street
+under a **10.00 m** ridge: arc bottom **6.19 m**, peak **13.81 m/s** (2.3x running), and it still
+ends against the facade it hangs from (FIND-042). The old act's pair no longer exists, because the
+houses are no longer identical — a script pinned to generated geometry is pinned to the seed *and*
+to the generator.
+
+**A measurement bug in the street test itself, worth 1.8 m.** Splitting alleys from streets by
+**width** (a 4 m threshold) moves every narrow street into the alley bucket and reports the street
+median 1.8 m too wide: **9.14 m by width, 7.36 m by block** on the same city. The split is now by
+`lot_of()` — same ring is an alley, different rings is a street — which is exact and unbiased.
+
+**The ground is anchorable now, and what that costs.** The user: *„man soll überall seinen haken
+inmachen können! auch an den boden oder dächer, alles!"*. `maps.ron` had the ground at
+`anchorable: false` on purpose (*"otherwise you hook into the ground slabs"*) — **overruled**. All
+14 ground, paving, apron, channel and quay blocks of ashgate are tagged, and
+`anchorable_fraction` went 0.85 → **1.0**, so every house and every roof holds a hook: 1935 of 2048
+blocks. The old reason was real and is written into the file rather than pretended away: a
+700 × 700 m slab is the largest target in the map, so a crosshair slightly below the horizon now
+hits *ground* where it used to fly past to a facade behind, and a rope into the ground pulls you
+down into it. Accepted, because the alternative is the thing he complained about — a shot that
+answers `NoAnchor` for no reason the player can see.
+
+**🔴 The part that is NOT solved, and it is not solvable in `maps.ron`.** The district still has
+**no skyline**, and the picture says so honestly. The residential band can only be 4.5 .. 11.5 m,
+because `scale.ron: architecture.heights_m` has `house_large` at 11.5 and **nothing at all between
+12 and 35** (Q-036, open, the user's), and `tests/data.rs::t005_...residential...` holds the layout
+to it. 5 m of spread over 700 m of town is invisible from the air; widening it downward breaks
+`d < H`, which is the one proportion the movement lives on.
+
+What was done inside that constraint: **eight bell towers at the church's own 35 m**, scattered
+through the quarters, `landmark: true`. That is the mechanism `maps.ron` always claimed — "the
+vertical comes from the landmarks" — and until today the whole district had exactly one landmark
+inside the wall. They punctuate the roofscape and they give a 35 m anchor over the middle of a
+quarter, which no 11 m ridge can (FIND-041).
+
+**What the user has to decide (Q-036):** a `house_tall` between 14 and 20 m in
+`scale.ron: architecture.heights_m`, plus a `house_large` entry in `eaves_m` (it has none, so the
+roof rise had to be derived as a *fraction* from his two existing entries: 3.0/4.5 = 1/3 and
+6.0/8.0 = 1/4). With a 14..20 m class the layout could put one tall house per block and the
+roofline would break by itself. **ASSUMPTION until he answers:** the band stays 6.5..11.5 and the
+vertical comes from landmarks only. **Rollback point:** `maps.ron: ashgate.layout.min_height_m` /
+`max_height_m` and the eight tower entries under "Bell towers".
+
+**The honest paragraph.** The picture has separated houses and readable roofs; it does not have a
+skyline, and one of the three things he asked for is therefore only half delivered. The other thing
+I cannot see from here: the district now reads as **detached cubes** rather than as a closed old
+town, because nearly every neighbour pair got a gap. That is a direct answer to „alle ineinander"
+and it may be one step too far in the other direction — it is a question for his eye, not for the
+survey, and nobody has played it yet.
+
+
+## FIND-074 — 🔴 `--screenshot` exits 0 with red asserts, and `assert kills` blames the wrong link
+
+**Two defects in the same file family, both found by the round that repaired the script headers.
+The first one is the root of a whole class of false greens; the second one costs an hour at the
+wrong end.**
+
+### 1. The picture run had no verdict at all
+
+`src/debug/screenshot.rs::exit_when_written` wrote `AppExit::Success` the moment the PNG was on
+disk and **never looked at `ScriptRun::failures`**. `FIND-032` fixed exactly this defect for
+`--ticks` (`src/lib.rs::exit_after_ticks` → `debug::cutoff_verdict`) and named this file as the
+other half; the half was left open for a day.
+
+**Reproduced [offlinebot], before the fix:**
+
+```text
+./target/debug/defeated_by_titan --offscreen --script scripts/f-001-hooks.txt \
+      --ticks 400 --screenshot /tmp/find074-repro.png
+  ERROR line 134: assert Height > 12 — measured 9.980
+  ERROR line 136: assert Speed  > 35 — measured 20.147
+  INFO  image written: /tmp/find074-repro.png (820429 bytes)
+  exit = 0                          # own run, not a pipeline's $?
+```
+
+**Why it is worse than `FIND-032`.** `FIND-032` needed a `--ticks` number that was written too
+small. This one needs nothing at all: **every** `--screenshot` command reported success, always,
+whatever its script found. The same round measured that **16 of 35 scripts documented ONLY a
+`--screenshot` command** in their header and no `--headless` verdict — so for those 16 files the
+entire recorded evidence came out of a code path that was structurally incapable of reporting a
+failure, and four of them were genuinely red behind it. (That round counted four red asserts in
+`f-001-hooks` at `--ticks 400`; the run above found two — the tree moved in between, and the
+number is not the point: **any** number above zero exited 0.) That is `docs/HANDOVER.md` §2 ("5 asserts
+held, exit 0, for a completely dead feature") a third time, and the repaired headers do not cure
+it: a header is a convention, and the next script written from a template reproduces it.
+
+**Fixed** — `screenshot::shot_verdict(&ScriptRun) -> AppExit`, called from `exit_when_written`
+**after** `std::fs::metadata` has confirmed the file is on disk and non-empty. Never an early
+guard: that would end the run at the failing assert and destroy the image the run exists for.
+The image is worth more than the exit code's timing, and now the run delivers both.
+
+**The asymmetry against `cutoff_verdict`, and it is deliberate.** `cutoff_verdict` has two rules —
+a failed assert is red, *and* a script that did not reach its end is red. `shot_verdict` keeps only
+the first. A `--ticks` run is cut off **by accident** (the number was too small, the run has not
+shown what the script claims); a screenshot run is cut off **on purpose** — `--ticks 152` picks the
+one moment to be photographed and the instructions after it are not meant to run. Inheriting the
+second rule would make **every** image run in this repository exit 1, and `docs/ACCEPTANCE.md`'s
+"no image, no 🟧" would be left without a green command to produce one with. The invariant that has
+to hold everywhere is the narrow one: **a failed assert is never green, under any flag
+combination.**
+
+### 2. `assert kills` named the wrong link of its `?` chain
+
+`measure(Metric::Kills)` walks two links — the local player, then the mission's `KillTally` — and
+the caller printed one fixed string for both: `measured nothing (no player found)`. This entry's
+own file records two runs (`p1-overlay`, `p1-no-overlay`) that read exactly that line **with a
+player standing in the world**; the missing thing was `--mission`. A wrong error message is more
+expensive than none, because it is followed.
+
+**Fixed** — `measure` returns `Result<f32, &'static str>` and each missing link names itself:
+`no local player found` · `no mission kill tally — is this run missing --mission?` ·
+`the local player has no Health component` (that third one was mis-named the same way: a player
+without a `Health` component was reported as a missing player). The format stays
+`measured nothing (<reason>)`, so the existing "it must say *nothing*, not print a number" tests
+keep their claim.
+
+### What is NOT fixed here, and it is the other half of "image or verdict, never both"
+
+`FIND-032` measured that the same run at a **generous** `--ticks` gives the correct exit and **no
+image at all**: `run_script` writes its `AppExit` in the tick the script finishes, which is before
+the shot tick, so the app is gone before the screenshot triggers. That is a *lost picture*, not a
+false green, and it needs its own guard (suppress the script's exit while a screenshot job is
+pending) — plus a guard against the run then hanging forever if the offscreen target never appears.
+Not done here on purpose: it converts a clean failure into a possible hang and it deserves its own
+red test. **Rule for now: a `--screenshot` run's `--ticks` must land before the script's end** —
+which is what a shot tick is for anyway.
+
+### Evidence
+
+`tests/debug.rs::a_failed_assert_is_red_on_the_screenshot_path_too` ·
+`tests/debug.rs::a_screenshot_that_cuts_its_script_short_is_not_an_error` ·
+`tests/debug.rs::assert_kills_names_the_missing_tally_and_not_the_player` — all three red-checked
+by putting the defect back in one line and watching them fail again. Stage 🟨 for the process-level
+after-measurement: the repro above was run against the binary as it stood, and the rebuilt binary
+has not been run under `--offscreen --screenshot` since (the commission's cargo budget was
+`--test debug` and `cargo check`). **The next session that builds should repeat the repro command
+and see exit 1 with the PNG still on disk.**
+
+<!-- APPEND NEW ENTRIES ABOVE THIS LINE -->

@@ -103,6 +103,35 @@ fn plan() -> Vec<BlockPlan> {
     plan_blocks(&d, map)
 }
 
+/// The **walls** of the generated houses — `house_<lot>_<i>`, without their roof caps.
+///
+/// A generated house has been two cuboids since 2026-08-12 (`world::map`), and the two are
+/// different measurements: the wall is what a street is measured between, the ridge is what
+/// `d < H` is measured against. A test that lumps them together measures neither.
+fn walls(plan: &[BlockPlan]) -> Vec<&BlockPlan> {
+    plan.iter().filter(|k| k.name.starts_with("house_")).collect()
+}
+
+/// The roof cap of a wall, if the layout builds roofs at all.
+fn roof_of<'a>(plan: &'a [BlockPlan], wall: &BlockPlan) -> Option<&'a BlockPlan> {
+    let want = wall.name.replacen("house_", "roof_", 1);
+    plan.iter().find(|k| k.name == want)
+}
+
+/// Total height of a generated house, cap included — the number the hook hangs from.
+fn ridge_m(plan: &[BlockPlan], wall: &BlockPlan) -> f32 {
+    roof_of(plan, wall).map_or(wall.size_m.y, |r| r.center_m.y + r.size_m.y * 0.5)
+}
+
+/// Which block a generated house belongs to — the `<lot>` of `house_<lot>_<i>`.
+///
+/// Two houses of the same lot are neighbours in one ring and what lies between them is an
+/// alley; two houses of different lots face each other across a street. The distinction is
+/// the whole point of the layout, so it is read off the name and not guessed from a width.
+fn lot_of(house: &BlockPlan) -> &str {
+    house.name.trim_start_matches("house_").split('_').next().unwrap_or("")
+}
+
 /// Every built cuboid as `(name, center, full size, anchorable)`, sorted by name.
 fn built_blocks(app: &mut App) -> Vec<(String, Vec3, Vec3, bool)> {
     let mut q = app
@@ -342,42 +371,125 @@ fn f003_the_space_around_the_origin_stays_clear() {
 
 #[test]
 fn f003_the_grid_houses_stay_in_the_height_window_from_the_file() {
-    // `maps.ron` says: the city is flat, the vertical comes from the landmarks. Red when
-    // somebody pulls the residential band back up — in the image that looks like a skyline,
-    // not like a bug.
+    // `maps.ron` says: the vertical comes from the landmarks, and the residential band stays
+    // inside `scale.ron: architecture.heights_m`. Red when somebody pulls the band up —
+    // including by adding a roof **on top of** the rolled height instead of cutting it out of
+    // it, which is exactly the tempting way to build a roof and would put every ridge 2 to 4
+    // metres above the user's own ceiling without a single test noticing.
     let d = data();
     let map = d.current_map().expect("current map");
     let r = &map.layout;
     let plan = plan();
-    let houses = &plan[map.blocks.len()..];
+    let houses = walls(&plan);
+    assert!(!houses.is_empty(), "no generated house at all");
 
-    let mut tall = 0;
-    for house in houses {
-        let h = house.size_m.y;
+    for house in &houses {
+        let ridge = ridge_m(&plan, house);
         assert!(
-            (r.min_height_m..=r.max_height_m).contains(&h),
-            "{}: {h} m is not in {}..={} (maps.ron: layout)",
+            (r.min_height_m..=r.max_height_m).contains(&ridge),
+            "{}: a ridge of {ridge} m is not in {}..={} (maps.ron: layout)",
             house.name,
             r.min_height_m,
             r.max_height_m
         );
+        assert!(house.size_m.y > 0.0, "{}: the roof ate the whole wall", house.name);
         assert!(house.center_m.y > 0.0, "{}: center below the ground", house.name);
         assert!(
-            (house.center_m.y - h * 0.5).abs() < 1e-4,
+            (house.center_m.y - house.size_m.y * 0.5).abs() < 1e-4,
             "{}: does not stand on y = 0, but at {}",
             house.name,
-            house.center_m.y - h * 0.5
+            house.center_m.y - house.size_m.y * 0.5
         );
-        if h > (r.min_height_m + r.max_height_m) * 0.5 {
-            tall += 1;
+        // And the cap really sits ON the wall, not floating over it or sunk into it.
+        if let Some(cap) = roof_of(&plan, house) {
+            let eaves = house.center_m.y + house.size_m.y * 0.5;
+            assert!(
+                (cap.center_m.y - cap.size_m.y * 0.5 - eaves).abs() < 1e-3,
+                "{}: the cap starts at {} m, the eaves are at {eaves} m",
+                cap.name,
+                cap.center_m.y - cap.size_m.y * 0.5
+            );
+            assert!(
+                cap.size_m.x < house.size_m.x && cap.size_m.z < house.size_m.z,
+                "{}: the cap is not pulled in — a roof flush with the wall is a flat top",
+                cap.name
+            );
         }
     }
-    // Not all the same height: a city of nothing but 8 m blocks would be an arithmetic bug
-    // that no height window catches.
+}
+
+#[test]
+fn f003_the_district_has_a_skyline_and_not_one_flat_top() {
+    // ★ The user's verdict of 2026-08-12, as a measurement: *„keine unterschiedliche höhen!"*.
+    //
+    // The band alone does not catch this. The version he judged rolled every house out of
+    // 8.0..11.5 independently — inside the window, spread by any per-house measure, and from
+    // twenty metres up a flat mosaic, because white noise averages out over a hundred metres.
+    // So what is measured here is **relief at two scales**: neighbours differ, AND blocks
+    // differ from blocks. The second one is the one that was missing.
+    let d = data();
+    let map = d.current_map().expect("current map");
+    let r = &map.layout;
+    let plan = plan();
+    let houses = walls(&plan);
+
+    let ridges: Vec<f32> = houses.iter().map(|h| ridge_m(&plan, h)).collect();
+    let lo = ridges.iter().copied().fold(f32::MAX, f32::min);
+    let hi = ridges.iter().copied().fold(f32::MIN, f32::max);
+    let band = r.max_height_m - r.min_height_m;
     assert!(
-        tall > 0 && tall < houses.len(),
-        "{tall} of {} houses in the upper half of the window — the heights do not spread",
-        houses.len()
+        hi - lo > band * 0.8,
+        "every ridge in the district is between {lo:.2} and {hi:.2} m — {:.2} m of the \
+         {band:.2} m band is unused",
+        band - (hi - lo)
+    );
+
+    // Scale 2: the mean ridge PER BLOCK. `house_<lot>_<i>` — the lot is the block.
+    let mut per_block: std::collections::BTreeMap<&str, (f32, u32)> = Default::default();
+    for (h, ridge) in houses.iter().zip(&ridges) {
+        let lot = h.name.trim_start_matches("house_").split('_').next().expect("house_<lot>_<i>");
+        let e = per_block.entry(lot).or_insert((0.0, 0));
+        e.0 += ridge;
+        e.1 += 1;
+    }
+    let mut means: Vec<f32> = per_block.values().map(|(s, n)| s / *n as f32).collect();
+    means.sort_by(f32::total_cmp);
+    assert!(means.len() > 50, "only {} blocks — is this the district?", means.len());
+    let p10 = means[means.len() / 10];
+    let p90 = means[means.len() * 9 / 10];
+    eprintln!(
+        "{} houses in {} blocks · ridge {lo:.2}..{hi:.2} m · block mean p10 {p10:.2} m, \
+         p90 {p90:.2} m, relief {:.2} m",
+        houses.len(),
+        means.len(),
+        p90 - p10
+    );
+    assert!(
+        p90 - p10 > 1.5,
+        "the tenth-highest and the tenth-lowest block of the district differ by \
+         {:.2} m — at that relief the town is one flat top from any distance, whatever the \
+         individual houses do",
+        p90 - p10
+    );
+
+    // Scale 1: inside one block, the neighbours are not all the same either.
+    let inner = per_block
+        .keys()
+        .map(|lot| {
+            let hs: Vec<f32> = houses
+                .iter()
+                .zip(&ridges)
+                .filter(|(h, _)| h.name.starts_with(&format!("house_{lot}_")))
+                .map(|(_, r)| *r)
+                .collect();
+            hs.iter().copied().fold(f32::MIN, f32::max) - hs.iter().copied().fold(f32::MAX, f32::min)
+        })
+        .filter(|d| *d > 0.5)
+        .count();
+    assert!(
+        inner * 2 > per_block.len(),
+        "only {inner} of {} blocks have houses that differ by more than half a metre",
+        per_block.len()
     );
 }
 
@@ -396,17 +508,22 @@ fn f003_the_street_is_narrower_than_the_houses_are_tall() {
     // Measured here, not asserted from a comment: for every generated house, the gap to the
     // next generated house along +x and along +z whose other axis overlaps. That is exactly
     // what a street sample is.
-    let d = data();
-    let map = d.current_map().expect("current map");
+    // ⚠️ Since 2026-08-12 the sample is split in two, and it has to be: the ring has
+    // **alleys** in it now (`maps.ron: layout.perimeter.gap_fraction`), and an alley is 1 to
+    // 3 m wide. Pooled into one median they would outnumber the street samples and report a
+    // 2 m "street" — a number that passes this test while saying nothing about it. So:
+    // 1..4 m is an alley and gets its own count, 4..25 m is a street and carries the
+    // assertion, above 25 m is a field and is a hole in the frontage.
     let plan = plan();
-    let houses = &plan[map.blocks.len()..];
+    let houses = walls(&plan);
     assert!(houses.len() > 100, "only {} generated houses — is this the district?", houses.len());
 
     let span = |c: f32, s: f32| (c - s * 0.5, c + s * 0.5);
     let mut gaps: Vec<f32> = Vec::new();
     let mut ratios: Vec<f32> = Vec::new();
+    let mut alleys: Vec<f32> = Vec::new();
     let mut broken = 0usize;
-    for a in houses {
+    for a in &houses {
         for axis in 0..2 {
             let (a_lo, a_hi) = if axis == 0 {
                 span(a.center_m.x, a.size_m.x)
@@ -419,7 +536,8 @@ fn f003_the_street_is_narrower_than_the_houses_are_tall() {
                 span(a.center_m.x, a.size_m.x)
             };
             let mut best: Option<&BlockPlan> = None;
-            for b in houses {
+            for b in &houses {
+                let b = *b;
                 let (b_lo, _) = if axis == 0 {
                     span(b.center_m.x, b.size_m.x)
                 } else {
@@ -478,8 +596,22 @@ fn f003_the_street_is_narrower_than_the_houses_are_tall() {
                 // street would make the median meaningless in the flattering direction.
                 continue;
             }
+            if lot_of(a) == lot_of(b) {
+                // An alley between two houses of the SAME block. Not a street — but it is the
+                // thing that stopped the ring from reading as one merged mass, so it is
+                // counted rather than dropped.
+                //
+                // Split by **block and not by width**, and that is not a detail: a width
+                // threshold moves every narrow street into the alley bucket and the street
+                // median comes out flattering by half a metre. Measured 2026-08-12: 9.14 m
+                // with a 4 m threshold, 7.62 m by block, on the same city.
+                alleys.push(gap);
+                continue;
+            }
             gaps.push(gap);
-            ratios.push(gap / a.size_m.y.min(b.size_m.y));
+            // Against the RIDGE, not against the wall: the roof cap carries the same anchor
+            // bit as its house, so `d < H` (FIND-041) hangs from the cap.
+            ratios.push(gap / ridge_m(&plan, a).min(ridge_m(&plan, b)));
         }
     }
 
@@ -491,10 +623,22 @@ fn f003_the_street_is_narrower_than_the_houses_are_tall() {
     let n = gaps.len();
     let gap_m = median(&mut gaps);
     let ratio = median(&mut ratios);
+    // ★ The other half of the user's verdict — *„häuser sind alle ineinander!"*. Red when
+    // somebody takes `gap_fraction` back out: then every neighbour is a party wall again and
+    // there is not one gap in the whole district you could see down.
+    assert!(
+        alleys.len() * 4 > n,
+        "{} alleys against {n} streets — with that few gaps between neighbours the ring is \
+         one merged mass again, which is exactly what got judged on 2026-08-12",
+        alleys.len()
+    );
+    let alley_m = median(&mut alleys);
     eprintln!(
         "{} generated houses · {n} street samples, median gap {gap_m:.2} m, median \
-         street : ridge {ratio:.2} : 1 · {broken} facades look at open ground",
-        houses.len()
+         street : ridge {ratio:.2} : 1 · {} alleys, median {alley_m:.2} m · {broken} facades \
+         look at open ground",
+        houses.len(),
+        alleys.len()
     );
     assert!(
         broken * 3 < n,
@@ -526,6 +670,18 @@ fn f003_no_anchorable_block_has_another_block_sitting_on_its_roof_centre() {
     // is the premise, as geometry, over whatever map `current` names: **a tagged surface
     // nothing can reach from above is a lie in the map**, and a lie you can only find by
     // playing is one nobody finds.
+    //
+    // ## What changed on 2026-08-12, and why it is not a weakening
+    //
+    // Read literally, "nothing may stand over a tagged roof centre" forbids **pitched roofs**
+    // — and that is why the rebuild deleted them, which the user then judged
+    // (*„keine unterschiedliche höhen!"*). But the lie FIND-059 describes is not the cap. It
+    // is the **answer**: the player aims at the highest thing he sees, the ray hits whatever
+    // is on top, and if *that* is untagged the shot dies as `NoAnchor` for no visible reason.
+    // A cap that carries the same anchor bit as its wall answers correctly, so the invariant
+    // that actually holds — and the one measured here — is: **whatever caps a tagged surface
+    // must itself be tagged.** Stricter in one way, too: it no longer stops at the first
+    // capping block but reports every untagged one.
     let d = data();
     let map = d.current_map().expect("current map");
     let plan = plan();
@@ -533,7 +689,7 @@ fn f003_no_anchorable_block_has_another_block_sitting_on_its_roof_centre() {
     let mut capped: Vec<String> = Vec::new();
     for a in plan.iter().filter(|k| k.anchorable) {
         let a_top = a.center_m.y + a.size_m.y * 0.5;
-        for b in &plan {
+        for b in plan.iter().filter(|k| !k.anchorable) {
             if std::ptr::eq(a, b) {
                 continue;
             }
@@ -543,17 +699,37 @@ fn f003_no_anchorable_block_has_another_block_sitting_on_its_roof_centre() {
                 && (b.center_m.z - a.center_m.z).abs() < half.z
                 && b.center_m.y + half.y > a_top + 1e-3;
             if over {
-                capped.push(format!("{} is capped by {}", a.name, b.name));
+                capped.push(format!("{} is capped by the untagged {}", a.name, b.name));
                 break;
             }
         }
     }
     assert!(
         capped.is_empty(),
-        "{} of {} anchorable blocks cannot be hooked at their roof centre: {capped:#?}",
+        "{} of {} anchorable blocks answer NoAnchor at the highest point the player sees: \
+         {capped:#?}",
         capped.len(),
         plan.iter().filter(|k| k.anchorable).count()
     );
+
+    // And the converse, which is what keeps the sentence above from being a licence: the
+    // district really does have roof caps, and every single one of them is tagged like the
+    // house it sits on. Without this, deleting the roofs again would make the test greener.
+    let roofs: Vec<&BlockPlan> = plan.iter().filter(|k| k.name.starts_with("roof_")).collect();
+    if map.layout.perimeter.as_ref().and_then(|p| p.roof.as_ref()).is_some() {
+        assert!(roofs.len() > 100, "only {} roof caps in the district", roofs.len());
+        for cap in &roofs {
+            let wall = plan
+                .iter()
+                .find(|k| k.name == cap.name.replacen("roof_", "house_", 1))
+                .unwrap_or_else(|| panic!("{}: a roof cap with no house under it", cap.name));
+            assert_eq!(
+                cap.anchorable, wall.anchorable,
+                "{} and {} disagree about the anchor bit — that is FIND-059",
+                cap.name, wall.name
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------

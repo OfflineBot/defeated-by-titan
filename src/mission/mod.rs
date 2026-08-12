@@ -77,7 +77,7 @@ use crate::shared::{
     Cli, Health, HitZone, PlayerId, SimulationSystems, SpawnTitan, Tick, TitanHit,
 };
 
-pub use hub::{DeploymentPoint, RefuelStation, ReturnToHub, Sortie, SortieOrder};
+pub use hub::{BladeRack, DeploymentPoint, RefuelStation, ReturnToHub, Sortie, SortieOrder};
 pub use phase::MissionPhase;
 pub use run::{resolve, KillTally, Mission, MissionClock, SortieNumbers, WaveSchedule};
 
@@ -108,15 +108,17 @@ impl Plugin for MissionPlugin {
 
         // ---- the hub loop ------------------------------------------------------------------
         //
-        // All three in `PostStep`, and that is the whole ordering story: both triggers have to
+        // All of them in `PostStep`, and that is the whole ordering story: every trigger has to
         // read the position **this** tick's integration produced, not the one the player had
-        // before he walked. The station only *asks* — it writes `shared::RefuelRequest`, and
-        // `vector::gas::apply_refuel_requests` (`Intent`) applies it in the next tick, because
-        // `Gas` has exactly one writer and it is not this domain (`docs/architecture.md`,
-        // authority table; `FINDINGS.md` FIND-063).
+        // before he walked. The supply only *asks* — it writes `shared::RefuelRequest` and
+        // `shared::BladeRestockRequest`, and the domains that own the two fields apply them in
+        // the next tick's `Intent` (`vector::gas::apply_refuel_requests`,
+        // `blades::resupply::apply_restock_requests`), because `Gas` and `Blades` have exactly
+        // one writer each and neither is this domain (`docs/architecture.md`, authority table;
+        // `FINDINGS.md` FIND-063 for the tank, FIND-066 for the harness).
         app.add_systems(
             FixedUpdate,
-            (hub::deploy_on_contact, hub::refuel_at_stations)
+            (hub::deploy_on_contact, hub::refuel_at_stations, hub::restock_at_stations)
                 .in_set(SimulationSystems::PostStep)
                 .run_if(in_state(MissionPhase::Hub)),
         )
