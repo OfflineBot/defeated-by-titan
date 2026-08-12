@@ -34,27 +34,20 @@
 //! proven is that a real exported model arrives upright, painted and the right size — that
 //! needs a file and a screen (`docs/models.md`).
 
-use bevy::animation::AnimationClip;
+use bevy::animation::graph::{AnimationGraph, AnimationGraphHandle, AnimationNodeIndex};
+use bevy::animation::{AnimationClip, AnimationPlayer, RepeatAnimation};
 use bevy::world_serialization::WorldInstanceReady;
 use bevy::asset::LoadState;
 use bevy::gltf::Gltf;
 use bevy::prelude::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::data::{GameData, ModelSource};
-use crate::shared::TitanKindName;
+use crate::shared::{MovementState, TitanKindName, TitanState};
 
-/// The empties a model may carry, exactly as `docs/models.md` names them.
-///
-/// **Names, not numbers** — this is a contract with Blender, so it belongs in the code the way
-/// an axis convention does. A typo in Blender therefore does not raise an error, it produces a
-/// *missing* anchor; that is why [`read_the_models_anchors`] shouts about a missing `cortex`
-/// instead of silently doing nothing.
-pub const ANCHOR_NAMES: [&str; 8] =
-    ["cortex", "hit.min", "hit.max", "hook.l", "hook.r", "hand.l", "hand.r", "eye"];
-
-/// The one anchor whose absence is a gameplay bug and not a missing detail (`F-030`).
-pub const CORTEX_ANCHOR: &str = "cortex";
+// The anchor contract lives in `shared/` and not here, because `titan` has to READ it: the
+// `cortex` empty out of the file is where the titan dies. See `shared::anchors`.
+pub use crate::shared::anchors::{ModelAnchors, ANCHOR_NAMES, CORTEX_ANCHOR};
 
 /// "This entity is the logical model `name`."
 ///
@@ -90,27 +83,6 @@ pub enum ModelBody {
     Scene(Entity),
 }
 
-/// The anchors that came **out of the model**, in the model root's own space, in meters.
-///
-/// Inserted on **every** entity with a [`ModelName`], empty for a primitive. That is
-/// deliberate: a reader asks [`ModelAnchors::get`], gets `None`, and uses the computed rig
-/// position — one code path for both worlds, which is the difference between a switch and a
-/// rebuild (`docs/models.md`).
-#[derive(Component, Debug, Clone, Default, PartialEq)]
-pub struct ModelAnchors(pub BTreeMap<String, Vec3>);
-
-impl ModelAnchors {
-    /// The anchor the model brought, or `None` — *never* a substitute. A cortex that quietly
-    /// becomes `Vec3::ZERO` is a kill zone between the feet.
-    pub fn get(&self, anchor: &str) -> Option<Vec3> {
-        self.0.get(anchor).copied()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-
 /// Everything the registry asked the asset server for. Empty on a repo with no `.glb`.
 #[derive(Resource, Debug, Default)]
 pub struct ModelAssets {
@@ -124,8 +96,63 @@ pub struct ModelAssets {
     /// falls back to the static pose — which is exactly what happens when the user names a
     /// clip that is not in his file.
     pub clips: BTreeMap<String, BTreeMap<String, Handle<AnimationClip>>>,
+    /// Logical name -> the graph its [`AnimationPlayer`] plays out of, and one node per state.
+    ///
+    /// Built lazily by [`drive_animations`] out of [`clips`](Self::clips), **one graph asset
+    /// per model and not per entity**: sixty husks share one graph, and a node index means the
+    /// same thing on all of them.
+    pub graphs: BTreeMap<String, ModelGraph>,
     /// Logical names still waiting for their file. Emptied by [`resolve_animation_clips`].
     pending: Vec<String>,
+    /// `(model, state)` pairs already shouted about. **A warning that repeats every frame is a
+    /// warning nobody reads** (rule 6) — and a titan flipping `Idle`/`Pursue` would produce
+    /// exactly that.
+    warned: BTreeSet<(String, String)>,
+}
+
+/// One model's animation graph: the asset the player reads, and where each state sits in it.
+#[derive(Debug, Clone)]
+pub struct ModelGraph {
+    pub handle: Handle<AnimationGraph>,
+    /// Game state -> its node. **A state that is absent here has no clip in the file** — that
+    /// is the missing-clip case, and it is never filled with a neighbour.
+    pub nodes: BTreeMap<String, AnimationNodeIndex>,
+}
+
+/// Which clip name a titan's state asks for. **The names are the ones in `docs/models.md`.**
+///
+/// [`TitanState`] is the honest source: it is what `titan::brain` already decides, what
+/// `combat` gates on and what the F3 overlay prints. An animation state machine of its own
+/// would be a second FSM that disagrees with the first one the day somebody adds an edge.
+pub fn clip_state_of_titan(state: TitanState) -> &'static str {
+    match state {
+        TitanState::Idle => "idle",
+        TitanState::Pursue => "walk",
+        TitanState::Windup => "windup",
+        TitanState::Strike => "strike",
+        TitanState::Recover => "recover",
+        TitanState::Death => "death",
+    }
+}
+
+/// The same for the player's body ([`MovementState`]).
+pub fn clip_state_of_movement(state: MovementState) -> &'static str {
+    match state {
+        MovementState::Grounded => "idle",
+        MovementState::Airborne => "fall",
+        MovementState::Tethered => "swing",
+        MovementState::OnWall => "wall",
+        MovementState::Downed => "downed",
+    }
+}
+
+/// Does this state loop, or does it play once and stop?
+///
+/// **Looping is the exception, not the rule.** A state a body can stand in for ever loops; a
+/// state that is a beat of an attack plays once, because a looping wind-up is a titan that
+/// telegraphs for ever (`F-053`).
+pub fn clip_repeats(state: &str) -> bool {
+    matches!(state, "idle" | "walk" | "fall" | "swing" | "wall")
 }
 
 /// One `Startup` pass over `art.ron`.
@@ -347,6 +374,261 @@ pub fn attach_late_scenes(
             .remove::<PendingScene>()
             .insert(WorldAssetRoot(scene));
     }
+}
+
+/// What is playing on this entity's model right now, and whether there was anything to play.
+///
+/// The memo that keeps [`drive_animations`] from doing its work every frame (rule 6): a state
+/// is switched **on the edge**, not per tick. `has_clip: false` is not a resting state — it is
+/// re-tried, because the file may still have been loading when the state was first asked for.
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
+pub struct PlayingClip {
+    /// The **game state** (`idle`, `walk`, `windup`, …), not the clip name inside the file.
+    pub state: String,
+    /// Did that state resolve to a clip? `false` means the model stands still for it.
+    pub has_clip: bool,
+}
+
+/// **The visible half of the missing-clip warning.**
+///
+/// `docs/FINDINGS.md` FIND-053: a clip name that is not in the file has *no visual symptom* —
+/// the model spawns, renders, is the right size and stands perfectly still. So when a model
+/// that **declares** animations cannot show the state the game is in, the cuboid rig comes
+/// back: it is driven by `titan::pose` and it does show the wind-up. You see a placeholder
+/// instead of a lie, and the log says why.
+///
+/// A model that declares **no** animations at all (`animations: {}`) is a legal answer and
+/// gets `false` — a static model is not a broken one.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrimitiveFallback(pub bool);
+
+/// The memo of what [`hide_the_primitive_under_a_model`] last did. Never set by hand.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrimitiveHidden(pub bool);
+
+/// **State in, clip out.** The seam the user asked for, finished.
+///
+/// Deliberately *not* a blend tree and *not* a transition table: [`TitanState`] already decides
+/// what the body is doing, and a second state machine over the top of it disagrees with the
+/// first one the day somebody adds an edge. `idle`/`walk` loop, `windup`/`strike` play once
+/// (`clip_repeats`).
+///
+/// The [`AnimationPlayer`] is taken from the model where the glTF loader put it
+/// (`bevy_gltf-0.19.0/src/loader/mod.rs:1088-1093` inserts one on an animated hierarchy's
+/// root); only when the instance brings none does this put one on the scene child itself.
+pub fn drive_animations(
+    mut commands: Commands,
+    data: Res<GameData>,
+    mut assets: ResMut<ModelAssets>,
+    mut graph_assets: ResMut<Assets<AnimationGraph>>,
+    owners: Query<(
+        Entity,
+        &ModelName,
+        &ModelBody,
+        Option<&TitanState>,
+        Option<&MovementState>,
+        Option<&PlayingClip>,
+    )>,
+    children: Query<&Children>,
+    mut players: Query<&mut AnimationPlayer>,
+) {
+    for (entity, wanted, body, titan_state, movement, playing) in &owners {
+        let ModelBody::Scene(scene) = body else {
+            continue;
+        };
+        // The state the *game* is in. A titan says so, the player's body says so, and an
+        // entity that says neither has nothing to drive.
+        let state = match (titan_state, movement) {
+            (Some(s), _) => clip_state_of_titan(*s),
+            (None, Some(m)) => clip_state_of_movement(*m),
+            (None, None) => continue,
+        };
+        if playing.is_some_and(|p| p.state == state && p.has_clip) {
+            continue;
+        }
+        // Nothing has been resolved for this model yet — the file may still be in flight. Do
+        // not decide "no clip" on a question that has not been answered.
+        if !assets.clips.contains_key(&wanted.name) {
+            continue;
+        }
+
+        build_graph_once(&mut assets, &mut graph_assets, &wanted.name);
+        let node = assets
+            .graphs
+            .get(&wanted.name)
+            .and_then(|g| g.nodes.get(state))
+            .copied();
+
+        let Some(node) = node else {
+            // The fourth glTF trap (FIND-053): loud, once, and with something to look at.
+            let declares = data.model(&wanted.name).is_some_and(|m| !m.animations.is_empty());
+            if declares && assets.warned.insert((wanted.name.clone(), state.to_string())) {
+                warn!(
+                    "model {:?}: the game is in state {state:?} and this model has no clip for \
+                     it. The cuboid rig stays visible for that state — a model that stands \
+                     still would look exactly like a model that has no animation at all \
+                     (docs/models.md, docs/FINDINGS.md FIND-053).",
+                    wanted.name
+                );
+            }
+            commands.entity(entity).insert((
+                PlayingClip { state: state.to_string(), has_clip: false },
+                PrimitiveFallback(declares),
+            ));
+            continue;
+        };
+
+        let handle = assets.graphs[&wanted.name].handle.clone();
+        let Some(player_entity) = animation_player_of(*scene, &children, &players) else {
+            // The instance brought none — put one on the scene child and play next frame, when
+            // the component actually exists. Not an error: a hand-built world asset (and every
+            // test fixture in this repository) has no `AnimationPlayer` of its own.
+            commands
+                .entity(*scene)
+                .insert((AnimationPlayer::default(), AnimationGraphHandle(handle)));
+            continue;
+        };
+
+        commands.entity(player_entity).insert(AnimationGraphHandle(handle));
+        if let Ok(mut player) = players.get_mut(player_entity) {
+            // One state at a time. No cross-fade, no transition table — that is a separate
+            // decision and it is not this seam's to make.
+            player.stop_all();
+            let active = player.play(node);
+            if clip_repeats(state) {
+                active.repeat();
+            } else {
+                active.set_repeat(RepeatAnimation::Never);
+            }
+        }
+        commands.entity(entity).insert((
+            PlayingClip { state: state.to_string(), has_clip: true },
+            PrimitiveFallback(false),
+        ));
+    }
+}
+
+/// One [`AnimationGraph`] per model, built the first time a state asks for it.
+///
+/// Not per entity: sixty husks share one graph asset, and a node index means the same thing on
+/// every one of them.
+fn build_graph_once(
+    assets: &mut ModelAssets,
+    graph_assets: &mut Assets<AnimationGraph>,
+    name: &str,
+) {
+    if assets.graphs.contains_key(name) {
+        return;
+    }
+    let Some(clips) = assets.clips.get(name) else {
+        return;
+    };
+    if clips.is_empty() {
+        return;
+    }
+    let mut graph = AnimationGraph::new();
+    let root = graph.root;
+    let mut nodes = BTreeMap::new();
+    for (state, clip) in clips {
+        nodes.insert(state.clone(), graph.add_clip(clip.clone(), 1.0, root));
+    }
+    let handle = graph_assets.add(graph);
+    info!("model {name:?}: animation graph built with {} state(s)", nodes.len());
+    assets.graphs.insert(name.to_string(), ModelGraph { handle, nodes });
+}
+
+/// The scene's own [`AnimationPlayer`], or the first one under it. `None` = the instance
+/// brought none.
+fn animation_player_of(
+    scene: Entity,
+    children: &Query<&Children>,
+    players: &Query<&mut AnimationPlayer>,
+) -> Option<Entity> {
+    if players.contains(scene) {
+        return Some(scene);
+    }
+    children.iter_descendants(scene).find(|e| players.contains(*e))
+}
+
+/// **The primitive gets out of the way.**
+///
+/// Until 2026-08-12 a configured model spawned its scene *beside* the cuboid rig and both were
+/// visible — for a titan that is two bodies in one place. This hides the rig, and it hides
+/// **only the picture**: `Visibility` is not read by avian, by `GlobalTransform` propagation or
+/// by `SpatialQuery`, so the body collider, the cortex sensor and every length the rig computes
+/// stay exactly where they were. That is the whole reason it is `Visibility` and not a despawn
+/// or a removed `Mesh3d`: a hidden cortex still kills, and it comes back with one line of RON.
+///
+/// **The trigger is the arrived scene, not the configured row** — a file that never loads
+/// leaves the cuboids standing, which is what `docs/models.md` promises for a wrong path.
+pub fn hide_the_primitive_under_a_model(
+    mut commands: Commands,
+    owners: Query<(Entity, &ModelBody, Option<&PrimitiveFallback>, Option<&PrimitiveHidden>)>,
+    arrived: Query<(), With<WorldAssetRoot>>,
+    children: Query<&Children>,
+    meshes: Query<(), With<Mesh3d>>,
+) {
+    for (entity, body, fallback, hidden) in &owners {
+        let want_hidden = match body {
+            ModelBody::Primitive => false,
+            ModelBody::Scene(scene) => {
+                arrived.contains(*scene) && !fallback.is_some_and(|f| f.0)
+            }
+        };
+        if hidden.is_some_and(|h| h.0 == want_hidden) {
+            continue;
+        }
+        let skip = match body {
+            ModelBody::Scene(scene) => Some(*scene),
+            ModelBody::Primitive => None,
+        };
+        let visibility =
+            if want_hidden { Visibility::Hidden } else { Visibility::Inherited };
+        for part in primitive_parts(entity, skip, &children, &meshes) {
+            commands.entity(part).insert(visibility);
+        }
+        // A block carries its cuboid on the entity ITSELF, not on a child (`build_block_meshes`).
+        // Hiding it would take the scene child with it — unless the child says
+        // `Visibility::Visible`, which ignores a hidden parent. That is the one case where the
+        // model has to be louder than its owner.
+        if meshes.contains(entity) {
+            commands.entity(entity).insert(visibility);
+            if let Some(scene) = skip {
+                commands.entity(scene).insert(if want_hidden {
+                    Visibility::Visible
+                } else {
+                    Visibility::Inherited
+                });
+            }
+        }
+        commands.entity(entity).insert(PrimitiveHidden(want_hidden));
+    }
+}
+
+/// Every mesh under `owner` that is **not** part of the model's own scene.
+///
+/// Walked by hand instead of `iter_descendants` so that the scene's subtree can be cut out
+/// whole: hiding the model to make the model visible would be a funny bug to debug.
+fn primitive_parts(
+    owner: Entity,
+    skip: Option<Entity>,
+    children: &Query<&Children>,
+    meshes: &Query<(), With<Mesh3d>>,
+) -> Vec<Entity> {
+    let mut found = Vec::new();
+    let mut pending = vec![owner];
+    while let Some(entity) = pending.pop() {
+        if Some(entity) == skip {
+            continue;
+        }
+        if entity != owner && meshes.contains(entity) {
+            found.push(entity);
+        }
+        if let Ok(kids) = children.get(entity) {
+            pending.extend(kids.iter());
+        }
+    }
+    found
 }
 
 /// **The part that makes a swap work instead of merely render.**

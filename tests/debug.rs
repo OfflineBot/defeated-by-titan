@@ -25,8 +25,8 @@ use defeated_by_titan::debug::script::parse;
 use defeated_by_titan::debug::{DebugOverlay, ScriptRun};
 use defeated_by_titan::player::spawn_player;
 use defeated_by_titan::shared::{
-    AnchorSurface, Block, BodyId, Health, Hook, HookState, IdCounter, LocalPlayer, Side,
-    StateClock, TitanId, TitanKindName, TitanState, Cli,
+    AnchorSurface, Block, BodyId, Health, Hook, HookState, IdCounter, LocalPlayer, MovementState,
+    Side, StateClock, TitanId, TitanKindName, TitanState, Velocity, Cli,
 };
 
 /// Builds the **real** app, headless — not a second, similar one.
@@ -267,6 +267,54 @@ fn the_overlay_is_off_until_f3_and_then_carries_the_numbers() {
         Display::None,
         "F3 is a toggle — a switch that only goes on is a switch you have to restart the game \
          to undo"
+    );
+}
+
+#[test]
+fn the_overlay_says_flight_for_a_skidding_player_and_not_for_a_walking_one() {
+    // `FIND-050`, the sentence it left open: *"the F3 overlay still prints `Grounded` for a
+    // player skidding at 30 m/s in flight mode — that is a lie in the debug overlay."* It is a
+    // lie that costs evidence, not comfort: the overlay is what turns a screenshot into a
+    // measurement, and a picture that says `Grounded` while `air_control` is steering the body
+    // proves the opposite of what is happening.
+    //
+    // The honest print is the **predicate** (`player::locomotion::in_flight`, over
+    // `ground_top_speed_m_s` = 6.3333 m/s at the file's numbers), not the raw variant — and
+    // both halves are here, because a word that is always printed is not a verdict.
+    let mut app = running_app();
+    let player = {
+        let mut q = app.world_mut().query_filtered::<Entity, With<LocalPlayer>>();
+        q.iter(app.world()).next().expect("no local player — `player::spawn_player` did not run")
+    };
+
+    // Feet on the floor, 30 m/s across it: `Grounded` is what `integrator::readback` writes, and
+    // it is still true. It is just not the whole truth.
+    app.world_mut()
+        .entity_mut(player)
+        .insert((MovementState::Grounded, Velocity(Vec3::new(30.0, 0.0, 0.0))));
+    tap_f3(&mut app);
+    app.world_mut().run_schedule(Update);
+    let (text, _) = overlay(&mut app);
+    let line = text.lines().next().unwrap_or_default().to_string();
+    assert!(
+        line.contains("Grounded FLIGHT") && line.contains("spd 30.0"),
+        "the overlay printed {line:?} — a player skidding at 30 m/s is in flight by the game's \
+         own rule, and the speed has to stand next to the verdict or it cannot be read off the \
+         image"
+    );
+
+    // Slow again, same tick after next: the legs have him back, and the word has to go away.
+    // `clear()` because `just_pressed` survives `run_schedule(Update)` — `ButtonInput` is
+    // cleared in `PreUpdate`, so without this the second frame would toggle the overlay off.
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+    app.world_mut().entity_mut(player).insert(Velocity(Vec3::ZERO));
+    app.world_mut().run_schedule(Update);
+    let (text, _) = overlay(&mut app);
+    let line = text.lines().next().unwrap_or_default().to_string();
+    assert!(
+        line.contains("Grounded") && !line.contains("FLIGHT"),
+        "the overlay printed {line:?} — a standing player is not flying, and a verdict that is \
+         always printed says nothing"
     );
 }
 

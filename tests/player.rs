@@ -492,6 +492,16 @@ fn f014_below_the_run_speed_the_ground_is_still_an_assignment() {
 fn f014_the_input_still_steers_the_carried_momentum() {
     // Carrying momentum must not mean being a passenger. A player who arrives fast and holds
     // A curves; he does not keep the old vector forever, and he does not stop dead either.
+    //
+    // ⚠️ **Since F-006 (2026-08-12) this number is the AIR CONTROL's, not the legs'.** Above
+    // `run_speed_m_s + (-gravity_m_s2)/simulation_hz` `ground_locomotion` passes `Vec2::ZERO`
+    // as `desired`, so `ground_step` only brakes; what bends the line is
+    // `locomotion::air_control` at `-gravity_m_s2 / 2`. Measured `[offlinebot]`: the legs used
+    // to turn this by **22.44°**, the air control turns it by **11.22°**, and with an empty
+    // tank by **5.67°** (`f006_above_the_threshold_the_legs_stop_steering_and_the_air_takes_over`
+    // is the other half of this pair). **The margin over the 10° below is 1.22°** — whoever
+    // lowers the air control below ≈ 0.53·g makes this test go red, and that is the guard
+    // working, not a flaky test (`docs/FINDINGS.md` FIND-051).
     let mut app = app();
     let e = me(&mut app);
     launch_on_the_ground(&mut app, e, 30.0);
@@ -546,16 +556,22 @@ fn run_accel(app: &App, e: Entity) -> Vec3 {
     app.world().get::<RunAccel>(e).expect("a player carries the run drive").0
 }
 
-/// A body 200 m over the city with a written `Intent` — air control measured with no ground,
-/// no rope and no contact anywhere in the picture.
+/// Bodies 200 m over the city, 20 m apart — air control measured with no ground, no rope and
+/// no contact anywhere in the picture.
 ///
-/// A **second** player, because he has no `LocalPlayer`: `net::deliver_intents` only writes an
-/// `Intent` for a `PlayerId` that has mail, and nobody posts mail for him, so what is written
-/// here survives every tick (`src/net/mod.rs`).
-fn a_flyer(app: &mut App, x_m: f32, intent: Intent) -> Entity {
-    let e = second_player(app, Vec3::new(x_m, 200.0, 0.0));
+/// **Second** players, because they carry no `LocalPlayer`: `net::deliver_intents` only writes
+/// an `Intent` for a `PlayerId` that has mail, and nobody posts mail for them, so what
+/// [`fly`] writes survives every tick (`src/net/mod.rs`).
+///
+/// All of them are spawned **before** any intent is set, because `second_player` runs a tick of
+/// its own — spawning them one at a time gave the first flyer three ticks of thrust more than
+/// the last and measured 10.5002 m/s where 10 was due.
+fn flyers(app: &mut App, n: usize) -> Vec<Entity> {
+    (0..n).map(|i| second_player(app, Vec3::new(i as f32 * 20.0, 200.0, 0.0))).collect()
+}
+
+fn fly(app: &mut App, e: Entity, intent: Intent) {
     *app.world_mut().get_mut::<Intent>(e).expect("a player carries an intent") = intent;
-    e
 }
 
 fn horizontal(app: &App, e: Entity) -> Vec2 {
@@ -573,16 +589,14 @@ fn f006_w_flies_where_you_look_a_and_d_go_sideways_and_s_never_thrusts() {
     // it becomes `game.ron: player.air_accel_m_s2` this line reads that key.
     let a = -d.game.gravity_m_s2 / 2.0;
 
-    let forward = a_flyer(&mut app, 0.0, Intent { move_y: 1.0, ..default() });
+    let bodies = flyers(&mut app, 4);
+    let (forward, sideways, backwards, idle) = (bodies[0], bodies[1], bodies[2], bodies[3]);
+    fly(&mut app, forward, Intent { move_y: 1.0, ..default() });
     // Looking 60° down and holding D: the sideways thrust has to stay HORIZONTAL, or every
     // strafe in a fast swing — where you are looking at the street — pushes you into it.
-    let sideways = a_flyer(
-        &mut app,
-        20.0,
-        Intent { move_x: 1.0, pitch: -60.0_f32.to_radians(), ..default() },
-    );
-    let backwards = a_flyer(&mut app, 40.0, Intent { move_y: -1.0, ..default() });
-    let idle = a_flyer(&mut app, 60.0, Intent::default());
+    fly(&mut app, sideways, Intent { move_x: 1.0, pitch: -60.0_f32.to_radians(), ..default() });
+    fly(&mut app, backwards, Intent { move_y: -1.0, ..default() });
+    fly(&mut app, idle, Intent::default());
 
     let fall_before = app.world().get::<LinearVelocity>(sideways).unwrap().0.y;
     ticks(&mut app, 60); // one second
@@ -629,8 +643,10 @@ fn f006_an_empty_tank_leaves_half_the_air_control() {
     // ca)"* — so the air control is **not gated** on gas, it is halved without it. That is
     // what stops an empty tank from being the dead end it is today.
     let mut app = app();
-    let full = a_flyer(&mut app, 0.0, Intent { move_y: 1.0, ..default() });
-    let dry = a_flyer(&mut app, 20.0, Intent { move_y: 1.0, ..default() });
+    let bodies = flyers(&mut app, 2);
+    let (full, dry) = (bodies[0], bodies[1]);
+    fly(&mut app, full, Intent { move_y: 1.0, ..default() });
+    fly(&mut app, dry, Intent { move_y: 1.0, ..default() });
 
     // Re-emptied every tick: `vector.gas_regen_per_s` would put the tank back after
     // `gas_regen_delay_s`, and then this would be measuring a full tank again.
@@ -684,6 +700,38 @@ fn f006_touching_the_ground_at_speed_does_not_end_the_air_control() {
         Vec3::ZERO,
         "a walking player carries an air control of {walking:?} — below the run speed the \
          ground is an assignment and nothing may push on top of it"
+    );
+}
+
+#[test]
+fn f006_the_swerve_bends_the_flight_without_letting_go_of_the_hook() {
+    // **`F-006`'s own acceptance sentence**, out of `docs/backlog/gameplay.ron`: *"Vier
+    // Swerve-Richtungen aendern die Bahn messbar **ohne Haken zu loesen**"* — and the user's
+    // reason for it, *„das a d sorgt dafür dass man nicht immer direkt zum seil gezogen wird"*.
+    // A rope that can only drag you at your anchor is a leash; one you can lean out of is a
+    // swing.
+    let mut app = app();
+    let e = me(&mut app);
+    launch_on_the_ground(&mut app, e, 30.0);
+    anchor_the_left_hook(&mut app, e);
+    ticks(&mut app, 1);
+    assert_eq!(state(&app, e), MovementState::Tethered, "the rope has to be carrying him");
+
+    hold(&mut app, KeyCode::KeyD); // yaw = 0 ⇒ D is +X, across the +Z the rope handed him
+    ticks(&mut app, 30);
+    release(&mut app, KeyCode::KeyD);
+
+    let v = horizontal(&app, e);
+    assert!(
+        v.x > 1.0,
+        "half a second of D on the rope moved him {:.4} m/s sideways — the rope is still the \
+         only thing steering and the player is a passenger on it (F-006)",
+        v.x
+    );
+    let hook = app.world().get::<Hook>(e).expect("the player carries a Hook");
+    assert!(
+        matches!(hook.arm(Side::Left).state, HookState::Anchored { .. }),
+        "the swerve let go of the hook — F-006 is a course change WITHOUT releasing it"
     );
 }
 

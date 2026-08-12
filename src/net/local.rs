@@ -74,7 +74,16 @@ pub fn read_input(
     let mut t = Buttons::NONE;
     t.set(Buttons::JUMP, keys.pressed(KeyCode::Space));
     t.set(Buttons::BOOST, keys.pressed(KeyCode::ShiftLeft));
-    t.set(Buttons::REEL_IN, keys.pressed(KeyCode::ControlLeft));
+    // `Ctrl` **and** `S`. The user, 2026-08-12 (`docs/NEXT.md` §1a): *„mit s »spannt« man nur
+    // das seil!"* — in the air `S` is the one WASD key that produces no thrust
+    // (`player::locomotion::air_thrust`), and what it does instead is tension the rope. A
+    // SECOND binding and not a move: `Ctrl` has to stay reachable for a hand that is holding
+    // `W`, and `scripts/f-flight-cut.txt` presses it. On the ground `S` keeps walking him
+    // backwards — the axis below is untouched.
+    t.set(
+        Buttons::REEL_IN,
+        keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::KeyS),
+    );
     t.set(Buttons::DODGE, keys.pressed(KeyCode::KeyC));
     // The ropes are on the keyboard and the blades are on the mouse (user, 2026-08-10, after
     // the first time a human played this: the ropes have to be **steerable**). A hand can hold

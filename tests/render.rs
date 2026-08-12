@@ -31,6 +31,9 @@
 
 use core::any::TypeId;
 
+use avian3d::prelude::Collider;
+use bevy::animation::graph::AnimationGraph;
+use bevy::animation::{AnimationClip, AnimationPlayer, RepeatAnimation};
 use bevy::camera::RenderTarget;
 use bevy::ecs::system::RunSystemOnce;
 use bevy::gizmos::config::DefaultGizmoConfigGroup;
@@ -38,16 +41,18 @@ use bevy::gizmos::GizmoHandles;
 use bevy::prelude::*;
 use bevy::ui::DefaultUiCamera;
 use bevy::window::PrimaryWindow;
-use bevy::world_serialization::WorldAssetRoot;
+use bevy::world_serialization::{WorldAsset, WorldAssetRoot};
 use defeated_by_titan::data::{GameData, Model, ModelSource};
 use defeated_by_titan::debug::gizmo::GizmoToggle;
 use defeated_by_titan::render::model::{
     load_configured_models, ModelAnchors, ModelAssets, ModelBody, ModelName, PendingScene,
+    PrimitiveFallback, CORTEX_ANCHOR,
 };
 use defeated_by_titan::render::rope::rope_color;
 use defeated_by_titan::shared::{
-    BodyId, Cli, Hook, HookArm, HookState, Intent, LocalPlayer, Side, TitanKindName,
+    BodyId, Cli, Hook, HookArm, HookState, Intent, LocalPlayer, Side, TitanKindName, TitanState,
 };
+use std::collections::BTreeMap;
 
 /// Builds the **real** app, headless — not a second, similar one.
 ///
@@ -684,5 +689,322 @@ fn f030_a_named_clip_that_is_not_in_the_file_leaves_the_state_without_one() {
     assert!(
         app.world().get_resource::<GameData>().is_some(),
         "the app has to still be alive: a missing model is a warning, never a crash"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F-030 · the swap, end to end — **on a synthetic scene, because there is no `.glb`**
+//
+// `assets/3d/glb/` is empty on purpose and must stay empty (`f030_the_repository_runs_with_not
+// _a_single_glb` above). So these tests build the thing a `.glb` would have become: a
+// `WorldAsset` with named empties in it, handed to the registry the way the loader would hand
+// it over. The types are the real ones, the spawner is Bevy's own, the observer is the real
+// one — what is synthetic is the file, and only the file.
+//
+// **What that does and does not prove** is worth being exact about: it proves the anchor walk,
+// the `WorldAssetRoot` handoff, the visibility switch and the clip driver on a REAL spawned
+// instance. It does not prove that Blender's exporter writes the empties under those names,
+// that the model arrives upright, or that a glTF's own `AnimationPlayer` sits where this code
+// looks for it. Those need a file and a screen (`docs/models.md`).
+// ---------------------------------------------------------------------------
+
+/// The stand-in for an exported `.glb`: a world with one root and one named empty per anchor.
+fn synthetic_model(app: &mut App, anchors: &[(&str, Vec3)]) -> Handle<WorldAsset> {
+    let mut world = World::new();
+    let root = world.spawn((Name::new("model_root"), Transform::default())).id();
+    for (name, at) in anchors {
+        let empty = world
+            .spawn((Name::new((*name).to_string()), Transform::from_translation(*at)))
+            .id();
+        world.entity_mut(root).add_child(empty);
+    }
+    app.world_mut()
+        .resource_mut::<Assets<WorldAsset>>()
+        .add(WorldAsset::new(world))
+}
+
+/// Registers a row **and** hands the registry a finished scene for it, the way
+/// `resolve_animation_clips` would once the file is in memory.
+fn register_loaded(
+    app: &mut App,
+    name: &str,
+    animations: &[(&str, &str)],
+    anchors: &[(&str, Vec3)],
+    clips: &[&str],
+) {
+    register(
+        app,
+        name,
+        art_entry(ModelSource::Gltf(format!("3d/glb/{name}.glb")), animations),
+    );
+    let scene = synthetic_model(app, anchors);
+    let resolved: BTreeMap<String, Handle<AnimationClip>> = clips
+        .iter()
+        .map(|state| {
+            let clip = app
+                .world_mut()
+                .resource_mut::<Assets<AnimationClip>>()
+                .add(AnimationClip::default());
+            ((*state).to_string(), clip)
+        })
+        .collect();
+    let mut assets = app.world_mut().resource_mut::<ModelAssets>();
+    assets.scenes.insert(name.to_string(), scene);
+    assets.clips.insert(name.to_string(), resolved);
+}
+
+/// An entity that looks like the titan rig from the outside: a body with one cuboid child that
+/// carries a collider — the two things that must **not** share a fate.
+fn body_with_a_cuboid(app: &mut App, name: &str) -> (Entity, Entity) {
+    let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(1.0, 1.0, 1.0));
+    let part = app
+        .world_mut()
+        .spawn((
+            Name::new("primitive_part"),
+            Mesh3d(mesh),
+            Collider::sphere(0.5),
+            Transform::from_xyz(0.0, 2.0, 0.0),
+        ))
+        .id();
+    let body = app.world_mut().spawn((ModelName::new(name), Transform::default())).id();
+    app.world_mut().entity_mut(body).add_child(part);
+    (body, part)
+}
+
+fn visibility(app: &App, entity: Entity) -> Visibility {
+    app.world().get::<Visibility>(entity).copied().unwrap_or(Visibility::Inherited)
+}
+
+#[test]
+fn f030_a_model_that_arrived_hides_the_cuboid_it_replaces() {
+    // **Gap 1.** Until 2026-08-12 the scene spawned BESIDE the rig and both were visible — for
+    // a titan that is two bodies standing in one place, and it made every swap look broken.
+    // The other half of the assertion is the one that matters more: the collider does not go
+    // with the picture. A hidden cortex still kills.
+    let mut app = app();
+    register_loaded(&mut app, "swapped", &[], &[], &[]);
+    let (_body, part) = body_with_a_cuboid(&mut app, "swapped");
+    for _ in 0..4 {
+        app.update();
+    }
+
+    assert_eq!(
+        visibility(&app, part),
+        Visibility::Hidden,
+        "the model arrived and the cuboid it replaces is still drawn — that is two bodies in \
+         one place, which is what a swap looked like before this line existed"
+    );
+    assert!(
+        app.world().get::<Collider>(part).is_some(),
+        "hiding the picture took the collider with it — the titan would render right and be \
+         unhittable, which is worse than the doubled silhouette it replaced"
+    );
+    let placed = app
+        .world()
+        .get::<GlobalTransform>(part)
+        .expect("the part keeps a global transform")
+        .translation();
+    assert_eq!(
+        placed,
+        Vec3::new(0.0, 2.0, 0.0),
+        "hiding must not move anything: the cortex sits where scale.ron put it, visible or not"
+    );
+
+    // And the other direction, in the same app: a primitive row leaves its cuboids alone.
+    let (_, untouched) = body_with_a_cuboid(&mut app, "titan_husk");
+    for _ in 0..4 {
+        app.update();
+    }
+    assert_eq!(
+        visibility(&app, untouched),
+        Visibility::Inherited,
+        "a `source: Primitive` row must never hide anything — the cuboid IS the model there"
+    );
+}
+
+#[test]
+fn f030_a_file_that_never_loads_leaves_the_cuboid_standing() {
+    // The safe direction, and the one `docs/models.md` promises for a wrong path: the entity
+    // keeps its cuboid. The trigger for hiding is therefore the scene that ARRIVED, never the
+    // row that was configured — `swapped_missing` points at a file that does not exist.
+    let mut app = app();
+    register(
+        &mut app,
+        "swapped_missing",
+        art_entry(ModelSource::Gltf("3d/glb/swapped_missing.glb".into()), &[]),
+    );
+    let (_, part) = body_with_a_cuboid(&mut app, "swapped_missing");
+    for _ in 0..8 {
+        app.update();
+    }
+
+    assert_eq!(
+        visibility(&app, part),
+        Visibility::Inherited,
+        "the file never loaded, so there is nothing to see except the cuboid — hiding it would \
+         make a typo in art.ron into an invisible titan"
+    );
+}
+
+#[test]
+fn f030_the_game_state_plays_the_clip_that_is_mapped_to_it() {
+    // **Gap 2.** Until 2026-08-12 the clips were resolved by state name and NOTHING played
+    // them: no `AnimationPlayer`, no graph. `TitanState` is the honest source — it is what the
+    // FSM already decides and what the F3 overlay prints, so an animation cannot disagree with
+    // the game.
+    let mut app = app();
+    register_loaded(
+        &mut app,
+        "animated_husk",
+        &[("idle", "Idle"), ("windup", "Windup")],
+        &[],
+        &["idle", "windup"],
+    );
+    let (body, _) = body_with_a_cuboid(&mut app, "animated_husk");
+    app.world_mut().entity_mut(body).insert(TitanState::Idle);
+    for _ in 0..6 {
+        app.update();
+    }
+
+    let ModelBody::Scene(scene) = *app
+        .world()
+        .get::<ModelBody>(body)
+        .expect("the registry decided something")
+    else {
+        panic!("a configured model has to produce a scene");
+    };
+    let nodes = app.world().resource::<ModelAssets>().graphs["animated_husk"].nodes.clone();
+    let player = app
+        .world()
+        .get::<AnimationPlayer>(scene)
+        .expect("nothing plays the clips — the animation seam is a lookup table and no player");
+    assert!(
+        player.is_playing_animation(nodes["idle"]),
+        "the titan is Idle and the idle clip is not playing"
+    );
+    assert_eq!(
+        player.animation(nodes["idle"]).map(|a| a.repeat_mode()),
+        Some(RepeatAnimation::Forever),
+        "idle has to loop — a one-shot idle is a body that animates once and then stands still"
+    );
+
+    // The edge: one state in, one clip out, and a wind-up plays ONCE.
+    *app.world_mut().get_mut::<TitanState>(body).expect("the state is there") = TitanState::Windup;
+    for _ in 0..3 {
+        app.update();
+    }
+    let player = app.world().get::<AnimationPlayer>(scene).expect("the player stays");
+    assert!(
+        player.is_playing_animation(nodes["windup"]),
+        "the state changed and the clip did not — that is the seam being decoration again"
+    );
+    assert!(
+        !player.is_playing_animation(nodes["idle"]),
+        "two clips at once: this seam plays one state, and blending is a decision nobody made"
+    );
+    assert_eq!(
+        player.animation(nodes["windup"]).map(|a| a.repeat_mode()),
+        Some(RepeatAnimation::Never),
+        "a looping wind-up is a titan that telegraphs for ever (F-053)"
+    );
+    assert!(
+        !app.world().resource::<Assets<AnimationGraph>>().is_empty(),
+        "the graph asset has to exist for the player to read a node out of"
+    );
+}
+
+#[test]
+fn f030_a_state_without_a_clip_brings_the_cuboid_back() {
+    // **The fourth glTF trap** (`docs/FINDINGS.md` FIND-053) and the worst one: the model
+    // spawns, renders, is the right size and stands perfectly still. There is no visual symptom
+    // — so this makes one. A model that DECLARES animations and cannot show the state the game
+    // is in gets its cuboid rig back, and the rig is the thing `titan::pose` actually animates.
+    let mut app = app();
+    register_loaded(
+        &mut app,
+        "half_animated",
+        &[("idle", "Idle"), ("windup", "Windup")],
+        &[],
+        &["idle"], // `Windup` is not in the file
+    );
+    let (body, part) = body_with_a_cuboid(&mut app, "half_animated");
+    app.world_mut().entity_mut(body).insert(TitanState::Idle);
+    for _ in 0..6 {
+        app.update();
+    }
+    assert_eq!(
+        visibility(&app, part),
+        Visibility::Hidden,
+        "idle resolved, so the model can show what the game is doing and the cuboid goes"
+    );
+
+    *app.world_mut().get_mut::<TitanState>(body).expect("the state is there") = TitanState::Windup;
+    for _ in 0..4 {
+        app.update();
+    }
+    assert_eq!(
+        app.world().get::<PrimitiveFallback>(body),
+        Some(&PrimitiveFallback(true)),
+        "a state the model has no clip for has to be MARKED, not swallowed"
+    );
+    assert_eq!(
+        visibility(&app, part),
+        Visibility::Inherited,
+        "the model cannot show the wind-up and nothing came back — that is a titan that \
+         telegraphs invisibly, and the player dies without being told why (F-053)"
+    );
+
+    // …and a model that says `animations: {}` is not broken, it is static. It keeps its cuboid
+    // hidden, because that is what the user asked for in one line of RON.
+    let mut app = self::app();
+    register_loaded(&mut app, "static_model", &[], &[], &[]);
+    let (body, part) = body_with_a_cuboid(&mut app, "static_model");
+    app.world_mut().entity_mut(body).insert(TitanState::Windup);
+    for _ in 0..6 {
+        app.update();
+    }
+    assert_eq!(
+        app.world().get::<PrimitiveFallback>(body).copied(),
+        Some(PrimitiveFallback(false)),
+        "`animations: {{}}` is a legal answer — a static model must not be reported as broken"
+    );
+    assert_eq!(visibility(&app, part), Visibility::Hidden);
+}
+
+#[test]
+fn f030_the_anchors_come_out_of_a_spawned_instance() {
+    // The anchor walk had never had an instance under it: `read_the_models_anchors` was
+    // compiled and reasoned about, not observed (`docs/FINDINGS.md` FIND-052). This spawns a
+    // real `WorldAsset` through Bevy's own spawner and reads what lands on the entity.
+    let mut app = app();
+    register_loaded(
+        &mut app,
+        "anchored",
+        &[],
+        &[(CORTEX_ANCHOR, Vec3::new(0.0, 9.4, 0.5)), ("hook.l", Vec3::new(-0.8, 6.0, 0.0))],
+        &[],
+    );
+    let (body, _) = body_with_a_cuboid(&mut app, "anchored");
+    for _ in 0..8 {
+        app.update();
+    }
+
+    let anchors = app
+        .world()
+        .get::<ModelAnchors>(body)
+        .expect("every entity with a ModelName carries anchors")
+        .clone();
+    assert_eq!(
+        anchors.get(CORTEX_ANCHOR),
+        Some(Vec3::new(0.0, 9.4, 0.5)),
+        "the `cortex` empty out of the file did not arrive — then a swapped model renders in \
+         one place and dies in another (F-030)"
+    );
+    assert_eq!(anchors.get("hook.l"), Some(Vec3::new(-0.8, 6.0, 0.0)));
+    assert_eq!(
+        anchors.get("hand.r"),
+        None,
+        "an empty the model does not carry must be ABSENT, never Vec3::ZERO — that would be a \
+         kill zone between the feet"
     );
 }

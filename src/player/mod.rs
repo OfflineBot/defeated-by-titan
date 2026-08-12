@@ -86,6 +86,14 @@ impl Plugin for PlayerPlugin {
                 (rope::detach_ropes, rope::attach_ropes)
                     .chain()
                     .in_set(SimulationSystems::Drive),
+            )
+            // `F-006` Swerve. In `Drive` and NOT chained to anything: it assigns its own field
+            // (`RunAccel`) and adds into avian's acceleration accumulator, and two contributors
+            // adding into an accumulator commute — the same argument `vector::boost` makes for
+            // sitting there next to `vector::reel` (`shared::schedule::SimulationSystems`).
+            .add_systems(
+                FixedUpdate,
+                locomotion::air_control.in_set(SimulationSystems::Drive),
             );
         // The per-substep reel-in. Its own function because it hangs in avian's
         // `SubstepSchedule` and not in `FixedUpdate` — see `rope.rs`, decision 1.

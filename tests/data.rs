@@ -225,6 +225,37 @@ fn t005_eye_height_sits_inside_the_body() {
 }
 
 #[test]
+fn t005_the_air_control_can_never_hold_a_player_up() {
+    // `F-006`, and the bound the number used to carry in its own shape: until 2026-08-12 the
+    // air control WAS `-gravity_m_s2 / 2` in `player::locomotion::air_control`, so "weaker than
+    // gravity" was true by construction. Now that it is a key (§4, FIND-051), the guarantee has
+    // to be a test — at or above `-gravity_m_s2` WASD alone lifts you, and gasless hovering
+    // becomes free in a game whose whole gate is that flight costs gas.
+    let d = data();
+    let accel = d.game.player.air_accel_m_s2;
+    let gravity = -d.game.gravity_m_s2;
+    assert!(
+        accel.is_finite() && accel > 0.0 && accel < gravity,
+        "air_accel_m_s2 = {accel} — must be finite and in 0 < x < {gravity} (= -gravity_m_s2), \
+         or WASD alone holds a player in the air"
+    );
+}
+
+#[test]
+fn t005_an_empty_tank_weakens_the_air_control_without_removing_it() {
+    // Not a derivation, the user's spec: *„ohne gas kann man immernoch w a d nutzen um etwas
+    // movement aufzubauen (aber hälfte ca)"* (docs/NEXT.md §1e). Above 1.0 an empty tank would
+    // be STRONGER than a full one; below 0.0 it would thrust backwards. Both ends are the
+    // whole check — the 0.5 in between is a tuning value and nobody's business here.
+    let f = data().game.player.air_accel_empty_fraction;
+    assert!(
+        f.is_finite() && (0.0..=1.0).contains(&f),
+        "air_accel_empty_fraction = {f} — a fraction lives in 0..=1; above 1 an empty tank \
+         would be the strong one"
+    );
+}
+
+#[test]
 fn t005_a_substep_is_smaller_than_the_thinnest_wall() {
     // The core of the tunneling safeguard. At max_speed_m_s = 75 a 60 Hz tick covers 1.25 m;
     // without substeps the player drives through every wall — and only sometimes, which is

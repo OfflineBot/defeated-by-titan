@@ -296,7 +296,7 @@ before `Could` is the order, not a recommendation (prompts/init.md §2).
 | ⬜ | F-011 | Hook-Break (Notbremse) | 2 | F-001 | needs F-001 |
 | 🟨 | F-003 | Getaggte Ankerflaechen (Ebene 1) | 1 | F-002 | needs F-002 |
 | 🟨 | F-005 | Reel-In / Seilverkuerzung | 1 | F-004 | needs F-004 |
-| ⬜ | F-006 | Swerve-Steuerung | 1 | F-004 | needs F-004 |
+| 🟨 | F-006 | Swerve-Steuerung | 1 | F-004 | needs F-004 |
 | ⬜ | F-008 | Boost-Dash | 1 | F-007 | needs F-007 |
 | ⬜ | F-012 | Velocity-Clamp gegen Fling | 1 | F-004 | needs F-004 |
 | ⬜ | F-013 | Kollisionsdaempfung | 1 | F-004 | needs F-004 |

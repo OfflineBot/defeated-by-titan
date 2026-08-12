@@ -25,6 +25,7 @@ pub mod cli;
 pub mod rng;
 pub mod state;
 pub mod layers;
+pub mod anchors;
 
 pub use schedule::{IntentSystems, SimulationSystems, Tick};
 pub use geometry::{player_aabb, AnchorSurface, Block, Ground, Body, BodyMask};
@@ -46,3 +47,4 @@ pub use state::{MovementState, Gas, Blades, Velocity, Health, HitStop, TitanStat
 pub use layers::{
     GameLayer, LAYER_WORLD, LAYER_PLAYER, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
 };
+pub use anchors::{ModelAnchors, ANCHOR_NAMES, CORTEX_ANCHOR};

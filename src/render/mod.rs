@@ -53,6 +53,11 @@ impl Plugin for RenderPlugin {
                         model::name_the_titans_model,
                         model::spawn_models,
                         model::attach_late_scenes,
+                        // …and the two that finish the seam: the game state picks the clip,
+                        // and the cuboid rig gets out of the way of the model that replaced
+                        // it — or comes back when that model cannot show the state.
+                        model::drive_animations,
+                        model::hide_the_primitive_under_a_model,
                     )
                         .chain(),
                 ),

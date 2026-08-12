@@ -22,7 +22,15 @@ use bevy::text::FontSize;
 // kill counter. There is no message to read them from — they are *state*, not an event, and a
 // tool that has to see the state of a running game cannot be served by a message that fired
 // three ticks ago. The edge has its line with this reason in `docs/architecture.md`.
+use crate::data::GameData;
 use crate::mission::{KillTally, MissionPhase};
+// `debug -> player`: the F3 overlay has to print whether the player is FLYING, and that is not
+// a component anywhere — it is `player::locomotion::in_flight` over
+// `player::integrator::ground_top_speed_m_s` (`FIND-050`). A message cannot serve it (it is a
+// predicate over the current state, not an event), and mirroring the answer into a `shared`
+// component would give the overlay a second writer of the player's state for no reason other
+// than a text line. Read-only, and the derivation stays `player`'s. See `docs/architecture.md`.
+use crate::player::{integrator::ground_top_speed_m_s, locomotion::in_flight};
 use crate::shared::{
     MovementState, LookOverride, IntentSystems, Gas, Health, Hook, LocalPlayer, Mark, PlayerId,
     StateClock, WarpPlayer, Cli, Velocity, Tick, TitanId, TitanKindName, TitanState, SpawnTitan,
@@ -486,7 +494,8 @@ pub fn spawn_overlay(mut commands: Commands) {
 pub fn update_overlay(
     keys: Res<ButtonInput<KeyCode>>,
     tick: Res<Tick>,
-    players: Query<(&Transform, &Gas, &MovementState), With<LocalPlayer>>,
+    data: Res<GameData>,
+    players: Query<(&Transform, &Gas, &MovementState, &Velocity), With<LocalPlayer>>,
     titans: Query<(&TitanId, Option<&TitanKindName>, Option<&TitanState>, Option<&StateClock>)>,
     // The mission phase and its counter. Until `hud` (`F-170`) draws the objective line and the
     // word `WON`/`LOST`, **this is the only place a screenshot can show what the mission is
@@ -505,16 +514,31 @@ pub fn update_overlay(
             continue;
         }
         let mut content = match players.iter().next() {
-            Some((t, gas, state)) => format!(
-                "t={}  pos {:.1} {:.1} {:.1}  gas {:.0}/{:.0}  {:?}",
-                tick.0,
-                t.translation.x,
-                t.translation.y,
-                t.translation.z,
-                gas.current,
-                gas.max,
-                state
-            ),
+            Some((t, gas, state, velocity)) => {
+                // **The state alone is a lie and `FIND-050` says so in as many words:** a player
+                // skidding across the floor at 30 m/s is `Grounded` and is, by the game's own
+                // rule, in flight — his legs steer nothing, `player::locomotion::air_control`
+                // does. So the variant is printed AND the verdict, because they are two
+                // different facts and the overlay owns neither: `Grounded` is still what
+                // `movement_state` wrote, `FLIGHT` is what `in_flight` answers about it.
+                //
+                // The speed stands next to them for the same reason a titan line carries
+                // `21/36` instead of `Windup`: with the number in the same PNG the verdict can
+                // be **read off** the image against the threshold instead of believed.
+                let speed_m_s = velocity.0.xz().length();
+                let flying = in_flight(*state, speed_m_s, ground_top_speed_m_s(&data));
+                format!(
+                    "t={}  pos {:.1} {:.1} {:.1}  gas {:.0}/{:.0}  {:?}{}  spd {speed_m_s:.1}",
+                    tick.0,
+                    t.translation.x,
+                    t.translation.y,
+                    t.translation.z,
+                    gas.current,
+                    gas.max,
+                    state,
+                    if flying { " FLIGHT" } else { "" }
+                )
+            }
             None => format!("t={}  (no local player)", tick.0),
         };
 

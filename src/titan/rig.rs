@@ -52,8 +52,8 @@ use bevy::prelude::*;
 
 use crate::data::{GameData, TitanKind};
 use crate::shared::{
-    Health, StateClock, TitanId, TitanKindName, TitanState, Velocity, LAYER_TITAN_BODY,
-    LAYER_TITAN_CORTEX,
+    Health, ModelAnchors, StateClock, TitanId, TitanKindName, TitanState, Velocity,
+    CORTEX_ANCHOR, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
 };
 
 /// Which box of the rig this is. Its own type instead of eight marker components, so that a
@@ -184,6 +184,23 @@ impl TitanRig {
             self.cortex_height_m - self.head_centre_m(),
             self.head_m * 0.5,
         )
+    }
+
+    /// The same point, but taken **out of the model** instead of computed.
+    ///
+    /// A `cortex` empty in a `.glb` is given in the model root's own space — metres above the
+    /// origin between the feet (`docs/models.md`). The rig's cortex hangs under the head, so
+    /// the anchor has to be expressed in the head's frame; in the rest pose the head's origin
+    /// sits at `(0, head_centre_m(), 0)` above the root with no rotation, which makes the
+    /// conversion a subtraction. [`cortex_in_head`](Self::cortex_in_head) is the same formula
+    /// with the rig's own numbers put in.
+    ///
+    /// **Why the rest pose and not the current one:** the cortex is a child of the head and
+    /// therefore follows the lean for free through `GlobalTransform`. A conversion through the
+    /// *current* pose would apply that lean twice, and the kill zone would drift a little
+    /// further out of the head with every degree of wind-up.
+    pub fn cortex_in_head_from_model(&self, anchor: Vec3) -> Vec3 {
+        anchor - Vec3::new(0.0, self.head_centre_m(), 0.0)
     }
 
     /// Where a shoulder sits **inside the torso's local frame**. `right` is +X, which is the
@@ -423,6 +440,54 @@ pub fn build_rig(
     commands.entity(head).add_child(cortex);
 
     root
+}
+
+/// **Where a swapped model dies.**
+///
+/// Until 2026-08-12 the cortex was computed from `scale.ron` and nothing else — so a model the
+/// user dropped in *rendered* in the right place and *died* in the computed one. This is the
+/// one line that closes it: when the `.glb` brings a `cortex` empty,
+/// [`ModelAnchors`](crate::shared::ModelAnchors) carries it and the sensor moves there. When it
+/// does not, nothing happens at all and the computed position stands — the fallback is the
+/// **absence** of a write, which is why a missing empty can never become a kill zone at the
+/// origin.
+///
+/// `scale.ron` stays the yardstick, not the loser: `render::model` compares the anchor against
+/// it and shouts past `art.ron: cortex_tolerance_m`. The model decides *where*, the file
+/// decides *whether that is plausible*.
+///
+/// **`Changed<ModelAnchors>` and nothing per tick** (rule 6): the component is written once,
+/// when the scene instance is ready.
+pub fn cortex_from_the_model(
+    anchors: Query<(Entity, &TitanRig, &ModelAnchors), Changed<ModelAnchors>>,
+    children: Query<&Children>,
+    parts: Query<&TitanPart>,
+    mut transforms: Query<&mut Transform>,
+) {
+    for (root, rig, model) in &anchors {
+        let Some(anchor) = model.get(CORTEX_ANCHOR) else {
+            continue;
+        };
+        let Some(cortex) = children
+            .iter_descendants(root)
+            .find(|e| parts.get(*e) == Ok(&TitanPart::Cortex))
+        else {
+            continue;
+        };
+        let Ok(mut transform) = transforms.get_mut(cortex) else {
+            continue;
+        };
+        let local = rig.cortex_in_head_from_model(anchor);
+        if transform.translation == local {
+            continue;
+        }
+        info!(
+            "the model's {CORTEX_ANCHOR:?} empty moves the kill zone from {:.2} m to {:.2} m \
+             above the feet (F-030)",
+            rig.cortex_height_m, anchor.y
+        );
+        transform.translation = local;
+    }
 }
 
 /// A matte material. A missing `metallic` means 1.0 in glTF, and a diffuse material without

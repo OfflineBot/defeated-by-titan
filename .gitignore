@@ -5,3 +5,9 @@ saves/
 *.log
 assets/extern/
 __pycache__/
+
+# assets/3d/glb/ is TRACKED on purpose: the game has to run on a machine without Blender
+# (docs/models.md, prompts/init.md §18). The negation is here so that no future broad rule
+# can quietly take the models out of the repository.
+!assets/3d/glb/
+!assets/3d/glb/**

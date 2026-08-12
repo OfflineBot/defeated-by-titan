@@ -127,7 +127,11 @@ impl Plugin for TitanPlugin {
                 // `PostStep`: a titan asked for this tick enters the world at the **end** of
                 // it and takes its first step in the next one. That is what makes `Idle` a
                 // state you can observe rather than a value nobody ever sees.
-                (spawn_titans, brain::dissolve)
+                // …and, in the same set, the one line that makes a swapped model die where it
+                // renders: a `cortex` empty out of the `.glb` beats the position the rig
+                // computes out of `scale.ron`. `Changed<ModelAnchors>`-gated, so it costs
+                // nothing on the 99.99 % of ticks in which no scene instance became ready.
+                (spawn_titans, brain::dissolve, rig::cortex_from_the_model)
                     .chain()
                     .in_set(SimulationSystems::PostStep),
             ),

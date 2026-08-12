@@ -35,6 +35,14 @@ debug -> mission   # the F3 overlay and `assert phase|kills` read the mission ph
                    #  a tool that has to show what the game is doing right now cannot be
                    #  served by a TitanHit that fired three ticks ago, and mirroring the
                    #  state into shared/ would give one field two writers.
+debug -> player    # the F3 overlay prints whether the player is FLYING, and flight is not a
+                   #  component: it is `player::locomotion::in_flight` over
+                   #  `player::integrator::ground_top_speed_m_s` (FIND-050 — a skidding
+                   #  `Grounded` player IS in flight, and the overlay used to print the
+                   #  variant and lie). A message will not do — it is a predicate over the
+                   #  current state, not an event — and mirroring the answer into shared/
+                   #  would give the player's state a second writer for the sake of one text
+                   #  line. Read-only, and the derivation stays `player`'s alone.
 hud -> mission     # the objective line draws the kill counter and the verdict, and
                    #  `docs/PLAN-GAME.md` §1 makes both part of "playable": `0/3 -> 1/3`
                    #  and the word WON/LOST. Same reason as the line above and no other:
@@ -92,6 +100,7 @@ toss at 60 Hz — and over the network a divergence nobody can reproduce (§5 ru
 | the player's `Transform` | `player` (ground, gravity) and `vector` (rope forces) — **split by state**, never at the same time; the state stands in `shared::MovementState` | everyone, read-only |
 | `Gas`, `Blades` | `vector` and `blades` respectively | `hud`, `sound` |
 | titan body (limbs, cortex) | `titan` | `combat` reads, sends messages |
+| `shared::ModelAnchors` (the empties a swapped glTF brings: `cortex`, `hook.l/r`, `hand.l/r`, `eye`, `hit.min/max`) | **`render::model`** — it is the only thing that reads a loaded scene's node tree | `titan::rig` (the `cortex` anchor overrides the position computed from `scale.ron`; **no anchor ⇒ no write at all**, so the computed value stands unchanged) |
 | mission state | `mission` | `hud`, `squad` |
 | save game | `save` | `progress` |
 

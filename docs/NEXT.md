@@ -115,7 +115,29 @@ and `docs/gameplay/` side by side and names anything the latter loses. If nothin
 recoverable from history either way, so the cost of being wrong is small — but so is the cost of
 checking.
 
-## 2. Finish or DELETE the boost blend — read item 1a first, it may be obsolete
+## 2. The boost blend — a fork the USER decides, do not settle it by taste
+
+**Since WASD air control landed (`F-006`, FIND-051), the blend is no longer needed as a steering
+mechanism.** Two honest options and they contradict each other:
+
+- **`boost_rope_fraction: 0.0`** — one RON value, no code change, and **FIND-046's 90°-off-look
+  band disappears** (the early return at 0.0 is bit-exact to pure look direction). But it deletes
+  the thing the user literally asked for: *"wenn man boostet soll man in richtung seil und
+  mauszeiger fliegen"*.
+- **Keep the blend and fix it** — the interrupted commission: rewrite the refuted physics rationale
+  (FIND-045), make `w` an actual dial (`nlerp` gives 3 % of the angle at 170° separation), and cap
+  the deviation from the look direction so "rope behind you, boost forward" stops throwing you
+  sideways.
+
+**What still argues FOR the blend even now:** flying *at* your anchor shortens the rope through
+`B-005`'s ratchet, and that is what lifts an arc bottom from 18.3 m underground to 14.8 m above
+(`FIND-041`). Looking at the anchor while thrusting reaches the same loop — so the blend is a
+convenience, not the only route.
+
+**Ask him. Do not pick.** If he wants it kept, the fix is the commission above; if not, `0.0` first
+and delete `boost_direction`/`rope_dir` in a later cleanup once he has felt it.
+
+## 2b. Finish or DELETE the boost blend — the commission, if he keeps it
 
 An agent was rebuilding it when the session ended and **had written nothing** (verified: it was
 still reading). The commission is fully specified in `FINDINGS.md` FIND-045 and FIND-046. What has

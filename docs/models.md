@@ -1,8 +1,12 @@
 # models — the asset chains (models, atlas, sound, VFX), and how YOU swap a model
 
-Updated: 2026-08-12 · Stage: ⬜ (the chains are described, none of them is built: there is no
-`tools/blend/`, no `tools/atlas/`, no `tools/sound/` and no `assets/3d/` in this repo yet, and
-machine A has no Blender — see below and [`docs/environment.md`](environment.md))
+Updated: 2026-08-12 · Stage: 🟨 for the **model registry and the swap** — `assets/data/art.ron`
+decides primitive-or-`.glb`, `src/render/model.rs` executes it, the cuboid it replaces is
+hidden, the game state plays the clip and the model's `cortex` empty moves the kill zone;
+`tests/render.rs` and `tests/titan.rs` hold every direction (seen red first). ⬜ for **everything above it in the chain**: there is no
+`tools/blend/`, no `tools/atlas/`, no `tools/sound/`, no `.blend` and no auto export, and
+machine A has no Blender — see below and [`docs/environment.md`](environment.md). `assets/3d/`
+exists since 2026-08-12 and is **empty on purpose**: the game runs with no `.glb` at all.
 
 ## The chain
 
@@ -23,13 +27,115 @@ blender --background --factory-startup --python tools/blend/vanguard.py
 
 ## For the user: this is how I swap a model
 
-1. Open `assets/3d/blend/<name>.blend` in Blender.
-2. **Swap the geometry.** The anchors (the empties, see below) are already in place — leave
-   them where they are, or push them where they belong on *your* model.
-3. Save. **Nothing else.** At the next game start the game sees that the `.blend` is newer
-   than the `.glb`, exports it again and uses it.
-4. If the model is still on `use_blend: false`: set **one line** in `assets/data/art.ron` to
-   `use_blend: true`.
+**This section describes what is built, not what is planned** (2026-08-12). The registry, the
+fallback and the animation seam run; the Blender half of the chain above them does not exist
+yet — there is no `tools/blend/`, no auto export, and not a single `.blend`. So the route that
+works today starts with a finished `.glb`, from wherever you got it.
+
+### The three steps
+
+1. **Put the file at `assets/3d/glb/<name>.glb`.** That folder is committed to git on purpose
+   (§"The auto export" below) — a model that only exists on your machine is a game that only
+   runs on your machine.
+2. **Change one line in `assets/data/art.ron`:**
+
+   ```ron
+   "titan_husk": (source: Primitive, scale: 1.0, attribution: None, animations: {}),
+   //            ^^^^^^^^^^^^^^^^^^ becomes
+   "titan_husk": (source: Gltf("3d/glb/titan_husk.glb"), scale: 1.0, attribution: None,
+                  animations: {}),
+   ```
+
+   The path is relative to `assets/`. Nothing else changes, and **no Rust is touched** — the
+   code only ever asks for the logical name `titan_husk`.
+3. **Start the game.** The cuboid rig is replaced by your model at the same place, in the same
+   size class, on the same entity.
+
+**To go back**, put `source: Primitive` back. The primitive path is not a legacy branch that
+rots — it is what every row says today, and `tests/render.rs` holds both directions.
+
+### Your own animations
+
+`animations:` maps a **game state** to the name of the clip **inside your file**:
+
+```ron
+"titan_husk": (source: Gltf("3d/glb/titan_husk.glb"), scale: 1.0, attribution: None,
+               animations: {"idle": "Idle", "walk": "Walk", "windup": "Windup",
+                            "strike": "Strike"}),
+```
+
+The names on the left are the ones **the game asks for**; the values on the right are yours,
+exactly as the clip is called in Blender. `{}` means "this model animates nothing", and that is
+a legal answer.
+
+**They are not invented for the art pipeline — they are the states the simulation is already
+in** (`src/render/model.rs::clip_state_of_titan` / `clip_state_of_movement`). Nothing here is a
+second state machine that can disagree with the first one:
+
+| Model of a… | state name | comes from | plays |
+|---|---|---|---|
+| titan | `idle` | `TitanState::Idle` | looping |
+| titan | `walk` | `TitanState::Pursue` | looping |
+| titan | `windup` | `TitanState::Windup` | **once** |
+| titan | `strike` | `TitanState::Strike` | **once** |
+| titan | `recover` | `TitanState::Recover` | **once** |
+| titan | `death` | `TitanState::Death` | **once** |
+| player | `idle` | `MovementState::Grounded` | looping |
+| player | `fall` | `MovementState::Airborne` | looping |
+| player | `swing` | `MovementState::Tethered` | looping |
+| player | `wall` | `MovementState::OnWall` | looping |
+| player | `downed` | `MovementState::Downed` | **once** |
+
+A state you leave out of the map is not an error — that state simply has no clip, and you are
+told (next section). **There is no blending and no transition table:** the state changes, the
+clip changes, full stop. A cross-fade is a decision nobody has made yet.
+
+### What you will see if you get it wrong
+
+Every one of these is a **line in the log**, never a crash and never a silent wrong result —
+which is the whole point, because the three glTF traps at the bottom of this file all look
+identical from the outside.
+
+| What you did | What happens | What the log says |
+|---|---|---|
+| Named a file that is not there | the entity keeps its cuboid | `ERROR … points at "3d/glb/x.glb" and that file did not load` |
+| Named a model that is not in `art.ron` (e.g. a typo in `titan.ron`) | the entity keeps its cuboid | `WARN model "titan_hsuk" is not in art.ron` |
+| Named a clip that is not in the file | that **one** state has no animation, the rest work — and **the cuboid rig comes back for that state**, because the cuboid is the thing the game can still animate | `WARN … maps the state "windup" to the clip "Windup", and that clip is NOT in the file. The clips the file does carry are [...]` |
+| Left out the `cortex` empty | the cortex stays where the rig computes it | `WARN model "titan_husk" carries no "cortex" empty` |
+| Put the `cortex` empty in the wrong place | the model is used as it is, and you are told by how much | `WARN … its "cortex" empty sits at 6.20 m, and scale.ron puts the cortex of this size class at 8.90 m — 2.70 m out` |
+
+That last row is the one that matters most and is the easiest to miss: **`F-030` says a titan
+dies only from a cut into the cortex.** If your model's neck is somewhere else than the size
+table says, the cut lands where the silhouette looks right and the kill zone is elsewhere. The
+tolerance is one number, `cortex_tolerance_m` in `art.ron`, and it is 0.15 m.
+
+### What a swap does and does not do (2026-08-12, second pass)
+
+**Closed on 2026-08-12** (`docs/FINDINGS.md` FIND-054, `tests/render.rs` + `tests/titan.rs`):
+
+- **The cuboid gets out of the way.** When your scene has *arrived*, every primitive mesh on
+  that entity is hidden — and **only the picture**: the body collider, the cortex sensor and
+  every length the rig computed stay where they were, so a hidden cortex still kills. A file
+  that never loads hides nothing, which is why a typo leaves a titan standing rather than
+  making him invisible.
+- **The clips play.** One `AnimationPlayer` per spawned scene, one `AnimationGraph` per model,
+  and the game state picks the node (table above).
+- **The `cortex` anchor decides where the titan dies.** If your model brings the empty, the kill
+  zone moves there; if it does not, the position `scale.ron` computes stands, exactly as before.
+
+**Still open:**
+
+- **The other seven anchors are read and used by nobody.** `hook.l/r`, `hand.l/r`, `eye`,
+  `hit.min/max` land on the entity as `ModelAnchors` and no domain asks for them yet — a hook
+  still bites where the collider is, not where the model says.
+- **No transitions.** State in, clip out, no cross-fade, no blend tree.
+- **No `.blend` route.** Everything above the `.glb` in the chain diagram is still a plan.
+- **No `.glb` has ever been through any of this.** Every path above is proven on a **synthetic**
+  `WorldAsset` built inside the test, because the repository has no file and must not have one.
+  What a real export does with names, orientation and its own `AnimationPlayer` is ⬜.
+
+Seen: `docs/images/f003-city-after.png` — the city out of `maps.ron` after the registry landed,
+still every bit of it a primitive, because every row still says `Primitive`.
 
 > ⚠️ **A `.blend` you have touched is sacred.** The generator **never** overwrites it. It
 > checks: the file exists and is newer than its script → *"edited by the user, left alone"*
@@ -63,9 +169,27 @@ With them the modeler decides **where**, the RON decides **how strong**:
 | `hand.l` / `hand.r` | grabbing, throwing |
 | `eye` | look direction, blinding |
 
-> **If an empty is missing, the zone is a point** — and a cortex that is a point feels like a
-> broken game. That is why `tests/models.rs` falls over when a model with `use_blend: true` is
-> missing a required anchor.
+**How they are read (since 2026-08-12):** a glTF node arrives in Bevy as an entity with a
+`Name`. When a model's scene instance is ready, `render::model::read_the_models_anchors` walks
+it, picks up every empty out of the eight names above, converts it into the model root's own
+space and puts it on the entity as `ModelAnchors` — **in meters, relative to the origin between
+the feet.** The list of names is in `src/shared/anchors.rs::ANCHOR_NAMES`, and it is this table.
+(The type lives in `shared/` and not in `render/` because `titan` has to **read** it: `render`
+writes, everybody else reads — `docs/architecture.md`.)
+
+> **A missing empty does not become a point at `(0,0,0)`** — that would be a kill zone between
+> the feet, and it would look like a physics bug rather than a modelling mistake. It becomes
+> **absent**: `ModelAnchors::get` answers `None` and the reader keeps using the position the
+> rig computes. A missing `cortex` is additionally a `WARN` at load, and a `cortex` that sits
+> further than `art.ron: cortex_tolerance_m` from what `scale.ron` says for that size class is
+> a second `WARN` **with both numbers in it**.
+>
+> **The `cortex` anchor is read since 2026-08-12** — `titan::rig::cortex_from_the_model` moves
+> the sensor there, and the fallback is the **absence** of that write, so a model without the
+> empty keeps the position `scale.ron` computes. Measured: `scale.ron` 8.90 m → model 9.30 m,
+> cortex measured at 9.30 m (`tests/titan.rs::f030_a_models_cortex_anchor_beats_the_computed_position`).
+> ⚠️ **The other seven anchors are still read by nobody**: a hook bites where the collider is,
+> not where `hook.l` says.
 
 ---
 
@@ -271,17 +395,38 @@ blender --background --factory-startup <file>.blend \
 
 ## The switch: `assets/data/art.ron`
 
+**Built since 2026-08-12** (`src/render/model.rs`, `tests/render.rs`). The switch is an
+**enum**, not a `bool` plus a path:
+
 ```ron
-models: {
-    "vanguard":     (blend: "vanguard",     use_blend: true,  scale: 1.0),
-    "titan_husk":   (blend: "titan_husk",   use_blend: false, scale: 1.0),  // still a placeholder
-}
+(
+    models: {
+        "vanguard":   (source: Gltf("3d/glb/vanguard.glb"), scale: 1.0, attribution: None,
+                       animations: {"idle": "Idle"}),
+        "titan_husk": (source: Primitive, scale: 1.0, attribution: None, animations: {}),
+    },
+    cortex_tolerance_m: 0.15,
+)
 ```
 
-`use_blend: false` ⇒ the game builds the **procedural placeholder** out of Bevy primitives
-(capsule/box/cylinder, tinted). `use_blend: true` ⇒ it loads the `.glb`. **Both paths have to
-work at all times**, and both use the same anchors, the same hit zone and the same scaling —
-otherwise switching is not a switch but a rebuild.
+`Primitive` ⇒ the game leaves the **procedural placeholder** standing (the cuboid rig, the
+blocks out of `maps.ron`). `Gltf(path)` ⇒ it loads that file, relative to `assets/`, and hangs
+the scene on the entity as a child at the same transform.
+
+**Why an enum and not `use_blend: bool` + `blend: String`**, which is what this section said
+until 2026-08-12: rule 2 forbids `serde(default)`, so "no model configured" has to be
+*expressible* rather than *absent*. With a bool and a path, a typo in the path is a silently
+loaded nothing; with `Primitive` as a named variant, an unknown word is a **crash at load with
+a line number**, and the shipped state of the repo — no `.glb` anywhere — is something the file
+can actually say.
+
+**Both paths have to work at all times**, and both use the same anchors, the same hit zone and
+the same scaling — otherwise switching is not a switch but a rebuild. Four tests hold that,
+and they were seen red first with the systems unregistered:
+`f030_a_model_without_a_file_stays_the_primitive_it_is_today`,
+`f030_a_configured_model_spawns_a_scene_instead_of_the_primitive`,
+`f030_an_unknown_model_name_never_takes_the_geometry_away`,
+`f030_the_repository_runs_with_not_a_single_glb`.
 
 **No file name in Rust code.** An `asset_server.load("titan.glb")` in the middle of a system is
 a bug; there is **one** place that reads the registry (`data/`), everybody else asks for the
@@ -389,9 +534,28 @@ live, what is it supposed to become?*
 
 ## Where it stands
 
-`cargo test --test models -- --ignored --nocapture` prints the table: *model · `.blend` there? ·
-`.glb` current? · painted? · anchors complete? · wired into the RON?* — exactly what another
-agent wants to read in ten seconds.
+`cargo test --test models -- --ignored --nocapture` is meant to print the table: *model ·
+`.blend` there? · `.glb` current? · painted? · anchors complete? · wired into the RON?* — and
+**that test file does not exist.** What exists today is `cargo test --test render` (ten
+`f030_*` tests) and `cargo test --test titan` (one), and between them they answer everything
+that can be answered without a single file: a row without a model stays a primitive, a row with
+one produces a scene, the scene hides the cuboid, the state plays the clip, a clip that is
+missing says so and brings the cuboid back, and the `cortex` empty moves the kill zone. The
+scene under all of that is **built inside the test** — a `WorldAsset` with named empties in it,
+spawned by Bevy's own spawner. It is the file that is synthetic, nothing else.
+
+| 2026-08-12 | state |
+|---|---|
+| `assets/data/art.ron` as the one switch | 🟨 built, 11 tests, seen red first |
+| primitive fallback, in both directions | 🟨 |
+| the primitive hidden under an arrived model | 🟨 built, seen red first, **on a synthetic scene** |
+| `.glb` really loading, painted, upright | ⬜ — **there is no file to load** |
+| anchors read out of the model | 🟨 built and observed on a synthetic instance |
+| the `cortex` anchor moving the kill zone | 🟨 built, 8.90 m → 9.30 m measured |
+| the other seven anchors | 🟨 built, **read by nobody** |
+| animation clips resolved by name | 🟨 |
+| a game state playing its clip | 🟨 built, **on a hand-made `AnimationClip`** |
+| the `.blend` half of the chain | ⬜ |
 
 **The four stages apply to models just the same** (§8): a placeholder out of primitives is ⬜ or
 🟨 — never more, no matter how well it fits in. Only a real model that somebody has **seen** is

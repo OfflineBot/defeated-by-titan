@@ -1379,6 +1379,284 @@ them answers "what am I building and why"** — `docs/gameplay/` is now that ans
 the table. A stranger also learns the stage legend before learning that `docs/NEXT.md` is where
 he actually starts; `NEXT.md` is in the table, but below the fold of the first screen.
 
+## FIND-052 — The model switch was a `bool` plus a path, and that shape cannot express "no model"
+
+**Measured, not reasoned.** Before 2026-08-12 `assets/data/art.ron` carried
+`(blend: "titan_husk", use_blend: false, scale: 1.0)` for all eight rows, and
+`GameData::model()` had **no caller anywhere in `src/`** (`grep -rn "\.model(" src/` → one hit,
+the definition). The registry the whole asset plan hangs on was loaded, tested by
+`tests/data.rs`, and read by nobody. Every visible thing in the game — 101 blocks on the start
+map, the whole titan rig — was a `Cuboid` built in Rust.
+
+**The shape was the problem, not the wiring.** `use_blend: false` plus `blend: "titan_husk"`
+says *"there is a model called titan_husk and we are choosing not to use it"*. What is true is
+*"there is no model"*. The difference is not cosmetic:
+
+- a path typo under `use_blend: true` is a file that never loads — and with no `serde(default)`
+  to catch it, the failure arrives as an **empty entity**, three systems later, in the middle
+  of the game;
+- there is no way for the file to say the honest thing about the repo as it ships.
+
+`source: Primitive | Gltf(path)` says it. An unknown word is now a **RON parse error with a
+line number at startup** (`data::load_ron` panics with the file name), which is what rule 2
+asks for; and `Primitive` is a first-class answer rather than a negation.
+
+**What the change costs and what it does not:** `tests/data.rs` reads only `attribution` and
+`scale` off a `Model`, so the two tests that walk the registry
+(`t005_every_titan_points_at_a_model_that_exists`,
+`t005_every_third_party_asset_carries_its_attribution`) went through untouched — 45 passed.
+Nothing outside `src/data/mod.rs` and `src/render/` had to move, because nothing outside them
+had ever asked.
+
+**Confidence 🟧 for the fallback, 🟨 for the load.** Four tests were seen red first, by taking
+the four systems out of `RenderPlugin` and running the file: `f030_a_model_without_a_file_...`,
+`f030_a_configured_model_spawns_a_scene_...`, `f030_an_unknown_model_name_...` and
+`f030_a_titan_gets_its_model_...` all fail; the two pure-data claims stay green, which is
+itself worth knowing — *those two do not test the wiring at all.*
+
+**And the one thing no test here can reach:** there is no `.glb` in this repository, so
+"a configured model spawns a scene" is proven up to the **handle**, not up to a triangle. The
+child entity carries `PendingScene(Handle<Gltf>)` and the file behind it does not exist. That
+a real exported model arrives upright, painted and the right size is ⬜ and stays ⬜ until
+somebody puts a file in and looks at it.
+
+## FIND-053 — An animation that fails silently is indistinguishable from a model that has no animation
+
+`docs/models.md` lists "three glTF traps that all look the same" — white, chrome, invisible. A
+fourth belongs on that list and is worse, because it has **no visual symptom at all**: a clip
+name in the registry that is not in the file. The model spawns, renders, is the right size, and
+stands perfectly still. Nothing in Bevy warns: `Gltf::named_animations` is a `HashMap`, and a
+missing key is a `None` that a `let ... else` swallows in one line.
+
+**What was built against it.** `art.ron` maps a **game state** to a **clip name**
+(`{"idle": "Idle", "windup": "Windup"}`), resolved once when the file lands. A name that is not
+in the file produces a `WARN` that names four things — the model, the state, the clip that was
+asked for, **and the list of clip names the file actually carries**. That last item is the one
+that matters: without it the user knows something is wrong and has no way to find out what he
+should have typed, because the names live inside a binary.
+
+**The fallback is "no clip", never a substitute.** `ModelAssets::clips[model]` simply has no
+entry for that state.
+`tests/render.rs::f030_a_named_clip_that_is_not_in_the_file_leaves_the_state_without_one`
+registers a model with `{"idle": "Idle", "windup": "NoSuchClip"}` against a file that does not
+exist, runs 20 frames, and asserts that `windup` resolved to nothing **and that the app is
+still alive**. Substituting a neighbouring clip would be the same class of bug as a cortex
+anchor quietly becoming `Vec3::ZERO`: plausible, wrong, and silent.
+
+**⚠️ What this finding does NOT claim.** The seam is a lookup table, not a player. No
+`AnimationPlayer` is spawned, no `AnimationGraph` is built, no state ever asks for its clip.
+The test above is green on a repository where **no clip has ever been resolved successfully**,
+because there is no glTF file to resolve one out of. So the honest reading is: *the failure
+path is proven, the success path is not.* Both halves of that sentence are load-bearing —
+whoever builds the state machine on top should expect the first real `.glb` to surface
+something this could not.
+
+## FIND-050 — Flight mode needed no new state: `Tethered` already was one, and the missing half was that flight had no controls
+
+The commission for `docs/NEXT.md` §1b asked whether flight should be a **new `MovementState`
+variant** or a **widened `Tethered`**. Measured against the code, it is neither, and the reason
+is worth writing down because the obvious two answers both cost something real.
+
+**What the enum actually distinguishes today.** Every reader of `MovementState` was checked
+(the list in FIND-037): `player::locomotion` (`!= Grounded`), `player::integrator` (writes it),
+`combat::health` (`Downed` only), `blades::swing` (`Downed` only), the F3 overlay (prints it).
+**Not one of them tells `Tethered` from `Airborne`.** Behaviourally the enum is `Grounded` vs
+not-`Grounded`, plus `Downed`. So a new variant would have been a fifth name for the second of
+those two, and `src/shared/state.rs` belongs to another agent besides.
+
+**Why widening `movement_state` was measured and rejected.** The tempting one-branch change is
+`if grounded && speed <= top { Grounded } else if anchored { Tethered } else { Airborne }` —
+i.e. an unroped player skidding fast becomes `Airborne`. It reads exactly like the user's
+sentence. It is also a **dead end**, and arithmetic says so without a playtest: with
+`player.friction: 0.0` and `Restitution::Min`, `locomotion::ground_locomotion` is the **only**
+thing in this game that can brake a horizontal velocity on the ground. Skip it and a 30 m/s
+landing slides at 30 m/s forever — *„erst wenn man langsam genug ist läuft man wieder"* would
+never arrive, because nothing would ever make him slow. And the brake cannot move into a
+system that only sees `Airborne`, because "am I touching something" lives in `Collisions` and
+`integrator::readback` is its one reader.
+
+**What went in instead.** The state stays exactly what it was; flight became a **predicate on
+the speed that already existed**, `player::locomotion::in_flight`, over
+`integrator::ground_top_speed_m_s` = `run_speed_m_s + (-gravity_m_s2)/simulation_hz` = 6.3333.
+`Grounded` is the only variant that has to ask, and asking is the user's sentence:
+
+> *„nur weil man den boden berührt ist man nicht direkt aus flugmodus raus, erst wenn man
+> langsam genug ist läuft man wieder"*
+
+Above the line the legs stop steering (`ground_locomotion` passes `Vec2::ZERO` as `desired`,
+so `ground_step` degenerates to the pure brake it always was at that end) and the same WASD
+becomes thrust; below it nothing whatever changed. **The threshold is now used in two places
+and computed in one** — that is the only structural change, and it is why
+`ground_top_speed_m_s` became a function.
+
+**Measured `[offlinebot]`, `tests/player.rs`:** skidding across the ground at 30 m/s the air
+control reads `RunAccel = (10.0, 0.0, −0.0)` where it read `(0,0,0)` before — one toe on the
+floor no longer costs the whole flight. Two ticks after the slide has stopped, the same held
+key reads `(0,0,0)` again, because a walking player may not carry a thrust on top of an
+assignment. `f006_touching_the_ground_at_speed_does_not_end_the_air_control` is both halves,
+and it goes red on one line (`MovementState::Grounded => false` in `in_flight`).
+
+**⚠️ What this does NOT do.** The F3 overlay still prints `Grounded` for a player skidding at
+30 m/s in flight mode. That is now a **lie in the debug overlay** and it is `debug`'s to fix —
+the honest print is the predicate, not the variant. Nothing else reads the difference.
+
+## FIND-051 — `F-006` Swerve was in the backlog all along, and the air control's magnitude is a derivation, not a tuning value
+
+**First, the process finding, and it is `docs/NEXT.md`'s own rule 2 collecting again.** The
+user's §1a — *"W thrust forward, A/D lateral, S tensions the rope, and A/D is what stops you
+being dragged straight at your anchor"* — is `F-006` out of `docs/backlog/gameplay.ron`, word
+for word: *"Richtungseingabe waehrend des Einzugs moduliert die Flugbahn seitlich, nach oben
+und unten. **Kein binaeres Ziel-Anfliegen**"*, acceptance *"Vier Swerve-Richtungen aendern die
+Bahn messbar ohne Haken zu loesen"*. `F-006` is ⬜ in `docs/STATUS.md` and `depends_on: F-004`,
+which has been done since 2026-08-10. **The feature was specified before it was asked for, and
+one grep found it.** `src/vector/boost.rs`'s header even names it (*"F-006 Swerve and F-008
+Dash dock on here later"*), and `shared::gear::RunAccel` has been documented as *"contribution
+of ground run and **air control**"* since day one and written by nobody.
+
+**Where the numbers come from.** Two were needed and neither became a RON key today:
+
+- **`-gravity_m_s2 / 2` = 10 m/s²** for the thrust. Not a value somebody typed: *the air
+  control is half of gravity*, which is a statement anybody can check — **WASD alone can never
+  hold you up**, so what keeps a player airborne stays the rope and the gas. That is exactly
+  the acceptance criterion the user wrote for the whole block (§1f, *„bis das gas ausgeht"*).
+  Against `vector.boost_m_s2 = 34` it is 29 %, so `Shift` stays the strong option. It is the
+  same move `ground_step`'s `decel = -gravity_m_s2` ("μ·g at μ = 1.0") makes one screen up in
+  the same file, and it is made for the same stated reason: *a second untuned number nobody has
+  measured is worth less than a derivation that says out loud what it assumes.*
+- **The half without gas is the spec, not a derivation** — *„ohne gas kann man immernoch w a d
+  nutzen um etwas movement aufzubauen (aber hälfte ca)"*. The air control is therefore **not
+  gated** on gas and books none: `vector::gas` stays the sole writer of `Gas`, and this system
+  only reads `is_empty()`.
+
+**⚠️ The two RON keys, for whoever owns `assets/data/game.ron`.** The day either is to be tuned
+independently, they are `player.air_accel_m_s2: 10.0` and `player.air_accel_empty_fraction: 0.5`
+in the `player:` section, and the two lines in `player::locomotion::air_control` read them
+instead of deriving. **Rollback point if the user disagrees with 10 m/s²: that one expression.**
+
+**Measured `[offlinebot]`, `tests/player.rs`, all five tests seen red first:**
+
+| what | before | after |
+|---|---|---|
+| one second of `W`, airborne, full tank | 0.0000 m/s | **10.0002 m/s** along −Z |
+| one second of `W`, airborne, empty tank | 0.0000 m/s | **5.00 m/s** (half, to the digit) |
+| half a second of `D` while `Tethered` | 0.0000 m/s | **5.0000 m/s** sideways, hook still anchored |
+| half a second of `A` on a 30 m/s slide | 22.44° (legs) | **11.22°** full tank / **5.67°** empty |
+| `S`, airborne | — | **no thrust**, and `S` now also sets `REEL_IN` |
+
+**⚠️ A coupling that will bite somebody.** `f014_the_input_still_steers_the_carried_momentum`
+asserts `> 10°` of turn, and that turn is **no longer the legs'** — it is the air control's.
+The margin is **1.22°**: an air control below ≈ 0.53·g makes that test go red. That is the
+guard working (a slide you cannot steer *is* the passenger bug it was written for), but it
+means the two numbers are one decision now, and the test says so in its own comment.
+
+**⚠️ Does this obsolete the boost/rope blend (`boost_rope_fraction`, FIND-045/046)?** Not
+automatically, and the honest answer is *not yet* — see the report; `src/vector/boost.rs` was
+not touched here.
+
+## FIND-055 — the overlay could not stop lying without a new domain edge, and FIND-050 did not see that
+
+FIND-050 closed with *"the honest print is the predicate, not the variant — and it is `debug`'s
+to fix."* It is, but **`debug` was not allowed to ask.** The allow list in
+`docs/architecture.md` carried exactly two edges (`debug -> mission`, `hud -> mission`), and
+`in_flight` + `ground_top_speed_m_s` both live in `player`, so `tests/domains.rs` goes red on
+the fix as written. The three ways out were: duplicate the predicate in `debug` (two writers of
+one rule, and the arithmetic 6.3333 copied into a text formatter), mirror the answer into a
+`shared` component (a second writer of the player's state for the sake of one line of text), or
+enter the edge. **The edge went in**, read-only, with its reason — `debug -> player`, the same
+shape as `debug -> mission`: a predicate over current state is not something a message can
+carry. Whoever adds the next debug read of a domain has a precedent now, and that is the risk
+worth naming: the F3 overlay is a natural sink for every domain's state, and this list is the
+only thing that keeps it from becoming an edge to all of them.
+
+**Measured `[offlinebot]`, `tests/debug.rs::the_overlay_says_flight_for_a_skidding_player_and_not_for_a_walking_one`,
+seen red first:** at 30 m/s across the floor the overlay printed
+`t=0  pos 0.0 2.0 0.0  gas 300/300  Grounded  spd 30.0` and now prints `Grounded FLIGHT`. The
+variant is **kept** next to the verdict — `Grounded` is still what `integrator::readback` wrote
+and `Tethered`/`Downed` are still worth reading — and the speed is printed with it, because a
+verdict whose number is not in the same PNG cannot be checked against the 6.3333 m/s threshold.
+
+## FIND-054 — The three gaps that made the model swap cosmetic, and the domain edge that blocked two of them
+
+**Closing FIND-052/053.** The registry landed and the swap did not work end to end: a
+configured model spawned its scene **beside** the cuboid rig, nothing ever played a resolved
+clip, and `ModelAnchors` was written, tested and read by nobody. All three are closed
+(`src/render/model.rs`, `src/titan/rig.rs`) and each was **seen red first** by unregistering
+the systems, then broken again in one line:
+
+| test | red when |
+|---|---|
+| `f030_a_model_that_arrived_hides_the_cuboid_it_replaces` | the two new systems are out of `RenderPlugin`; and again with `want_hidden = false` |
+| `f030_the_game_state_plays_the_clip_that_is_mapped_to_it` | same; and again with `clip_repeats` answering `false` for every state |
+| `f030_a_state_without_a_clip_brings_the_cuboid_back` | same; and again with `PrimitiveFallback(declares)` turned into `PrimitiveFallback(false)` |
+| `f030_a_models_cortex_anchor_beats_the_computed_position` | `rig::cortex_from_the_model` is out of `TitanPlugin`; and again with the head-frame conversion dropped |
+
+**The measurement:** `scale.ron` puts the husk's cortex at 8.90 m; a model bringing a `cortex`
+empty at 9.30 m moves the **sensor** there, measured on the assembled rig through
+`GlobalTransform` — 9.30 m, with the collider still on it and still the same entity.
+
+### The interesting part was not the hiding, it was what hiding must not touch
+
+`Visibility::Hidden` was chosen over despawning the rig or removing `Mesh3d` because avian,
+`GlobalTransform` propagation and `SpatialQuery` do not read it: the body capsule, the cortex
+sensor and every length the rig computed stay exactly where they were, and the switch is
+reversible by one line of RON. **A hidden cortex still kills** — asserted, not assumed
+(`Collider` present, `GlobalTransform` unchanged at `(0, 2, 0)`).
+
+Two details that are not obvious and are load-bearing:
+
+- **The trigger is the scene that ARRIVED, not the row that was configured.** Hiding on
+  `ModelBody::Scene` alone would make a typo in a path into an invisible titan, which is
+  exactly the direction `docs/models.md` promises against. `f030_a_file_that_never_loads_
+  leaves_the_cuboid_standing` holds it — and it is honest to say it passes **vacuously** with
+  the hiding system unregistered; its value is as the counterpart of the test above, not alone.
+- **A block carries its cuboid on the entity itself, not on a child.** Hiding it would take the
+  scene child with it, so the child gets `Visibility::Visible`, which ignores a hidden parent.
+  Nothing in the game gives a block a `ModelName` today, so **that branch is reasoned about and
+  compiled, never executed.**
+
+### The missing clip now has a symptom, and it is the cuboid
+
+FIND-053 called this the fourth glTF trap: the model spawns, renders, is the right size and
+stands perfectly still. A warning alone does not fix that — nobody reads a log while playing.
+So a model that **declares** animations and has no clip for the state the game is in gets its
+cuboid rig back, and the cuboid is the thing `titan::pose` actually animates: the wind-up stays
+readable (`F-053`) instead of being invisible. A model that declares `animations: {}` is
+**static, not broken**, and keeps its cuboid hidden — that distinction is the whole design, and
+both halves are asserted.
+
+### The blocker worth reporting: `titan -> render` is not on the allow list
+
+Two of the three gaps need `titan` to read something `render` writes, and `docs/architecture.md`
+is another agent's file this session. `ModelAnchors` (with `ANCHOR_NAMES` and `CORTEX_ANCHOR`)
+therefore **moved to `src/shared/anchors.rs`**, re-exported from `render::model` so no caller
+changed — the same move, for the same reason, that `TitanState` and `StateClock` made for the
+F3 overlay. `tests/domains.rs` stays green with three tests and no new edge.
+**What is still owed to `docs/architecture.md`:** one line in the authority table saying
+`render::model` is the one writer of `ModelAnchors` and `titan::rig` a reader. It is not written
+because the file is not this agent's.
+
+### What is proven, and what is only compiled
+
+The repository has **no `.glb` and must not have one**, so the fixture is a `WorldAsset` built
+in the test with named empties in it, handed to Bevy's own spawner. That turned two of
+FIND-052's "never seen a real file" claims into observations: the `WorldAssetRoot` handoff and
+the anchor walk both run — `model "anchored": 2 anchor(s) read out of the file`, values exact.
+
+**Still not observed, and no test here can reach it:**
+
+- that a Blender export names its empties `cortex`, `hook.l`, … at all, or that the model
+  arrives upright and painted;
+- that a real glTF's own `AnimationPlayer` (the loader puts one on an animated hierarchy's root,
+  `bevy_gltf-0.19.0/src/loader/mod.rs:1088-1093`) is found by `animation_player_of` — every test
+  here takes the *other* branch, where the instance brings none and one is inserted on the scene
+  child;
+- that a clip with real curves in it moves anything. The clips in the tests are
+  `AnimationClip::default()` — empty. What is proven is that **the right node plays, once or
+  looping**; that a bone moves is a claim about a file.
+
+Whoever puts the first real model in should expect that list to produce a surprise, and should
+add it here rather than quietly fixing it.
+
 *(Append further findings here. A finding without a measurement is an opinion.)*
 
 Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUESTIONS.md)

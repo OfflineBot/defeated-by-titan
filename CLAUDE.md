@@ -160,6 +160,16 @@ supervisor. In descending order of cost:
 9. **Cap the report.** "Under 40 lines, do not summarise the docs you wrote — I can read them."
    A report that restates its own deliverable is paid for twice.
 
+### And one that is not about tokens: **never `git add -A` while an agent is still working**
+
+On 2026-08-12 a sweep commit swallowed a whole feature that was still being written — the model
+registry landed inside a commit whose message describes only the `init.md` carry-over, so **no
+commit in the history says that feature exists.** Nothing was lost, and the history now lies about
+what happened, which is worse than a messy diff.
+**Stage explicit paths while agents are live** (`git add docs/ src/vector/gas.rs`), or wait for the
+round to close. `git status --short` before every commit, and if a path you did not touch is
+modified, find out whose it is first.
+
 **The one that is not a saving: do not cut the red test, the counter-check on a claim, or the
 honest paragraph.** Those are the things that made the session's output worth anything, and every
 one of them caught something real.

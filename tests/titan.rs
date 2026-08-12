@@ -1489,3 +1489,85 @@ fn f053_the_telegraph_goes_dark_when_the_pose_angles_go_to_zero() {
          at 40 m (criterion 150)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// F-030 · a swapped model decides where its titan DIES, not only where it renders
+//
+// `docs/FINDINGS.md` FIND-052 named this the single highest-value follow-up of the model
+// registry, and the reason a swap was cosmetic only: `ModelAnchors` was written, tested and
+// read by nobody, while `rig::build_rig` kept computing the cortex out of `scale.ron`. A
+// swapped model therefore rendered in one place and died in another — invisibly, because both
+// places look right on their own.
+//
+// There is no `.glb` in this repository and there must not be one, so the anchor is put on the
+// entity the way `render::model::read_the_models_anchors` puts it there. What that proves is
+// the READER; that Blender writes an empty called `cortex` at all is a claim about a file and
+// stays ⬜ (`docs/models.md`).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn f030_a_models_cortex_anchor_beats_the_computed_position() {
+    use defeated_by_titan::shared::{ModelAnchors, CORTEX_ANCHOR};
+
+    let mut app = app();
+    let d = data(&app);
+    let husk = d.titan("husk").expect("husk");
+    let computed = d.titan_cortex_height_m(husk).expect("husk cortex height");
+
+    // Far outside `aggro_radius_m`: `Idle` is the upright pose the heights are defined against.
+    spawn(&mut app, "husk", Vec3::new(0.0, 0.0, -200.0));
+    ticks(&mut app, 2);
+    let root = the_titan(&mut app);
+    let cortex = part_entity(&app, root, TitanPart::Cortex).expect("the rig has a cortex");
+
+    // **The fallback first**, because it is the one that must not break: no anchors, and the
+    // computed position stands exactly as it did before this system existed.
+    let before = app.world().get::<GlobalTransform>(cortex).expect("global").translation();
+    assert!(
+        (before.y - computed).abs() < 0.01,
+        "without a model the cortex has to stay where scale.ron puts it ({computed} m), it is \
+         at {} m",
+        before.y
+    );
+
+    // Now the model brings its own. 0.4 m higher and 0.1 m further back than the size table —
+    // a plausible modelling decision, and one nothing in the rig can guess.
+    // The anchor is given in the MODEL ROOT's own space — metres above the origin between the
+    // feet — so the titan's own position in the world is what it has to be read against.
+    let origin = app.world().get::<Transform>(root).expect("root transform").translation;
+    let anchor = Vec3::new(0.0, computed + 0.4, before.z - origin.z + 0.1);
+    let mut anchors = ModelAnchors::default();
+    anchors.0.insert(CORTEX_ANCHOR.to_string(), anchor);
+    app.world_mut().entity_mut(root).insert(anchors);
+    ticks(&mut app, 2);
+
+    let after = app.world().get::<GlobalTransform>(cortex).expect("global").translation();
+    assert!(
+        (after.y - anchor.y).abs() < 0.01,
+        "the model's cortex empty sits at {:.2} m and the kill zone is at {:.2} m — the titan \
+         renders where the modeller put it and dies where scale.ron computed it (F-030)",
+        anchor.y,
+        after.y
+    );
+    assert!(
+        (after.z - origin.z - anchor.z).abs() < 0.01,
+        "the anchor's depth was dropped: {:.2} m asked for, {:.2} m reached — the nape is a \
+         point, not a height",
+        anchor.z,
+        after.z - origin.z
+    );
+    // The sensor moved, not a second one: one cortex, still under the head, still hittable.
+    assert_eq!(
+        part_entity(&app, root, TitanPart::Cortex),
+        Some(cortex),
+        "a second cortex was spawned instead of the one being moved"
+    );
+    assert!(
+        app.world().get::<Collider>(cortex).is_some(),
+        "the moved cortex lost its collider — it would render in the right place and never be hit"
+    );
+    println!(
+        "F-030 anchor: scale.ron {computed:.2} m -> model {:.2} m, cortex measured at {:.2} m",
+        anchor.y, after.y
+    );
+}

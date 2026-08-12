@@ -120,6 +120,21 @@ use crate::shared::{Hook, MovementState, PlayerId, Velocity};
 /// `length_prev/length_new` (`shared::rope::rope_reel_in`). ACT 1 then reported 46.414 m/s off
 /// the `vector.max_speed_m_s` clamp. Keeping the −22.138 leaves 28 m/s pointing almost straight
 /// **at** the anchor, which a reel cannot amplify at all.
+/// **The one speed that splits the legs from the air**, out of `game.ron` and out of nowhere
+/// else: `run_speed_m_s` plus one tick of the ground's own deceleration.
+///
+/// It answers two questions with one number, and that is the point of it being a function
+/// instead of two expressions: [`movement_state`] asks *"is the rope carrying him or are his
+/// legs?"* and [`super::locomotion::in_flight`] asks *"is this input running or is it thrust?"*.
+/// Those are the same question — **the legs cannot produce more than the ground's top speed** —
+/// and two copies of the arithmetic would be two answers the day somebody changes one of them.
+///
+/// Why the extra tick and not a bare `run_speed_m_s` is in [`movement_state`]'s doc: held `W`
+/// comes back as 6.000022888 m/s, not as 6.0.
+pub fn ground_top_speed_m_s(data: &GameData) -> f32 {
+    data.game.player.run_speed_m_s - data.game.gravity_m_s2 / data.game.simulation_hz as f32
+}
+
 pub fn movement_state(
     anchored: bool,
     grounded: bool,
@@ -151,11 +166,9 @@ pub fn readback(
     // uses to stop a body in front of a surface — not a second one invented here.
     let min_penetration = -data.game.world.collision_margin_m;
 
-    // The fastest a tick of ground can hand a body back — see [`movement_state`] for why it is
-    // not just `run_speed_m_s`. `-gravity_m_s2 / simulation_hz` is `locomotion::ground_step`'s
-    // own quantum, read from the same two file values that system reads, not invented here.
-    let ground_top_speed_m_s = data.game.player.run_speed_m_s
-        - data.game.gravity_m_s2 / data.game.simulation_hz as f32;
+    // The fastest a tick of ground can hand a body back — see [`ground_top_speed_m_s`] and
+    // [`movement_state`] for why it is not just `run_speed_m_s`.
+    let ground_top_speed_m_s = ground_top_speed_m_s(&data);
 
     for (entity, physics_velocity, hook, mut velocity, mut state) in &mut players {
         // `set_if_neq` and not an assignment — here and on the state below. A component that

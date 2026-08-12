@@ -198,6 +198,22 @@ pub struct PlayerTuning {
     pub health: f32,
     pub run_speed_m_s: f32,
     pub jump_speed_m_s: f32,
+    /// `F-006`. **⚠️ UNTUNED.** How hard WASD pushes in flight, in m/s²
+    /// (`player::locomotion::air_control`).
+    ///
+    /// Stood in Rust as `-gravity_m_s2 / 2` until 2026-08-12 (`docs/FINDINGS.md` FIND-051) and
+    /// is a key now because §4 says a game value belongs in the file. The derivation it came
+    /// from is still the bound: **strictly below `-gravity_m_s2`**, or WASD alone holds you up
+    /// and gasless hovering is free — and well below [`VectorTuning::boost_m_s2`], or `Shift`
+    /// stops being the strong option. `tests/data.rs` holds the first of those.
+    pub air_accel_m_s2: f32,
+    /// `F-006`. **⚠️ UNTUNED.** What is left of [`air_accel_m_s2`](Self::air_accel_m_s2) with an
+    /// empty tank. Dimensionless, so no unit suffix.
+    ///
+    /// **Not a derivation — the user's spec:** *„ohne gas kann man immernoch w a d nutzen um
+    /// etwas movement aufzubauen (aber hälfte ca)"* (`docs/NEXT.md` §1e). The air control is
+    /// therefore not gated on gas; it only gets weaker.
+    pub air_accel_empty_fraction: f32,
     pub eye_height_m: f32,
     /// Largest distance per substep of the integrator. Has to be strictly smaller than
     /// [`WorldTuning::min_wall_m`], or the player tunnels through the thinnest wall.

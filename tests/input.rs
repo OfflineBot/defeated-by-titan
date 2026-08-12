@@ -255,6 +255,12 @@ fn p3_a_script_look_still_overrides_the_mouse() {
 /// driver does (`src/debug/mod.rs:217-224`) — writing the `Intent` by hand would test nothing
 /// but the test.
 fn buttons_from(keys: &[KeyCode], mouse: &[MouseButton]) -> Buttons {
+    intent_from(keys, mouse).buttons
+}
+
+/// The same, but the whole [`Intent`] — the movement axes matter as soon as one key means two
+/// things (`S` is `REEL_IN` **and** walking backwards, `docs/NEXT.md` §1a).
+fn intent_from(keys: &[KeyCode], mouse: &[MouseButton]) -> Intent {
     let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
 
     // Startup frame with a zero delta, so no fixed step is smuggled in before the press.
@@ -280,7 +286,35 @@ fn buttons_from(keys: &[KeyCode], mouse: &[MouseButton]) -> Buttons {
         .iter(app.world())
         .next()
         .expect("the local player must exist after startup")
-        .buttons
+        .to_owned()
+}
+
+/// `S` **tensions the rope** — and it keeps walking backwards on the ground.
+///
+/// The user, 2026-08-12 (`docs/NEXT.md` §1a): *„wenn man w drückt und verbunden ist bekommt man
+/// schon movement! bei a und d movement zur seite. **mit s »spannt« man nur das seil!**"* — so
+/// `S` is the one WASD key that is not a thrust (`player::locomotion::air_thrust` clamps the
+/// forward axis at 0) and instead does what `Ctrl` does.
+///
+/// **A second binding, not a move.** `Ctrl` keeps `REEL_IN`: the reel has to stay reachable
+/// with a hand that is holding `W`, and `scripts/f-flight-cut.txt` presses `Ctrl` for it.
+#[test]
+fn bindings_s_tensions_the_rope_and_still_walks_backwards() {
+    let i = intent_from(&[KeyCode::KeyS], &[]);
+    assert!(
+        i.buttons.contains(Buttons::REEL_IN),
+        "S must set REEL_IN — got {:?}",
+        i.buttons
+    );
+    assert!(
+        (i.move_y + 1.0).abs() < 1e-6,
+        "S must still be backwards on the ground — move_y is {}",
+        i.move_y
+    );
+    assert!(
+        intent_from(&[KeyCode::ControlLeft], &[]).buttons.contains(Buttons::REEL_IN),
+        "the reel lost its own key — S is a SECOND binding, not a move"
+    );
 }
 
 /// `Q` is the **left rope**, and it is no longer the mark.
