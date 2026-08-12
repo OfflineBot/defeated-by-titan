@@ -1,10 +1,10 @@
 # docs — the index: one line per file
 
-Updated: 2026-08-09 · Stage: 🟨
+Updated: 2026-08-12 · Stage: 🟨
 
 **Every file under `docs/` stands here.** Whatever is not here is an orphan file and gets
-linked or deleted — there is nothing in between (`prompts/init.md` §10). `tools/norms.py`
-checks that.
+linked or deleted — there is nothing in between ([`conventions.md`](conventions.md) §6).
+`tools/norms.py` checks that.
 
 ## Where to start
 
@@ -22,7 +22,9 @@ checks that.
 |---|---|
 | [`architecture.md`](architecture.md) | domains, plugin order, the **allow list** of dependencies, the authority table (who writes which field), the Roblox→Bevy translations |
 | [`conventions.md`](conventions.md) | axes, units, looking direction, 1 stud = 0.28 m, the binding terms, the three signal colors, all the naming norms |
-| [`models.md`](models.md) | the model chain, the anchor empties, the three glTF traps — and **the instructions for the user** on how to swap a model |
+| [`models.md`](models.md) | the four asset chains (model, atlas, sound, VFX), the anchor empties, the size table, the three glTF traps — and **the instructions for the user** on how to swap a model |
+| [`gameplay/`](gameplay/README.md) | ⭐ **the design: what the game is and why** — the pillars, the world, the enemies, the core loop, and where the user's wishes go |
+| [`RELEASE.md`](RELEASE.md) | the finish line: carry over, clean up, publish, dissolve the scaffolding — **and the record of where each part of the commission went** |
 | [`multiplayer.md`](multiplayer.md) | the plan that does not get built yet: eight rules, the authority model, the seam `src/net/` |
 | [`environment.md`](environment.md) | the two machines, measured: what works, what does not, and what follows from that |
 | [`BUGS.md`](BUGS.md) | every bug with repro, evidence, expectation, cause — and the fix doctrine (red test first) |
@@ -84,17 +86,45 @@ cargo run -- --headless --script scripts/t007-first-run.txt --ticks 600
 cargo run -- --headless --lag 200 --script scripts/t019-latency.txt --ticks 900
 ```
 
-## Empty so far, but planned
+## The design — one file per topic
 
-| Folder | what for |
+`docs/gameplay/` is the **WHY**: it says what the game is supposed to be, so that a number in a
+RON has something to be right or wrong against. It is also the place the user's design wishes go
+once the bootstrap inbox is dissolved ([`RELEASE.md`](RELEASE.md)).
+
+| File | what is in it |
 |---|---|
-| `gameplay/` | the design per topic (`<topic>.md`), plus `references.md` and `images/`. It fills up as things are carried over out of the inbox |
-| `images/` | screenshots as evidence: `<f-id>-<short>.png`. **On machine A nothing appears here** |
+| [`gameplay/README.md`](gameplay/README.md) | the index, the routing table for the user's wishes, the order of precedence, and how the spreadsheet is read and re-read |
+| [`gameplay/pillars.md`](gameplay/pillars.md) | the game in one sentence, the five design pillars, the ten improvements over the reference, the success metrics |
+| [`gameplay/world.md`](gameplay/world.md) | setting, tone, what titans are, the visual style with the three signal colors, the platform rules |
+| [`gameplay/enemies.md`](gameplay/enemies.md) | the anti-autopilot rule and the eight titan kinds, each with what it teaches |
+| [`gameplay/core-loop.md`](gameplay/core-loop.md) | hook, swing, gas, cut — and the four things copied from the reference |
+
+Still to come here: `references.md` (numbers taken from research, each with its source) and an
+`images/` folder for sketches.
+
+## `images/` — the evidence in pixels
+
+`docs/images/<f-id>-<short>.png`, named per [`conventions.md`](conventions.md) §4. **A screenshot
+nobody can find again is not evidence**, so every one of them is linked from a `STATUS.md` row, a
+`BUGS.md` entry or [`ACCEPTANCE.md`](ACCEPTANCE.md). The route that produces them reproducibly is
+`--offscreen --screenshot`; the window route works but its image size belongs to the compositor,
+not to the command.
 
 ## A named deviation: `docs/` does not mirror `src/` file by file yet
 
-`prompts/init.md` §5 asks for one doc file per source file. As long as a domain consists of
+**The rule is: one source file, one doc file** — and the doc does not describe *what* the code
+does (that is in the code) but **why it is that way and where the traps are**. A new source file
+means a new doc file and a line here, in the same commit. As long as a domain consists of
 nothing but an empty `mod.rs`, that would be a folder full of files without content — exactly
-the orphans §10 forbids. **Until then [`architecture.md`](architecture.md) carries the
-description of every domain in one line.** Whoever writes the first real logic into a domain
-creates `docs/<domain>.md` and enters it here — **in the same commit**.
+the orphans [`conventions.md`](conventions.md) §6 forbids. **Until then
+[`architecture.md`](architecture.md) carries the description of every domain in one line.**
+Whoever writes the first real logic into a domain creates `docs/<domain>.md` and enters it here —
+**in the same commit**.
+
+> ⚠️ **This deviation has outlived its reason and nobody has withdrawn it.** It was written when
+> every domain was an empty `mod.rs`. Since then `vector/`, `combat/`, `blades/`, `hud/`,
+> `debug/` and `world/` carry real logic, and the trigger sentence above ("whoever writes the
+> first real logic") has fired several times without anybody creating the file. Either the
+> deviation gets renewed with a current reason, or the domain docs get written. It is not a
+> blocker for anything, which is exactly why it has survived — recorded 2026-08-12.

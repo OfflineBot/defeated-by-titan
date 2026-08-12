@@ -38,10 +38,16 @@ use bevy::gizmos::GizmoHandles;
 use bevy::prelude::*;
 use bevy::ui::DefaultUiCamera;
 use bevy::window::PrimaryWindow;
-use defeated_by_titan::data::GameData;
+use bevy::world_serialization::WorldAssetRoot;
+use defeated_by_titan::data::{GameData, Model, ModelSource};
 use defeated_by_titan::debug::gizmo::GizmoToggle;
+use defeated_by_titan::render::model::{
+    load_configured_models, ModelAnchors, ModelAssets, ModelBody, ModelName, PendingScene,
+};
 use defeated_by_titan::render::rope::rope_color;
-use defeated_by_titan::shared::{BodyId, Cli, Hook, HookArm, HookState, Intent, LocalPlayer, Side};
+use defeated_by_titan::shared::{
+    BodyId, Cli, Hook, HookArm, HookState, Intent, LocalPlayer, Side, TitanKindName,
+};
 
 /// Builds the **real** app, headless — not a second, similar one.
 ///
@@ -466,4 +472,217 @@ fn f004_a_rope_is_the_cyan_out_of_maps_ron() {
     let lines = drawn_lines(&mut app);
     assert_eq!(lines.len(), 1);
     assert_eq!(lines[0].2, expected, "a rope is drawn in a colour that is not maps.ron's cyan");
+}
+
+// ---------------------------------------------------------------------------
+// The model registry — `assets/data/art.ron` decides, and BOTH answers are normal.
+//
+// The user, 2026-08-12: *„mach zudem, dass ich später einfach die 3d modelle austauschen kann
+// + eigene animationen adden kann!"* These tests are the half of that sentence that can be
+// checked without a single `.glb` in the repository — and "without a single `.glb`" is not a
+// limitation of the tests, it is the **requirement**: every visible thing in this game is a
+// primitive cuboid today, and it has to stay that way until somebody puts a file in.
+//
+// **Why they mutate `GameData` instead of adding a line to `art.ron`:** the swap has to be
+// provable while every shipped entry is still a placeholder. A test entry in the real registry
+// would need a file that does not exist, and would make `cargo run` print an error for ever.
+// The types are the real ones, the systems are the real ones, the app is the real one — only
+// the row is the test's own.
+// ---------------------------------------------------------------------------
+
+/// Both halves of the switch spawn into the same app, so a green result cannot come from two
+/// differently built worlds.
+fn art_entry(source: ModelSource, animations: &[(&str, &str)]) -> Model {
+    Model {
+        source,
+        scale: 1.0,
+        attribution: None,
+        animations: animations
+            .iter()
+            .map(|(state, clip)| ((*state).to_string(), (*clip).to_string()))
+            .collect(),
+    }
+}
+
+/// Puts a row into the registry the way `art.ron` would, then does what `Startup` does with it.
+fn register(app: &mut App, name: &str, model: Model) {
+    app.world_mut()
+        .resource_mut::<GameData>()
+        .art
+        .models
+        .insert(name.to_string(), model);
+    // `load_configured_models` is a `Startup` system and has already run. Running it again by
+    // hand is what makes this a test of the REAL loader rather than of a handle the test made
+    // up itself.
+    app.world_mut()
+        .run_system_once(load_configured_models)
+        .expect("the loader runs");
+}
+
+#[test]
+fn f030_a_model_without_a_file_stays_the_primitive_it_is_today() {
+    // **The non-negotiable.** `titan_husk` is `source: Primitive` in the shipped `art.ron`, and
+    // every titan in the game points at it. If this goes red the game has started demanding a
+    // file that is not in the repository — and the symptom is an empty world, not an error.
+    let mut app = app();
+    let entity = app.world_mut().spawn(ModelName::new("titan_husk")).id();
+    app.world_mut().run_schedule(Update);
+
+    assert_eq!(
+        app.world().get::<ModelBody>(entity),
+        Some(&ModelBody::Primitive),
+        "a `source: Primitive` row must leave the entity alone — whatever cuboids are already \
+         standing on it are the model"
+    );
+    assert!(
+        app.world().get::<Children>(entity).is_none(),
+        "nothing may be spawned under a primitive: the rig owns those children"
+    );
+    assert_eq!(
+        app.world().get::<ModelAnchors>(entity).map(ModelAnchors::is_empty),
+        Some(true),
+        "a primitive has no anchors OUT OF A FILE — an empty map is how a reader is told to \
+         ask the rig instead of being handed a Vec3::ZERO kill zone"
+    );
+}
+
+#[test]
+fn f030_a_configured_model_spawns_a_scene_instead_of_the_primitive() {
+    // The other half, and the one that makes the half above falsifiable: same app, same tick,
+    // one line of RON different — and now something is spawned.
+    let mut app = app();
+    register(&mut app, "swapped", art_entry(ModelSource::Gltf("3d/glb/swapped.glb".into()), &[]));
+
+    let entity = app.world_mut().spawn(ModelName::new("swapped")).id();
+    app.world_mut().run_schedule(Update);
+
+    let body = app
+        .world()
+        .get::<ModelBody>(entity)
+        .copied()
+        .expect("the registry has to have decided something");
+    let ModelBody::Scene(scene) = body else {
+        panic!(
+            "art.ron says `source: Gltf(..)` and the entity still came out as {body:?} — \
+             then no swap is possible and the switch is decoration"
+        );
+    };
+    assert_eq!(
+        app.world().get::<ChildOf>(scene).map(ChildOf::parent),
+        Some(entity),
+        "the scene has to hang UNDER the entity: the simulation owns the entity's transform, \
+         the model owns only its own scale (docs/architecture.md)"
+    );
+    // The file does not exist, so what the child carries is the handle in flight, not a
+    // finished scene. That is the honest assertion — and `attach_late_scenes` is what turns it
+    // into a `WorldAssetRoot` on the frame the file arrives.
+    assert!(
+        app.world().get::<PendingScene>(scene).is_some()
+            || app.world().get::<WorldAssetRoot>(scene).is_some(),
+        "the child carries neither a pending glTF handle nor a scene root — nothing will ever \
+         be rendered under it"
+    );
+}
+
+#[test]
+fn f030_an_unknown_model_name_never_takes_the_geometry_away() {
+    // The direction that costs a session: a typo in `titan.ron` must not leave a titan
+    // invisible. Falling back to the primitive is the only safe answer, and it is said out
+    // loud once.
+    let mut app = app();
+    let entity = app.world_mut().spawn(ModelName::new("no_such_model")).id();
+    app.world_mut().run_schedule(Update);
+
+    assert_eq!(
+        app.world().get::<ModelBody>(entity),
+        Some(&ModelBody::Primitive),
+        "an unknown logical name must fall back to the primitive, not to nothing"
+    );
+}
+
+#[test]
+fn f030_the_repository_runs_with_not_a_single_glb() {
+    // **The requirement, checked on the file that ships** — not on a fixture. The day somebody
+    // sets a row to `Gltf(..)` without committing the file, this is what says so.
+    let app = app();
+    let data = app.world().resource::<GameData>();
+    let configured: Vec<&String> = data
+        .art
+        .models
+        .iter()
+        .filter(|(_, m)| !matches!(m.source, ModelSource::Primitive))
+        .map(|(name, _)| name)
+        .collect();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    for name in &configured {
+        let ModelSource::Gltf(path) = &data.art.models[*name].source else {
+            continue;
+        };
+        assert!(
+            root.join(path).is_file(),
+            "art.ron: model {name:?} points at {path:?}, and assets/{path} is not there. \
+             Either commit the file (assets/3d/glb/ is TRACKED, docs/models.md) or put the row \
+             back to `source: Primitive`"
+        );
+    }
+    assert_eq!(
+        app.world().resource::<ModelAssets>().gltf.len(),
+        configured.len(),
+        "the loader asked for a different number of files than art.ron configures"
+    );
+}
+
+#[test]
+fn f030_a_titan_gets_its_model_and_its_cortex_yardstick_out_of_the_ron() {
+    // The wiring, and it costs no domain edge: `TitanKindName` is `shared`, `titan.ron` and
+    // `scale.ron` are `data` — both free for every domain. `render` never learns that a domain
+    // `titan` exists (docs/architecture.md).
+    let mut app = app();
+    let entity = app.world_mut().spawn(TitanKindName::new("husk")).id();
+    app.world_mut().run_schedule(Update);
+
+    let named = app.world().get::<ModelName>(entity).cloned().expect("a titan gets a model name");
+    let data = app.world().resource::<GameData>();
+    let kind = data.titan("husk").expect("husk stands in titan.ron");
+    assert_eq!(named.name, kind.model, "the model name has to come out of titan.ron");
+    assert_eq!(
+        named.cortex_height_m,
+        data.titan_cortex_height_m(kind),
+        "the cortex yardstick has to come out of scale.ron — a swapped model is checked \
+         against it, and a number copied into Rust is a lie on the day of the first change"
+    );
+}
+
+#[test]
+fn f030_a_named_clip_that_is_not_in_the_file_leaves_the_state_without_one() {
+    // **The animation seam, and its only promise: silence is not an option, and a wrong name
+    // is not fatal.** `windup` here names a clip that cannot possibly resolve, because there
+    // is no file at all. The state must simply have no clip — a fabricated fallback clip
+    // would be the trap `docs/models.md` warns about, where the model animates the wrong
+    // thing and nothing says so.
+    let mut app = app();
+    register(
+        &mut app,
+        "animated",
+        art_entry(
+            ModelSource::Gltf("3d/glb/animated.glb".into()),
+            &[("idle", "Idle"), ("windup", "NoSuchClip")],
+        ),
+    );
+
+    for _ in 0..20 {
+        app.update();
+    }
+
+    let assets = app.world().resource::<ModelAssets>();
+    let resolved = assets.clips.get("animated");
+    assert!(
+        resolved.is_none_or(|c| !c.contains_key("windup")),
+        "a clip name that is not in the file must leave that state EMPTY, and the loader must \
+         say so — it resolved {resolved:?} instead"
+    );
+    assert!(
+        app.world().get_resource::<GameData>().is_some(),
+        "the app has to still be alive: a missing model is a warning, never a crash"
+    );
 }

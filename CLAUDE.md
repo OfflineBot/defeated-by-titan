@@ -9,9 +9,13 @@
 > obeyed**. The translation table lives in [`docs/architecture.md`](docs/architecture.md) and
 > it **grows**: whoever runs into a new Roblox instruction adds the line there.
 
-**This project is still being built up out of `prompts/` and `gameplay/`.** That is bootstrap
-scaffolding and it disappears once it has been carried over (`prompts/init.md` §18). Until
-then: `gameplay/` decides the **content**, `prompts/` the **craft**.
+**The bootstrap prompt is gone.** `prompts/init.md` was carried over in full on 2026-08-12 and
+deleted — every rule in it now has a permanent home in `docs/` or in this file, audited section by
+section (`docs/FINDINGS.md` FIND-048, the transfer record in [`docs/RELEASE.md`](docs/RELEASE.md)).
+It is readable in the history: `git show <sha>:prompts/init.md`.
+**`gameplay/features.xlsx` stays** — it is not scaffolding, it is the generator source for
+`docs/features.ron` and the whole `docs/backlog/`. **`docs/gameplay/` is the design**: what the
+game is and why.
 
 ---
 
@@ -19,7 +23,7 @@ then: `gameplay/` decides the **content**, `prompts/` the **craft**.
 
 ```bash
 hostname                                    # 'debian' = no window, and that is fine
-ls -lt prompts/ && ls -R gameplay/          # new commission? The user adds work at any time
+cat user-messages.md                        # the player's notes — READ FIRST, then migrate + empty
 git status --short && git log --oneline -5  # what did another session do?
 cat docs/STATUS.md docs/TODO.md             # where do we actually stand?
 export PATH="$HOME/.cargo/bin:$PATH"        # Rust lives in ~/.cargo (machine A)
@@ -65,7 +69,7 @@ went unseen.**
 
 This project is **not worked through serially by one head**, but with workflows and subagents
 — **broadly parallel and scientifically**. That is binding, not recommended
-(`prompts/init.md` §17, spelled out in
+(carried over into
 [`docs/lessons/supervision.md`](docs/lessons/supervision.md)).
 
 - **The supervisor runs permanently in the `/loop`** and triggers workflows and subagents. He
@@ -121,6 +125,45 @@ one finding for 400 000 tokens is a *bad round*, and the supervisor is the one s
   re-derived over a day that the backlog had already specified, and the re-derived version was
   worse.
 
+### Where the tokens actually went on 2026-08-10, and the seven cheap fixes
+
+Measured against that session, the waste was **not** in the agents doing the work. It was in the
+supervisor. In descending order of cost:
+
+1. **The double round-trip on every finding.** Agent measures → writes a long report → the
+   supervisor rewrites it into `docs/FINDINGS.md`. That pays for the same prose twice.
+   **Fix: the agent writes its own `FIND-` entry directly**, with an id the supervisor assigns in
+   the commission so two agents cannot collide. The supervisor then verifies and integrates
+   instead of transcribing. Roughly halves the cost of a finding.
+2. **Commissions that paste what the agent could read.** A briefing does not need forty lines of
+   measurements quoted into it. **Name the file and the id** — `docs/FINDINGS.md` FIND-035 — plus
+   the two or three numbers the agent needs to start. It reads faster than I can paste.
+3. **Narrating whole agent reports back to the user.** He needs the decision, the number and what
+   is still unknown — not the transcript. **One screen, not five.**
+4. **Re-running the whole gate.** Four full `cargo test` runs in one session at ~17 min of linking
+   each. **One per round, at the round gate, and only after the agents have landed.**
+5. **Reading whole files to change three lines.** `grep -n` and `sed -n 'a,bp'` first; `Read` the
+   range, not the file.
+6. **Counter-checking mechanical work.** The refutation rounds paid for themselves three times out
+   of three — but each time on a **claim or a measurement**. A rebinding or a doc repair with a red
+   test does not need one. **Attack claims; do not attack chores.**
+7. **Screenshots taken out of habit.** A picture is required for 🟧 and for nothing else. Two runs
+   per script (verdict + image) is the rule *when a stage needs the image*, not per run.
+
+8. **Four big agents at once is the expensive mistake, not any one of them.** Each re-derives the
+   same context and each writes a full report. **Prefer one stream at a time, finished and
+   verified, then the next.** Parallel is still the default *for cheap, well-cut work* (one file
+   each, one criterion each) — but a round with two 100 k-token jobs running beside each other buys
+   nothing that running them in sequence would not, and it makes integration worse.
+   **Rule of thumb: parallel when the cut is by file and the criterion is mechanical; serial when
+   the agent has to think.**
+9. **Cap the report.** "Under 40 lines, do not summarise the docs you wrote — I can read them."
+   A report that restates its own deliverable is paid for twice.
+
+**The one that is not a saving: do not cut the red test, the counter-check on a claim, or the
+honest paragraph.** Those are the things that made the session's output worth anything, and every
+one of them caught something real.
+
 ## Autonomous operation — when nobody is standing next to you
 
 The normal case in this project is that the user is **not** there. Then this holds on top:
@@ -166,6 +209,8 @@ The normal case in this project is that the user is **not** there. Then this hol
 
 | Question | File |
 |---|---|
+| **What am I building, and why?** | [`docs/gameplay/`](docs/gameplay/README.md) — ⭐ the design: pillars, world, enemies, core loop |
+| **What does the player say is wrong?** | [`user-messages.md`](user-messages.md) — his notes. **Read first, migrate, then empty** |
 | **What do I do first, right now?** | [`docs/NEXT.md`](docs/NEXT.md) — the queue the last session left, in order |
 | What is open, in which order? | [`docs/TODO.md`](docs/TODO.md) *(generated)* |
 | How far may I trust a thing? | [`docs/STATUS.md`](docs/STATUS.md) *(generated)* |
@@ -197,10 +242,13 @@ cargo run -- --headless --script scripts/<f-id>-<short>.txt   # one run without 
 
 ## What does not apply yet
 
-The build-up plan (`prompts/init.md` §13, `Stufenplan`) is at **setup**. From its step 3 on,
-the bible's phase plan takes over — and **its hard rule: no meta system before the Vector Gear
-gate is passed.** Trait tree, economy, lineages, raids, cosmetics do **not get started** while
-the movement does not yet feel convincing.
+The bootstrap build-up plan is **used up** — its disposition is recorded in
+[`docs/ROADMAP.md`](docs/ROADMAP.md), including the one step that was **skipped rather than
+finished** (the model chain; it is being built now). From here the design's own phase plan governs
+— and **its hard rule: no meta system before the Vector Gear gate is passed.** Trait tree, economy,
+lineages, raids, cosmetics do **not get started** while the movement does not yet feel convincing.
+The gate is a blind test against **Attack on Titan Revolution** with ten testers, in which our
+movement has to score at least level ([`docs/gameplay/pillars.md`](docs/gameplay/pillars.md)).
 
 ## Commit messages
 

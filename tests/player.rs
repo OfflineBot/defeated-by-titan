@@ -46,8 +46,8 @@ use defeated_by_titan::data::GameData;
 use defeated_by_titan::player::integrator::movement_state;
 use defeated_by_titan::player::spawn_player;
 use defeated_by_titan::shared::{
-    Block, BodyId, Cli, Hook, HookState, IdCounter, LocalPlayer, MovementState, PlayerId, Side,
-    SpatialIndex, Velocity,
+    Block, BodyId, Cli, Gas, Hook, HookState, IdCounter, Intent, LocalPlayer, MovementState,
+    PlayerId, RunAccel, Side, SpatialIndex, Velocity,
 };
 
 /// Builds the **real** app, headless, one simulation step per `update()`.
@@ -519,6 +519,203 @@ fn f014_the_input_still_steers_the_carried_momentum() {
         (speed - 20.0).abs() < 1.5,
         "steering left him at {speed:.4} m/s instead of the 20 m/s the plain deceleration \
          allows — turning must not be a second brake"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// 3bb. F-006 Swerve — WASD is the air control, and touching the ground does not take it away
+//
+// The user, 2026-08-12, after playing it (`docs/NEXT.md` §1, quoted verbatim there):
+// *„wenn man w drückt und verbunden ist bekommt man schon movement! bei a und d movement zur
+// seite. mit s »spannt« man nur das seil! … das a d sorgt dafür dass man nicht immer direkt
+// zum seil gezogen wird!"* and *„nur weil man den boden berührt ist man nicht direkt aus
+// flugmodus raus, erst wenn man langsam genug ist läuft man wieder"* and *„ohne gas kann man
+// immernoch w a d nutzen um etwas movement aufzubauen (aber hälfte ca)"*.
+//
+// That is `F-006` out of `docs/backlog/gameplay.ron` word for word — *"Richtungseingabe
+// waehrend des Einzugs moduliert die Flugbahn seitlich, nach oben und unten. **Kein binaeres
+// Ziel-Anfliegen**"*, acceptance *"Vier Swerve-Richtungen aendern die Bahn messbar ohne Haken
+// zu loesen"*. Until 2026-08-12 `ground_locomotion` read the input **only** while
+// `MovementState::Grounded`, so airborne WASD did nothing whatever.
+//
+// The threshold is not a new one: `run_speed_m_s + (-gravity_m_s2)/simulation_hz` = 6.3333 is
+// the same number `movement_state` splits `Grounded` from `Tethered` on (`FIND-037`).
+// ---------------------------------------------------------------------------------------
+
+fn run_accel(app: &App, e: Entity) -> Vec3 {
+    app.world().get::<RunAccel>(e).expect("a player carries the run drive").0
+}
+
+/// A body 200 m over the city with a written `Intent` — air control measured with no ground,
+/// no rope and no contact anywhere in the picture.
+///
+/// A **second** player, because he has no `LocalPlayer`: `net::deliver_intents` only writes an
+/// `Intent` for a `PlayerId` that has mail, and nobody posts mail for him, so what is written
+/// here survives every tick (`src/net/mod.rs`).
+fn a_flyer(app: &mut App, x_m: f32, intent: Intent) -> Entity {
+    let e = second_player(app, Vec3::new(x_m, 200.0, 0.0));
+    *app.world_mut().get_mut::<Intent>(e).expect("a player carries an intent") = intent;
+    e
+}
+
+fn horizontal(app: &App, e: Entity) -> Vec2 {
+    app.world().get::<LinearVelocity>(e).unwrap().0.xz()
+}
+
+#[test]
+fn f006_w_flies_where_you_look_a_and_d_go_sideways_and_s_never_thrusts() {
+    // Four bodies, one second of held key, one app. Before F-006 all four reported
+    // **0.0000 m/s** of horizontal speed: `ground_locomotion` skipped every one of them.
+    let mut app = app();
+    let d = data(&app);
+    // The magnitude is derived, not typed: `-gravity_m_s2 / 2` — "the air control is half of
+    // gravity, so WASD alone can never hold you up". See `src/player/locomotion.rs`. The day
+    // it becomes `game.ron: player.air_accel_m_s2` this line reads that key.
+    let a = -d.game.gravity_m_s2 / 2.0;
+
+    let forward = a_flyer(&mut app, 0.0, Intent { move_y: 1.0, ..default() });
+    // Looking 60° down and holding D: the sideways thrust has to stay HORIZONTAL, or every
+    // strafe in a fast swing — where you are looking at the street — pushes you into it.
+    let sideways = a_flyer(
+        &mut app,
+        20.0,
+        Intent { move_x: 1.0, pitch: -60.0_f32.to_radians(), ..default() },
+    );
+    let backwards = a_flyer(&mut app, 40.0, Intent { move_y: -1.0, ..default() });
+    let idle = a_flyer(&mut app, 60.0, Intent::default());
+
+    let fall_before = app.world().get::<LinearVelocity>(sideways).unwrap().0.y;
+    ticks(&mut app, 60); // one second
+    let fall_after = app.world().get::<LinearVelocity>(sideways).unwrap().0.y;
+
+    // W: `yaw = 0` looks along −Z (`docs/conventions.md`), so one second of W is `a` m/s of −Z.
+    let w = horizontal(&app, forward);
+    assert!(
+        (w.length() - a).abs() < 0.5 && w.y < -1.0,
+        "one second of W in the air gave {w:?} ({:.4} m/s); {a} m/s along −Z is what an air \
+         control of {a} m/s² buys — airborne input is being thrown away (F-006)",
+        w.length()
+    );
+
+    // A/D: the same magnitude, +X for D, and nothing added to the fall.
+    let s = horizontal(&app, sideways);
+    assert!(
+        (s.length() - a).abs() < 0.5 && s.x > 1.0,
+        "one second of D in the air gave {s:?} — `A`/`D` is the steering the rope never had \
+         (\"das a d sorgt dafür dass man nicht immer direkt zum seil gezogen wird\")"
+    );
+    let fallen = fall_after - fall_before;
+    let gravity_only = d.game.gravity_m_s2; // one second of it
+    assert!(
+        (fallen - gravity_only).abs() < 0.5,
+        "a second of D while looking 60° down changed the vertical velocity by {fallen:.4} m/s \
+         instead of the {gravity_only} m/s gravity alone owes — the strafe is tilting with the \
+         pitch instead of staying horizontal"
+    );
+
+    // S: the rope's tension key, and **not** a thrust.
+    let b = horizontal(&app, backwards);
+    assert!(
+        b.length() < 0.01,
+        "one second of S in the air gave {b:?} — S tensions the rope (\"mit s »spannt« man nur \
+         das seil!\") and must never push the body"
+    );
+    assert!(horizontal(&app, idle).length() < 0.01, "a body with no key held thrust anyway");
+}
+
+#[test]
+fn f006_an_empty_tank_leaves_half_the_air_control() {
+    // *„ohne gas kann man immernoch w a d nutzen um etwas movement aufzubauen (aber hälfte
+    // ca)"* — so the air control is **not gated** on gas, it is halved without it. That is
+    // what stops an empty tank from being the dead end it is today.
+    let mut app = app();
+    let full = a_flyer(&mut app, 0.0, Intent { move_y: 1.0, ..default() });
+    let dry = a_flyer(&mut app, 20.0, Intent { move_y: 1.0, ..default() });
+
+    // Re-emptied every tick: `vector.gas_regen_per_s` would put the tank back after
+    // `gas_regen_delay_s`, and then this would be measuring a full tank again.
+    for _ in 0..60 {
+        app.world_mut().get_mut::<Gas>(dry).unwrap().current = 0.0;
+        ticks(&mut app, 1);
+    }
+
+    let with_gas = horizontal(&app, full).length();
+    let without = horizontal(&app, dry).length();
+    assert!(with_gas > 1.0, "the full tank produced {with_gas:.4} m/s — nothing to halve");
+    assert!(
+        (without - with_gas * 0.5).abs() < 0.5,
+        "an empty tank gave {without:.4} m/s against the {with_gas:.4} m/s of a full one; the \
+         user's word is \"hälfte ca\" - half, not zero and not all of it"
+    );
+}
+
+#[test]
+fn f006_touching_the_ground_at_speed_does_not_end_the_air_control() {
+    // *„nur weil man den boden berührt ist man nicht direkt aus flugmodus raus, erst wenn man
+    // langsam genug ist läuft man wieder"* — a **speed** threshold, not a contact test. His
+    // feet are on the floor in both halves of this test; only the speed differs.
+    let mut app = app();
+    let e = me(&mut app);
+    launch_on_the_ground(&mut app, e, 30.0);
+
+    hold(&mut app, KeyCode::KeyD);
+    ticks(&mut app, 2);
+    assert_eq!(
+        state(&app, e),
+        MovementState::Grounded,
+        "his feet have to be down for this test to say anything"
+    );
+    let skidding = run_accel(&app, e);
+    assert!(
+        skidding.length() > 1.0,
+        "skidding across the ground at 30 m/s his air control is {skidding:?} — one toe on the \
+         floor took the whole flight mode away (F-006, docs/NEXT.md §1b)"
+    );
+
+    // And the other end of the same rule: once he is slow, the legs have him back and the air
+    // control is silent — or walking would carry a thrust on top of its assignment.
+    release(&mut app, KeyCode::KeyD);
+    ticks(&mut app, 150); // 30 m/s at 20 m/s² is standing after 1.5 s
+    hold(&mut app, KeyCode::KeyD);
+    ticks(&mut app, 2);
+    let walking = run_accel(&app, e);
+    assert_eq!(
+        walking,
+        Vec3::ZERO,
+        "a walking player carries an air control of {walking:?} — below the run speed the \
+         ground is an assignment and nothing may push on top of it"
+    );
+}
+
+#[test]
+fn f006_above_the_threshold_the_legs_stop_steering_and_the_air_takes_over() {
+    // The other half of `f014_the_input_still_steers_the_carried_momentum`, and the two are a
+    // **pair**: with a tank the steering is there (that test), with an empty one it is half
+    // and the legs add nothing of their own (this one). Before F-006 the legs steered a
+    // 30 m/s slide by **22.44°** in half a second whatever the tank said, because
+    // `ground_step`'s direction term does not know about gas.
+    let mut app = app();
+    let e = me(&mut app);
+    launch_on_the_ground(&mut app, e, 30.0);
+
+    hold(&mut app, KeyCode::KeyA); // yaw = 0 ⇒ A is −X, perpendicular to the +Z momentum
+    for _ in 0..30 {
+        app.world_mut().get_mut::<Gas>(e).unwrap().current = 0.0;
+        ticks(&mut app, 1);
+    }
+    release(&mut app, KeyCode::KeyA);
+
+    let v = horizontal(&app, e);
+    let turned_deg = v.x.atan2(v.y).to_degrees().abs();
+    assert!(
+        turned_deg < 10.0,
+        "half a second of A on an empty tank turned a 30 m/s slide by {turned_deg:.2}° — that \
+         is the legs steering, and above the run speed the legs are not driving any more"
+    );
+    assert!(
+        turned_deg > 2.0,
+        "{turned_deg:.2}° is no steering at all — half of the air control still has to bend \
+         the line, or an empty tank is the dead end it was before"
     );
 }
 

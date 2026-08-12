@@ -231,18 +231,12 @@ pub struct VectorTuning {
     pub gas_tank: f32,
     pub gas_boost_per_s: f32,
     pub gas_reel_per_s: f32,
-    /// How fast the tank refills **while neither boosting nor reeling** (`docs/QUESTIONS.md`
-    /// Q-033). It does not run during a boost, so it does not lengthen a single held boost —
-    /// that length is [`gas_tank`](Self::gas_tank) divided by
-    /// [`gas_boost_per_s`](Self::gas_boost_per_s) and nothing else.
-    ///
-    /// No `serde(default)`, here as everywhere: a missing value has to crash on load (§4).
-    /// `0.0` in the file is the old behaviour — a tank that never comes back — and it is a
-    /// decision somebody wrote down, not a value nobody noticed was missing.
-    pub gas_regen_per_s: f32,
-    /// How long after the last tick that wanted gas the refill stays off, in seconds.
-    /// Multiplied out to ticks by `vector::gas`, so that tapping boost does not become free.
-    pub gas_regen_delay_s: f32,
+    // ⚠️ **There is deliberately no `gas_regen_per_s` / `gas_regen_delay_s` here** — the tank
+    // has no regeneration rate, because gas refills only at the stations of the main building
+    // (`docs/QUESTIONS.md` Q-033, the user on 2026-08-12). `deny_unknown_fields` above is what
+    // makes that stick: a `game.ron` that still carries either key now **crashes on load**
+    // instead of quietly being ignored, which is the behaviour §4 asks for and the reason this
+    // note sits in the struct rather than only in the file.
     /// Who pays first when the tank does not cover both. **A game-value decision**, which is
     /// why it stands here and not as an `if` in `vector/gas.rs`.
     pub gas_priority: Vec<GasConsumer>,
@@ -672,22 +666,50 @@ pub struct VectorScale {
 #[serde(deny_unknown_fields)]
 pub struct Art {
     pub models: BTreeMap<String, Model>,
+    /// How far a `cortex` anchor read out of a swapped model may sit away from the height
+    /// `scale.ron` names for that size class before `render::model` shouts.
+    ///
+    /// **The number is here and not in Rust** (rule 2), and it is an *art-pipeline* tolerance,
+    /// not a game value — `scale.ron` stays the one truth about where the cortex is; this only
+    /// says how much sloppiness in a `.glb` still counts as "the modeler meant that spot".
+    /// A model that misses it by more than this breaks `F-030`: the cut lands where the
+    /// silhouette says and the kill zone is somewhere else.
+    pub cortex_tolerance_m: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Model {
-    /// Name of the `.blend` without the extension. The auto-export turns it into the `.glb`
-    /// (§7).
-    pub blend: String,
-    /// `false` ⇒ the **placeholder path** out of Bevy primitives. Both paths have to run at any
-    /// time and have the same size, hit zone and scale — otherwise switching is not a switch
-    /// but a rebuild.
-    pub use_blend: bool,
+    /// Where the geometry comes from. **The switch** (§7) — and the reason it is an enum and
+    /// not a `bool` plus a path: "no model configured" has to be *expressible*, and a
+    /// `serde(default)` path field would turn a typo into silence instead of a crash (§4).
+    pub source: ModelSource,
     pub scale: f32,
     /// Set only on third-party material: URL · date · license · what it is meant to replace.
     /// That makes the replacement list a `grep` (§7).
     pub attribution: Option<String>,
+    /// Game state (`idle`, `walk`, `windup`, `strike`) -> the name of the clip **inside the
+    /// glTF file**. Empty is a legal answer and means "this model animates nothing".
+    ///
+    /// Resolved once at load; a name that is not in the file is a **loud warning plus that
+    /// state having no clip**, never a silent substitute (`docs/models.md`, glTF traps).
+    pub animations: BTreeMap<String, String>,
+}
+
+/// Primitive or file — the one decision that makes a swap one line.
+///
+/// [`ModelSource::Primitive`] is what the whole game is today: cuboids out of `maps.ron` and
+/// out of the titan rig. **The game has to run with not a single `.glb` in the repository**,
+/// which is why the absent case is a named variant and not a missing field.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum ModelSource {
+    /// Build the procedural placeholder out of Bevy primitives.
+    Primitive,
+    /// Load this file. The path is **relative to `assets/`** — that is the asset server's root,
+    /// and it is written here so that no file name ever stands in Rust (§7,
+    /// `tools/norms.py`).
+    Gltf(String),
 }
 
 // ---------------------------------------------------------------------------

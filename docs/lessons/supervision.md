@@ -165,7 +165,7 @@ Otherwise it delivers the plausible instead of the correct — four points, none
 | # | Point | Reason |
 |---|---|---|
 | 1 | **Which files are his** and which he may *only read* | one writer per file |
-| 2 | **Which sections he should read** — e.g. "`prompts/init.md` §5 + §8 + §9, `docs/architecture.md`" | "read everything" means a subagent with an 800-line order rebuilds half the prompt |
+| 2 | **Which sections he should read** — e.g. "`docs/architecture.md` the allow list, `docs/BUGS.md` the head, `docs/STATUS.md` his own rows" | "read everything" means a subagent with an 800-line order rebuilds half the prompt |
 | 3 | **The evidence obligation (§9)**: what he claims, he measures — the return value carries **a test name, a measured value and the stage (§8)**, not "implemented it" | otherwise the report is an opinion |
 | 4 | **No foreign ground**: what he notices but does not own goes to `docs/FINDINGS.md` | fixing it along quietly is an invisible merge conflict |
 

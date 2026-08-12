@@ -1,7 +1,8 @@
-# models — the model chain, and how YOU swap a model
+# models — the asset chains (models, atlas, sound, VFX), and how YOU swap a model
 
-Updated: 2026-08-09 · Stage: ⬜ (the chain is described, but machine A has no Blender —
-see below and [`docs/environment.md`](environment.md))
+Updated: 2026-08-12 · Stage: ⬜ (the chains are described, none of them is built: there is no
+`tools/blend/`, no `tools/atlas/`, no `tools/sound/` and no `assets/3d/` in this repo yet, and
+machine A has no Blender — see below and [`docs/environment.md`](environment.md))
 
 ## The chain
 
@@ -285,6 +286,86 @@ otherwise switching is not a switch but a rebuild.
 **No file name in Rust code.** An `asset_server.load("titan.glb")` in the middle of a system is
 a bug; there is **one** place that reads the registry (`data/`), everybody else asks for the
 logical name. `tools/norms.py` checks it.
+
+## The same chain three more times: atlas, sound, VFX
+
+**The rule behind the model chain is not about models.** It is always the same four links:
+
+```
+script (the source, in the repo)  →  generated asset  →  a RON switch  →  the game
+```
+
+It holds for a color atlas and a sound exactly as it holds for a mesh. **Whoever starts a new
+*kind* of asset builds the chain with it** — not "by hand just this once", because "just this
+once" is how an asset ends up with no source anybody can edit.
+
+| Chain | Source | Result | Switch |
+|---|---|---|---|
+| Model | `tools/blend/<name>.py` → `.blend` (**the user's**) | `assets/3d/glb/<name>.glb` | `art.ron` |
+| Atlas | `tools/atlas/<name>.py` | `assets/textures/atlas/` + the UV assignment as RON | the registry |
+| Sound | `tools/sound/<name>.py` | `assets/audio/sfx/<name>.ogg` | the registry |
+| VFX | — (data, not code) | `assets/vfx/<name>` as a definition | the registry |
+
+### The registry: one line per asset, one line to swap it
+
+The code **never** asks for a file, always for a **logical name**. `art.ron` above is the model
+half of it; the same table carries sounds and effects:
+
+```ron
+"sfx_hook_hit": (sound: File("audio/sfx/hook_hit.ogg"), volume: 0.8, use_asset: true),
+"sfx_gas":      (sound: Recipe("gas_hiss"), volume: 0.5, looping: true, use_asset: true),
+"vfx_steam":    (vfx: Recipe("steam"), use_asset: true),
+```
+
+`use_asset: false` falls back to the **placeholder path** — a primitive, a silent sound, no
+effect. **Both paths have to run at all times and have the same size and timing**, or the switch
+is a rebuild rather than a switch. A missing asset **crashes at load** with its name, not
+silently as a white cube in the middle of the game.
+
+### Color: atlas or vertex colors — decide, and write it down
+
+The bible gives the direction: **the environment runs off one single atlas** (color consistency,
+few draw calls), **figures and titans may use vertex colors** (survives remodeling, no UV work).
+Which applies to which asset stands in the registry's `color:` field and **not in the code**.
+
+And the three signal colors — cyan, amber, crimson — are reserved for gameplay: **they may not
+appear in the atlas as decoration** ([`docs/gameplay/world.md`](gameplay/world.md)). That is not a
+preference, it is the reason the game is readable at speed.
+
+### Sound: a recipe, and **measured instead of heard**
+
+**There are no ears in this environment.** So a sound is finished exactly when it is
+**measurable**: length, base frequency, envelope, peak level, and whether it loops (start ==
+end). A recipe (`tools/sound/<name>.py`) is the source, the `.ogg` is the result, the registry is
+the switch — the same three links as a model.
+
+**Only original or licensed music**, ever. Third-party soundtracks are a legal dead end and the
+bible files it under risks; references may be listened to and described, never taken
+([`docs/QUESTIONS.md`](QUESTIONS.md) Q-006).
+
+### Where the files live
+
+```
+assets/
+  data/                 the RON files — including the registry
+  3d/
+    blend/              ⭐ THE SOURCE, hand-editable — this is where the user goes
+    glb/                GENERATED — never touch by hand, committed anyway
+  textures/
+    atlas/              GENERATED: the ONE environment color atlas, out of tools/atlas/
+    hand/               hand-made PNGs — the generator never touches these
+  audio/
+    sfx/                generated or hand-made
+    music/              original or licensed only
+  vfx/                  effect definitions (data, not code)
+  extern/               ⭐ DOWNLOADED PLACEHOLDERS — strictly separated from our own
+    3d/  audio/  textures/
+    ATTRIBUTION.md      one line per file: URL · date · licence · what it replaces
+```
+
+**Three separations that do not get blurred:** `tools/` **builds** things, `scripts/` **plays**
+the game, `assets/` holds the **result** — and `assets/extern/` alone holds anything
+third-party.
 
 ## Own and third-party stay separated
 

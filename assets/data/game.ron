@@ -102,33 +102,39 @@
         // angle over 60 degrees) for under 1 % residual error. The degenerate case — both
         // anchors nearly in one line — does not converge with two either (docs/interface.md).
         rope_iterations: 2,
+        // ⚠️⚠️ THERE IS NO `gas_regen_per_s` AND NO `gas_regen_delay_s` IN THIS BLOCK, AND
+        // THAT IS A DECISION — NOT SOMETHING SOMEBODY FORGOT. DO NOT ADD ONE.
+        //
+        // The user, 2026-08-12, closing docs/QUESTIONS.md Q-033: "gas refillt nur im main
+        // gebaeude an bestimmten stationen/objekten". Gas comes back at a PLACE YOU GO TO,
+        // never on a timer. Between 2026-08-10 and 2026-08-12 this file did carry a 10/s
+        // regeneration behind a 0.5 s pause; he was asked which of three shapes he wanted and
+        // picked none of them. The whole mechanism was removed with those two keys —
+        // `refill_tank`, `arm_pause` and `Gas::regen_delay_left_s` went with it.
+        //
+        // Why he is right: the bible couples gas to RISK, not to a clock — burning it is loud
+        // and a Bellower answers the noise (bible line 159). A tank that quietly fills itself
+        // while you hang around on a roof is exactly the timer the bible refuses; a tank you
+        // have to fly home to fill turns the whole map into a resource decision. The refuel
+        // stations are a WORLD feature and they are queued in docs/NEXT.md §1d.
+        //
+        // If the tank feels tight before those exist, the knob is gas_tank / gas_boost_per_s
+        // below, NOT a rate. `deny_unknown_fields` in src/data/mod.rs means either key put
+        // back here crashes the game on load rather than being ignored, and
+        // tests/vector_gas.rs::f018_an_idle_tank_never_refills_on_its_own goes red the moment
+        // anything in the simulation puts a drop back.
+
         // 100.0 -> 300.0. The user, after playing it on 2026-08-10: "also gas tank sollte
         // sehr viel mehr haben". ⚠️ UNTUNED. At 18/s this is the whole answer to his other
         // sentence, "der boost haelt nicht lang genug": 16.67 s of continuous boost against
-        // the 5.6 s he flew. The length of a boost comes from THIS number — the refill below
-        // does not run while the boost runs (docs/QUESTIONS.md Q-033).
+        // the 5.6 s he flew. **The length of a boost is gas_tank / gas_boost_per_s and
+        // nothing else** — with no refill anywhere, this number IS the flight time, and it is
+        // also the whole mission's supply until the stations exist.
         gas_tank: 300.0,
         gas_boost_per_s: 18.0,
+        // For scale, the other consumer: reeling a full rope in from 90 m to the 3 m minimum
+        // takes (90-3)/28 = 3.1 s and costs 18.6 gas — 6.2 % of the tank.
         gas_reel_per_s: 6.0,
-        // ⚠️ UNTUNED — these two keys exist because of the user's verdict from playing it on
-        // 2026-08-10: "der boost haelt nicht lang genug". He was right, and it was worse than
-        // that: the tank never refilled at all (docs/QUESTIONS.md Q-033).
-        //
-        // The refill runs ONLY while neither boosting nor reeling. That is the mechanism
-        // Q-033 decided, and the delay below only means anything under it. So a held boost
-        // still costs the full 18/s, and 10/s does NOT make that a net 8/s — a net drain
-        // would need the refill to keep running DURING the boost, which it deliberately does
-        // not. What the 10/s buys is that the tank comes back at all: empty to full in 30 s
-        // of not using it, instead of a Vector Gear that was dead for the rest of a 330 s
-        // mission. The decision to boost keeps costing its full price, which is the point of
-        // the resource (bible 6.4). For scale, the other consumer: reeling a full rope in
-        // from 90 m to the 3 m minimum takes (90-3)/28 = 3.1 s and costs 18.6 gas — 6.2 % of
-        // the tank, and the refill puts it back in under two seconds of not using the gear.
-        gas_regen_per_s: 10.0,
-        // A pause before the refill starts, so tapping boost does not silently become free.
-        // 0.5 s is 30 ticks: long enough that a rhythm of taps still pays, short enough that
-        // it never interrupts a flight that has actually stopped burning.
-        gas_regen_delay_s: 0.5,
         // Who pays first when the tank is not enough for both? That is a GAME-VALUE
         // decision and not an `if` in the code (docs/QUESTIONS.md Q-017).
         gas_priority: [Boost, ReelIn],

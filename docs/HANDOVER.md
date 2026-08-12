@@ -97,10 +97,14 @@ Every one of those was right, and three of them found holes no test in this repo
 found:
 
 - **Gas never refilled.** `Gas` was written at spawn and by `gas_budget`, which only subtracts.
-  5.6 s of boost for a 330 s mission, then the gear was dead. Now `gas_tank` 100 → **300** plus
-  `gas_regen_per_s: 10` after a 0.5 s pause (Q-033). **16.67 s** per tank, refill 30 s from empty.
-  ⚠️ The regeneration does **not** lengthen a single held boost — the tripled tank is the whole
-  answer. (The supervisor first claimed 37.5 s; that was wrong and is corrected in Q-033.)
+  5.6 s of boost for a 330 s mission, then the gear was dead. `gas_tank` 100 → **300**, which is
+  **16.67 s of continuous boost** per tank.
+  ⚠️ **Corrected twice, and the second one is the user's.** I first claimed 37.5 s (wrong — it
+  needed the refill to run during the boost). Then I added a 10/s idle regeneration; on 2026-08-12
+  the user closed `Q-033` against it: *"gas refillt nur im main gebäude an bestimmten
+  stationen/objekten"*. **The regeneration is gone — mechanism, keys and struct fields.** Gas comes
+  back at a **place you go to**, and the stations do not exist yet, so **300 gas is currently the
+  entire supply of a run**. The tripled tank is the whole answer to "the boost is too short".
 - **`B-005`, the overshoot.** Measured: without the reel held the enforced length never shrank at
   all, so the player flew **the entire rope length — 50.000 m — past his own anchor at every speed
   from 20 m/s up**. Fixed with a slack take-up ratchet (`limits.max` follows the true distance

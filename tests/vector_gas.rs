@@ -102,20 +102,6 @@ fn hz(d: &GameData) -> f32 {
     d.game.simulation_hz as f32
 }
 
-/// The pause before the refill starts, **in ticks, out of `game.ron`** — never as a literal,
-/// so that these tests still measure the pause after somebody has tuned it (§4).
-fn delay_ticks(d: &GameData) -> u64 {
-    (d.game.vector.gas_regen_delay_s * hz(d)).ceil() as u64
-}
-
-/// One tick's worth of refill. The tolerance every assert below is written against: the
-/// countdown is done in `f32` seconds, and thirty subtractions of 1/60 do not land on exactly
-/// 0.0 — so the first refilling tick is the 30th or the 31st, and an assert that cares which
-/// one measures the floating-point unit and not the game.
-fn regen_per_tick(d: &GameData) -> f32 {
-    d.game.vector.gas_regen_per_s / hz(d)
-}
-
 /// Presses a real key — the same input a human triggers and the same one `--script` uses.
 /// Writing into `Intent` would not work for the local player: `net::local::read_input`
 /// rebuilds it from the keyboard every tick.
@@ -466,100 +452,83 @@ fn f018_the_costs_in_the_file_are_positive_and_the_tank_outlasts_a_swing() {
 }
 
 // ---------------------------------------------------------------------------------------
-// 6. The refill (`docs/QUESTIONS.md` Q-033)
+// 6. Nothing refills the tank (`docs/QUESTIONS.md` Q-033, answered 2026-08-12)
 //
-// The user played the game on 2026-08-10, the first time a human ever has, and said "der
-// boost hält nicht lang genug" and "also gas tank sollte sehr viel mehr haben". Measured, it
-// was worse than the complaint: `Gas` was written in exactly two places, `Gas::full()` at
-// spawn and the debit above, and **there was no refill of any kind** — 5.6 s of boost for a
-// 330 s mission, after which the Vector Gear was dead for the rest of the run.
+// The user: *"gas refillt nur im main gebäude an bestimmten stationen/objekten"*. Refuelling
+// is **a place you go to**, never a rate — so the simulation has one writer that lowers the
+// tank and none that raises it, and the tests below are what keeps it that way. They are also
+// the **station rules in advance**: when the refuel stations of `docs/NEXT.md` §1d get built,
+// "nothing refills while spending" and "never above `max`" are exactly the two claims they
+// will have to keep, and the first test is the one that will then need a station standing next
+// to the player before it may be relaxed.
 //
-// The mechanism Q-033 decided: **it refills while neither boosting nor reeling, after a short
-// pause.** Everything in this section measures one half of that sentence.
+// Between 2026-08-10 and 2026-08-12 this section measured a 10/s regeneration behind a 0.5 s
+// pause — an assumption made while the question was open. Four tests went with it.
 // ---------------------------------------------------------------------------------------
 
 #[test]
-fn f018_a_drained_tank_refills_at_exactly_the_rate_from_the_file() {
-    // The mirror image of the very first test in this file: one second of refill puts back
-    // exactly `gas_regen_per_s`, not 60 times too much and not 60 times too little.
+fn f018_an_idle_tank_never_refills_on_its_own() {
+    // ★ **The new truth, and it goes red against the regeneration.** The user answered Q-033
+    // on 2026-08-12: *"gas refillt nur im main gebäude an bestimmten stationen/objekten"* —
+    // gas comes back **at a place you go to**, never on a timer. So a tank left alone holds
+    // its number for as long as you leave it alone, and no pause, no rate and no idle branch
+    // may put a single drop back.
+    //
+    // Twenty seconds of standing still is deliberately long: `gas_regen_delay_s` was 0.5 s
+    // and `gas_regen_per_s` 10/s, so a regeneration of any shape has 19.5 s to show itself
+    // here — 195 gas' worth, two thirds of the tank.
     let mut app = app();
     let d = data(&app);
     let e = me(&mut app);
     ticks(&mut app, 60);
 
-    // Burn one tick first, so the pause is armed the way the game arms it — then empty the
-    // tank by hand, which is faster than flying it dry and measures the same thing.
-    hold(&mut app, BOOST_KEY);
-    ticks(&mut app, 1);
-    release(&mut app, BOOST_KEY);
-    set_tank(&mut app, e, 0.0);
-
-    // Two ticks past the pause, so that the boundary tick (see `regen_per_tick`) falls
-    // outside the measurement instead of into it.
-    ticks(&mut app, delay_ticks(&d) + 2);
-    let before = gas(&app, e).current;
-    ticks(&mut app, 60); // exactly one second of refilling
-    let gained = gas(&app, e).current - before;
-
-    assert!(
-        (gained - d.game.vector.gas_regen_per_s).abs() < regen_per_tick(&d) * 1.5,
-        "60 ticks of not using the gear put back {gained:.4}; game.ron says \
-         gas_regen_per_s = {}",
-        d.game.vector.gas_regen_per_s
-    );
-}
-
-#[test]
-fn f018_the_pause_holds_the_refill_off_and_then_lets_it_go() {
-    // Without the pause, tapping boost would be free: release, one tick of refill, press
-    // again. With it, a rhythm of taps still pays.
-    let mut app = app();
-    let d = data(&app);
-    let e = me(&mut app);
-    ticks(&mut app, 60);
-
+    // Burn one tick first, exactly the way the game burns it: a timer-shaped refill is armed
+    // off the last tick that wanted gas, so this is the state it was built to fire from.
     hold(&mut app, BOOST_KEY);
     ticks(&mut app, 1);
     release(&mut app, BOOST_KEY);
     let half = d.game.vector.gas_tank / 2.0;
     set_tank(&mut app, e, half);
 
-    ticks(&mut app, delay_ticks(&d));
-    assert!(
-        (gas(&app, e).current - half).abs() < 1e-6,
-        "the pause is {} s = {} ticks, and inside it the tank went from {half} to {} — \
-         a refill that starts immediately makes a tapped boost free",
-        d.game.vector.gas_regen_delay_s,
-        delay_ticks(&d),
-        gas(&app, e).current
-    );
+    // One tick before the counter is read: `set_tank` above writes `Gas` by hand, and Bevy's
+    // change detection reports that write — mine, not the game's. Measuring from here on means
+    // every change counted below came out of the simulation.
+    app.update();
+    let idle_ticks = (20.0 * hz(&d)) as u64;
+    let before = gas_changes(&app);
+    ticks(&mut app, idle_ticks);
 
-    // And the moment it is over, the refill runs — within one tick of the boundary.
-    ticks(&mut app, 2);
-    let gained = gas(&app, e).current - half;
+    let now = gas(&app, e).current;
     assert!(
-        gained > 0.0,
-        "the pause has run out and the tank still holds {half} — the refill never starts"
+        (now - half).abs() < 1e-3,
+        "{:.1} s of touching nothing moved the tank from {half} to {now} — gas refills only \
+         at a station in the main building (docs/QUESTIONS.md Q-033), and nothing in the \
+         simulation may put a drop back on its own",
+        idle_ticks as f32 / hz(&d)
     );
-    // Three ticks of slack and not an epsilon: `current` is an `f32` around 150, where one
-    // ULP is 1.5e-5, so `current - half` carries more error than a strict bound survives.
-    // The claim being made is coarse anyway — two ticks past the pause you get two ticks of
-    // gas, not the {delay_ticks}+2 a refill that ignored the pause would have handed out.
-    assert!(
-        gained <= regen_per_tick(&d) * 3.0,
-        "two ticks past the pause the tank gained {gained:.4}, which is more than three \
-         ticks of {:.4} — the pause was not counted, it was skipped",
-        regen_per_tick(&d)
+    // And the same claim in the signal the HUD hangs on: a tank nobody is using is not a tank
+    // that changes, so it must not be written at all.
+    assert_eq!(
+        gas_changes(&app) - before,
+        0,
+        "an idle tank reported {} changes in {idle_ticks} ticks — `Changed<Gas>` is a signal, \
+         and something is still writing to the tank every tick",
+        gas_changes(&app) - before
     );
 }
 
 #[test]
 fn f018_nothing_refills_while_the_gas_is_being_spent() {
-    // **The half of the mechanism that decides the feel.** The refill runs while neither
-    // boosting nor reeling — so a held boost costs its full price, and one second of it costs
-    // `gas_boost_per_s` and not `gas_boost_per_s - gas_regen_per_s`. A refill that quietly
-    // kept running during the boost would make the drain a net one, and the tank would carry
-    // a boost more than twice as long as the file says it does.
+    // **The rule the refuel stations will have to keep, written before they exist.** A held
+    // boost costs its full price: one second of it costs `gas_boost_per_s`, not
+    // `gas_boost_per_s` minus something that ran alongside. Anything that puts gas back during
+    // the burn turns the drain into a net one, and the tank then carries a boost far longer
+    // than the file says it does — which is how the length of a flight stops being readable
+    // out of `gas_tank / gas_boost_per_s`.
+    //
+    // **Strengthened on 2026-08-12 (Q-033):** the sum at the end is not enough on its own — a
+    // refill that gave back exactly what it took would pass it. So the tank is read **every
+    // tick** and may never be higher than it was the tick before.
     let mut app = app();
     let d = data(&app);
     let v = &d.game.vector;
@@ -569,25 +538,39 @@ fn f018_nothing_refills_while_the_gas_is_being_spent() {
 
     set_tank(&mut app, e, half);
     hold(&mut app, BOOST_KEY);
-    ticks(&mut app, 60);
+    let mut previous = half;
+    for tick in 0..60 {
+        app.update();
+        let now = gas(&app, e).current;
+        assert!(
+            now <= previous + 1e-6,
+            "tick {tick} of a held boost took the tank from {previous} UP to {now} — \
+             nothing may put gas back while it is being spent"
+        );
+        previous = now;
+    }
     release(&mut app, BOOST_KEY);
     let spent = half - gas(&app, e).current;
     assert!(
         (spent - v.gas_boost_per_s).abs() < 0.01,
-        "a second of boost cost {spent:.4}; game.ron says gas_boost_per_s = {} and the \
-         refill does not run while the boost does (a net {:.1}/s would be {:.4})",
-        v.gas_boost_per_s,
-        v.gas_boost_per_s - v.gas_regen_per_s,
-        v.gas_boost_per_s - v.gas_regen_per_s
+        "a second of boost cost {spent:.4}; game.ron says gas_boost_per_s = {}",
+        v.gas_boost_per_s
     );
 
     // The same for a rope that is actually being reeled in. The pressed button alone is not
-    // enough — the cost, and with it the pause, follows the effect.
+    // enough — the cost follows the effect.
     set_tank(&mut app, e, half);
     hold(&mut app, REEL_KEY);
-    for _ in 0..60 {
+    let mut previous = half;
+    for tick in 0..60 {
         anchor_left(&mut app, e);
         app.update();
+        let now = gas(&app, e).current;
+        assert!(
+            now <= previous + 1e-6,
+            "tick {tick} of reeling in took the tank from {previous} UP to {now}"
+        );
+        previous = now;
     }
     release(&mut app, REEL_KEY);
     let spent = half - gas(&app, e).current;
@@ -599,50 +582,57 @@ fn f018_nothing_refills_while_the_gas_is_being_spent() {
 }
 
 #[test]
-fn f018_the_refill_stops_at_the_top_and_stops_reporting_a_change() {
-    // ★ **The one with teeth.** `Changed<Gas>` is what the HUD hangs on. A refill that keeps
-    // adding zero to a full tank is invisible in every assert on `Gas::current` and wakes the
-    // bar sixty times a second for the rest of the run.
+fn f018_the_tank_never_climbs_above_max_and_a_full_tank_reports_no_change() {
+    // ★ **The one with teeth, and the second station rule.** `Changed<Gas>` is what the HUD
+    // hangs on: anything that writes the tank every tick without moving it is invisible in
+    // every assert on `Gas::current` and still wakes the bar sixty times a second for the rest
+    // of the run. And `max` is a ceiling a station will have to respect too — a tank at 300 of
+    // 300 that is topped up once more is how a refuel point invents fuel.
     let mut app = app();
     let d = data(&app);
     let e = me(&mut app);
     ticks(&mut app, 60);
 
+    // Burn, release, then hand the tank back one tick short of full: the state in which a
+    // mechanism that tops off would show itself.
     hold(&mut app, BOOST_KEY);
     ticks(&mut app, 1);
     release(&mut app, BOOST_KEY);
-    // Two ticks short of full, so the refill has to run, arrive, and then stop by itself.
-    set_tank(&mut app, e, d.game.vector.gas_tank - regen_per_tick(&d) * 2.0);
-    ticks(&mut app, delay_ticks(&d) + 10);
+    let one_tick = d.game.vector.gas_boost_per_s / hz(&d);
+    let short = d.game.vector.gas_tank - one_tick;
+    set_tank(&mut app, e, short);
 
+    // One tick first: `set_tank` is my own write and change detection reports it as one.
+    app.update();
+    let before = gas_changes(&app);
+    ticks(&mut app, 300); // five seconds of standing there
     let tank = gas(&app, e);
     assert!(
         tank.current <= tank.max + 1e-6,
-        "the refill went past the top: {} of {}",
+        "the tank climbed past the top: {} of {}",
         tank.current,
         tank.max
     );
     assert!(
-        (tank.current - tank.max).abs() < 1e-4,
-        "ten ticks past the pause the tank should be full; it holds {} of {}",
-        tank.current,
-        tank.max
+        (tank.current - short).abs() < 1e-3,
+        "five seconds of nothing topped the tank up from {short} to {} — gas comes back at a \
+         station, not by standing still (docs/QUESTIONS.md Q-033)",
+        tank.current
     );
-
-    let before = gas_changes(&app);
-    ticks(&mut app, 120);
     assert_eq!(
         gas_changes(&app) - before,
         0,
-        "a full tank that nobody is using reported {} changes in 120 ticks — \
-         `Changed<Gas>` is a signal, and that is a lie in it",
+        "a tank that nobody is using reported {} changes in 300 ticks — `Changed<Gas>` is a \
+         signal, and that is a lie in it",
         gas_changes(&app) - before
     );
 }
 
 #[test]
-fn f018_the_sandbox_tank_is_not_touched_by_the_refill_either() {
-    // `--sandbox` is unlimited: there is nothing to refill, so there is nothing to report.
+fn f018_the_sandbox_tank_is_not_written_while_it_idles() {
+    // `--sandbox` is unlimited: nothing leaves it and nothing goes into it, so nothing about
+    // it may be written — a mechanism that ticked some countdown on it would mark `Gas` as
+    // changed while the tank stood still.
     let mut app = app_with(Cli { headless: true, sandbox: true, ..default() });
     let d = data(&app);
     let e = me(&mut app);
@@ -653,18 +643,13 @@ fn f018_the_sandbox_tank_is_not_touched_by_the_refill_either() {
     release(&mut app, BOOST_KEY);
 
     let before = gas_changes(&app);
-    ticks(&mut app, delay_ticks(&d) + 120);
+    ticks(&mut app, 300);
     let tank = gas(&app, e);
     assert!(
         (tank.current - d.game.vector.gas_tank).abs() < 1e-6,
         "the sandbox tank holds {} of {}",
         tank.current,
         d.game.vector.gas_tank
-    );
-    assert!(
-        (tank.regen_delay_left_s - 0.0).abs() < 1e-6,
-        "an unlimited tank has nothing to wait for, and it is counting down {} s",
-        tank.regen_delay_left_s
     );
     assert_eq!(
         gas_changes(&app) - before,
@@ -682,9 +667,10 @@ fn f018_the_sandbox_tank_is_not_touched_by_the_refill_either() {
 fn f018_a_full_tank_carries_a_boost_that_lasts() {
     // ★ **The user's complaint, as a number.** He flew a 100 tank at 18/s: 5.6 s, and then a
     // dead Vector Gear for the rest of a 330 s mission. The length of one held boost is
-    // `gas_tank / gas_boost_per_s` and comes out of the tank alone — the refill does not run
-    // while the boost runs — so this test measures the tank against the file and against the
-    // sentence "der boost hält nicht lang genug".
+    // `gas_tank / gas_boost_per_s` and comes out of the tank alone — there is no refill
+    // anywhere (Q-033) — so this test measures the tank against the file and against the
+    // sentence "der boost hält nicht lang genug". The tripled tank is the **whole** answer to
+    // it, which is why this test matters more since the regeneration came back out.
     let mut app = app();
     let d = data(&app);
     let v = &d.game.vector;
@@ -724,68 +710,18 @@ fn f018_a_full_tank_carries_a_boost_that_lasts() {
 }
 
 #[test]
-fn f018_an_empty_tank_comes_back_in_the_time_the_file_names() {
-    // The other end of the same arithmetic: `gas_tank / gas_regen_per_s` seconds of not using
-    // the gear and the tank is full again — 300 at 10/s is 30 s. That number is the whole
-    // difference between a Vector Gear that is dead after one flight and one that is a
-    // resource you keep choosing to spend.
-    let mut app = app();
-    let d = data(&app);
-    let v = &d.game.vector;
-    let e = me(&mut app);
-    ticks(&mut app, 60);
-
-    hold(&mut app, BOOST_KEY);
-    ticks(&mut app, 1);
-    release(&mut app, BOOST_KEY);
-    set_tank(&mut app, e, 0.0);
-    ticks(&mut app, delay_ticks(&d) + 2);
-
-    let refill_ticks = (v.gas_tank / v.gas_regen_per_s * hz(&d)) as u64;
-
-    // Halfway there it is halfway full — that is what makes this a rate and not a timer that
-    // fills the tank in one step at the end.
-    ticks(&mut app, refill_ticks / 2);
-    let half = gas(&app, e).current;
-    assert!(
-        (half - v.gas_tank / 2.0).abs() < v.gas_tank * 0.01,
-        "after half the refill time the tank holds {half:.2} of {}, expected about half",
-        v.gas_tank
-    );
-
-    ticks(&mut app, refill_ticks / 2 + 2);
-    let full = gas(&app, e);
-    assert!(
-        (full.current - full.max).abs() < 1e-3,
-        "{} s of not using the gear should refill {} gas at {}/s; the tank holds {:.3}",
-        v.gas_tank / v.gas_regen_per_s,
-        v.gas_tank,
-        v.gas_regen_per_s,
-        full.current
-    );
-}
-
-#[test]
-fn f018_the_refill_values_in_the_file_are_a_refill_and_not_a_second_tank() {
-    // Guards against the two zeroes that make the feature invisible rather than broken, and
-    // against a refill so fast that the resource stops being one.
+fn f018_a_tank_is_a_whole_mission_of_flying_because_nothing_refills_it() {
+    // The other end of the same arithmetic, and it replaces the refill-rate test that stood
+    // here until 2026-08-12. With no regeneration anywhere, `gas_tank` is not "how long one
+    // boost lasts" — it is **the entire supply of a run** until the refuel stations exist
+    // (`docs/NEXT.md` §1d). So the file has to carry enough of it that a mission is flyable at
+    // all, and that is a claim about the numbers, not about the mechanism.
     let d = data(&app());
     let v = &d.game.vector;
-    assert!(
-        v.gas_regen_per_s > 0.0,
-        "gas_regen_per_s = {} — a tank that never comes back is what the user complained \
-         about (docs/QUESTIONS.md Q-033)",
-        v.gas_regen_per_s
-    );
-    assert!(v.gas_regen_delay_s >= 0.0 && v.gas_regen_delay_s.is_finite());
-    let refill_s = v.gas_tank / v.gas_regen_per_s;
-    assert!(
-        refill_s > 5.0,
-        "an empty tank is full again after {refill_s:.2} s — below that nobody ever chooses \
-         between boosting and keeping the gas"
-    );
-    // A reel-in of a full rope costs about 1 % of the tank. Not balancing: a guard against a
-    // tank so large that the other consumer stops existing.
+
+    // A reel-in of a full rope costs a few per cent of the tank. Not balancing: a guard
+    // against a tank so large that the other consumer stops existing, and against one so small
+    // that a single reel-in ends the run.
     let reel_s = (d.scale.vector.anchor_range_m - v.min_rope_m) / v.reel_speed_m_s;
     let share = v.gas_reel_per_s * reel_s / v.gas_tank;
     assert!(
@@ -796,5 +732,16 @@ fn f018_the_refill_values_in_the_file_are_a_refill_and_not_a_second_tank() {
         v.gas_reel_per_s * reel_s,
         share * 100.0,
         v.gas_tank
+    );
+
+    // Boost is bought in bursts, not held for sixteen seconds. Half a second is a burst; the
+    // tank has to hold enough of them that flying is a rhythm rather than a countdown.
+    let bursts = v.gas_tank / (v.gas_boost_per_s * 0.5);
+    assert!(
+        bursts > 20.0,
+        "a {} tank at {}/s is only {bursts:.1} half-second boosts, and nothing refills it \
+         (docs/QUESTIONS.md Q-033) — that is a run that ends before the mission does",
+        v.gas_tank,
+        v.gas_boost_per_s
     );
 }

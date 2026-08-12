@@ -37,28 +37,27 @@
 //!   costing gas in the next one — one tick of delay in exchange for an order that does not
 //!   depend on which system Bevy happens to run first.
 //!
-//! ## The refill (`docs/QUESTIONS.md` Q-033)
+//! ## This file only ever subtracts (`docs/QUESTIONS.md` Q-033)
 //!
-//! Until 2026-08-10 this file only ever subtracted, and nothing anywhere added: the tank was
-//! full at spawn and then fell to zero for the rest of the mission. The user played it and
-//! said *„der boost hält nicht lang genug"*, which was true and too kind.
+//! **There is no refill here, and its absence is a decision.** The user answered it on
+//! 2026-08-12: *„gas refillt nur im main gebäude an bestimmten stationen/objekten"* — gas
+//! comes back **at a place you go to**, never on a timer.
 //!
-//! It now refills — **while neither boosting nor reeling, and only after a pause**
-//! (`vector.gas_regen_per_s`, `vector.gas_regen_delay_s`). Two consequences worth stating
-//! before somebody reads a net drain into them:
+//! Between 2026-08-10 and then this file did regenerate the tank while nobody was spending,
+//! after a `gas_regen_delay_s` pause. That was an assumption made under the autonomous rule
+//! while the question was open, and the user picked none of the three shapes it offered. The
+//! whole mechanism came back out: `refill_tank`, `arm_pause`, `Gas::regen_delay_left_s` and
+//! both RON keys. **Do not put a rate back in when the tank feels tight** — the answer is the
+//! stations (queued in `docs/NEXT.md` §1d), and the reason is in the bible: burning gas is
+//! loud and a Bellower answers it, so the resource is coupled to *risk*, which a tank that
+//! quietly fills itself while you hang around is not.
 //!
-//! - **A held boost still costs the full `gas_boost_per_s`.** The refill and the debit never
-//!   run in the same tick, so there is no net rate. How long one boost lasts is
-//!   `gas_tank / gas_boost_per_s` and nothing else — the tank got bigger for that, the refill
-//!   did not.
-//! - **The pause follows the *want*, not the spend.** A tick in which the button asks for gas
-//!   arms it, even when the tank was too empty to pay: otherwise a player who ran dry would
-//!   be refilling while still holding the button down.
+//! How long one held boost lasts is therefore `gas_tank / gas_boost_per_s` and nothing else —
+//! 16.67 s at the numbers of 2026-08-12. The tank is what got bigger for that.
 //!
-//! `Changed<Gas>` stays a signal through all of it. A full tank that nobody is using is not
-//! written, so the HUD is not woken (`tests/vector_gas.rs`, "stops reporting a change"). What
-//! *does* report a change is the pause counting down — 30 ticks after the last burn — and it
-//! reports one because the tank really is changing: the countdown is part of it.
+//! `Changed<Gas>` stays a signal because of it. A tick in which nobody wants gas writes
+//! nothing at all to the tank, so the HUD is not woken sixty times a second by a number that
+//! did not move (`tests/vector_gas.rs::f018_an_idle_tank_never_refills_on_its_own`).
 //!
 //! Cost, evidence and image of this file: `tests/vector_gas.rs`, `scripts/f-018-gas.txt`,
 //! `docs/images/f-018-gas.png`.
@@ -86,29 +85,24 @@ pub fn gas_budget(
     // `tests/vector_gas.rs` goes red on it.
     let boost_cost = vector.gas_boost_per_s * dt;
     let reel_cost = vector.gas_reel_per_s * dt;
-    let refill = vector.gas_regen_per_s * dt;
 
     for (intent, hook, mut gas, mut grant) in &mut players {
         let wants_boost = intent.pressed(Buttons::BOOST);
         let wants_reel_in = intent.pressed(Buttons::REEL_IN) && hook.anchored_count() > 0;
 
-        // On a copy, so that `Gas` is only marked changed when something about the tank
-        // really is different — and so that [`book`] and [`refill_tank`] stay plain functions
-        // a test can drive without an app.
-        let mut tank = *gas;
-
         if !wants_boost && !wants_reel_in {
-            // Nobody wants anything: nothing is debited, and the tank fills back up if its
-            // pause has run out. On a full tank with the pause at zero this writes the
-            // identical struct and `set_if_neq` keeps quiet — `Changed<Gas>` is a signal the
-            // HUD and one day the wire read, and a tank that reports a change every tick
-            // without changing is a lie in that signal.
+            // Nobody wants anything, so **the tank is not touched at all** — not even to
+            // write the same number back. `Changed<Gas>` is a signal the HUD and one day the
+            // wire read, and a tank that reports a change every tick without changing is a
+            // lie in that signal. Refilling belongs to the stations, not here (Q-033).
             grant.set_if_neq(GasGrant::default());
-            refill_tank(&mut tank, refill, dt);
-            gas.set_if_neq(tank);
             continue;
         }
 
+        // On a copy, so that `Gas` is only marked changed when something about the tank really
+        // is different — and so that [`book`] stays a plain function a test can drive without
+        // an app.
+        let mut tank = *gas;
         let booked = book(
             &vector.gas_priority,
             wants_boost,
@@ -117,43 +111,9 @@ pub fn gas_budget(
             reel_cost,
             &mut tank,
         );
-        // The pause starts over on every tick that **wants** gas, whether or not there was
-        // any to give. Arming it on the spend instead would refill a player who is holding
-        // the button down on an empty tank.
-        arm_pause(&mut tank, vector.gas_regen_delay_s);
         gas.set_if_neq(tank);
         grant.set_if_neq(booked);
     }
-}
-
-/// One tick of refill for **one** tank: counts the pause down, or puts `amount` back.
-///
-/// **Never both in the same tick.** The pause is over when it reaches zero, and the tick that
-/// brings it there is still a tick of waiting — one tick either way is 17 ms, and a branch
-/// that does two things at once is the one somebody later reads as a net rate.
-///
-/// An unlimited tank (`--sandbox`) is left alone entirely: there is nothing to put back, and
-/// counting a pause down on it would mark `Gas` as changed for half a second after every
-/// boost while nothing about it changed.
-pub fn refill_tank(gas: &mut Gas, amount: f32, dt: f32) {
-    if gas.unlimited {
-        return;
-    }
-    if gas.regen_delay_left_s > 0.0 {
-        gas.regen_delay_left_s = (gas.regen_delay_left_s - dt).max(0.0);
-        return;
-    }
-    // `Gas::refill` clamps at `max` and ignores a nonsensical amount, so a full tank takes
-    // nothing and stays byte-identical.
-    gas.refill(amount);
-}
-
-/// Holds the refill off for `delay_s` seconds from now. See [`refill_tank`].
-pub fn arm_pause(gas: &mut Gas, delay_s: f32) {
-    if gas.unlimited || !delay_s.is_finite() || delay_s < 0.0 {
-        return;
-    }
-    gas.regen_delay_left_s = delay_s;
 }
 
 /// Books one tick for **one** tank, in the order the file names.
@@ -270,44 +230,35 @@ mod tests {
         assert!(!gas.is_empty());
     }
 
-    /// One tick at 60 Hz, and one tick of a 10/s refill.
-    const DT: f32 = 1.0 / 60.0;
-    const REGEN: f32 = 10.0 / 60.0;
-
     #[test]
-    fn f018_the_pause_runs_out_before_the_first_drop_goes_in() {
-        // 0.5 s at 60 Hz is 30 ticks of waiting, and not one of them puts gas back.
-        let mut gas = Gas { current: 0.0, ..Gas::full(300.0) };
-        arm_pause(&mut gas, 0.5);
-        for tick in 0..30 {
-            refill_tank(&mut gas, REGEN, DT);
-            assert_eq!(gas.current, 0.0, "tick {tick} of the pause put gas back");
+    fn f018_booking_never_puts_a_drop_back_in() {
+        // The station rule (Q-033) from the booking's side: `book` is the only thing this file
+        // does to a tank, and it is monotone downwards. Nine hundred ticks of every
+        // combination of the two buttons, and the number may not rise once — a refill smuggled
+        // in here would look exactly like the regeneration that was taken out on 2026-08-12.
+        for (wants_boost, wants_reel) in [(true, true), (true, false), (false, true), (false, false)]
+        {
+            let mut gas = Gas { current: 5.0, ..Gas::full(300.0) };
+            let mut previous = gas.current;
+            for tick in 0..900 {
+                book(
+                    &[GasConsumer::Boost, GasConsumer::ReelIn],
+                    wants_boost,
+                    wants_reel,
+                    BOOST,
+                    REEL,
+                    &mut gas,
+                );
+                assert!(
+                    gas.current <= previous + 1e-9,
+                    "tick {tick} of ({wants_boost}, {wants_reel}) took the tank from {previous} \
+                     up to {} — gas comes back only at a station (docs/QUESTIONS.md Q-033)",
+                    gas.current
+                );
+                assert!(gas.current <= gas.max, "and never above max: {} of {}", gas.current, gas.max);
+                previous = gas.current;
+            }
         }
-        assert!(gas.regen_delay_left_s <= 0.0, "after 30 ticks the pause is over");
-        refill_tank(&mut gas, REGEN, DT);
-        assert!((gas.current - REGEN).abs() < 1e-6, "and then it refills: {}", gas.current);
-    }
-
-    #[test]
-    fn f018_the_refill_stops_at_the_top_and_changes_nothing_there() {
-        let mut gas = Gas::full(300.0);
-        let before = gas;
-        for _ in 0..600 {
-            refill_tank(&mut gas, REGEN, DT);
-        }
-        assert_eq!(gas, before, "a full tank must come out of the refill byte-identical");
-    }
-
-    #[test]
-    fn f018_an_unlimited_tank_is_left_alone_by_the_refill() {
-        // `--sandbox`: nothing to put back, and nothing to wait for either. A pause counting
-        // down on it would mark `Gas` as changed while nothing about it changed.
-        let mut gas = Gas { unlimited: true, ..Gas::full(1.0) };
-        let before = gas;
-        arm_pause(&mut gas, 0.5);
-        assert_eq!(gas, before, "an unlimited tank does not arm a pause");
-        refill_tank(&mut gas, REGEN, DT);
-        assert_eq!(gas, before, "and it does not refill");
     }
 
     #[test]

@@ -17,6 +17,16 @@ use serde::{Deserialize, Serialize};
 /// Gas is finite, and **spending gas is loud** — the Bellower reacts to the noise (bible 4).
 /// That couples the resource to the risk instead of making it a plain timer.
 ///
+/// ## It does not come back on its own (`docs/QUESTIONS.md` Q-033)
+///
+/// The user decided it on 2026-08-12: *"gas refillt nur im main gebäude an bestimmten
+/// stationen/objekten"*. Refuelling is **a place you go to**, not a rate. So the simulation
+/// has exactly one writer that ever *lowers* this number (`vector::gas::gas_budget`) and, for
+/// now, none that raises it — [`refill`](Self::refill) exists for the stations that are still
+/// to be built and is called by nobody. A field like `regen_delay_left_s` used to hang here
+/// for a timer-shaped regeneration; it is gone on purpose, and
+/// `tests/vector_gas.rs::f018_an_idle_tank_never_refills_on_its_own` keeps it gone.
+///
 /// The numbers (tank size, drain per second, boost cost) stand in `assets/data/gear.ron`,
 /// **not here** (§4).
 #[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -25,22 +35,11 @@ pub struct Gas {
     pub max: f32,
     /// `--sandbox` sets this: infinite gas, for looking around (§12a).
     pub unlimited: bool,
-    /// Seconds still to wait before the tank refills again (`F-018`, `docs/QUESTIONS.md`
-    /// Q-033). Armed by every tick that wants gas, counted down while nobody does.
-    ///
-    /// **It lives here and not in a `Resource` and not in a `Local`**: it is state of *one*
-    /// tank, twenty players have twenty of them, and it has to travel with the tank into a
-    /// save and one day down a wire (`docs/multiplayer.md` rule 8). The length of the pause
-    /// is a game value and stands in `game.ron` (`vector.gas_regen_delay_s`), never here.
-    ///
-    /// Written by the same single writer as [`current`](Self::current) —
-    /// `vector::gas::gas_budget`, the authority table in `docs/architecture.md`.
-    pub regen_delay_left_s: f32,
 }
 
 impl Gas {
     pub fn full(max: f32) -> Self {
-        Gas { current: max, max, unlimited: false, regen_delay_left_s: 0.0 }
+        Gas { current: max, max, unlimited: false }
     }
 
     pub fn fraction(&self) -> f32 {
@@ -66,6 +65,12 @@ impl Gas {
         true
     }
 
+    /// Puts `amount` back, **capped at [`max`](Self::max)**.
+    ///
+    /// ⚠️ **Nothing in the simulation calls this today, and that is the design** (Q-033): the
+    /// refuel stations of the main building are the only thing that ever will. Whoever wires
+    /// it to a timer, an idle branch or a tick is undoing the user's decision — see the type's
+    /// doc.
     pub fn refill(&mut self, amount: f32) {
         if amount.is_finite() && amount > 0.0 {
             self.current = (self.current + amount).min(self.max);

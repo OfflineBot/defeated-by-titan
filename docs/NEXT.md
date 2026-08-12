@@ -62,8 +62,18 @@ that is the variant's home. Double-tap needs an edge timer; the tick counter is 
 ⚠️ `gas_boost_per_s: 18.0` is currently the *only* boost cost. It becomes the **cheap** one, and
 the dodge needs its own key. Both `⚠️ UNTUNED`.
 
-**1d. Gas refuels only at stations.** See `Q-033`, now answered. `gas_regen_per_s` → 0.0, the
-regeneration comes out, `gas_tank: 300.0` stays. Refuel stations are a **new world feature**.
+**1d. Gas refuels only at stations. ✅ half done 2026-08-12.** `Q-033` is answered and the
+regeneration is **removed outright** — mechanism, both RON keys, both struct fields, six tests
+(`FIND-049`). Not "set to 0.0": `deny_unknown_fields` means a re-added key now **crashes on load**,
+which is the honest guard. `gas_tank: 300.0` stays.
+**What remains is the feature itself: refuel stations as world objects**, plus a mission loop where
+going back to the main building is a decision. `Gas::refill` exists, is called by nobody, and is
+reserved for them.
+⚠️ **Until they exist, 300 gas is the entire supply of a run.** Whether that is playable is a feel
+question no test answers, and it is sharper now than it was yesterday.
+⚠️ **`scripts/f-018-gas.txt` now exits 1** — its ACT 4 brackets (`gas > 5.4` / `< 6.2`) existed only
+because the refill put 10/s back. It needs re-cutting and `docs/images/f-018-gas.png` re-taking.
+Small, mechanical, and nobody has done it.
 
 **1e. Without gas you keep about half.**
 > *"ohne gas kann man immernoch w a d nutzen um etwas movement aufzubauen (aber hälfte ca)"*
@@ -88,6 +98,22 @@ again means raising `hook_speed_m_s` with it. **Ask before spending a round on i
 
 **Build order I would defend:** 1b (flight state, smallest, unblocks the rest) → 1a (WASD air
 control, the core) → 1e (half without gas) → 1c (two boosts) → 1d (stations) → measure 1f.
+
+## 1z. `prompts/DefeatedByTitan_Design-Bibel.md` — the last scaffolding file, deliberately still here
+
+`prompts/init.md` was audited section by section and **deleted** on 2026-08-12 (`FIND-048`,
+transfer record in [`RELEASE.md`](RELEASE.md)). The bible was walked in the same pass and its
+content is in [`gameplay/`](gameplay/README.md) — pillars, world, enemies, core loop.
+
+**It was NOT deleted, and that is a judgement, not an oversight.** The audit is 🟨 by its own
+verdict: *"no independent agent has attacked it"*, and this file is the **design authority** —
+`init.md` itself put it "inhaltlich über dieser Datei". Retiring the source of every WHY in the
+project on one head's reading is the kind of step this project's own rules say to attack first.
+
+**To close it:** one cheap counter-check — an agent that did not do the carry-over reads the bible
+and `docs/gameplay/` side by side and names anything the latter loses. If nothing, delete it. It is
+recoverable from history either way, so the cost of being wrong is small — but so is the cost of
+checking.
 
 ## 2. Finish or DELETE the boost blend — read item 1a first, it may be obsolete
 

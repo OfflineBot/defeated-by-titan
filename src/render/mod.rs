@@ -21,6 +21,7 @@
 //! scene 30 ticks later with the arm let go.
 
 pub mod camera;
+pub mod model;
 pub mod rope;
 
 use bevy::prelude::*;
@@ -32,10 +33,30 @@ pub struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_light).add_systems(
-            Update,
-            (attach_camera, build_block_meshes, camera::rotate_camera, rope::draw_ropes),
-        );
+        app.init_resource::<model::ModelAssets>()
+            .add_systems(Startup, (setup_light, model::load_configured_models))
+            .add_observer(model::read_the_models_anchors)
+            .add_systems(
+                Update,
+                (
+                    attach_camera,
+                    build_block_meshes,
+                    camera::rotate_camera,
+                    rope::draw_ropes,
+                    // The model chain, in its own order: a file becomes handles, an entity
+                    // becomes a name, a name becomes a body. `chain()` and not three separate
+                    // registrations, because a titan that appears and gets its scene one frame
+                    // later is exactly the case `attach_late_scenes` exists for — and a random
+                    // order would make that "sometimes".
+                    (
+                        model::resolve_animation_clips,
+                        model::name_the_titans_model,
+                        model::spawn_models,
+                        model::attach_late_scenes,
+                    )
+                        .chain(),
+                ),
+            );
     }
 }
 

@@ -1,6 +1,6 @@
 # ROADMAP — what deliberately comes later
 
-Updated: 2026-08-09
+Updated: 2026-08-12
 
 **This is what has been recorded, understood and deliberately not built.** The difference to
 `docs/TODO.md`: that file holds work that is coming up. This one holds work that is **not**
@@ -16,6 +16,25 @@ forgotten.
 The genre's graveyard is full of games with elaborate skill trees and movement that feels
 wrong. **The P1 gate is a blind test against the reference with ten testers; our movement has
 to be rated at least level with it. Not passing means iterating, not moving on.**
+
+## The build-up plan is used up — the phase plan took over
+
+The commission carried a set-up plan of its own (stages 0 to 8: preflight, `cargo init`, a 3D
+scene, the model chain, the city, the Vector Gear, a titan, a mission, progression, polish). **It
+only ever governed the set-up**, and it explicitly handed over to the bible's phase plan from its
+step 3 onward. That has happened:
+
+| Stage of the build-up plan | Where it stands |
+|---|---|
+| **0a preflight** · **0b `cargo init`** | done — measured in [`environment.md`](environment.md) |
+| **1** 3D scene, FPS camera, gravity, `Intent`, the tools, `src/net/` stub, `tests/multiplayer.rs` | done — the tools are in [`lessons/workflow.md`](lessons/workflow.md) |
+| **1b** the model chain with **one** model | **not done.** No Blender on machine A; the chain is described in [`models.md`](models.md) and built nowhere |
+| **2** the city | partly — `assets/data/maps.ron` describes one, `world::map::build_map` is a stub |
+| **3 and up** | **superseded.** From here the bible's phases below and [`PLAN-GAME.md`](PLAN-GAME.md) hold, in that order |
+
+**Nothing of it is a live instruction any more.** It is here so that nobody re-derives a plan the
+project already walked through, and so that stage 1b is visible as the one piece that was skipped
+rather than finished.
 
 ## After the gate, in this order (bible 6.2)
 

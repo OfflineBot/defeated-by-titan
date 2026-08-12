@@ -1,6 +1,6 @@
 # FINDINGS — mistakes I tripped over on the way past
 
-Updated: 2026-08-09
+Updated: 2026-08-12
 
 **Whoever trips over something that is not part of their own task: write it down, with the
 measurement beside it** — so that somebody else can check whether it really is wrong.
@@ -1231,6 +1231,153 @@ of that line will never reach `FINDINGS.md`. **Whatever row this gets in `docs/S
 - **The shape test over-neutralises**: it forces `BackgroundColor` *and* `BorderColor` to white,
   which **fills the ring** and destroys the fill-vs-outline cue the code itself calls a shape
   difference. The claim survives; the test is weaker than the claim.
+
+## FIND-049 — The gas regeneration is out, and the removal took one runtime assert with it
+
+**What changed (Q-033, answered by the user on 2026-08-12** — *"gas refillt nur im main gebäude an
+bestimmten stationen/objekten"*): the timer-shaped refill is **gone**, not zeroed.
+`vector.gas_regen_per_s` and `vector.gas_regen_delay_s` are out of `assets/data/game.ron` and out of
+`VectorTuning`; `refill_tank`, `arm_pause` and the idle refill branch are out of
+`src/vector/gas.rs`; `Gas::regen_delay_left_s` is out of `src/shared/state.rs`. **`gas_tank: 300.0`
+stayed** — it is the whole answer to *"der boost hält nicht lang genug"* (16.67 s per tank).
+
+**The red test, before anything was removed:** `tests/vector_gas.rs::f018_an_idle_tank_never_refills_on_its_own`
+failed against the then-current code with *"20.0 s of touching nothing moved the tank from 150 to
+300"*. One failure, no others. After the removal the same test is green and the tank reads 150.000
+after 1200 idle ticks.
+
+**Measured, not assumed — `deny_unknown_fields` really does catch a re-added key.** The RON comment
+now claims that putting `gas_regen_per_s` back crashes the game on load, so that claim was run:
+re-adding the line makes every `tests/data.rs` case panic at `src/data/mod.rs:165` with
+`Unexpected field named 'gas_regen_per_s' in 'VectorTuning'`, naming line and column. **A future
+agent that "restores" the key gets a loud crash, not a silently ignored value.** That is worth
+knowing because the obvious rollback — setting the value to `0.0` — is no longer possible at all.
+
+**⚠️ FOREIGN TERRITORY — `scripts/f-018-gas.txt` will now exit 1, and it was not touched.** Its
+ACT 4 asserts `gas > 5.4` and `gas < 6.2` one second after the tank ran dry, and that bracket exists
+*only* because the refill put 10/s back (the file says so in its own header: *"MEASURED: 5.800"*).
+With no refill the tank stays at the ~0.133 that ACT 3 left, so **both asserts fail**. Predicted from
+the file's own arithmetic, **not measured** — running it needs `cargo run`, which this job was not
+allowed to spend. The whole header block of that script also documents the pause and `refill_tank`
+by name, and its `--screenshot` note ("the closing `wait 3` puts 30 gas back at 10/s", tick 1118 vs
+1362) is now wrong in the other direction: **the tank no longer refills, so the image may be shot at
+the end of the run**. `scripts/f-flight-cut.txt:49` mentions the refill in a comment only — harmless,
+but it reads as current fact. `docs/HANDOVER.md:101` still states *"`gas_regen_per_s: 10` after a
+0.5 s pause (Q-033). 16.67 s per tank, refill 30 s from empty"* — half of that sentence is now false.
+
+**What did NOT break:** `tests/hud.rs:175` constructs `Gas { current, ..Gas::full(100.0) }`, which
+survives the field removal untouched. `cargo check --all-targets` is clean over the whole tree.
+
+**The rule the deletion left behind, so nobody rebuilds it by accident.** Four tests that pinned the
+regeneration are gone; two were kept and **strengthened into the station rules in advance**:
+"nothing refills while spending" now reads the tank **every tick** and fails on any rise (the old
+version compared only the sum, which a refill giving back exactly what it took would have passed),
+and "never above `max`" now also asserts the tank does not creep up over five idle seconds.
+`Gas::refill` is deliberately kept and is **called by nobody** — it is the stations' entry point
+(`docs/NEXT.md` §1d).
+
+## FIND-048 — `prompts/init.md` can be deleted: the audit found four gaps, all four are now filled
+
+**The task:** §18 of the commission allows its own deletion only once nothing in it is unique.
+This is that audit, section by section (§1–§18), plus the same pass over
+`prompts/DefeatedByTitan_Design-Bibel.md` and `gameplay/`.
+
+**Verdict: GO.** No section of the commission holds content that exists nowhere else. What
+remains in the grep is **153 hits, none of them content** — attributions, generated headers, and
+the deletion procedure itself. (147 before this audit; the 12 added by `RELEASE.md` and by this
+entry are the record of the deletion, and 6 pre-existing hits in `prompts/` fall away with the
+file.)
+
+### What was already carried over — fourteen of eighteen sections, and well
+
+| § | Home | Checked |
+|---|---|---|
+| §3 axes, units, looking direction | `conventions.md` §1 | 1 stud = 0.28 m, +Y up, −Z facing, radians in code / degrees in RON |
+| §3 Bevy setup and traps | `lessons/bevy.md` | goes further than the source: every name verified against the **installed** 0.19.0 with file and line |
+| §4 numbers in RON | `CLAUDE.md` rule 2 + `conventions.md` §5 | incl. no `serde(default)` |
+| §5 domains, plugin order, allow list | `architecture.md` | plus the authority table, which §5 only asks for in prose |
+| §6 multiplayer | `multiplayer.md` | all eight rules, each with where it already holds in the code |
+| §8 the four stages | head of `STATUS.md` + `ACCEPTANCE.md` + `CLAUDE.md` | the three pieces of evidence for 🟧 are stated in all three |
+| §9 bug and safety doctrine | head of `BUGS.md` | four fields, red-test order, wording table, `unsafe`/`unwrap`/NaN guards |
+| §10 norms | `conventions.md` §4 + §6 | every row of the norm table, plus the rituals in `CLAUDE.md` |
+| §11 performance | `lessons/performance.md` | and it names six gaps the source does not have |
+| §12 tooling | `lessons/workflow.md` | flags, the driver, the overlay, screenshots, research rules |
+| §14/§15 machines and traps | `environment.md` (measured) + `lessons/environment.md` (cost) | B was **re-measured** and the source was wrong in two places |
+| §16 acceptance of the commission | `ACCEPTANCE.md` §"What the user also wanted to see" | all six points, each answered |
+| §17 supervision | `lessons/supervision.md` | incl. the report format and the four things a commission must name |
+| bible: pillars, phases, gate | `ROADMAP.md` | the gate rule leads the file, P2–P11 with their acceptance criteria |
+
+### The four gaps — measured, not assumed
+
+| Gap | Evidence it was a gap | Filled by |
+|---|---|---|
+| **1. `docs/gameplay/` did not exist.** §18 maps §1 (game content and the reference) and the bible's WHY there. `docs/README.md` said "Empty so far, but planned" | `ls docs/gameplay` → no such directory. The five pillars, the world, the tone, the enemy philosophy, the ten improvements and the twelve success metrics had **no home outside `prompts/`** | `docs/gameplay/` with `README.md`, `pillars.md`, `world.md`, `enemies.md`, `core-loop.md` |
+| **2. §18 itself had no permanent home.** The file that describes how to delete the file was the only copy | `grep -rn "gh repo create\|ATTRIBUTION.md is complete\|git rm -r gameplay" docs/` → nothing. Steps 2 (pre-publication cleanup), 3 (the public repo) and 4 (dismantling, in order, one commit per line) existed **only** in `prompts/init.md` | `docs/RELEASE.md`, including the transfer table as a record of where each section went |
+| **3. §2's reading protocol for the spreadsheet.** `docs/backlog/README.md` carries the row counts, but it is **generated** and cannot hold a rule | the six Excel traps (multiple sheets, formulas, meaning in the fill color, merged cells, hidden rows, cell comments), the re-extraction diff protocol (**vanished rows are not silently deleted**) and the backlog-status ↔ four-stages mapping appeared in no maintained file. `grep -rn "In Arbeit\|Zurueckgestellt" docs/*.md docs/lessons/*.md` → empty | `docs/gameplay/README.md` |
+| **4. §7 beyond models.** `models.md` covered the model chain completely and the other three not at all | no file mentioned `tools/atlas/`, `tools/sound/`, the atlas-vs-vertex-colors split, the `assets/` tree, or the rule **"you have no ears — a sound is finished when it is measurable"** | a new section in `docs/models.md`, and its title now says *asset chains* |
+
+**A fifth, smaller one:** §13's build-up plan was referenced as live by `CLAUDE.md` but was
+already used up. Its disposition — stages 0, 1 done; **1b (the model chain) skipped, not
+finished**; 2 partial; 3 and up superseded by the bible's phases — is now a table in
+`ROADMAP.md`. That stage 1b is a skip rather than a completion was not written down anywhere
+before.
+
+### The grep, categorized — 147 hits, 0 blockers
+
+```bash
+grep -rn "prompts/init.md" . --exclude-dir=target --exclude-dir=.git | wc -l   # 153
+```
+
+| Category | Count | Blocks deletion? |
+|---|---|---|
+| Inside `prompts/` itself | 6 | **No** — goes with the file |
+| Root `init.md` (the starter) and `gameplay/README.md` | 9 | **No** — both are dismantled in the same step (`RELEASE.md` step 4) |
+| Generated files: `docs/backlog/*.ron`, `backlog/README.md`, `features.ron`, `TODO.md`, `STATUS.md` | 14 | **No** — they carry the string because `tools/features.py` writes it. Change the source strings, re-run, done |
+| `tools/features.py` + `tools/norms.py` source strings | 13 | **No** — attributions in comments; changing them is a one-file edit |
+| `src/`, `tests/`, `scripts/`, `Cargo.toml` doc comments | 45 | **No** — every one is an attribution beside a rule that now lives in `docs/`. They become dangling citations, not lost knowledge |
+| `docs/**.md` prose | 65 | **No** — all attributions (12 of them are `RELEASE.md` and this entry describing the deletion). Checked line by line; **none carries a rule that exists only in the commission** |
+| `CLAUDE.md` | 3 | **No, but see below** — two of the three have to change wording |
+| Root `README.md` | 1 | **No** — it is the "once the scaffolding is dissolved" pointer, which is exactly what step 4 rewrites |
+
+**The honest qualification:** §18 asks for a stricter result than this — *"the grep may find only
+the one line in `CLAUDE.md`"*. That standard is not met and, on the evidence, should not be: 117
+of the 147 hits are attributions of the form "(`prompts/init.md` §9)" sitting next to a rule whose
+permanent home exists. Deleting the file loses **no rule**; it leaves those citations pointing at
+a path that only the git history resolves. **That is a tidiness debt, not a knowledge loss**, and
+it is separable from the deletion. Two things were repaired here because they were *instructions*
+rather than attributions: the subagent-commission example in `lessons/supervision.md` §g, which
+told future agents to go and read `prompts/init.md §5 + §8 + §9`, and the mirror rule in
+`docs/README.md`, which stated the requirement only by citing it.
+
+### The one thing the auditor could not do
+
+**`CLAUDE.md` belongs to the main head and was not touched.** Three edits there are prerequisites
+of the deletion, not of this audit:
+
+1. Line 13 — *"still being built up out of `prompts/` and `gameplay/` … disappears once it has
+   been carried over (`prompts/init.md` §18)"* → must become the one surviving line §18 asks for:
+   *"The initial prompt has been worked through and deleted; it is readable in the git history
+   (`git show <sha>:prompts/init.md`)."*
+2. Line 68 — the supervision rule is attributed to `§17`; it now lives in
+   `docs/lessons/supervision.md`, which the same sentence already links.
+3. Line 229 — *"The build-up plan (`prompts/init.md` §13, `Stufenplan`) is at **setup**"* is
+   **false as written**: stages 0 and 1 are done and stage 3 is where the work actually is. It
+   should point at `docs/ROADMAP.md`.
+4. The session ritual at line 22 runs `ls -lt prompts/ && ls -R gameplay/`. After step 4 both are
+   gone and the ritual's second line reads `cat user-messages.md`.
+
+### Reading `CLAUDE.md` as a stranger — §18's own question
+
+*Does it say in thirty seconds how the project ticks and where the traps are?* **Yes, for the
+craft. No, for the game.** In thirty seconds a stranger gets: the four stages and who may set
+them, RON-not-Rust, one domain one plugin, multiplayer from day 1, no fix without a red test,
+nothing per frame — plus the session ritual and the commit norm. That is an unusually good index.
+
+What is missing is one line saying **what the game is** beyond the two-sentence header, and a
+pointer to the design. The "Where things are" table lists eleven destinations and **not one of
+them answers "what am I building and why"** — `docs/gameplay/` is now that answer and is not in
+the table. A stranger also learns the stage legend before learning that `docs/NEXT.md` is where
+he actually starts; `NEXT.md` is in the table, but below the fold of the first screen.
 
 *(Append further findings here. A finding without a measurement is an opinion.)*
 
