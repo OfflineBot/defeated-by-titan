@@ -955,7 +955,35 @@ rate, 3.0 → **54.18 m/s** and 5.0 → **39.62 m/s**. Two metres removes 27 % o
 stated reason in the file is a *camera* constraint, so it is doing two unrelated jobs at once and
 should probably split into a separate `vector.min_reel_m`.
 
-## Q-033 — The gas never refilled. I gave it a regeneration; the shape of it is yours.
+## Q-033 — ✅ ANSWERED 2026-08-12: gas refills ONLY at stations. My regeneration was wrong.
+
+> **The user's answer, from `user-messages.md`:** *"(gas refillt nur im main gebäude an bestimmten
+> stationen/objekten)"* — gas refills **only in the main building, at certain stations/objects.**
+>
+> **That kills the assumption I ran under.** I chose "regenerates while neither boosting nor
+> reeling" because he had not answered, and I said in this entry that the shape was his to pick. He
+> picked, and he picked none of my three options: refuelling is a **place you go to**, not a timer.
+>
+> **What has to be rolled back, exactly as this entry promised:**
+> - `assets/data/game.ron`: `gas_regen_per_s: 10.0` → **0.0** (the entry already records that 0.0
+>   restores the old behaviour exactly) and `gas_regen_delay_s` becomes dead.
+> - `src/vector/gas.rs`: the `refill_tank` / `arm_pause` branch comes out, and `Gas::regen_delay_left_s`
+>   with it.
+> - The four red tests in `tests/vector_gas.rs` that pin the regeneration go with it; the ones that
+>   pin "nothing refills while spending" and "never above max" stay and become the station rules.
+> - **`gas_tank: 300.0` STAYS.** He asked for that separately (*"gas tank sollte sehr viel mehr
+>   haben"*) and it is the whole answer to *"der boost hält nicht lang genug"* — 16.67 s per tank.
+>
+> **What replaces it is a new feature, not a value:** refuel stations as world objects, and a
+> mission loop where returning to the main building is a decision. That is `F-018`'s real shape and
+> it does not exist yet. Queued in [`NEXT.md`](NEXT.md).
+>
+> **Why he is right and I was not:** the bible couples gas to *risk*, not to a timer — burning gas
+> is loud and a Bellower answers it (bible line 159). A tank that quietly refills itself while you
+> hang around is exactly the timer the bible refuses. A tank you have to go somewhere to fill makes
+> the whole map a resource decision.
+
+## Q-033 (original entry, kept for the record) — The gas never refilled. I gave it a regeneration; the shape of it is yours.
 
 **Context:** on 2026-08-10 the user played the game — **the first time a human ever has** — and
 said: *"der boost hält nicht lang genug"* and *"seile ohne boost bringen gar nichts"* and

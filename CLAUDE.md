@@ -97,6 +97,30 @@ This project is **not worked through serially by one head**, but with workflows 
   format: **`Task · Done · Evidence · Stage · Open · Findings`** — a free-text report cannot
   be integrated.
 
+## Token cost is a constraint too (user, 2026-08-12)
+
+> *„es soll etwas tokeneffizienter gearbeitet werden. es gilt zwar immernoch: Qualität wichtiger
+> als tokenverbrauch/effizienz. aber bei jeder iteration wäre es vermutlich sinnvoll wenn man die
+> conversation compacted! damit agents nicht mit zu viel context erstellt werden! aktuell ist der
+> tokenverbauch zu hoch für zu wenige ergebnisse!"*
+
+**Quality still outranks cost — that does not change.** What changes is that a round which produces
+one finding for 400 000 tokens is a *bad round*, and the supervisor is the one spending it.
+
+- **Compact between iterations.** A fresh agent inherits the commission, not the session. Long
+  context makes agents slower, not better.
+- **A commission is a briefing, not a transcript.** Name the files, the acceptance criterion and
+  the two or three measured facts it needs. Do not paste findings it can read itself.
+- **Fewer, tighter agents.** Three well-scoped beat six overlapping. Every agent that has to
+  re-derive shared context is the supervisor's waste, not the agent's.
+- **Measure before you delegate.** One `grep` by the main head often replaces a whole commission —
+  and several rounds on 2026-08-10 were spent re-deriving something one file already said.
+- **Do not order the full `cargo test` in a commission.** It belongs to the main head, once, at the
+  round gate. Ordering it three times in parallel cost load average 205 and a 22-minute build.
+- **Read `docs/backlog/` for the F-ID before designing anything** — `FIND-039`: a feature was
+  re-derived over a day that the backlog had already specified, and the re-derived version was
+  worse.
+
 ## Autonomous operation — when nobody is standing next to you
 
 The normal case in this project is that the user is **not** there. Then this holds on top:
@@ -198,6 +222,50 @@ place where something reasonable was *explained* instead of being *measured* in 
 Write what you know: "built, untested — 🟨" is a good sentence, "should work now" is not.
 
 # EXTRA
-look at the user-messages.md. 
-its what the player feels about the game. stuff that has to change.
-the next time you see this EXTRA tab. rewrite it so it makes more sense for you! its for the players notes. when play testing the game. 
+## `user-messages.md` — the player's notes. Read it FIRST, every session.
+
+**It is the most valuable file in this repository**, and that is measured, not flattery: on
+2026-08-10 four sentences the user typed after a few minutes of play found gas that never refilled,
+a rope that went slack on every fast approach, and an overshoot **no test here could have found** —
+because no test had ever flown at an anchor without holding reel. A full day of instrumented
+measurement found none of the three.
+
+**It is his to write and mine to empty.** He plays, he writes what felt wrong, in German, in
+whatever form he likes. Nothing in it is a specification; it is a symptom report, and my job is to
+find the cause.
+
+### The ritual for it — do this before any other work
+
+1. **Read it.** If it is empty, say so and carry on with [`docs/NEXT.md`](docs/NEXT.md).
+2. **Migrate every line out of it** into the place that will actually be read again:
+   - a **decision that is his** → [`docs/QUESTIONS.md`](docs/QUESTIONS.md), and if it answers an
+     open `Q-`, mark that one ✅ ANSWERED and write down **what has to be rolled back**;
+   - a **thing to build** → [`docs/NEXT.md`](docs/NEXT.md), in build order, quoting him verbatim
+     so the intent survives my paraphrase;
+   - a **symptom with a cause** → [`docs/BUGS.md`](docs/BUGS.md) with a repro, or
+     [`docs/FINDINGS.md`](docs/FINDINGS.md) with a measurement;
+   - a note about **how I work** → into this file, as a rule, not as a memo.
+3. **Then empty it** back to the template below and commit it with the migration, so he always
+   opens a blank page and never has to wonder whether I read the last one.
+4. **Quote him verbatim in the migrated entry.** His phrasing carries information my summary loses
+   — *"das a d sorgt dafür dass man nicht immer direkt zum seil gezogen wird"* is a whole control
+   scheme in one clause, and I would have flattened it to "add lateral control".
+
+### The two rules his notes have already earned
+
+- **A symptom he reports is real even when the code looks right.** Every single one so far has
+  been. Find the cause; do not explain the symptom away.
+- **His instruction beats my derivation, and beats his own earlier number.** That precedence rule
+  is already in `scale.ron` and `Q-002`; his notes are where it gets exercised.
+
+### The template `user-messages.md` gets reset to
+
+```markdown
+# Movement
+
+# Combat
+
+# Feel / Look
+
+# Technisches zu Claude in dem Projekt
+```

@@ -25,7 +25,71 @@ Also his, and named in this session but never answered:
 
 ---
 
-## 1. ⚠️ FIRST — finish the boost blend. It was stopped mid-commission.
+## 1. ⚠️ THE AIR-CONTROL SPEC — the user wrote it down, it is coherent, and it supersedes several of my decisions
+
+From `user-messages.md`, 2026-08-12, migrated here because that file gets emptied for new notes.
+**This is one design, not six requests.** Read it whole before building any part.
+
+> *"wenn man w drückt und verbunden ist bekommt man schon movement! bei a und d movement zur seite.
+> mit s »spannt« man nur das seil! … das a d sorgt dafür dass man nicht immer direkt zum seil
+> gezogen wird!"*
+
+**1a. WASD is the air control while roped.** `W` = thrust forward, `A`/`D` = lateral, `S` = tension
+the rope only (no thrust). **The stated purpose of `A`/`D` is that you are not always dragged
+straight at your anchor** — that is the steering the rope has never had.
+⚠️ **This supersedes the boost/rope blend** (`boost_rope_fraction`, `FIND-045`/`FIND-046`). Direction
+comes from WASD relative to the rope, not from a look/rope lerp. **Do NOT finish the old blend
+before reading this** — item 2 below is now subordinate to this spec, and the anti-parallel bug
+(90° off-look) may simply disappear with the blend itself.
+
+**1b. Flight mode is a state with hysteresis, and touching the ground does not leave it.**
+> *"nur weil man den boden berührt ist man nicht direkt aus flugmodus raus, erst wenn man langsam
+> genug ist läuft man wieder"*
+
+A speed threshold, not a contact test. **We already have exactly this machinery**: `MovementState::Tethered`
+went in on 2026-08-10 with the rule *"the legs cannot produce more than the ground's top speed"*
+(`FIND-037`), threshold `run_speed_m_s + (-gravity_m_s2)/simulation_hz` = 6.3333. **Flight mode is
+the same idea generalised**, and `ground_locomotion`'s momentum carry (`F-014`) is already the other
+half. This is a small change on top of what exists, not a new system.
+
+**1c. Two boosts, not one.**
+> *"mit doppel leertaste boostet man stark in die lauf richtung (ein weiter dodge) der viel gas
+> aufbraucht. das andere boosten verbraucht sehr wenig!"*
+
+`Shift` while in flight = the cheap, continuous boost. **Double-tap `Space` = a strong dodge in the
+run direction, expensive.** Note `Buttons::DODGE` already exists on `C` and is written by nobody —
+that is the variant's home. Double-tap needs an edge timer; the tick counter is the honest one.
+⚠️ `gas_boost_per_s: 18.0` is currently the *only* boost cost. It becomes the **cheap** one, and
+the dodge needs its own key. Both `⚠️ UNTUNED`.
+
+**1d. Gas refuels only at stations.** See `Q-033`, now answered. `gas_regen_per_s` → 0.0, the
+regeneration comes out, `gas_tank: 300.0` stays. Refuel stations are a **new world feature**.
+
+**1e. Without gas you keep about half.**
+> *"ohne gas kann man immernoch w a d nutzen um etwas movement aufzubauen (aber hälfte ca)"*
+
+So WASD air thrust is **not** gated on gas — it is halved without it. That is what stops an empty
+tank from being the dead end it is today, and it is the honest answer to *"seile ohne boost bringen
+gar nichts"*.
+
+**1f. The acceptance criterion, in his words:**
+> *"es soll möglich sein wenn man gut ist die ganze zeit in der luft zu bleiben bis das gas
+> ausgeht."*
+
+**A skilled player stays airborne until the gas runs out.** That is measurable and it is the gate
+for this whole item: a script that never touches the ground for the length of a full tank.
+
+**1g. Ropes much longer, RON-configurable.**
+> *"seile sollen deutlich länger gehen! deutlich (über ron configurierbar!)"*
+
+`hook_range_m` went 90 → **200** on 2026-08-10 (`Q-035`) — **that may already be this request, or he
+may want more.** It is one RON value and `tests/data.rs` guards `range/speed ≤ 1.5 s`, so raising it
+again means raising `hook_speed_m_s` with it. **Ask before spending a round on it.**
+
+**Build order I would defend:** 1b (flight state, smallest, unblocks the rest) → 1a (WASD air
+control, the core) → 1e (half without gas) → 1c (two boosts) → 1d (stations) → measure 1f.
+
+## 2. Finish or DELETE the boost blend — read item 1a first, it may be obsolete
 
 An agent was rebuilding it when the session ended and **had written nothing** (verified: it was
 still reading). The commission is fully specified in `FINDINGS.md` FIND-045 and FIND-046. What has
