@@ -1111,3 +1111,58 @@ worst-case hook flight is acceptable or already too slow to read. Both are yours
 ## Answered
 
 *(nothing yet — the user's first answer comes here, with a date)*
+
+---
+
+## ⬇️ APPEND NEW QUESTIONS BELOW THIS LINE — with `>>`, never with an edit tool
+
+This file is **68 kB**. Opening it to add one entry costs ~17 000 tokens.
+
+```bash
+cat >> docs/QUESTIONS.md <<'END'
+
+## Q-0nn — <the question, in one line>
+...
+END
+grep -n '^## Q-033' docs/QUESTIONS.md && sed -n '900,940p' docs/QUESTIONS.md   # read ONE entry
+```
+
+Every entry carries the same four parts, and a question missing them is useless to the user:
+the **context**, the **ASSUMPTION:** the work continued under, **what would have to be rolled
+back**, and **why it matters today**.
+
+## Q-036 — `scale.ron` has nothing between 12 m and 35 m, and that hole is why the scaffolding cannot go
+
+**Context:** you asked for the district to look like the reference *"möglichst akkurat"*, and for the
+scaffolding-looking gantries to be architecture instead. Two rebuilds later the density is right
+(7.00 m facade to facade, street:ridge **0.82 : 1** against a surveyed real ratio of 0.62 : 1, 596
+facing facades against 311 before) — **and the gantries still cannot be removed.** The reason is a
+gap in your own size table, not in the map.
+
+**Measured:**
+- A rope between two houses now satisfies `d < H` — but the anchor stands over **solid house**, so
+  the pendulum's low point is *inside the building*. Measured: a 7 m street gives an **arc bottom of
+  5.92 m at 14.278 m/s, and the swing ends against the facade it hooked**. It is a hop, not a lane.
+- Any rope long enough to be a lane (**≥ 18 m**) gives `11.5 − 18 = −6.5 m` of arc bottom — i.e.
+  underground — because housing is capped at **11.5 m**.
+- What would replace the gantries honestly: **a corbelled tower top at 24–28 m.** From a roof at
+  11.5 m, 20 m away, that gives an arc bottom of **+2.1 m** — a real lane over the street.
+
+**`scale.ron: architecture` has 4.5 / 8.0 / 11.5 / 12 (watchtower) / 35 (church).** There is
+**nothing between 12 and 35**, so every structure that could carry a swing lane is either a house
+(too low) or the church (a single landmark). The surveyed reference ridge is **13 m**, so even our
+tallest house is slightly under the real thing.
+
+**ASSUMPTION: the gantries stay, and I have invented no new height class.** Making one up would put
+a building type in the world that you never named, in a project where the size table is explicitly
+yours (`scale.ron` header: *"NOT untuned — it is given by the user"*).
+
+**What I need from you — one or two numbers:**
+- a **tower / gatehouse / granary class around 24–28 m** (this is the one that removes the
+  scaffolding), and
+- optionally `architecture.eaves_m` for **`house_large`**, which is missing entirely — that is why
+  every 11.5 m house in the screenshot is a flat box while the 4.5 and 8.0 classes had pitched caps.
+
+**What would have to be rolled back if you say no:** nothing. The map works and is 🟧 for geometry.
+The gantries stay, the skyline stays flat, and the district keeps a piece of game furniture down its
+main axis.

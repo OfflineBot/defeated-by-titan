@@ -125,6 +125,58 @@ one finding for 400 000 tokens is a *bad round*, and the supervisor is the one s
   re-derived over a day that the backlog had already specified, and the re-derived version was
   worse.
 
+### 🔴 THE BIGGEST ONE, and it dwarfs the rest: **never read raw `cargo` output**
+
+Measured 2026-08-12: **one `cargo test` in this repo writes 629 952 bytes / 3 482 lines. The signal
+in it is 21 lines.** An agent that reads that raw pays roughly **150 000 tokens for a single test
+run** — and a round has several. This one line item was most of the session's spend.
+
+**Every `cargo` and every game run gets filtered. No exceptions.**
+
+```bash
+cargo test --test world 2>&1 | grep -E '^test result|^error|panicked|FAILED' | head -30
+cargo check                2>&1 | grep -E '^error' | head -20
+# a failure? ask for that ONE test's detail, not the suite's:
+cargo test --test world <one_test> 2>&1 | grep -A6 'panicked' | head -20
+# the game prints a full Bevy startup log on every run:
+./target/debug/defeated_by_titan --headless --script scripts/x.txt --ticks 900 2>&1 \
+  | grep -E 'MARK|assert|script run finished|ERROR' | tail -25
+# and the exit code needs its OWN run — a pipeline's $? is the LAST command's:
+./target/debug/defeated_by_titan --headless --script scripts/x.txt --ticks 900 >/dev/null 2>&1; echo $?
+```
+
+**Put this in every commission.** It is the difference between a 200 k round and a 20 k round, and
+it costs nothing in quality — the 21 lines are the whole verdict.
+
+### 🔴 THE SECOND ONE: **never open a big doc to add a line to it**
+
+Measured the same day: `docs/FINDINGS.md` is **108 kB (~27 000 tokens)**, `docs/QUESTIONS.md`
+**68 kB**. Appending an entry with an edit tool means reading the whole file first — so a
+five-agent round paid ~135 000 tokens to add fifty lines.
+
+```bash
+cat >> docs/FINDINGS.md <<'EOF'      # append: costs nothing to read
+...
+EOF
+grep -n '^## FIND-041' docs/FINDINGS.md && sed -n '820,860p' docs/FINDINGS.md   # read ONE entry
+```
+
+Both files carry an explicit append marker at the bottom for this. Same rule for any file over
+~20 kB: **`grep -n` for the anchor, `sed -n 'a,bp'` for the slice.** Never `Read` a 100 kB file to
+change three lines.
+
+### The standing rule: **audit the round's spend before starting the next one**
+
+The user asked for this on 2026-08-12 and it is now part of closing a round, next to the gate:
+
+1. **Where did this round's tokens go?** Name the largest line item, not a feeling.
+2. **Was it necessary?** A bug hunt, a refutation round, a measurement sweep — expensive and worth
+   it. A chore that cost six figures — not.
+3. **Fix the cause, in this file, as a rule** — so it cannot recur. Both entries above came out of
+   exactly this audit, and each was a ~300x and a ~30x saving that had been invisible for a day.
+4. **Measure, do not estimate.** `wc -c` on what agents read, `wc -l` on what they run. Both of the
+   findings above were one `wc` away the whole time.
+
 ### Where the tokens actually went on 2026-08-10, and the seven cheap fixes
 
 Measured against that session, the waste was **not** in the agents doing the work. It was in the

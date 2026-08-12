@@ -354,6 +354,8 @@ pub struct Map {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Layout {
+    /// Edge of one grid cell's BUILT area. With `perimeter: None` that is the footprint of
+    /// the single house on it; with `Some` it is the outer edge of the closed block.
     pub lot_m: f32,
     pub street_m: f32,
     pub min_height_m: f32,
@@ -364,8 +366,36 @@ pub struct Layout {
     pub anchorable_fraction: f32,
     /// Radius around the origin that stays clear.
     pub clear_radius_m: f32,
+    /// How a built cell is filled.
+    ///
+    /// `None` — one detached box that fills the whole lot. That is a suburb: the gap between
+    /// two houses is `street_m` in one direction and `street_m` in the other, and every lot
+    /// is an island.
+    ///
+    /// `Some` — a **closed block perimeter**: a ring of touching row houses around a
+    /// courtyard, which is how a walled old town is actually built (the reference survey
+    /// measures party walls, 12-14 m frontages and 39 % ground coverage). The street then is
+    /// the gap between two rings and it is `street_m` wide, facade to facade, everywhere.
+    ///
+    /// **Explicit, never defaulted** (`docs/conventions.md` §4): a map that forgets to say
+    /// which of the two it is does not silently become a suburb, it fails to load.
+    pub perimeter: Option<Perimeter>,
     /// Allowed color keys out of [`Maps::palette`].
     pub colors: Vec<String>,
+}
+
+/// The closed block: how one grid cell is turned into a ring of touching houses.
+///
+/// The courtyard is `lot_m - 2 * wing_depth_m` on a side and it is a **gap between blocks**,
+/// not a hole cut into one — this world has no subtraction (`docs/FINDINGS.md` FIND-056).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Perimeter {
+    /// Target width of one row house along the street. The run is divided into whole houses,
+    /// so the built width is the nearest divisor of the run — never a gap.
+    pub frontage_m: f32,
+    /// How deep the ring is. `2 * wing_depth_m < lot_m`, or there is no courtyard left.
+    pub wing_depth_m: f32,
 }
 
 /// One explicitly placed box. Origin at the center, like `shared::Block`.
@@ -735,7 +765,48 @@ pub enum ModelSource {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Missions {
+    /// The place the game is played **out of** — the main building (user, 2026-08-12).
+    pub hub: HubLayout,
     pub templates: BTreeMap<String, MissionTemplate>,
+}
+
+/// Where the hub's furniture stands. **Layout, not tuning** — every number here is a place in
+/// meters, and the two *rates* the hub needs (how fast a station fills a tank, how far it
+/// reaches) stay in `gear.ron: resupply`, where they already were.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HubLayout {
+    pub name: String,
+    /// Where a player stands when he enters the hub — at launch and after every sortie.
+    pub spawn_m: (f32, f32, f32),
+    /// How long the verdict stays on screen before the hub takes you back. Seconds in the
+    /// file, ticks in the code (`docs/conventions.md`).
+    pub debrief_s: f32,
+    /// The doors. **One per difficulty** — a game with mouse-look and no cursor cannot offer
+    /// a menu here, so the choice is a place you walk to.
+    pub deployments: Vec<DeploymentPad>,
+    /// Where gas comes back. The **only** thing in the game that ever refills a tank
+    /// (`docs/QUESTIONS.md` Q-033).
+    pub refuel_stations: Vec<StationPad>,
+}
+
+/// One door: which mission at which difficulty, and the circle you have to stand in.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeploymentPad {
+    /// A key in [`Missions::templates`].
+    pub mission: String,
+    /// A key in that template's [`MissionTemplate::difficulties`].
+    pub difficulty: String,
+    pub center_m: (f32, f32, f32),
+    pub radius_m: f32,
+}
+
+/// One refuel station. **Only a place** — `gear.ron: resupply` says how fast and how far.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StationPad {
+    pub center_m: (f32, f32, f32),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -744,14 +815,41 @@ pub struct MissionTemplate {
     pub name: String,
     pub map: String,
     /// The mission arc runs 5–7 min (Bible 5, change 10).
+    ///
+    /// ⚠️ This and the two fields below are the **direct-entry** numbers: what
+    /// `--mission <name>` flies when nobody picked a difficulty at a hub door. A sortie
+    /// deployed out of the hub always flies a [`Difficulty`] instead, and never these.
     pub target_duration_s: f32,
     /// How many titans have to die for `F-071` to flip the mission to `Won`. **⚠️ UNTUNED.**
     /// A number the mission counts to belongs in the file, not in Rust.
     pub kill_target: u32,
     pub waves: Vec<Wave>,
+    /// What a difficulty level **is**: the same three numbers, once per level. The code holds
+    /// only the mechanism (`mission::run::resolve`), so a fourth level is file work.
+    ///
+    /// May be empty — the tutorial has no levels, it is the tutorial. A hub door that names a
+    /// difficulty which is not in here refuses to deploy, loudly.
+    pub difficulties: BTreeMap<String, Difficulty>,
 }
 
+/// One difficulty level of one mission. **A set of numbers, never an `if`** (§4).
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Difficulty {
+    /// What the HUD and the log call it: `Recruit`, `Veteran`, `Elite`.
+    pub name: String,
+    /// The deadline. Longer at the low end — the same fight with more air in it.
+    pub target_duration_s: f32,
+    /// How many cortex kills win it.
+    pub kill_target: u32,
+    /// Which kinds come, when, and how many. **This is the third lever**: an elite sortie is
+    /// not a husk with more hit points, it is more titans and worse ones.
+    pub waves: Vec<Wave>,
+}
+
+// `PartialEq` since 2026-08-12: `mission::run::SortieNumbers` compares two wave lists to say
+// "the difficulty really replaced the template's waves and did not merely tweak a number".
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Wave {
     pub at_s: f32,

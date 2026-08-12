@@ -112,7 +112,10 @@ pub fn objective_text(phase: MissionPhase, tally: Option<&KillTally>) -> Option<
         MissionPhase::Active => Some(format!("{}/{}", tally.total(), tally.target)),
         // The mission exists but has not opened the field: `0/3` before the first tick would be
         // a count of something that cannot have happened yet.
-        MissionPhase::Briefing | MissionPhase::Deploying => None,
+        // `Hub` is here for the same reason (2026-08-12): standing in the main building is not
+        // an objective, and the mission entity is despawned on the way in anyway — so this arm
+        // is the belt to that braces.
+        MissionPhase::Briefing | MissionPhase::Deploying | MissionPhase::Hub => None,
         MissionPhase::Won | MissionPhase::Lost => unreachable!("handled by is_decided above"),
     }
 }

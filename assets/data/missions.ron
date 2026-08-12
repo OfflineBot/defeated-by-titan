@@ -1,10 +1,66 @@
-// missions.ron — mission templates: objectives, phases, spawn waves, reward.
-// A new mission is file work, not Rust (init.md §4).
+// missions.ron — the hub, the mission templates, and the difficulty levels.
+// A new mission, a new door, a new difficulty: file work, not Rust (init.md §4).
 //
-// STATUS: a single template, so that `--mission tutorial` has something to load.
-// A mission arc lasts 5–7 min (bible 5, change 10).
+// The loop the user asked for on 2026-08-12 — „dann fehlt auch noch eine hub! bei der man rum
+// laufen kann und missionen starten kann. das game ist dann eine mission (mit
+// schwierigkeitsleveln)" — is:
+//
+//     hub  ──(walk onto a deployment pad)──►  sortie  ──(WON | LOST)──►  hub
+//
+// ⚠️ Every number in this file is **UNTUNED**. What is laid down is only the SHAPE: a
+// difficulty is a set of numbers, never a branch in the code.
 (
+    // -----------------------------------------------------------------------------------
+    // The hub — the main building. Positions in meters, origin at the player's spawn.
+    // -----------------------------------------------------------------------------------
+    //
+    // ⚠️ The hub has **no building of its own yet**: it is laid out on the map that
+    // `maps.ron: current` builds, and only its pads are placed here. Every coordinate below
+    // therefore has to stay inside `maps.ron: layout.clear_radius_m` (24.0 m for the graybox),
+    // which is the circle the city generator keeps free — and on **+Z**, because the graybox
+    // has an explicitly placed house at (0, 2, −12).
+    hub: (
+        name: "The Rookery",
+
+        // Where you stand: at launch with `--hub`, and again after every sortie. The same
+        // point `player::spawn_local_player` uses, so the two cannot drift apart visibly.
+        spawn_m: (0.0, 2.0, 0.0),
+
+        // How long WON/LOST stays up before the hub takes you back. Long enough to read the
+        // word, short enough that nobody waits for it.
+        debrief_s: 3.0,
+
+        // ---- The doors -----------------------------------------------------------------
+        //
+        // **One pad per difficulty, and no menu.** The game has mouse-look and no cursor
+        // while playing, so choosing a difficulty is a place you walk to and not a click.
+        // `recruit` stands straight ahead of the spawn point —
+        // it is the door you find without looking for it; the two harder ones stand off to
+        // the sides.
+        deployments: [
+            (mission: "skirmish", difficulty: "recruit", center_m: ( 0.0, 0.0, 16.0), radius_m: 3.0),
+            (mission: "skirmish", difficulty: "veteran", center_m: (-9.0, 0.0, 16.0), radius_m: 3.0),
+            (mission: "skirmish", difficulty: "elite",   center_m: ( 9.0, 0.0, 16.0), radius_m: 3.0),
+        ],
+
+        // ---- The gas ------------------------------------------------------------------
+        //
+        // „gas refillt nur im main gebäude an bestimmten stationen/objekten" (user,
+        // 2026-08-12, docs/QUESTIONS.md Q-033). These three points are the whole answer:
+        // there is no regeneration anywhere else in the game, and `Gas::refill` has no other
+        // caller. **How fast and how far stands in `gear.ron: resupply`**, not here — this
+        // file says where the stations are, that file says what a station does.
+        refuel_stations: [
+            (center_m: (  0.0, 0.0, 6.0)),
+            (center_m: (-14.0, 0.0, 6.0)),
+            (center_m: ( 14.0, 0.0, 6.0)),
+        ],
+    ),
+
     templates: {
+        // The drop-in that F-070 and F-071 were built on. It has **no difficulties**: it is
+        // the tutorial, and it is entered with `--mission tutorial`, which walks straight
+        // into the fight and never sees the hub.
         "tutorial": (
             name: "First Ride",
             map: "ashgate",
@@ -18,6 +74,76 @@
                 (at_s:  90.0, kind: "husk",     count: 2),
                 (at_s: 210.0, kind: "scuttler", count: 1),
             ],
+            difficulties: {},
+        ),
+
+        // ★ **The mission the hub flies.** „das game ist dann eine mission (mit
+        // schwierigkeitsleveln)" — so there is one sortie here and three levels of it, not
+        // three missions.
+        "skirmish": (
+            name: "Ashgate Skirmish",
+            map: "ashgate",
+
+            // ⚠️ The three numbers below are the DIRECT-ENTRY shape (`--mission skirmish`
+            // without the hub). Every sortie deployed from a pad flies a `difficulties`
+            // entry instead and never these. They exist because `--mission <name>` is the
+            // door every script and every test in the repository already comes through.
+            target_duration_s: 330.0,
+            kill_target: 3,
+            waves: [
+                (at_s:   0.0, kind: "husk",     count: 2),
+                (at_s: 120.0, kind: "husk",     count: 2),
+                (at_s: 240.0, kind: "scuttler", count: 1),
+            ],
+
+            // ---- What a difficulty changes, and it is exactly three things -------------
+            //
+            //   kill_target        how many cortex kills win it
+            //   target_duration_s  how long you have before the clock loses it for you
+            //   waves              which kinds come, when, and how many
+            //
+            // Nothing else. No hidden multiplier on titan health, no scaling in Rust — a
+            // level nobody can read out of this file is a level nobody can tune.
+            difficulties: {
+                // Two kills, seven minutes, and **nothing at all for the first minute**:
+                // time to fly out, find the ring and pick a target before anything is
+                // looking at you.
+                "recruit": (
+                    name: "Recruit",
+                    target_duration_s: 420.0,
+                    kill_target: 2,
+                    waves: [
+                        (at_s:  60.0, kind: "husk", count: 2),
+                        (at_s: 180.0, kind: "husk", count: 2),
+                    ],
+                ),
+                // The shape F-071 was written against: three kills in five and a half
+                // minutes, and the first pair is already standing when you arrive.
+                "veteran": (
+                    name: "Veteran",
+                    target_duration_s: 330.0,
+                    kill_target: 3,
+                    waves: [
+                        (at_s:   0.0, kind: "husk",     count: 2),
+                        (at_s: 120.0, kind: "husk",     count: 2),
+                        (at_s: 240.0, kind: "scuttler", count: 1),
+                    ],
+                ),
+                // Five kills, five minutes, and the kinds change: `scuttler` is fast and
+                // small (11 m/s, a 0.20 m cortex), `errant` is a husk that keeps up.
+                // That is the difference between "more of them" and "worse ones".
+                "elite": (
+                    name: "Elite",
+                    target_duration_s: 300.0,
+                    kill_target: 5,
+                    waves: [
+                        (at_s:   0.0, kind: "husk",     count: 3),
+                        (at_s:  60.0, kind: "scuttler", count: 2),
+                        (at_s: 150.0, kind: "errant",   count: 3),
+                        (at_s: 240.0, kind: "scuttler", count: 2),
+                    ],
+                ),
+            },
         ),
     },
 )

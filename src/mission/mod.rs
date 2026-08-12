@@ -12,18 +12,27 @@
 //!
 //! | file | what |
 //! |---|---|
-//! | [`phase`] | the five phases, and why a `Resource` is right here and not a breach of rule 4 |
-//! | [`run`] | the clock in ticks, the per-player counter, the wave list |
+//! | [`phase`] | the six phases, and why a `Resource` is right here and not a breach of rule 4 |
+//! | [`run`] | the clock in ticks, the per-player counter, the wave list, template ⊕ difficulty |
+//! | [`hub`] | **the place you play out of** (2026-08-12): deployment pads, refuel stations, the way back |
 //!
 //! ```text
-//! Startup, --mission <name>
+//! Startup
 //!    │
-//!    ├─ Briefing ──► Deploying ──► Active ──┬─ kill_target reached ──► Won
-//!    │  (template)   (entity,      (waves,  │
-//!    │                clock,        kills)  └─ deadline_tick, or every player down ──► Lost
-//!    │                counter)
-//!    └─ no --mission: stays in Briefing, and nothing in this domain ever runs
+//!    ├─ --hub ──► Hub ──(a player stands on a deployment pad)──┐
+//!    │             ▲                                           │
+//!    │             │  hub.debrief_s after the verdict          │
+//!    │             │  (only for a sortie that came from here)  ▼
+//!    ├─ --mission <name> ────────────────► Deploying ──► Active ──┬─ kill_target ──► Won
+//!    │                                     (entity,      (waves,  │
+//!    │                                      clock,        kills)  └─ deadline, or every
+//!    │                                      counter)                 player down ──► Lost
+//!    └─ neither: stays in Briefing, and nothing in this domain ever runs
 //! ```
+//!
+//! **A difficulty is data, not a branch** — `missions.ron: templates.<m>.difficulties` holds
+//! kill target, deadline and waves per level, and [`run::resolve`] is the one place that puts
+//! template and level together (`F-071`, the user 2026-08-12).
 //!
 //! ## The four traps that are paid for here
 //!
@@ -57,18 +66,20 @@
 //! dying") is dropped**: there are no NPCs in this game and no `F-ID` for them anywhere near.
 //! That is why `F-071` cannot go above 🟨 (`docs/PLAN-GAME.md` §8).
 
+pub mod hub;
 pub mod phase;
 pub mod run;
 
 use bevy::prelude::*;
 
-use crate::data::{GameData, MissionTemplate};
+use crate::data::GameData;
 use crate::shared::{
     Cli, Health, HitZone, PlayerId, SimulationSystems, SpawnTitan, Tick, TitanHit,
 };
 
+pub use hub::{DeploymentPoint, RefuelStation, ReturnToHub, Sortie, SortieOrder};
 pub use phase::MissionPhase;
-pub use run::{KillTally, Mission, MissionClock, WaveSchedule};
+pub use run::{resolve, KillTally, Mission, MissionClock, SortieNumbers, WaveSchedule};
 
 pub struct MissionPlugin;
 
@@ -80,12 +91,49 @@ impl Plugin for MissionPlugin {
         // kind of fake switch you first notice in the image (`docs/lessons/bevy.md`).
         // Without `--mission` it simply stays `Briefing` forever.
         app.init_state::<MissionPhase>();
+        // The order of the next sortie. Registered always and empty by default: `deploy` reads
+        // it, and a resource that only exists under one launch mode is a system that panics
+        // under the others.
+        app.init_resource::<Sortie>();
 
         app.add_systems(Startup, begin_mission)
             .add_systems(OnEnter(MissionPhase::Deploying), deploy)
             .add_systems(OnEnter(MissionPhase::Active), open_the_field)
             .add_systems(OnEnter(MissionPhase::Won), announce)
-            .add_systems(OnEnter(MissionPhase::Lost), announce);
+            .add_systems(OnEnter(MissionPhase::Lost), announce)
+            // The hub is furnished on entry and cleared on exit — the clearing is
+            // `DespawnOnExit(MissionPhase::Hub)` on every entity spawned there, so there is no
+            // second system that has to remember to run.
+            .add_systems(OnEnter(MissionPhase::Hub), hub::open_hub);
+
+        // ---- the hub loop ------------------------------------------------------------------
+        //
+        // All three in `PostStep`, and that is the whole ordering story: the trigger has to
+        // read the position **this** tick's integration produced, and the refill has to land
+        // after `vector::gas::gas_budget` (which sits in `Intent`) so that spending and
+        // refilling in one tick have a fixed order instead of a race.
+        app.add_systems(
+            FixedUpdate,
+            (hub::deploy_on_contact, hub::refuel_at_stations)
+                .in_set(SimulationSystems::PostStep)
+                .run_if(in_state(MissionPhase::Hub)),
+        )
+        .add_systems(
+            FixedUpdate,
+            hub::return_to_hub
+                .in_set(SimulationSystems::PostStep)
+                .run_if(a_verdict_has_fallen),
+        )
+        // `Deploying → Active` needs one system, because the hub sets `Deploying` from inside
+        // the running game and a `NextState` set in `OnEnter` is applied a frame later anyway.
+        // At startup this never fires: `begin_mission` walks the chain itself, so the game is
+        // already `Active` before the first tick (`F-070`).
+        .add_systems(
+            FixedUpdate,
+            open_the_gate
+                .in_set(SimulationSystems::PostStep)
+                .run_if(in_state(MissionPhase::Deploying)),
+        );
 
         app.add_systems(
             FixedUpdate,
@@ -116,9 +164,28 @@ impl Plugin for MissionPlugin {
 /// check. Running the schedule twice here costs two passes over five variants at startup and
 /// gives every phase a real `OnEnter`.
 ///
-/// **Without `--mission` this does nothing at all** and the game stays in `Briefing`.
+/// **Without `--mission` and without `--hub` this does nothing at all** and the game stays in
+/// `Briefing`.
+///
+/// `--hub` wins over `--mission`: the hub is where a mission is *chosen*, so naming both is a
+/// contradiction, and the loud half of it is the one the player asked for.
 fn begin_mission(world: &mut World) {
-    let Some(name) = world.resource::<Cli>().mission.clone() else {
+    let start = world.resource::<Cli>().clone();
+
+    if start.hub {
+        if start.mission.is_some() {
+            warn!(
+                "--hub and --mission {:?} were both given — the hub decides which sortie is \
+                 flown, so --mission is ignored",
+                start.mission
+            );
+        }
+        world.resource_mut::<NextState<MissionPhase>>().set(MissionPhase::Hub);
+        world.run_schedule(StateTransition);
+        return;
+    }
+
+    let Some(name) = start.mission.clone() else {
         return;
     };
 
@@ -146,32 +213,62 @@ fn begin_mission(world: &mut World) {
         }
     }
 
+    // The direct drop-in: no difficulty (the template's own numbers) and no way back — see
+    // `hub::ReturnToHub`.
+    world.resource_mut::<Sortie>().0 = Some(SortieOrder {
+        template: name,
+        difficulty: None,
+        from_hub: false,
+    });
+
     for next in [MissionPhase::Deploying, MissionPhase::Active] {
         world.resource_mut::<NextState<MissionPhase>>().set(next);
         world.run_schedule(StateTransition);
     }
 }
 
+/// Whether the sortie has been decided — the condition [`hub::return_to_hub`] hangs on.
+///
+/// A named function and not `in_state(Won).or(in_state(Lost))`: the predicate is
+/// `MissionPhase::is_decided`, it is written down once next to the enum, and a third phase that
+/// counts as a verdict one day changes one line instead of two call sites.
+fn a_verdict_has_fallen(phase: Res<State<MissionPhase>>) -> bool {
+    phase.get().is_decided()
+}
+
+/// `Deploying → Active`, one tick after the hub started a sortie.
+fn open_the_gate(mut next: ResMut<NextState<MissionPhase>>) {
+    next.set(MissionPhase::Active);
+}
+
 /// The mission comes into being: one entity with its clock and its counter.
-fn deploy(mut commands: Commands, start: Res<Cli>, data: Res<GameData>, tick: Res<Tick>) {
-    let Some((name, template)) = chosen(&start, &data) else {
+fn deploy(mut commands: Commands, sortie: Res<Sortie>, data: Res<GameData>, tick: Res<Tick>) {
+    let Some((order, numbers)) = chosen(&sortie, &data) else {
         return;
     };
-    let clock = MissionClock::new(tick.0, template, data.game.simulation_hz);
+    let clock = MissionClock::new(tick.0, numbers.target_duration_s, data.game.simulation_hz);
     info!(
-        "mission {:?} ({}) deployed at tick {} — {} kills in {} ticks ({} s)",
-        name,
-        template.name,
+        "mission {:?} ({}) deployed at tick {} — {} kills in {} ticks ({} s){}",
+        order.template,
+        numbers.name,
         tick.0,
-        template.kill_target,
+        numbers.kill_target,
         clock.duration_ticks,
-        template.target_duration_s
+        numbers.target_duration_s,
+        if order.from_hub { ", out of the hub" } else { "" }
     );
-    commands.spawn((
-        Mission { template: name.to_string(), name: template.name.clone() },
-        clock,
-        KillTally::with_target(template.kill_target),
-    ));
+    let mission = commands
+        .spawn((
+            Mission { template: order.template.clone(), name: numbers.name.clone() },
+            clock,
+            KillTally::with_target(numbers.kill_target),
+        ))
+        .id();
+    if order.from_hub {
+        // The way back, carried by the sortie itself and not by a global flag: `--mission
+        // <name>` came from nowhere and stays on its verdict.
+        commands.entity(mission).insert(ReturnToHub);
+    }
 }
 
 /// The field opens: the waves get their ticks and their places.
@@ -179,8 +276,8 @@ fn deploy(mut commands: Commands, start: Res<Cli>, data: Res<GameData>, tick: Re
 /// `DespawnOnExit(MissionPhase::Active)` is the point of the separate entity — when the verdict
 /// falls, the pending waves stop existing in the same transition, and no titan walks into a
 /// mission that is already over.
-fn open_the_field(mut commands: Commands, start: Res<Cli>, data: Res<GameData>, tick: Res<Tick>) {
-    let Some((_, template)) = chosen(&start, &data) else {
+fn open_the_field(mut commands: Commands, sortie: Res<Sortie>, data: Res<GameData>, tick: Res<Tick>) {
+    let Some((_, numbers)) = chosen(&sortie, &data) else {
         return;
     };
     // The circle the city generator keeps free, so nothing spawns inside a house. Loud when
@@ -197,7 +294,7 @@ fn open_the_field(mut commands: Commands, start: Res<Cli>, data: Res<GameData>, 
             return;
         }
     };
-    let schedule = WaveSchedule::of(template, tick.0, data.game.simulation_hz, ring_m);
+    let schedule = WaveSchedule::of(numbers.waves, tick.0, data.game.simulation_hz, ring_m);
     info!(
         "mission active at tick {}: {} titan(s) queued on a {:.1} m ring",
         tick.0,
@@ -226,14 +323,19 @@ fn announce(
     }
 }
 
-/// The template `--mission` picked. `None` means: no flag, or a name the file does not know —
-/// [`begin_mission`] has already said so loudly.
-fn chosen<'a>(start: &Cli, data: &'a GameData) -> Option<(&'a str, &'a MissionTemplate)> {
-    let name = start.mission.as_deref()?;
-    data.missions
-        .templates
-        .get_key_value(name)
-        .map(|(k, v)| (k.as_str(), v))
+/// The order that is being flown, and the numbers it flies.
+///
+/// `None` means: nothing was ordered, or the file does not know the template or the difficulty
+/// — [`begin_mission`] and [`hub::deploy_on_contact`] have both already said so loudly, and a
+/// half-built mission with a stand-in duration would be worse than none.
+fn chosen<'a>(
+    sortie: &'a Sortie,
+    data: &'a GameData,
+) -> Option<(&'a SortieOrder, SortieNumbers<'a>)> {
+    let order = sortie.0.as_ref()?;
+    let template = data.missions.templates.get(&order.template)?;
+    let numbers = resolve(template, order.difficulty.as_deref())?;
+    Some((order, numbers))
 }
 
 /// Writes a [`SpawnTitan`] for every titan whose tick has come.

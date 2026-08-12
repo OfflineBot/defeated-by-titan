@@ -1,0 +1,170 @@
+# f070-hub — THE LOOP THE GAME DID NOT HAVE, end to end, in one run.
+#
+#   the verdict:  cargo run -q -- --headless --hub --script scripts/f070-hub.txt --ticks 2000
+#
+# ⚠️ `--ticks 2000` is far past this script's own end (~1 200 ticks). A run that is cut off
+# before the script finishes is an ERROR since 2026-08-10 (`docs/FINDINGS.md` FIND-032) — it
+# used to exit 0 with red asserts in its own log. Raising the limit is free; lowering it turns a
+# green feature red for a reason that is not in the game.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT THIS FILE CLAIMS — five things, and every one of them is an `assert`
+#
+#   1. `--hub` starts the game **in the hub**, not in a fight        (`assert phase == 5`)
+#   2. gas comes back **at a station and only there**                (`assert gas` twice, Q-033)
+#   3. walking onto a deployment pad **starts that pad's sortie**    (`assert phase == 2`)
+#   4. the sortie can be **won**                                     (`assert kills`, `phase == 3`)
+#   5. and a won sortie **lands you back in the hub**                (`assert phase == 5`)
+#
+# The phase numbers are `mission::MissionPhase::code`, and 5 was appended and took nobody's
+# number: 0 Briefing · 1 Deploying · 2 Active · 3 Won · 4 Lost · **5 Hub**.
+#
+# ---------------------------------------------------------------------------------------
+# THE GEOMETRY — where the hub's furniture stands, and why the player walks +Z
+#
+# `assets/data/missions.ron: hub` puts everything on **+Z**, because the graybox has an
+# explicitly placed house at (0, 2, −12) and the player spawns at (0, 2, 0) looking −Z. So the
+# first thing this script does after burning its gas is turn around: `look 180 0`, and
+# `forward = (−sin yaw, 0, −cos yaw)` makes yaw 180 the +Z axis (the sign lesson of
+# `scripts/f-flight-cut.txt`, which cost that file nine red asserts).
+#
+#   refuel station   (0, 0,  6)   reach 4.0 m   `gear.ron: resupply.range_m`
+#   recruit pad      (0, 0, 16)   radius 3.0 m  straight ahead of the spawn point
+#   veteran pad     (−9, 0, 16)   elite pad (9, 0, 16)  — off to the sides, not on this line
+#
+# `game.ron: player.run_speed_m_s` is 6.0, so a second of `key W` is about six metres. The two
+# walks are deliberately loose: what proves the player arrived is not arithmetic but the assert
+# on the other side of the trigger — `gas > 299` for the station, `phase == 2` for the pad.
+#
+# ---------------------------------------------------------------------------------------
+# ⚠️ WHAT THIS FILE DOES **NOT** CLAIM
+#
+# - **Not a hub you can look at.** The hub has no building of its own: it is three amber pads
+#   and three cyan ones laid out on whatever map `maps.ron: current` builds. There is no
+#   picture in this run and none is claimed — it is `--headless`.
+# - **Not a cut a human could land.** The two kills are the fall-cut of
+#   `scripts/f030-cortex.txt`, arranged by arithmetic: `warp` to 18.5 m, fall, and the blade
+#   passes a husk standing 1.75 m to the side. Both husks are **spawned by the script**, and
+#   that is honest rather than convenient: a wave titan stands on a 24 m ring and no script can
+#   aim at one. What the mission counts is a cortex kill, and it does not care who put the
+#   titan there.
+# - **Not the difficulty being felt.** `recruit` was chosen because it needs two kills; that the
+#   three levels differ is `tests/mission.rs::
+#   f072_the_difficulty_and_not_the_template_decides_the_numbers`, not this run.
+# - **Not multiplayer.** One player walks onto the pad and one squad deploys. The rule that any
+#   player deploys everyone is written down in `mission::hub` and has never had two players
+#   standing in a hub to prove it.
+
+wait 1.5              # the world, the pads and the render pipelines come up (90 ticks)
+
+assert phase == 5     # ⭐ 1. the game starts in the HUB
+assert gas > 299      # a full tank: 300.0 out of game.ron
+assert titans == 0    # a hub is not a fight
+mark f072-in-the-hub
+
+# =========================================================================================
+# ACT 1 — the gas. It only comes back at a station, and this is what that looks like.
+# =========================================================================================
+#
+# Burning it first, because "the tank is full" proves nothing about a refill. `look 180 -89`
+# points the boost almost straight into the ground: `boost_m_s2` is 34, and at 89 degrees the
+# horizontal share of it is 1.7 %, so the player burns 18 gas/s standing where he is instead of
+# sliding across the hub on the way to the station.
+
+look 180 -89
+key Shift 2.0         # BOOST (src/net/local.rs) — 2 s at gas_boost_per_s 18.0 = 36 gas
+wait 2.3
+
+assert gas < 285      # the tank really emptied: 300 − 36 = 264, and nothing refilled it while
+assert gas > 200      # it was being spent
+mark f072-gas-burnt
+
+look 180 0            # +Z — toward the station and the pads
+key W 1.3             # ~7 m: into the station's 4 m reach around (0, 0, 6)
+wait 1.6              # gear.ron: resupply.gas_per_s 40.0 — a second and a half covers 36
+
+assert gas > 299      # ⭐ 2. gas came back, at a station, and the tank is full again
+mark f072-refuelled
+
+# =========================================================================================
+# ACT 2 — the door. A trigger volume you walk into, not a click.
+# =========================================================================================
+#
+# There is no cursor while playing (`menu`, `P4`), so the difficulty is a place: three pads,
+# one per level. This one is `recruit` — two kills, seven minutes, first wave at 60 s.
+
+key W 1.6             # ~9 m further, onto the pad at (0, 0, 16), radius 3.0
+wait 2.0              # ⚠️ LONGER than the key is held. `key` does not block: the script runs
+                      # on in the same tick, and the first version of this file asserted after
+                      # 0.6 s of a 1.6 s walk — the player was 5 m short of the pad and the run
+                      # said "the hub does not deploy".
+
+assert phase == 2     # ⭐ 3. ACTIVE — the pad started its sortie
+assert kills == 0     # and nothing has been counted yet
+assert titans == 0    # recruit's first wave is at 60 s: the field is still empty
+mark f072-deployed
+
+# =========================================================================================
+# ACT 3 — the sortie. Two cortex cuts, out of a fall, exactly as scripts/f030-cortex.txt.
+# =========================================================================================
+#
+# Why the player falls instead of flies: `gear.ron: blades.min_speed_m_s` is 8.0 and a running
+# player does 6.0, so a cut needs speed the legs cannot give. Gravity can, and it is
+# reproducible to the tick — 11.2 m of fall is 21 m/s. Why x = 15.75: the husk's body capsule
+# is 1.25 m and the player's 0.35 m, so 1.75 m to the side is 0.15 m of air, and the 1.6 m
+# blade reaches 0.15 m into a cortex sphere centred on x = 17.5.
+
+# ⚠️ The 0.90 between the warp and the slash is the fall, and it is **not adjustable**: the
+# first version of this file put an `assert titans == 1` and a `wait 0.1` in between, the player
+# fell one tenth of a second further, and the blade went past under the nape. The husk lived,
+# the mission was never won, and nothing in the log said "you missed" — it said `titans == 1`.
+# Whoever adds a line inside this block moves the cut.
+spawn titan husk 17.5 0 0
+warp 15.75 18.5 0.8
+look 0 0
+wait 0.90
+slash right 0.40
+wait 0.18
+assert titans == 1    # the blade is through him and the body is still dissolving
+wait 1.20
+assert titans == 0    # death_s 1.0: the body is gone a second after the nape was cut
+assert kills == 1     # ⭐ and the MISSION counted it
+mark f072-first-kill
+
+spawn titan husk 17.5 0 0
+warp 15.75 18.5 0.8
+look 0 0
+wait 0.90
+slash right 0.40
+wait 1.45
+
+assert kills >= 2     # ⭐ 4. the recruit target out of missions.ron is reached
+assert titans == 0
+wait 0.2
+assert phase == 3     # WON
+mark f072-won
+
+# =========================================================================================
+# ACT 4 — the way back. This is the half that did not exist before 2026-08-12.
+# =========================================================================================
+#
+# `missions.ron: hub.debrief_s` is 3.0 s: the verdict stays up long enough to read, then the
+# hub takes you back and puts you at its spawn point — which is also what stops the pad you
+# deployed from re-deploying you the moment you land.
+
+# MEASURED, 2026-08-12: the second cortex cut lands at t=656, the verdict is decided at 657,
+# and the hub takes over at 838 — 180 ticks = the 3.0 s of `hub.debrief_s`, to the tick. The
+# check below therefore stands at ~t=800 (still WON) and the one after it at ~t=920 (hub). The
+# first version of this file waited 2.0 s here, landed at t=873 and read the hub — a red assert
+# that was measuring the script's own arithmetic and not the game's.
+wait 0.8
+assert phase == 3     # still WON: the debrief is not cut short
+wait 2.5
+
+assert phase == 5     # ⭐ 5. back in the HUB. The loop is closed.
+assert height < 3     # standing on the ground at the spawn point, not 14 m up over a husk
+assert titans == 0
+mark f072-home
+
+wait 0.5
+assert phase == 5     # and standing there does not deploy him again

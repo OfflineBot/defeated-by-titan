@@ -381,6 +381,181 @@ fn f003_the_grid_houses_stay_in_the_height_window_from_the_file() {
     );
 }
 
+#[test]
+fn f003_the_street_is_narrower_than_the_houses_are_tall() {
+    // ★ The one proportion the district lives or dies by, and the reason `layout.perimeter`
+    // exists. The survey of the real walled town this district is modelled on gives
+    // **street : ridge = 8.1 : 13 = 0.62 : 1** — the house is 1.6x as tall as the street is
+    // wide, and that is what makes `d < H` (FIND-041) hold from one roof to the next.
+    //
+    // Before the closed block, this map put one 21 m box in the middle of a 28 m cell and
+    // one cell in four stayed empty: the median gap from facade to facade was **21 m**
+    // against an 8 m house — 2.6 : 1, a business park, and the reason the gantry lane had to
+    // be invented (FIND-058).
+    //
+    // Measured here, not asserted from a comment: for every generated house, the gap to the
+    // next generated house along +x and along +z whose other axis overlaps. That is exactly
+    // what a street sample is.
+    let d = data();
+    let map = d.current_map().expect("current map");
+    let plan = plan();
+    let houses = &plan[map.blocks.len()..];
+    assert!(houses.len() > 100, "only {} generated houses — is this the district?", houses.len());
+
+    let span = |c: f32, s: f32| (c - s * 0.5, c + s * 0.5);
+    let mut gaps: Vec<f32> = Vec::new();
+    let mut ratios: Vec<f32> = Vec::new();
+    let mut broken = 0usize;
+    for a in houses {
+        for axis in 0..2 {
+            let (a_lo, a_hi) = if axis == 0 {
+                span(a.center_m.x, a.size_m.x)
+            } else {
+                span(a.center_m.z, a.size_m.z)
+            };
+            let (a_olo, a_ohi) = if axis == 0 {
+                span(a.center_m.z, a.size_m.z)
+            } else {
+                span(a.center_m.x, a.size_m.x)
+            };
+            let mut best: Option<&BlockPlan> = None;
+            for b in houses {
+                let (b_lo, _) = if axis == 0 {
+                    span(b.center_m.x, b.size_m.x)
+                } else {
+                    span(b.center_m.z, b.size_m.z)
+                };
+                let (b_olo, b_ohi) = if axis == 0 {
+                    span(b.center_m.z, b.size_m.z)
+                } else {
+                    span(b.center_m.x, b.size_m.x)
+                };
+                // Facing each other means: the other axis really overlaps. Two houses that
+                // share a corner are not a street.
+                if b_lo < a_hi - 1e-3 || a_olo >= b_ohi - 1e-3 || b_olo >= a_ohi - 1e-3 {
+                    continue;
+                }
+                let take = match best {
+                    None => true,
+                    Some(k) => {
+                        let (k_lo, _) = if axis == 0 {
+                            span(k.center_m.x, k.size_m.x)
+                        } else {
+                            span(k.center_m.z, k.size_m.z)
+                        };
+                        b_lo < k_lo
+                    }
+                };
+                if take {
+                    best = Some(b);
+                }
+            }
+            let Some(b) = best else { continue };
+            let (b_lo, _) = if axis == 0 {
+                span(b.center_m.x, b.size_m.x)
+            } else {
+                span(b.center_m.z, b.size_m.z)
+            };
+            let gap = b_lo - a_hi;
+            // A gap wider than the hook can swing over is not a street, it is a field: the
+            // wall boulevard, the field outside, the market square. Those are deliberate
+            // (see the two dead zones below) and they must not be averaged into the street.
+            // Below 1 m it is a **party wall**, not a street — two row houses of the same
+            // run touch, and counting that as a 0 m street would make the median meaningless
+            // in the flattering direction. Above 25 m it is not a street either but a field:
+            // the wall boulevard, the market square, the open country outside the gate.
+            // Those are deliberate and they must not be averaged into the canyon.
+            if gap > 25.0 {
+                // Not a street but a field, and every one of these is a **hole in the
+                // frontage**: the house looks out at open ground instead of at the house
+                // opposite. Counted, because this — and not the width of the street — is
+                // what the old layout really got wrong.
+                broken += 1;
+                continue;
+            }
+            if gap < 1.0 {
+                // A party wall, not a street. Counting two touching row houses as a 0 m
+                // street would make the median meaningless in the flattering direction.
+                continue;
+            }
+            gaps.push(gap);
+            ratios.push(gap / a.size_m.y.min(b.size_m.y));
+        }
+    }
+
+    let median = |v: &mut Vec<f32>| {
+        v.sort_by(f32::total_cmp);
+        v[v.len() / 2]
+    };
+    assert!(gaps.len() > 200, "only {} street samples", gaps.len());
+    let n = gaps.len();
+    let gap_m = median(&mut gaps);
+    let ratio = median(&mut ratios);
+    eprintln!(
+        "{} generated houses · {n} street samples, median gap {gap_m:.2} m, median \
+         street : ridge {ratio:.2} : 1 · {broken} facades look at open ground",
+        houses.len()
+    );
+    assert!(
+        broken * 3 < n,
+        "{broken} of {} samples are a facade with no facade opposite — a frontage with that \
+         many holes in it is not a street, and the arc has nothing to run between",
+        broken + n
+    );
+
+    assert!(
+        gap_m <= 9.0,
+        "median gap from facade to facade is {gap_m:.2} m — the survey says 8.1"
+    );
+    assert!(
+        ratio < 1.0,
+        "median street : ridge is {ratio:.2} : 1 — above 1.0 the rope has no arc between two \
+         houses, and the map needs scaffolding again (FIND-058)"
+    );
+}
+
+#[test]
+fn f003_no_anchorable_block_has_another_block_sitting_on_its_roof_centre() {
+    // ★ `FIND-059`: 28 of ashgate's tagged row houses were built as body + a **narrower,
+    // untagged ridge cap** standing exactly on the centre of the body's roof. The highest
+    // point a player sees and aims at therefore answered `NoAnchor`, and
+    // `tests/vector_aiming.rs::f002_every_tagged_surface_in_the_map_is_reachable_by_free_aiming`
+    // had to be pinned to the graybox because of it.
+    //
+    // That test measures with a real ray and can only run where its premise holds. This one
+    // is the premise, as geometry, over whatever map `current` names: **a tagged surface
+    // nothing can reach from above is a lie in the map**, and a lie you can only find by
+    // playing is one nobody finds.
+    let d = data();
+    let map = d.current_map().expect("current map");
+    let plan = plan();
+
+    let mut capped: Vec<String> = Vec::new();
+    for a in plan.iter().filter(|k| k.anchorable) {
+        let a_top = a.center_m.y + a.size_m.y * 0.5;
+        for b in &plan {
+            if std::ptr::eq(a, b) {
+                continue;
+            }
+            let half = b.size_m * 0.5;
+            // Straight over the centre of the roof, and higher than it.
+            let over = (b.center_m.x - a.center_m.x).abs() < half.x
+                && (b.center_m.z - a.center_m.z).abs() < half.z
+                && b.center_m.y + half.y > a_top + 1e-3;
+            if over {
+                capped.push(format!("{} is capped by {}", a.name, b.name));
+                break;
+            }
+        }
+    }
+    assert!(
+        capped.is_empty(),
+        "{} of {} anchorable blocks cannot be hooked at their roof centre: {capped:#?}",
+        capped.len(),
+        plan.iter().filter(|k| k.anchorable).count()
+    );
+}
+
 // ---------------------------------------------------------------------------------------
 // T-036a / B-001 — the index, and the ids without which nothing can be hooked
 // ---------------------------------------------------------------------------------------
@@ -605,3 +780,4 @@ fn t036a_a_body_spawned_late_is_taken_in_and_stands_right_one_tick_later() {
     assert_eq!(settled.half_size_m, Vec3::splat(3.0));
     assert_eq!(app.world().resource::<SpatialIndex>().len(), before + 1, "and not inserted twice");
 }
+

@@ -58,12 +58,35 @@ use defeated_by_titan::shared::{
 };
 use defeated_by_titan::vector::boost::{boost_direction, rope_dir};
 
-/// Builds the **real** app, headless, one simulation step per `update()`.
-fn app() -> App {
+/// Builds the **real** app, headless, one simulation step per `update()`, on the map named
+/// here — **not** on whatever `maps.ron: current` happens to say.
+///
+/// Every test in this file flies a second player 200 m above the city and measures an
+/// acceleration, a clamp or a gas cost. None of them is a claim about a district — but a
+/// flier only touches nothing as long as nothing is up there, and the free volume over the
+/// origin belongs to the level design. On 2026-08-12 `current` moved to `ashgate` and
+/// [`f007_the_boost_does_not_outrun_the_top_speed`] measured 0.0000 m/s instead of the clamp,
+/// without a line of `vector::boost` having changed. So the map is pinned.
+///
+/// `GameData` is inserted by `data::DataPlugin` during `add_plugins`, i.e. **before** the
+/// first `update()` runs `Startup` — and `world::map::build_map` takes the name out of the
+/// resource, not out of the file. That is the seam; it needed nothing new.
+fn app_on(map: &str) -> App {
     let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
     app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    app.world_mut().resource_mut::<GameData>().maps.current = map.to_string();
+    assert!(
+        app.world().resource::<GameData>().current_map().is_some(),
+        "maps.ron lists no map {map:?} — a typo here builds an empty world and every \
+         assertion below turns into `nothing hit`"
+    );
     app.update(); // Startup: the city and the local player come into being
     app
+}
+
+/// The graybox — the map every number in this file was measured in.
+fn app() -> App {
+    app_on("graybox")
 }
 
 fn ticks(app: &mut App, n: u64) {

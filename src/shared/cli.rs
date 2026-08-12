@@ -23,6 +23,14 @@ pub struct Cli {
     pub sandbox: bool,
     /// Straight into a mission, no menu.
     pub mission: Option<String>,
+    /// **Start in the hub** — the main building you walk around in and start missions from
+    /// (user, 2026-08-12). Wins over [`Cli::mission`]: the hub is where a sortie is *chosen*.
+    ///
+    /// A flag and not the default, deliberately: making a plain `cargo run` land in the hub
+    /// would put live trigger volumes into every one of the thirty scripts in `scripts/` that
+    /// name no mission — and none of them could be re-run in this session to find out what
+    /// that does to them.
+    pub hub: bool,
     /// One run from a text file (§12b). With `assert` it becomes a test.
     pub script: Option<PathBuf>,
     /// For measuring. Under vsync every frame time is 16.6 ms — so "what does this cost?"
@@ -77,6 +85,7 @@ impl Cli {
                 "--headless" => s.headless = true,
                 "--offscreen" => s.offscreen = true,
                 "--sandbox" => s.sandbox = true,
+                "--hub" => s.hub = true,
                 "--novsync" => s.novsync = true,
                 "--reexport" => s.reexport = true,
                 "--no-export" => s.no_export = true,
@@ -164,6 +173,18 @@ mod tests {
         assert_eq!(s.lag_ms, 200);
         assert_eq!(s.ticks, 600);
         assert!(s.unknown.is_empty(), "unexpected: {:?}", s.unknown);
+    }
+
+    #[test]
+    fn the_hub_is_a_door_of_its_own_and_needs_no_mission_name() {
+        // The hub picks the mission at a pad, so `--hub` carries no value. Without this arm
+        // the flag lands in `unknown`, the run prints "unknown launch arguments" and starts in
+        // `Briefing` — a game that looks like it ignored you.
+        let s = parse(&["--headless", "--hub"]);
+        assert!(s.hub);
+        assert!(s.mission.is_none(), "--hub names no mission");
+        assert!(s.unknown.is_empty(), "unexpected: {:?}", s.unknown);
+        assert!(!parse(&["--headless"]).hub, "no flag, no hub");
     }
 
     #[test]

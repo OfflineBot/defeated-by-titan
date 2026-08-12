@@ -23,7 +23,15 @@
 // the explicitly placed boxes stood above it with 12, 14 and 18 m of ridge height.
 (
     // Which map gets built at startup. Has to appear in `maps` (tests/data.rs).
-    current: "graybox",
+    // ⚠️ **"ashgate" since 2026-08-12** (`scripts/f003-ashgate.txt`: 25 asserts, 1336 ticks,
+    // `docs/images/f003-ashgate.png`). Before the flip, every test that built an app built
+    // whatever stands here — `tests/vector_aiming.rs` therefore pins its map per test now
+    // (`app_on("graybox")`) instead of inheriting this line, and `--test vector_aiming`,
+    // `world`, `data`, `mission` are green with it.
+    // **What still warps into GRAYBOX coordinates: `scripts/game-full.txt`** — 5 of its 23
+    // asserts fail here (ACT 1 hooks a watchtower ashgate has no equivalent of); it was NOT
+    // loosened, see `docs/FINDINGS.md` FIND-059. Check any other script before quoting it.
+    current: "ashgate",
 
     // The one color atlas for the entire environment (bible 3.4: minimal draw calls).
     // Linear RGB. **None of the three signal colors** (cyan, amber, crimson) — those are
@@ -106,6 +114,11 @@
                 // Radius around the origin that stays clear: that is where the player
                 // stands at startup, and scripts/t007-first-run.txt runs 6 m along -Z.
                 clear_radius_m: 24.0,
+                // `None` = one detached box per lot, and the graybox keeps it deliberately.
+                // Eight tests in tests/vector_aiming.rs are pinned to THIS world as a
+                // fixture (FIND-059); the closed-block layout is Ashgate's, and the `None`
+                // arm in world/map.rs is byte-for-byte the generator these tests grew up on.
+                perimeter: None,
                 colors: ["stone_gray", "brick_red", "sand_brown"],
             ),
 
@@ -280,6 +293,454 @@
                 (center_m: (140.0, 28.0, 56.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
                 (center_m: (140.0, 28.0, 84.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
                 (center_m: (140.0, 58.0, 70.0), size_m: (8.0, 4.0, 36.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+            ],
+        ),
+
+        // ================================================================================
+        // ASHGATE — the walled district. `assets/data/missions.ron` has named
+        // `map: "ashgate"` since the first mission existed; until 2026-08-12 the map did not
+        // exist and every run fell back to `current` with a warning out of
+        // `src/mission/mod.rs:140`. This entry closes that.
+        //
+        // The user, 2026-08-12: „die map muss gebaut werden! mit grosser wand. [...] mit
+        // wand. haeuser, verschiedene hoehen (nicht alles plain flach) etc! erstelle auch
+        // die tuerme. den fluss der durch geht. es sollte moeglichst akkurat sein!"
+        //
+        // ⚠️ **`current` is deliberately still "graybox".** Switching is ONE line up at the
+        // top of this file — but every script under `scripts/` warps into graybox
+        // coordinates (`f004-towers.txt` hooks the gate towers at z = 70) and every test
+        // that builds an app builds `current`. Flipping it is the main head's call, not a
+        // side effect of this map existing. The evidence run for this map sets it:
+        // `scripts/f003-ashgate.txt` says so in its first line.
+        //
+        // ## The layout, and why it is this shape
+        //
+        // A district that juts OUT through the main wall, not a town sitting behind it:
+        //
+        //     z = +350 ..  -97.5   the district — dense grid housing, the market square,
+        //                          the church, the canal, the gantry lane
+        //     z = -120             the MAIN WALL, running the full 700 m across the map
+        //     z = -142.5 .. -277.5 the pocket: the part of the district that sticks out
+        //                          past the wall, flanked by walls at x = +-120
+        //     z = -300             the OUTER WALL with the outer gate
+        //     beyond               open field. Titan side.
+        //
+        // **Two gates on one axis:** outer gate (0, .., -300) and inner gate (0, .., -120),
+        // both 28 m wide and 20 m tall, and the straight line between them is the main
+        // street — it runs from z = -277.5 through the whole district up to z = +250.
+        //
+        // **The canal runs through the district and through BOTH walls** at x = -70: a
+        // 16 m channel 4 m below the paving, with 8 m quays either side, six bridges, and a
+        // water gate 12 m tall where it crosses each wall.
+        //
+        // ## Where the geometry comes from
+        //
+        // Everything vertical is `assets/data/scale.ron` and nothing is invented:
+        // wall 120 m, battered 45 m at the base to 28 m at the top, one course per 15 m
+        // `band_spacing_m` (eight of them), a plinth 0..2 m at exactly 45.0 and a coping
+        // 118..120 m at exactly 28.0 so the user's two numbers physically exist at the two
+        // heights he named them for. Platform at 60 m. Watchtowers 12 m — `scale.ron` calls
+        // them "standing on the wall", and that is where they stand. Church 35 m. Trees
+        // 12 m. Grid housing 4.5 .. 11.5 m, street 7 m.
+        //
+        // **The one height that is NOT from `scale.ron`: the 56 m gantry columns and their
+        // 60 m beam.** Same number and same shape as the graybox swing lane, and it carries
+        // the same open question — `scale.ron` names no structure above the church.
+        // docs/QUESTIONS.md Q-022/Q-023. Rolling it back is the gantry block below.
+        //
+        // ## THE ARITHMETIC THAT DECIDES WHETHER THIS MAP IS ANY GOOD
+        //
+        // `docs/FINDINGS.md` FIND-041: a rope swings only while `L < H` — anchor height H,
+        // rope length L at the moment of the hook, arc bottom `H - L`, and `L >= d`. So
+        //
+        //     the horizontal gap to the next anchor must be SMALLER than its height.
+        //
+        // 200 m of `hook_range_m` does not change that by one metre. And FIND-042: the
+        // bottom of a pendulum lies vertically UNDER its anchor, so an anchor over solid
+        // ground ends the swing inside the thing you hang from. Every anchor below that is
+        // meant to be swung on hangs over open ground. What that buys, route by route:
+        //
+        //   * **the gantry lane**, 14 stations at 35 m pitch along the main street, beam
+        //     top 60 m: level hook L = 35, arc bottom 60 - 35 = **25 m**, i.e. 13.5 m of air
+        //     over the 11.5 m roofs, and the descent gives sqrt(2*20*35) = **37.4 m/s**.
+        //     Ten of them run unbroken from z = 227.5 to z = -87.5 — **315 m, nine legs.**
+        //     Four more stand in the pocket (z = -157.5 .. -262.5, three legs).
+        //   * **the wall gallery**, a 700 m anchorable ledge at 60 m that projects 14 m out
+        //     over the boulevard: ANY gap under 60 m swings, the player picks his own
+        //     spacing, and the arc bottom lands on the cleared strip and not on a roof.
+        //   * **gallery <-> lane**: the last gantry (z = -87.5) is 25.5 m from the gallery
+        //     edge (z = -87.6) — 25.5 < 60, so the lane joins the wall.
+        //   * **the church (35 m)** to the beam of the gantry beside it: d = 20.5, u = 23,
+        //     L = 30.8, arc bottom 60 - 30.8 = **29 m**. The church is a perch, not a swing
+        //     anchor of its own (FIND-029: a swing that runs its course on a solid tower
+        //     ends against its face).
+        //   * **the crown corbels at 120 m** project 6 m past the wall face on both sides,
+        //     so the one anchor at crown height hangs over open air — and it is the only
+        //     one a rope from the district can see past the battered face.
+        //   * **NOT swingable, on purpose:** the 12 m watchtowers and the 12 m trees
+        //     (d < 12 puts the arc bottom on the pavement) and the whole residential stock.
+        //     They are perches and hook targets, not lanes.
+        //   * **The wall is a barrier and it is meant to be.** From the last inner gantry to
+        //     the first pocket one is 70 m > 60, so the two lanes do not join over the wall:
+        //     you take the gate at street level, or you climb — ground -> gallery (60 m) ->
+        //     crown corbel (120 m), two moves, both legs well inside the 200 m range.
+        //
+        // ## The river, in a game that has no water
+        //
+        // Graybox: a lowered channel, its own colour, `anchorable: false` — a hook into the
+        // water would be the one thing worse than no river. The **bridges are anchorable**,
+        // which makes the crossings the only hook targets over the channel and turns the
+        // canal into what it is in the reference: a gap in the roof network that costs you
+        // something to cross.
+        //
+        // ## How a hole gets into a box world
+        //
+        // There is no subtraction here, so the channel is the GAP BETWEEN two ground slabs,
+        // and everything that has to stay free of grid housing is an **apron**: a 0.3 m slab
+        // whose top edge sits 0.05 m above the ground. `world/map.rs` drops a generated lot
+        // whole as soon as a placed block overlaps it, and 0.05 m of overlap is enough. That
+        // is what keeps the field outside the wall empty, the main street open, the market
+        // square a square and the boulevard along the wall clear — and it is why the quays
+        // are 0.4 m high: a 21 m lot cannot fit into the 16 m gap between them, so no house
+        // is ever rolled over the water.
+        //
+        // ⚠️ UNTUNED, like every other footprint in this file. What is NOT untuned: every
+        // height listed above, `street_m`, `min_height_m`, `max_height_m` — those come out
+        // of `scale.ron` and thus from the user, and `tests/data.rs` falls over if they
+        // leave the window.
+        // ================================================================================
+        "ashgate": (
+            name: "Ashgate",
+            // 700 x 700 m. The guard is `half_extent_m >= longest_edge/2 + hook_range_m`
+            // (tests/data.rs): 350 + 200 = 550 against 600. 800 would fit exactly and leave
+            // nothing over; the 50 m of margin are worth more than 100 m of empty field.
+            size_m: (700.0, 700.0),
+            seed: 3405691582,
+
+            layout: (
+                // ## The proportion, and it is the only thing about this quarter that is
+                // ## measured rather than chosen.
+                //
+                // Survey of the real walled town the district is modelled on (1 344
+                // buildings, 4 100 street samples): street width facade to facade **8.1 m**
+                // pooled median (7.7 residential), ridge height **11-13 m** for the two
+                // storeys that are 68 % of the stock, **13.1 m** median longest wall,
+                // **39 %** ground coverage, **~24** buildings per hectare, and buildings
+                // that **touch** — party walls, closed block perimeters, courtyards inside.
+                // Street : ridge is therefore **0.62 : 1**, and the inverse is the rule:
+                // **a house is about 1.6x as tall as the street is wide.**
+                //
+                // Until 2026-08-12 this map built a 21 m box in the middle of a 28 m cell,
+                // so the gap from facade to facade was 7 m in the best case and 35 m as soon
+                // as one lot in three stayed empty — a suburb, and the reason the gantries
+                // had to be invented (FIND-058).
+                //
+                //   lot_m 36 = the OUTER edge of a closed block, not a house
+                //   + street_m 7 = block pitch **43 m** (survey 60, build target 40-45)
+                //   courtyard 36 - 2*11 = **14 m**
+                //   street 7 m against a 8..11.5 m ridge = **0.61 .. 0.88 : 1**
+                lot_m: 36.0,
+                // 7.0 and not 8.0: `scale.ron: reference.min_street_m/max_street_m` is
+                // 6..8 and the survey's residential median is 7.7. 7 m against the 11.5 m
+                // ridge is 0.61 : 1 — the measured proportion, to two digits.
+                street_m: 7.0,
+                // 4.5 -> 8.0. The survey counts storeys: 2 storeys 167 buildings,
+                // 3 storeys 65, **1 storey 9**. A one-storey house is 4 % of the stock, and
+                // in a 7 m street a 4.5 m house is a 1.6 : 1 clearing, not a canyon. So the
+                // band is `house_town` (8.0) .. `house_large` (11.5) out of scale.ron — both
+                // the user's numbers, neither invented, and 3.5 m of spread is a real old
+                // town's roofline rather than a sawtooth.
+                min_height_m: 8.0,
+                max_height_m: 11.5,
+                // 0.72 -> 0.78. The draw is now per BLOCK, not per house: a cell is either a
+                // closed ring or an open yard, and 0.78 of 43 x 43 m cells at 59.5 % built
+                // area inside a ring gives **46 %** coverage over the built-up quarters,
+                // which the aprons (field, main street, square, boulevard, quays) pull down
+                // to the surveyed ~39 % over the walled area. Higher and the town has no
+                // yards at all; lower and single blocks start standing alone again.
+                density: 0.78,
+                // 0.55 -> 0.85. With the roofscape as the route, a roof you cannot hook is a
+                // hole in the route and not a detail. 15 % untagged is still enough that
+                // F-003 ("no hook on an untagged part") is checkable in this map.
+                anchorable_fraction: 0.85,
+                clear_radius_m: 24.0,
+                // The closed block: a ring of touching row houses around a courtyard.
+                perimeter: Some((
+                    // 12 m of frontage. Survey median longest wall 13.1 m (p25 10.9,
+                    // p75 16.7); 12 divides 36 into three whole houses with no remainder,
+                    // and a remainder would be a gap in the perimeter.
+                    frontage_m: 12.0,
+                    // 11 m deep — survey ordinary house 11 x 13 m. It is also what fixes the
+                    // courtyard at 14 m: `d < H` wants the courtyard under the 11.5 m ridge,
+                    // and 36 - 2*11 = 14 is the last width that still qualifies.
+                    wing_depth_m: 11.0,
+                )),
+                colors: ["stone_gray", "brick_red", "sand_brown"],
+            ),
+
+            blocks: [
+
+                // ---- Ground, canal and paving ------------------------------------------
+                // the two ground slabs. The gap between them is the channel, and that is the only
+                (center_m: (-217.5, -0.1, 0.0), size_m: (265.0, 0.2, 700.0), color: "sand_brown", anchorable: false, solid: true, landmark: false),
+                // way to get a hole into a box world: leave it out. **Sand, not green: the ground BETWEEN
+                (center_m: (147.5, -0.1, 0.0), size_m: (405.0, 0.2, 700.0), color: "sand_brown", anchorable: false, solid: true, landmark: false),
+                // the channel floor 4 m down — no water in this game, so the river is a lowered lane.
+                // ⚠️ 16 -> 10 m of channel, and it is not taste. The quays are what deletes a grid
+                (center_m: (-70.0, -4.1, 0.0), size_m: (10.0, 0.2, 700.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                // house standing over the water, and since 2026-08-12 that test runs per HOUSE and not
+                (center_m: (-80.0, -1.8, 0.0), size_m: (10.0, 4.4, 700.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                // per cell: a 12 x 11 m row house fits into a 16 m gap and would hang in the air over
+                // the channel. It does not fit into 10. The quays are 10 m for the same arithmetic.
+                (center_m: (-60.0, -1.8, 0.0), size_m: (10.0, 4.4, 700.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                // the lots IS the street network, and a green one made the district read as houses on a lawn. Green stays outside the wall, where it is a field.
+                (center_m: (0.0, -0.1, -336.25), size_m: (700.0, 0.3, 27.5), color: "olive_green", anchorable: false, solid: true, landmark: false),
+                (center_m: (-235.0, -0.1, -232.5), size_m: (230.0, 0.3, 180.0), color: "olive_green", anchorable: false, solid: true, landmark: false),
+                (center_m: (235.0, -0.1, -232.5), size_m: (230.0, 0.3, 180.0), color: "olive_green", anchorable: false, solid: true, landmark: false),
+                // the boulevard along the wall: the cleared strip the wall gallery swings over
+                (center_m: (0.0, -0.1, -83.75), size_m: (700.0, 0.3, 27.5), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                // the main street — the two-gate axis, and the lane the gantries straddle.
+                // ⚠️ 48 -> 30 m, and the number is not free: the apron deletes every grid
+                // house that TOUCHES it, so its width decides where the frontage stands. At
+                // 48 it killed the middle house of the block as well and the axis measured
+                // **55 m** facade to facade; at 30 the middle house survives and the axis is
+                // **31 m** — one metre wider than the apron, and wide enough for the 28 m
+                // gates it connects. Anything between 31 and 47 buys nothing and costs a row
+                // of houses.
+                (center_m: (0.0, -0.1, -13.75), size_m: (30.0, 0.3, 527.5), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                // the market square. **Dead zone 1, on purpose** (and the church tower beside
+                // it is the way across): 76 m of open stone against an 11.5 m roofscape is
+                // `d < H` failing by a factor of six. Traversal that works everywhere is not
+                // a skill.
+                (center_m: (62.0, -0.1, -22.0), size_m: (76.0, 0.3, 76.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                // ---- Aprons under the projecting galleries ------------------------------
+                // The 60 m gallery and the 120 m crown corbel hang 14 m and 12 m out over
+                // the ground. A house under them has something standing on its roof centre,
+                // and a roof you cannot hook from above is a lie in the map
+                // (`tests/world.rs::f003_no_anchorable_block_has_another_block_sitting_on_its_roof_centre`).
+                // Along the main wall the boulevard already keeps that strip clear; the two
+                // flanks and the outer wall had nothing, and the hand-placed pocket houses
+                // stood under the west gallery. 20.4 m = the union of gallery and corbel.
+                (center_m: (-97.8, -0.1, -210.0), size_m: (20.4, 0.3, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (97.8, -0.1, -210.0), size_m: (20.4, 0.3, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (0.0, -0.1, -277.8), size_m: (240.0, 0.3, 20.4), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+
+                // ---- The wall: 120 m, battered 45 m -> 28 m, one course per 15 m band --
+                // main wall
+                (center_m: (-218.0, 7.5, -120.0), size_m: (264.0, 15.0, 43.94), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-34.0, 7.5, -120.0), size_m: (40.0, 15.0, 43.94), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (182.0, 7.5, -120.0), size_m: (336.0, 15.0, 43.94), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-70.0, 13.5, -120.0), size_m: (32.0, 3.0, 43.09), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-182.0, 22.5, -120.0), size_m: (336.0, 15.0, 41.81), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (182.0, 22.5, -120.0), size_m: (336.0, 15.0, 41.81), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 25.0, -120.0), size_m: (28.0, 10.0, 41.46), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 37.5, -120.0), size_m: (700.0, 15.0, 39.69), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 52.5, -120.0), size_m: (700.0, 15.0, 37.56), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 67.5, -120.0), size_m: (700.0, 15.0, 35.44), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 82.5, -120.0), size_m: (700.0, 15.0, 33.31), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 97.5, -120.0), size_m: (700.0, 15.0, 31.19), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 112.5, -120.0), size_m: (700.0, 15.0, 29.06), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                // plinth: base_thickness_m 45.0 exactly
+                (center_m: (-218.0, 1.0, -120.0), size_m: (264.0, 2.0, 45.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-34.0, 1.0, -120.0), size_m: (40.0, 2.0, 45.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (182.0, 1.0, -120.0), size_m: (336.0, 2.0, 45.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                // coping: top_thickness_m 28.0 exactly
+                (center_m: (0.0, 119.0, -120.0), size_m: (700.0, 2.0, 28.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                // outer wall of the protrusion
+                (center_m: (-114.25, 7.5, -300.0), size_m: (56.5, 15.0, 43.94), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-34.0, 7.5, -300.0), size_m: (40.0, 15.0, 43.94), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (78.25, 7.5, -300.0), size_m: (128.5, 15.0, 43.94), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-70.0, 13.5, -300.0), size_m: (32.0, 3.0, 43.09), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-78.25, 22.5, -300.0), size_m: (128.5, 15.0, 41.81), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (78.25, 22.5, -300.0), size_m: (128.5, 15.0, 41.81), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 25.0, -300.0), size_m: (28.0, 10.0, 41.46), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 37.5, -300.0), size_m: (285.0, 15.0, 39.69), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 52.5, -300.0), size_m: (285.0, 15.0, 37.56), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 67.5, -300.0), size_m: (285.0, 15.0, 35.44), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 82.5, -300.0), size_m: (285.0, 15.0, 33.31), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 97.5, -300.0), size_m: (285.0, 15.0, 31.19), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 112.5, -300.0), size_m: (285.0, 15.0, 29.06), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                // plinth: base_thickness_m 45.0 exactly
+                (center_m: (-114.25, 1.0, -300.0), size_m: (56.5, 2.0, 45.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-34.0, 1.0, -300.0), size_m: (40.0, 2.0, 45.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (78.25, 1.0, -300.0), size_m: (128.5, 2.0, 45.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                // coping: top_thickness_m 28.0 exactly
+                (center_m: (0.0, 119.0, -300.0), size_m: (285.0, 2.0, 28.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                // west flank
+                (center_m: (-120.0, 7.5, -210.0), size_m: (43.94, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-120.0, 22.5, -210.0), size_m: (41.81, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-120.0, 37.5, -210.0), size_m: (39.69, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-120.0, 52.5, -210.0), size_m: (37.56, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-120.0, 67.5, -210.0), size_m: (35.44, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-120.0, 82.5, -210.0), size_m: (33.31, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-120.0, 97.5, -210.0), size_m: (31.19, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-120.0, 112.5, -210.0), size_m: (29.06, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                // plinth: base_thickness_m 45.0 exactly
+                (center_m: (-120.0, 1.0, -210.0), size_m: (45.0, 2.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                // coping: top_thickness_m 28.0 exactly
+                (center_m: (-120.0, 119.0, -210.0), size_m: (28.0, 2.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                // east flank
+                (center_m: (120.0, 7.5, -210.0), size_m: (43.94, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (120.0, 22.5, -210.0), size_m: (41.81, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (120.0, 37.5, -210.0), size_m: (39.69, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (120.0, 52.5, -210.0), size_m: (37.56, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (120.0, 67.5, -210.0), size_m: (35.44, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (120.0, 82.5, -210.0), size_m: (33.31, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (120.0, 97.5, -210.0), size_m: (31.19, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (120.0, 112.5, -210.0), size_m: (29.06, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                // plinth: base_thickness_m 45.0 exactly
+                (center_m: (120.0, 1.0, -210.0), size_m: (45.0, 2.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                // coping: top_thickness_m 28.0 exactly
+                (center_m: (120.0, 119.0, -210.0), size_m: (28.0, 2.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+
+                // ---- Gatehouses — the towers that flank the two gates ------------------
+                // inner gatehouse
+                (center_m: (-24.0, 60.0, -120.0), size_m: (20.0, 120.0, 55.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (24.0, 60.0, -120.0), size_m: (20.0, 120.0, 55.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                // outer gatehouse
+                (center_m: (-24.0, 60.0, -300.0), size_m: (20.0, 120.0, 55.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (24.0, 60.0, -300.0), size_m: (20.0, 120.0, 55.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+
+                // ---- The platform at 60 m — a gallery that projects 14 m over open ground 
+                // main wall, district side. 700 m of anchorable rail at H = 60: every gap under 60 m
+                (center_m: (0.0, 59.0, -94.61), size_m: (700.0, 2.0, 14.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                // swings. The pendulum bottom lands on the boulevard, not on a roof.
+                (center_m: (-94.61, 59.0, -210.0), size_m: (14.0, 2.0, 180.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (94.61, 59.0, -210.0), size_m: (14.0, 2.0, 180.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (0.0, 59.0, -274.61), size_m: (240.0, 2.0, 14.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+
+                // ---- The crown at 120 m — corbels, watchtowers, cannon -----------------
+                // corbelled crown gallery, 12 m wide and projecting 10 m past the face. It is the
+                (center_m: (0.0, 121.5, -102.0), size_m: (700.0, 3.0, 12.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                // one crown anchor that hangs over open air — and the only one a rope from the
+                // district can see past the battered face. At 6 m of projection a measured shot
+                // from the gallery missed it by a metre; 10 m turned a 2-degree window into 7.
+                (center_m: (0.0, 121.5, -138.0), size_m: (700.0, 3.0, 12.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (0.0, 121.5, -282.0), size_m: (285.0, 3.0, 12.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (0.0, 121.5, -318.0), size_m: (285.0, 3.0, 12.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-102.0, 121.5, -210.0), size_m: (12.0, 3.0, 225.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-138.0, 121.5, -210.0), size_m: (12.0, 3.0, 225.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (138.0, 121.5, -210.0), size_m: (12.0, 3.0, 225.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (102.0, 121.5, -210.0), size_m: (12.0, 3.0, 225.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                // watchtowers, 12 m — scale.ron calls them 'standing on the wall'
+                (center_m: (-280.0, 126.0, -120.0), size_m: (8.0, 12.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-140.0, 126.0, -120.0), size_m: (8.0, 12.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (140.0, 126.0, -120.0), size_m: (8.0, 12.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (280.0, 126.0, -120.0), size_m: (8.0, 12.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-60.0, 126.0, -300.0), size_m: (8.0, 12.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (60.0, 126.0, -300.0), size_m: (8.0, 12.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-120.0, 126.0, -160.0), size_m: (8.0, 12.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (120.0, 126.0, -160.0), size_m: (8.0, 12.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-120.0, 126.0, -260.0), size_m: (8.0, 12.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (120.0, 126.0, -260.0), size_m: (8.0, 12.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                // cannon emplacements: the plinth is not anchorable, the barrel over the void is
+                (center_m: (-210.0, 121.5, -134.0), size_m: (6.0, 3.0, 6.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-210.0, 123.75, -140.0), size_m: (2.0, 1.5, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-70.0, 121.5, -134.0), size_m: (6.0, 3.0, 6.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-70.0, 123.75, -140.0), size_m: (2.0, 1.5, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (70.0, 121.5, -134.0), size_m: (6.0, 3.0, 6.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (70.0, 123.75, -140.0), size_m: (2.0, 1.5, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (210.0, 121.5, -134.0), size_m: (6.0, 3.0, 6.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (210.0, 123.75, -140.0), size_m: (2.0, 1.5, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-40.0, 121.5, -314.0), size_m: (6.0, 3.0, 6.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-40.0, 123.75, -320.0), size_m: (2.0, 1.5, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (40.0, 121.5, -314.0), size_m: (6.0, 3.0, 6.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (40.0, 123.75, -320.0), size_m: (2.0, 1.5, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+
+                // ---- The gantry line over the main street — the swing spine, pitch 35 m, beam at 60 m 
+                // ten stations from z = 227.5 to -87.5 = 315 m of lane, then the wall; four more in the
+                (center_m: (-14.0, 28.0, 227.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, 227.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 58.0, 227.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, 192.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, 192.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 58.0, 192.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, 157.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, 157.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 58.0, 157.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, 122.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, 122.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 58.0, 122.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, 87.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, 87.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 58.0, 87.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, 52.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, 52.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 58.0, 52.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, 17.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, 17.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 58.0, 17.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, -17.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, -17.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 58.0, -17.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, -52.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, -52.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 58.0, -52.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, -87.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, -87.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 58.0, -87.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                // pocket outside the inner gate. Columns NOT anchorable (FIND-042), beam is.
+                (center_m: (-14.0, 28.0, -157.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, -157.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 58.0, -157.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, -192.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, -192.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 58.0, -192.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, -227.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, -227.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 58.0, -227.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, -262.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, -262.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 58.0, -262.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+
+                // ---- The church (35 m), trees (12 m), bridges, market stalls -----------
+                // the church tower on the market square: 35 m, and 22 m under the gantry beam beside it
+                (center_m: (45.0, 17.5, -22.0), size_m: (14.0, 35.0, 14.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                // its nave
+                (center_m: (51.0, 5.75, -8.0), size_m: (26.0, 11.5, 14.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                // trees along the quays and the square: the cheapest anchor above the eaves
+                (center_m: (-92.0, 6.0, 60.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
+                (center_m: (-92.0, 6.0, -20.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
+                (center_m: (-48.0, 6.0, 30.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
+                (center_m: (-48.0, 6.0, -50.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
+                (center_m: (30.0, 6.0, 20.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
+                (center_m: (94.0, 6.0, -10.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
+                (center_m: (30.0, 6.0, -55.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
+                (center_m: (94.0, 6.0, 10.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
+                // x -92 -> -50: it stood under the west 60 m gallery (x -101.6..-87.6), so
+                // its crown — an anchorable surface — had 47 m of stone over it.
+                (center_m: (-50.0, 6.0, -180.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
+                (center_m: (-48.0, 6.0, -220.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
+                // six bridges. The channel is not anchorable, the bridges are.
+                (center_m: (-70.0, -0.1, -240.0), size_m: (36.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (-70.0, -0.1, -180.0), size_m: (36.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (-70.0, -0.1, -60.0), size_m: (36.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (-70.0, -0.1, 20.0), size_m: (36.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (-70.0, -0.1, 110.0), size_m: (36.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (-70.0, -0.1, 190.0), size_m: (36.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                // market stalls
+                (center_m: (32.0, 1.25, -50.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
+                (center_m: (40.0, 1.25, -50.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
+                (center_m: (48.0, 1.25, -50.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
+                (center_m: (32.0, 1.25, 4.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
+                (center_m: (40.0, 1.25, 4.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
+                (center_m: (48.0, 1.25, 4.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
+                (center_m: (88.0, 1.25, -30.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
+                (center_m: (88.0, 1.25, -6.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
+
+                // ---- Deleted 2026-08-12: the hand-placed row housing and the pocket ----
+                // 75 detached boxes stood here — a 20 m pitch along the main street and a
+                // 24 m pitch in the pocket, each one an island with an untagged ridge cap on
+                // its roof centre. They were the 28 unhookable crowns of `FIND-059` and half
+                // of "boxes on a lawn" in the screenshot of `FIND-056`.
+                //
+                // The closed-block layout builds both quarters now, at a 43 m block pitch
+                // with party walls and a 7 m street, and it builds them denser than the hand
+                // placement did. Whoever wants a pitched roof back builds it as body + cap
+                // **with the cap anchorable and the body not** — a tagged surface with
+                // something standing on its centre is a lie in the map, and
+                // `tests/world.rs::f003_no_anchorable_block_has_another_block_sitting_on_its_roof_centre`
+                // now says so out loud.
             ],
         ),
     },

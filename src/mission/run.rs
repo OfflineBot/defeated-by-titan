@@ -22,8 +22,48 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::prelude::*;
 
-use crate::data::MissionTemplate;
+use crate::data::{MissionTemplate, Wave};
 use crate::shared::{PlayerId, TitanId};
+
+/// The three numbers **one** sortie flies, after template and difficulty have been put
+/// together — and the one place that decides which of the two wins.
+///
+/// `difficulty: None` is the direct drop-in (`--mission <name>`, what `F-070` and every script
+/// in the repository uses) and takes the template's own numbers. `Some(key)` is a sortie
+/// deployed out of the hub and takes the level's. **The fork lives here and nowhere else**: a
+/// second `if difficulty.is_some()` in `deploy` and a third in `open_the_field` is how a
+/// mission ends up counting to the recruit target against the elite clock.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SortieNumbers<'a> {
+    /// What the log and the HUD call it — `"Ashgate Skirmish · Recruit"`.
+    pub name: String,
+    pub target_duration_s: f32,
+    pub kill_target: u32,
+    pub waves: &'a [Wave],
+}
+
+/// Template ⊕ difficulty. `None` means the level is not in the file — and the caller says so
+/// loudly instead of flying a mission with somebody else's numbers.
+pub fn resolve<'a>(
+    template: &'a MissionTemplate,
+    difficulty: Option<&str>,
+) -> Option<SortieNumbers<'a>> {
+    let Some(key) = difficulty else {
+        return Some(SortieNumbers {
+            name: template.name.clone(),
+            target_duration_s: template.target_duration_s,
+            kill_target: template.kill_target,
+            waves: &template.waves,
+        });
+    };
+    let level = template.difficulties.get(key)?;
+    Some(SortieNumbers {
+        name: format!("{} · {}", template.name, level.name),
+        target_duration_s: level.target_duration_s,
+        kill_target: level.kill_target,
+        waves: &level.waves,
+    })
+}
 
 /// Seconds out of the file into ticks. **Rounded, once**, so that 330 s at 60 Hz is 19 800 and
 /// not 19 799 or 19 801 depending on where the multiplication happened.
@@ -72,10 +112,12 @@ pub struct MissionClock {
 }
 
 impl MissionClock {
-    pub fn new(started_at_tick: u64, template: &MissionTemplate, simulation_hz: f64) -> Self {
+    /// The deadline comes out of the **resolved** numbers, not out of the template: a recruit
+    /// sortie has seven minutes and an elite one five, and both are the same template.
+    pub fn new(started_at_tick: u64, target_duration_s: f32, simulation_hz: f64) -> Self {
         MissionClock {
             started_at_tick,
-            duration_ticks: to_ticks(template.target_duration_s, simulation_hz),
+            duration_ticks: to_ticks(target_duration_s, simulation_hz),
             decided_at_tick: None,
         }
     }
@@ -182,12 +224,15 @@ impl WaveSchedule {
     /// generator keeps free, so no titan is spawned inside a house. It is deterministic and
     /// carries no rng: titan *i* of *n* stands at `i/n` of the circle.
     ///
-    /// ⚠️ This is a stand-in for a real spawn rule (`F-072`, not built). It is written down
-    /// here and reported, so that nobody mistakes it for a design decision.
-    pub fn of(template: &MissionTemplate, started_at_tick: u64, simulation_hz: f64, ring_m: f32) -> Self {
-        let total: u32 = template.waves.iter().map(|w| w.count).sum();
+    /// ⚠️ This is a stand-in for a real spawn rule. It is written down here and reported, so
+    /// that nobody mistakes it for a design decision.
+    ///
+    /// The waves come out of the **resolved** numbers ([`resolve`]) and not out of the
+    /// template: which kinds come, when and how many is the third thing a difficulty changes.
+    pub fn of(waves: &[Wave], started_at_tick: u64, simulation_hz: f64, ring_m: f32) -> Self {
+        let total: u32 = waves.iter().map(|w| w.count).sum();
         let mut pending = Vec::new();
-        for wave in &template.waves {
+        for wave in waves {
             let at_tick = started_at_tick.saturating_add(to_ticks(wave.at_s, simulation_hz));
             for _ in 0..wave.count {
                 let index = pending.len() as u32;
@@ -226,6 +271,68 @@ pub fn ring_position(index: u32, total: u32, ring_m: f32) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::Difficulty;
+
+    /// A template with one level in it, built here and not read from the file: what is under
+    /// test is the **fork**, and a test that reads `missions.ron` would go red the day somebody
+    /// balances it.
+    fn two_shapes() -> MissionTemplate {
+        MissionTemplate {
+            name: "Skirmish".into(),
+            map: "ashgate".into(),
+            target_duration_s: 330.0,
+            kill_target: 3,
+            waves: vec![Wave { at_s: 0.0, kind: "husk".into(), count: 2 }],
+            difficulties: [(
+                "elite".to_string(),
+                Difficulty {
+                    name: "Elite".into(),
+                    target_duration_s: 300.0,
+                    kill_target: 5,
+                    waves: vec![
+                        Wave { at_s: 0.0, kind: "husk".into(), count: 3 },
+                        Wave { at_s: 60.0, kind: "scuttler".into(), count: 2 },
+                    ],
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }
+    }
+
+    #[test]
+    fn a_sortie_without_a_difficulty_flies_the_templates_own_numbers() {
+        // The direct drop-in `--mission <name>`, i.e. every script and every test written
+        // before the hub existed. It must not silently pick a level.
+        let t = two_shapes();
+        let n = resolve(&t, None).expect("no difficulty is a legal sortie");
+        assert_eq!(n.target_duration_s, 330.0);
+        assert_eq!(n.kill_target, 3);
+        assert_eq!(n.waves.len(), 1);
+        assert_eq!(n.name, "Skirmish", "with no level the name carries no level");
+    }
+
+    #[test]
+    fn a_difficulty_replaces_all_three_numbers_and_not_one_of_them() {
+        // ⭐ The test that catches the cheap version of this feature: a difficulty that only
+        // moves `kill_target` and lets the deadline and the waves stay behind. Five kills
+        // against the 330 s clock and two husks would pass a looser test and be a different
+        // mission from the one the file describes.
+        let t = two_shapes();
+        let n = resolve(&t, Some("elite")).expect("`elite` stands in the file");
+        assert_eq!(n.kill_target, 5, "the level's kill target");
+        assert_eq!(n.target_duration_s, 300.0, "the level's deadline, not the template's 330");
+        assert_eq!(n.waves.len(), 2, "the level's waves, not the template's one");
+        assert_eq!(n.waves[1].kind, "scuttler", "and its kinds — an elite sortie is worse, not longer");
+        assert_eq!(n.name, "Skirmish · Elite");
+    }
+
+    #[test]
+    fn a_difficulty_the_file_does_not_know_resolves_to_nothing() {
+        // No fallback to the template. A pad that names a level nobody wrote must refuse to
+        // deploy, loudly — falling back would fly the wrong mission and look like it worked.
+        assert!(resolve(&two_shapes(), Some("impossible")).is_none());
+    }
 
     #[test]
     fn seconds_become_ticks_exactly_once() {

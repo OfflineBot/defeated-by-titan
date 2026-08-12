@@ -1657,6 +1657,461 @@ the anchor walk both run — `model "anchored": 2 anchor(s) read out of the file
 Whoever puts the first real model in should expect that list to produce a surprise, and should
 add it here rather than quietly fixing it.
 
-*(Append further findings here. A finding without a measurement is an opinion.)*
-
 Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUESTIONS.md)
+
+---
+
+## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE — and append with `>>`, never with an edit tool
+
+This file is **over 100 kB**. Reading it whole to add ten lines costs ~27 000 tokens, and on
+2026-08-12 every agent in a five-agent round was doing exactly that. So:
+
+```bash
+cat >> docs/FINDINGS.md <<'EOF'
+
+## FIND-0nn — <the claim, in one line>
+...
+EOF
+```
+
+That costs nothing to read. **To READ one finding, never open the file** — locate and slice it:
+
+```bash
+grep -n '^## FIND-041' docs/FINDINGS.md      # -> line number
+sed -n '820,860p' docs/FINDINGS.md           # -> just that entry
+```
+
+A finding without a measurement is an opinion. Keep the format: symptom · measurement · why it
+counts · confidence.
+
+## FIND-057 — The hub had nowhere to live: `Screen` could not hold it, `MissionPhase` could, and the refill it enables needs a second writer of `Gas`
+
+**Context:** the user, 2026-08-12 — *„dann fehlt auch noch eine hub! bei der man rum laufen kann
+und missionen starten kann. das game ist dann eine mission (mit schwierigkeitsleveln)"*. Built as
+`src/mission/hub.rs`; the run that carries it is `scripts/f070-hub.txt`
+(`--headless --hub --ticks 2000` → **20 asserts held, 986 ticks, exit 0**).
+
+### 1. The hub is not a screen, and the two candidates are not interchangeable
+
+`menu::Screen` is `Playing | Paused` and looked like the natural home for a third variant. It is
+not: in the hub the pointer stays **locked**, `Time<Virtual>` keeps **running** and the player
+**walks** — that is `Screen::Playing` in every property `menu` can observe. A `Screen::Hub` would
+have made "the game is paused" and "the player is in the hub" two answers to one question, and
+`menu::apply_screen` would have had to decide which of them owns the cursor.
+
+So the hub became `MissionPhase::Hub` (code **5**, appended — `assert phase == 4` in
+`scripts/f070-lost.txt` and `== 2` in `scripts/f071-won.txt` still mean what they say). Three
+things fall out **for free**, and that is the argument, not the aesthetics: every existing reader
+(`hud::objective`, the F3 overlay, `assert phase`) sees the hub with no change; the hub's props get
+their lifetime from `DespawnOnExit(MissionPhase::Hub)`; and a script can write `assert phase == 5`
+without `src/debug/script.rs` being touched at all. Guarded by
+`tests/menu.rs::f072_the_hub_is_a_place_and_not_a_screen`.
+
+**Cost, and it is real:** `MissionPhase` now carries a variant that is not a mission phase. Every
+exhaustive `match` on it had to gain an arm — exactly one existed (`src/hud/objective.rs:115`,
+another job's file, one line).
+
+### 2. `Gas::refill` cannot be called by anybody who is allowed to call it
+
+`docs/architecture.md`'s authority table: **`Gas` is written by `vector`.** `Gas::refill` has stood
+unused with the note *"the refuel stations of the main building are the only thing that ever
+will"* — and the stations are hub furniture, i.e. `mission`. The three ways out:
+
+| way | cost |
+|---|---|
+| `mission::hub` calls `Gas::refill` | a **second writer** of `Gas` — the rule this project is loudest about |
+| a `Refuel` message that `vector::gas` applies | `src/vector/gas.rs` is another job's file this session; not available |
+| leave it unbuilt | Q-033 stays unanswered and the hub has no reason to exist |
+
+**Taken: the first, deliberately, and bounded.** `vector::gas::gas_budget` runs in
+`SimulationSystems::Intent`, `hub::refuel_at_stations` in `PostStep` — a **fixed** order, not an
+incidental one; the directions are disjoint (`gas_budget` only subtracts, and
+`f018_booking_never_puts_a_drop_back_in` holds that; this only adds, capped at `Gas::max`); and it
+runs only in the hub. **What is owed to `docs/architecture.md`** (not this job's file): one row
+saying `mission::hub` is the second writer of `Gas`, in the hub only, after `vector`. If that is
+refused, the rollback is row 2 of the table above plus four lines in `vector/gas.rs`.
+
+### 3. Measured while trying to break it: the state gate on the refill is redundant today
+
+`tests/mission.rs::f072_a_station_is_a_hub_thing_and_does_not_follow_you_into_a_sortie` stays
+**green** when `run_if(in_state(MissionPhase::Hub))` is taken off the system — the stations carry
+`DespawnOnExit(MissionPhase::Hub)`, so outside the hub the query is empty anyway. It goes red only
+when **both** are removed (measured: `40.0` gas where `0.0` was asserted). The `run_if` stays as
+the guard for the day a station stops being state-scoped, but a reader should know which of the
+two is actually carrying the claim.
+
+### 4. The way back had to be per sortie, or three files that are not mine go red
+
+`Won`/`Lost` returning to the hub **unconditionally** breaks every run that reads a verdict after
+the fact: `scripts/f070-lost.txt` asserts `phase == 4` 120 ticks after the deadline, and
+`tests/combat.rs::p5_the_mission_is_lost_when_every_player_is_down` up to 250 ticks after the
+player falls. So the return hangs on a `ReturnToHub` **component on the mission entity**, set only
+when the sortie was deployed from a pad; `--mission <name>` came from nowhere and stays on its
+verdict. Held by `f072_a_sortie_that_came_from_nowhere_stays_on_its_verdict`, and confirmed by
+re-running `scripts/f071-won.txt` (**5 asserts held, exit 0**, `deployed at tick 0 — 3 kills in
+19800 ticks`: behaviour identical to before).
+
+### 5. `--hub` is a flag and not the default, and that is a confession
+
+`cargo run` with no flags still lands in `Briefing`, not in the hub — which is not the game the
+user described. Flipping it is **one line** in `mission::begin_mission` (treat "no `--mission`, no
+`--sandbox`" as `Hub`). It was not flipped because there are **31 files in `scripts/`**, most of
+them without `--mission`, and every one would suddenly run with three live trigger volumes and
+three refuel circles in the world: a script that flies through a pad starts a mission mid-run, and
+one that measures gas near the origin measures a refill. None of them could be re-run in this
+session (`cargo` is shared with another job).
+**ASSUMPTION: the hub stays opt-in via `--hub` until every script has been re-run once.**
+Rollback point: `mission::begin_mission`.
+
+### 6. Two smaller things a reader will trip over
+
+- **`scripts/f070-hub.txt` is named after an `F-ID` that means something else.**
+  `docs/features.ron` F-072 is *"Modus: Breach (Verteidigung)"*. The hub has **no `F-ID` at all** —
+  it is a request from 2026-08-12 and `features.xlsx` predates it. The file name was prescribed by
+  the commission; the collision belongs in `features.xlsx`, not in a rename here.
+- **`key` does not block, and that reads as a broken feature.** `key W 1.6` holds the key for
+  1.6 s, but the script runs on in the same tick — only `wait` stops it. The first version of the
+  script asserted after `wait 0.6` of a 1.6 s walk: the player was 5 m short of the pad and the run
+  said *"the hub does not deploy"*. Same class as the 0.90 s fall inside the cut block, where one
+  extra `wait 0.1` moved the blade under the nape and the husk lived — with `titans == 1` as the
+  only symptom.
+
+## FIND-056 — Ashgate: a district that swings, and the four things the box world made expensive
+
+**The map exists.** `assets/data/missions.ron` has named `map: "ashgate"` since the first mission
+and the map never existed; every run silently fell back with a warning out of
+`src/mission/mod.rs:140`. `maps.ron` now carries it: **471 blocks (246 placed, 225 generated),
+228 anchorable**, 700 x 700 m, and `scripts/f003-ashgate.txt` holds **25 asserts, exit 0**
+(`docs/images/f003-ashgate.png`, offscreen, same script).
+
+⚠️ **It is not `current`.** The evidence run sets `maps.ron: current = "ashgate"` and sets it back:
+every script under `scripts/` warps into graybox coordinates and every test that builds an app
+builds `current`. `--test world` and `--test data` are green in **both** settings (11 / 47).
+Flipping it for good is the main head's call, and it is one line.
+
+### 1. The layout, and the one number that decides whether it is any good
+
+A district that juts OUT through the main wall: main wall across `z = -120` over the full 700 m,
+flank walls at `x = +-120` running out to an outer wall at `z = -300`, **two gates on one axis**
+(0, ., -300) and (0, ., -120), and the straight line between them is the main street. A 16 m
+channel 4 m down at `x = -70` crosses **both** walls through 12 m water gates, with six bridges.
+
+**FIND-041 is the whole level design and it survived contact:** the gantry lane stands at the
+graybox's proven **35 m pitch with the beam top at 60 m**, and the measured first arc is
+**33.328 m of arc bottom at 31.375 m/s** — the graybox number (33.32 / 31.4) to three digits, on
+zero gas, `gas == 300` at both ends. Ten stations run unbroken over **315 m** (nine legs), four
+more in the pocket. The 700 m **wall gallery at 60 m** is the second lane: it projects 14 m over a
+cleared boulevard, so *any* gap under 60 m swings and the player picks his own spacing. The
+church (35 m) reaches the beam beside it at an arc bottom of 29 m. Watchtowers and trees (12 m)
+are perches, not lanes, and that is not an oversight: `d < H` puts a 12 m anchor's arc bottom on
+the pavement.
+
+**The wall is a barrier on purpose:** last inner gantry to first pocket gantry is 70 m > 60, so
+the lanes do not join over it. You take the gate, or you climb.
+
+### 2. The two-move climb needed a corbel, and the arithmetic says why
+
+Measured: ground (75, 2, -30) -> the gallery at **63.09 m** -> the crown at **117.0 m**, both legs
+far inside the 200 m range, **36.2 of 300 gas** for the whole climb.
+
+The interesting half is move 2. The wall is **battered**, so its face leans toward the district as
+you look up — at `y = 118` the face stands at `z = -105.5` while the gallery you stand on ends at
+`z = -87.6`. A rope fired at the crown from there hits **the wall**, not the crown: `anchor_target`
+takes the **first** hit and only then asks whether it is anchorable (`src/vector/aim.rs`, F-023).
+The fix is geometric, not a tag: a **corbelled crown gallery that projects past the face**. At 6 m
+of projection a measured shot missed by about a metre; at **10 m** the underside is 12 m deep and
+the pitch window opens to **74.6..84 degrees** (below 74.6 the ray enters the face, above 84 it
+passes the inner edge). Measured hits at 82 degrees: `120.00 -103.21` from z = -95 and
+`120.00 -98.21` from z = -90 — the model predicts -103.2 / -98.2. **A battered wall needs an
+overhang at the crown or it cannot be climbed from its own platform.**
+
+### 3. Three traps of a box world, and what they cost
+
+- **There is no subtraction.** The river is the **gap between two ground slabs**; everything that
+  has to stay free of grid housing is an **apron** — a 0.3 m slab whose top edge sits 0.05 m above
+  the ground, because `world/map.rs` drops a generated lot whole as soon as a placed block
+  *overlaps* it and touching does not count. That is what keeps the field outside the wall empty,
+  the street open and the square a square.
+- **A 16 m channel cannot be kept clear by a 16 m block.** The quays are 0.4 m high and 8 m wide
+  either side: a 21 m lot cannot fit into the 16 m gap between them, so **every** lot over the
+  water is deleted. Without that, houses stand in the air over the channel.
+- **The plinth ate the gate.** The 2 m plinth that pins `base_thickness_m = 45.0` exactly was
+  emitted across the full wall run while the courses above it carried the openings — a 2 m step
+  across both gates, and the run measured it as `height 2.000` in the gate passage. The openings
+  belong to *every* piece of a wall, including the two decorative ones.
+
+### 4. A lot grid does not fill a small enclosure — the pocket was empty
+
+The protruding quarter is 135 x 195 m. After the walls, the street apron and four gantries,
+**sixteen** grid lots survived in it, and a screenshot showed a district that juts out through its
+wall and is hollow. Twenty-five houses are now placed there by hand. **Generated density is a
+property of the map's open area, not of the map** — a `density` that reads well over 700 m says
+nothing about a courtyard.
+
+### 5. Two numbers this map needs and does not have (they are not mine to write)
+
+- **`scale.ron: architecture.eaves_m` has no `house_large`.** The street front is built as
+  body-to-eaves plus a narrower cap = a pitched roof in a world without rotation, and that works
+  for `house_small` (3.0/4.5) and `house_town` (6.0/8.0). The 11.5 m house therefore stays one flat
+  box. One number from the user turns a third of the street front into a roof.
+- **The gantry columns are 56 m and their beam tops at 60 m**, above the church (35 m), exactly as
+  in the graybox and carrying the same open question (Q-022/Q-023). 60 m is the one height above
+  the church the user has written down at all (`wall.platform_height_m`), and the two lanes are
+  level with each other because of it. Rolling it back is the gantry block.
+
+**Honest about the picture:** it reads as a walled district — grid streets, varied roof heights,
+the canal as a continuous line, the wall as a horizon. It does **not** read as a medieval town: the
+generated houses are 21 m boxes with flat tops, and only the placed street front and the pocket
+have roof caps. The gantry line is unmistakably game architecture, not a building.
+
+## FIND-058 — Tight streets ARE the swing route. The gantries only exist because our grid is suburban.
+
+**Symptom:** `ashgate` was built (2026-08-12) with a row of gantries — two columns and a crossbeam —
+down its main axis, reusing the graybox's proven swing lane. In the screenshot they read as
+**scaffolding through the middle of a medieval quarter**, not as architecture. The user asked for
+*"möglichst akkurat"*.
+
+**Measurement / arithmetic:** FIND-041's rule is `d < H` — a rope swings only while the horizontal
+gap to the anchor is smaller than the anchor's height.
+
+| grid | pitch `d` | house `H` | swings? |
+|---|---|---|---|
+| graybox / ashgate today | `lot_m 28 + street_m 7` = **35 m** | 11.5 m | **no** — 35 > 11.5, arc bottom underground |
+| a real dense district | **~10 m** | 11.5 m | **yes** — 10 < 11.5, and the arc bottom is over the street |
+
+**So the gantries are a workaround for a suburban lot grid, not a necessity.** At medieval density
+the houses *are* the lane: `d < H` holds on every street, the arc bottom sits over the pavement
+where the reference work puts it, and nothing has to be invented that a town would not have.
+
+**Why it counts:** it collapses two problems into one solution. "Make it look like the reference"
+and "make the rope worth using" have the same answer — **shrink `lot_m` and `street_m`** — and the
+current map solves the second with an object that damages the first.
+
+**The cost, stated so nobody discovers it late:** bodies. A 700 m district at a 10 m pitch is
+roughly 12x the block count of a 35 m pitch. `world.half_extent_m` is already 600 and the index is
+22 500 cells; the block count, not the grid, is what would bite. **Measure before committing** —
+`docs/lessons/performance.md` has the budget, and `f003-ashgate` currently builds 471 blocks.
+
+**Not done, deliberately:** this is a level-design change on top of a map that is 🟧 for geometry
+and works. Queued in `docs/NEXT.md`.
+
+## FIND-059 — `tests/vector_aiming.rs` measured the graybox and built `current`; and 28 ashgate row houses have an untagged crown
+
+**Measured 2026-08-12.** `assets/data/maps.ron: current` is now `"ashgate"`. The flip alone
+turned **6 of the 9** tests in `tests/vector_aiming.rs` red — none of them about the aim ray:
+
+    f002_the_aim_point_is_the_whole_coordinate_and_not_just_the_plane
+    f002_an_untagged_wall_in_front_of_a_roof_is_not_hookable_and_not_transparent
+    f002_free_aiming_hits_any_point_of_a_tagged_face_not_a_placed_anchor
+    f002_the_ray_ignores_the_players_own_capsule
+    f002_the_aim_names_the_body_it_hit
+    f002_every_tagged_surface_in_the_map_is_reachable_by_free_aiming
+
+Every one of those asserts on a **graybox coordinate** — the untagged wall at `z = -33.5`, the
+brick-red house at `z = -41`, the 8 m cube at `(-12, 4, -20)` — and then builds whatever
+`current` names. A physics test that follows a mutable global is a level-design tripwire, not a
+guard over `src/vector/aim.rs`.
+
+**The seam already existed and needed nothing new.** `data::DataPlugin` inserts `GameData`
+during `add_plugins` (`src/lib.rs:71` reads it there), so the resource can be written **before**
+the first `update()` runs `Startup`, and `world::map::build_map` takes the name out of the
+resource rather than out of the file. `app_on("graybox")` is one line. **No assertion and no
+coordinate in that file was changed** — only which world the app builds.
+
+Eight tests are pinned to the graybox; `f002_the_anchor_tag_and_the_body_mask_say_the_same_thing_about_every_block`
+stays on `current`, because it names no fixture and so still measures the shipped district.
+
+### The map half of it — 28 of 228 tagged surfaces have their roof centre capped
+
+`f002_every_tagged_surface..._reachable` run against ashgate reports **28 of 228** tagged blocks
+unreachable. They are not unreachable: they are the row houses along the main street, built as
+**body + ridge cap** (`maps.ron`: "the street front: body to the eaves, a narrower cap to the
+ridge — that is a pitched roof in a world without rotation"), e.g.
+
+    block_171  (-31, 3, -80)  14 x  6 x 12  anchorable: true    <- the body
+    block_172  (-31, 7, -80)  10 x  2 x 12  anchorable: false   <- the cap, dead centre on it
+
+The test aims from 5 m straight above the **centre** of the top face; the cap is narrower in x
+only, so the centre is always occluded and the shot returns `anchorable: false`. What is left
+tagged is a 2 m ledge on either side. So the test's premise — "a roof has nothing on top of it"
+— is a property of the graybox, not of a map, and that is why the test stays pinned there.
+
+**The gameplay question it does raise, and it is level design, not physics:** the *highest*
+point of 28 row houses is unhookable. A player swinging along the main street aims at the ridge
+he can see and gets `NoAnchor`. Either the caps get `anchorable: true`, or the test grows a free
+direction per block. Both are somebody else's call; nothing was changed here.
+
+### `scripts/game-full.txt` breaks in ashgate — 5 of 23, all in ACT 1
+
+Unchanged and un-loosened, as commissioned. It `warp 24 0 -20`, looks up 34 deg and hooks a
+**graybox** watchtower that ashgate does not have:
+
+    line 122: assert Speed  > 25    — measured   0.000
+    line 123: assert Height > 12    — measured   0.050
+    line 124: assert Gas    < 300   — measured 300.000
+    line 129: assert Height > 11.5  — measured   0.050
+    line 151: assert Height > 11.5  — measured   0.050
+
+No anchor, therefore no reel, therefore the tank is untouched and he never leaves the pavement.
+The other 18 asserts hold and the mission itself is unaffected: `MISSION WON at tick 898 — 3/3
+kills` (ACTs 2-4 are falls onto warped-in titans, not swings). `scripts/f003-ashgate.txt` is
+green in the live map: **25 asserts held, 1336 ticks**. Whether the shipped mission moves to
+ashgate is the main head's call.
+
+## FIND-060 — Ashgate got closed blocks: 7.00 m streets, 596 facades facing each other — and the measurement that says the gantries stay
+
+**Measured 2026-08-12.** `scripts/f003-ashgate.txt`: **39 asserts, exit 0, 1730 ticks**,
+`docs/images/f003-ashgate.png`. The map builds **987 blocks (174 placed, 813 generated), 743
+anchorable** — it was 471 (246 placed, 225 generated).
+
+### 1. The layout: a lot is a closed block now, not a box in a field
+
+`src/world/map.rs` grew one branch. `layout.perimeter` is `None` (the graybox, unchanged box
+for box and draw for draw — eight tests in `tests/vector_aiming.rs` are pinned to it as a
+fixture) or `Some((frontage_m, wing_depth_m))`: a cell becomes a **ring of touching row
+houses around a courtyard**. Ashgate: `lot_m 36 + street_m 7` = **43 m block pitch**,
+**12 m** frontages divided into whole houses with **zero gap** (party walls), **11 m** deep
+wings, a **14 m** courtyard, `min_height_m 4.5 -> 8.0`, `density 0.72 -> 0.78`,
+`anchorable_fraction 0.55 -> 0.85`.
+
+The **rejection against placed blocks moved from per cell to per house**, and that is the
+half of the change nobody would guess: a 48 m apron down the main street used to clip the
+corner of a block and delete the entire ring, so the axis measured **55 m** facade to facade.
+Per house it deletes only what stands on it. The main street apron then went 48 -> 30 m and
+the axis measures **31 m**, one metre wider than the apron.
+
+`tests/world.rs::f003_the_street_is_narrower_than_the_houses_are_tall` measures it, and it is
+red on the old layout:
+
+| | generated houses | street samples | median gap | median street : ridge | facades facing open ground |
+|---|---|---|---|---|---|
+| before | 229 | 311 | 7.00 m | **1.08 : 1** | 106 (25 %) |
+| after | **813** | **596** | 7.00 m | **0.82 : 1** | 166 (22 %) |
+
+⚠️ **The commission's premise was wrong and it matters.** It said the old map put "one
+detached building in the middle of a 28 m lot, facade-to-facade ~23 m", street : height about
+3 : 1. It did not: the old generator already filled the lot (21 m house in a 28 m cell), so
+the nominal street was **7 m then and 7 m now**. What was actually broken was three other
+things — **4.5 m houses in a 7 m street** (ratio 1.08, i.e. the street was wider than the
+house was tall for half the stock), **only 311 pairs of facades in the whole district**, and
+blocks that were **solid 21 m cubes with no interior**, so a quarter was a checkerboard of
+islands instead of a perimeter with a courtyard. Whoever quotes "the streets are five times
+too wide" from FIND-058 is quoting an arithmetic slip: FIND-058's `d` is the **block pitch**,
+not the street.
+
+### 2. The gantries stay, and here is the number
+
+The commission's condition for deleting them was a measured swing between two houses with the
+arc bottom above ground. **ACT 5 measures exactly that, and it measures both halves.** One
+block's east wing (ridge **10.711 m**) faces the next block's west wing (ridge **11.303 m**)
+across **7.00 m**. He steps off the west roof and hooks the roof opposite, 10.76 m of rope:
+
+    t+0.35  height 11.119   speed  8.667   rope 1
+    t+0.60  height  7.897   speed 14.278   <- the arc, 7.9 m over the pavement
+    t+0.85  height  5.915   speed  0.032   <- and it ends against the facade he hooked
+            gas 263.798 -> 263.798, no Shift and no Ctrl
+
+So `d < H` **does** hold between two houses now: there is an arc, its bottom is **5.92 m above
+the street**, and it peaks at **14.278 m/s = 2.4x running speed on zero gas**. And it is
+**7 m long and ends in a wall** — because the bottom of a pendulum lies vertically under its
+anchor and that anchor stands over solid house (FIND-042, and FIND-029 measured the same
+24.85 -> 0.000 on the church face). A rope between two 11.5 m houses is a **hop, not a lane**.
+
+That is not a tuning failure, it is `scale.ron`: housing is capped at **11.5 m**
+(`architecture.heights_m: house_large`) and the reference survey's ridge is **13 m**. At 11.5 m
+every rope long enough to be a lane (>= 18 m, the frontage of the next block) has
+`H - L = 11.5 - 18 = -6.5` m — underground. **The gantry beams at 60 m stay** (ACT 3 is
+unchanged: arc bottom 33.328 m at 31.375 m/s), and so does the 700 m wall gallery.
+
+**What would replace them, with the arithmetic, for whoever picks this up:** an anchor over
+open ground at 24-28 m. From a roof at 11.5 m to a corbelled tower top at 28 m, 20 m away:
+`L = sqrt(20^2 + 16.5^2) = 25.9`, arc bottom **2.1 m** — a real lane. The build spec's §8 asks
+for exactly that furniture (town hall 24-28 m, granary 20-24 m, windmill 18-22 m, depot stair
+tower 28 m) and its rule of thumb is "from anywhere in town, one anchor of H >= 20 m within
+20 m". **None of those heights exists in `scale.ron`** — the user has written down 4.5 / 8 /
+11.5 / 12 / 35 and nothing between 12 and 35. That is the one number that blocks it, and it
+is the same gap FIND-056 §5 flagged for `eaves_m: house_large`. → `docs/QUESTIONS.md`.
+
+### 3. The roof is honest now, and a test says so instead of a comment
+
+`FIND-059`'s 28 unhookable ridge caps are gone with the 75 hand-placed detached houses that
+carried them (37 along the main street, 38 in the pocket) — the closed-block layout builds
+both quarters denser than the hand placement did. But deleting the instance is not fixing the
+class, so `tests/world.rs::f003_no_anchorable_block_has_another_block_sitting_on_its_roof_centre`
+is the fix: **no anchorable block may have anything standing over the centre of its roof**,
+as geometry, over whatever map `current` names. It went red with **31** entries and found two
+classes nobody was looking for on top of the caps:
+
+- a **tree** at (30, 6, 20) standing on a row house's roof, and a second at (-92, 6, -180)
+  standing under the west 60 m gallery — 47 m of stone over an anchorable crown;
+- the **projecting galleries themselves**. The 60 m gallery hangs 14 m out and the 120 m crown
+  corbel 12 m; along the main wall the boulevard apron already kept that strip clear, but the
+  two flanks and the outer wall had nothing, so the hand-placed pocket houses stood underneath
+  it. Three new aprons (20.4 m = the union of gallery and corbel) fix it for good.
+
+### 4. Two numbers the block budget did NOT cost
+
+**987 blocks against 403 in the same binary, and the simulation does not notice.** 1800 ticks
+headless, debug build, machine B: **7.74 s of user CPU at 987 blocks, 7.83 s at 403** — the
+new map is inside the noise of the old one, and both hold the full 60 Hz (1800 ticks in 30.09 s
+wall). Static bodies are built once into the spatial index and never broadphase against each
+other; **the block count is a draw-call and memory question, not a frame-time one**, and
+FIND-058's warning ("bodies... the block count is what would bite") is measured wrong. The
+offscreen render run does 1442 ticks in 29.4 s at 101 % CPU — that is the half that will bite,
+and it has not been measured against a target.
+
+### 5. The two deliberate dead zones are kept
+
+The **market square** (76 x 76 m of open stone against an 11.5 m roofscape — `d < H` fails by
+a factor of six, and the 35 m church tower on it is the way across) and the **canal**. The
+canal channel went **16 -> 10 m** and its quays 8 -> 10 m, and that is not taste: with the
+rejection now per house, a 12 x 11 m row house **fits** into a 16 m gap and would hang in the
+air over the water. It does not fit into 10.
+
+**Honest about the picture:** it reads as a dense quarter — closed blocks with dark
+courtyards, continuous frontage, a roofscape in red / gray / sand at varied heights, the wall
+as a horizon. It does **not** read as an *old* town. The blocks are identical 36 m squares on
+a 43 m orthogonal grid; the model town is radial-and-ring and irregular. Every roof is flat —
+the pitched roof (body + narrower cap) died with the hand-placed houses and the generator does
+not build one, because it would double the block count. And no landmark is visible in the
+frame at all: the church, the towers and the gantries are all elsewhere. It is a **planned**
+town, not a grown one.
+
+---
+
+## FIND-061 — a test that follows a mutable global has a level designer as a co-author
+
+**2026-08-12 · tests/player.rs, tests/vector_boost.rs · fixed, and the lesson is the point**
+
+`maps.ron: current` flipped `graybox` -> `ashgate` and **five tests went red, none of them
+about a map**: four in `tests/player.rs` (the integrator coming to rest, the jump height, the
+run speed, the second player's body) and `f007_the_boost_does_not_outrun_the_top_speed` in
+`tests/vector_boost.rs`. Not one line of `src/player/` or `src/vector/` had changed. They all
+built `defeated_by_titan::app(...)` and inherited `current`, then asserted on graybox ground
+geometry — `y == 0 ± 0.01` and free air over the origin.
+
+The general shape: **a test that reads a mutable global as its fixture has whoever may edit
+that global as a silent co-author.** The failure it produces is maximally misleading, because
+it points at the mechanic under test (`0.0000 m/s is below the clamp — then F-007 is not
+producing the acceleration it promises`) and not at the file that actually moved. A red test
+that lies about its cause is worse than no test: it costs a session before it costs a fix.
+
+The rule that follows: **a test names the world it measures in, or it makes no claim about a
+coordinate.** The seam already existed — `data::DataPlugin` inserts `GameData` during
+`add_plugins`, before the first `update()` runs `Startup`, and `world::map::build_map` reads
+the name from the resource. So `app_on("graybox")` (with an assert that the name exists) is
+the whole fix, and `app_on_current_map()` stays for the one test per file that genuinely says
+something about *every* map. `tests/vector_aiming.rs` did it first, an hour earlier, for the
+same reason; this is the second and third file.
+
+**The 5 cm, reported not fixed** (`assets/data/maps.ron`, ashgate): the ground slabs are
+`center_m.y = -0.1, size_m.y = 0.2` — top edge exactly at y = 0. The **aprons** are 0.3 m
+thick at the same centre: top edge at **y = +0.05**. That is deliberate and the file says so:
+*"everything that has to stay free of grid housing is an apron: a 0.3 m slab whose top edge
+sits 0.05 m above the ground. `world/map.rs` drops a generated lot whole as soon as a placed
+block overlaps it, and 0.05 m of overlap is enough."* The main-street apron
+`(0.0, -0.1, -13.75), size (30.0, 0.3, 527.5)` covers the origin, so the player spawns on it
+and rests at y = 0.04996878 — the exact number in the red assert. **The open question for the
+map's owner:** the 5 cm is a lot generator's tool, but it is also a 5 cm lip along every apron
+edge (main street, square, boulevard, quays) in a game whose whole subject is momentum on the
+ground. Whether a player at 40 m/s trips on it has not been measured.

@@ -339,3 +339,54 @@ fn f175_a_paused_game_does_not_simulate() {
         "and it has to go on again afterwards"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The hub is not a screen (2026-08-12)
+// ---------------------------------------------------------------------------
+
+/// ★ **The decision this file exists to hold: the hub did not become a third `Screen`.**
+///
+/// When the hub was built (`mission::hub`), `Screen` was the obvious place for it — it is
+/// `Playing | Paused` and a hub looks like a third mode. It is not. In the hub the pointer stays
+/// locked, `Time<Virtual>` keeps running and the player **walks**: that is `Screen::Playing` in
+/// every respect this domain can observe. A third variant would have made "the game is paused"
+/// and "the player is in the hub" two answers to one question, and `apply_screen` would then
+/// have had to decide which of them owns the cursor.
+///
+/// So the hub is a phase of `mission::MissionPhase` and this test is the guard: if somebody
+/// widens `Screen` later, they have to come past this and say why.
+#[test]
+fn f072_the_hub_is_a_place_and_not_a_screen() {
+    use defeated_by_titan::mission::MissionPhase;
+
+    let mut app = defeated_by_titan::app(Cli { headless: true, hub: true, ..default() });
+    let window = app.world_mut().spawn((Window::default(), PrimaryWindow)).id();
+    app.update();
+    app.update();
+
+    assert_eq!(
+        *app.world().resource::<State<MissionPhase>>().get(),
+        MissionPhase::Hub,
+        "`--hub` did not put the session in the hub — the rest of this test would prove nothing"
+    );
+    assert_eq!(
+        *app.world().resource::<Screen>(),
+        Screen::Playing,
+        "the hub arrived as a screen state. It is a place: you walk in it, and the mouse still \
+         looks around"
+    );
+
+    // The two things a screen decides, and the hub changes neither of them.
+    let c = cursor(&app, window);
+    assert_eq!(c.grab_mode, CursorGrabMode::Locked, "the pointer was let go in the hub");
+    assert!(!c.visible, "a system cursor appeared in the hub");
+    assert!(
+        !app.world().resource::<Time<Virtual>>().is_paused(),
+        "time stopped in the hub — nobody could walk anywhere"
+    );
+
+    // And `Esc` still works there, which is the one thing a place must not take away.
+    press_esc(&mut app, window);
+    assert_eq!(*app.world().resource::<Screen>(), Screen::Paused);
+    assert_eq!(cursor(&app, window).grab_mode, CursorGrabMode::None, "Esc has to give the pointer back in the hub too");
+}

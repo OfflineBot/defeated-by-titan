@@ -50,14 +50,47 @@ use defeated_by_titan::shared::{
     PlayerId, RunAccel, Side, SpatialIndex, Velocity,
 };
 
-/// Builds the **real** app, headless, one simulation step per `update()`.
+/// Builds the **real** app, headless, one simulation step per `update()`, on the map named
+/// here — **not** on whatever `maps.ron: current` happens to say.
 ///
 /// Not a second, similar one — otherwise the test proves nothing about the game that is
 /// actually played (the same argument as in `tests/multiplayer.rs`).
-fn app() -> App {
+///
+/// The map is pinned for the same reason as in `tests/vector_aiming.rs`: nothing in this file
+/// is a claim about a district. It is the integrator, the jump height, the run speed, the
+/// ground contact — measured against `maps.ron: graybox`, whose ground block has its top edge
+/// exactly at y = 0. On 2026-08-12 `current` moved to `ashgate`, whose ground at the origin
+/// stands 0.05 m proud, and four tests here went red without a single line of physics having
+/// changed. A test about the integrator must not change its answer because a level designer
+/// moved a building.
+///
+/// `GameData` is inserted by `data::DataPlugin` during `add_plugins`, i.e. **before** the
+/// first `update()` runs `Startup` — and `world::map::build_map` takes the name out of the
+/// resource, not out of the file. That is the seam; it needed nothing new.
+fn app_on(map: &str) -> App {
     let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
     app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    app.world_mut().resource_mut::<GameData>().maps.current = map.to_string();
+    assert!(
+        app.world().resource::<GameData>().current_map().is_some(),
+        "maps.ron lists no map {map:?} — a typo here builds an empty world and every \
+         assertion below turns into `nothing hit`"
+    );
     app.update(); // Startup: the city and the local player come into being
+    app
+}
+
+/// The graybox — the map every number in this file was measured in.
+fn app() -> App {
+    app_on("graybox")
+}
+
+/// Whatever `maps.ron: current` names: the map that actually ships. Only for the tests that
+/// make a statement about *the map*, not about a fixture inside one.
+fn app_on_current_map() -> App {
+    let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    app.update();
     app
 }
 
@@ -1004,7 +1037,10 @@ fn t007_every_world_collider_carries_a_rigid_body() {
     // character controller filters on `With<ColliderOf>` (.../move_and_slide.rs:82), and
     // `ColliderOf` only comes into being for a collider that belongs to a body. Retrofitting
     // that means touching every row of every map — so it is checked from the start.
-    let mut app = app();
+    //
+    // **The one test here that is not pinned**, and deliberately: it names no coordinate and
+    // no fixture, so it says something about *every* map — including the one that ships.
+    let mut app = app_on_current_map();
     let mut q = app.world_mut().query::<(&Name, &Collider, Option<&RigidBody>)>();
     let bodyless: Vec<String> = q
         .iter(app.world())

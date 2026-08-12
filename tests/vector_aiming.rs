@@ -59,11 +59,44 @@ use defeated_by_titan::shared::{
     WarpPlayer,
 };
 
-/// Builds the **real** app, headless, one simulation step per `update()`.
-fn app() -> App {
+/// Builds the **real** app, headless, one simulation step per `update()`, on the map named
+/// here — **not** on whatever `maps.ron: current` happens to say.
+///
+/// Every fixture in this file is a coordinate: the untagged wall at `z = -33.5`, the 8 m cube
+/// at `(-12, 4, -20)`, the brick-red house at `z = -41`. Those are the **graybox**'s, and a
+/// test that inherits `current` asserts on them in whatever world the level design last
+/// switched to. On 2026-08-12 that was measured: with `current: "ashgate"` six of the nine
+/// tests below went red — not one of them about the aim ray, all of them about a wall that is
+/// not in that district. So the map is pinned per test.
+///
+/// `GameData` is inserted by `data::DataPlugin` during `add_plugins` (`src/lib.rs:71` reads it
+/// right after), i.e. **before** the first `update()` runs `Startup` — and `world::map::
+/// build_map` takes the name out of the resource, not out of the file. That is the seam; it
+/// needed nothing new.
+fn app_on(map: &str) -> App {
     let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
     app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    app.world_mut().resource_mut::<GameData>().maps.current = map.to_string();
+    assert!(
+        app.world().resource::<GameData>().current_map().is_some(),
+        "maps.ron lists no map {map:?} — a typo here builds an empty world and every \
+         assertion below turns into `nothing hit`"
+    );
     app.update(); // Startup: the city out of `maps.ron` and the local player come into being
+    app
+}
+
+/// The graybox — the map the coordinates in this file were measured in.
+fn app() -> App {
+    app_on("graybox")
+}
+
+/// Whatever `maps.ron: current` names: the map that actually ships. Only for the tests that
+/// make a statement about *the map*, not about a fixture inside one.
+fn app_on_current_map() -> App {
+    let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    app.update();
     app
 }
 
@@ -311,6 +344,16 @@ fn f002_every_tagged_surface_in_the_map_is_reachable_by_free_aiming() {
     // Aimed at from 5 m straight above the roof centre, looking down. That is the one
     // direction that is free for every block in this map (a roof has nothing on top of it),
     // and it makes the expected hit point exactly the centre of the top face.
+    //
+    // ⚠️ **That last sentence is the reason this test is pinned to the graybox** and not run
+    // against `current`, however much it would like to be a check on the shipped district.
+    // The premise "a roof has nothing on top of it" is a property of the graybox, not of a
+    // map: in ashgate 28 of 228 tagged blocks are row houses whose ridge cap — a narrower,
+    // `anchorable: false` box — sits exactly on the centre of the top face, so the shot from
+    // straight above lands on the cap and reports `anchorable: false` (measured 2026-08-12,
+    // `docs/FINDINGS.md` FIND-059). That is a statement about the aiming *method* of this
+    // test, not about the ray. Making it map-agnostic needs a free direction per block, and
+    // that is a new claim — so it is written down instead of invented here.
     let mut app = app();
     let (e, id) = test_player(&mut app, Vec3::new(0.0, 4.0, 0.0));
     let eye_height_m = data(&app).game.player.eye_height_m;
@@ -482,7 +525,12 @@ fn f002_the_anchor_tag_and_the_body_mask_say_the_same_thing_about_every_block() 
     // through `world::index::mask_from` — but they are written in two places
     // (`world::map::BlockPlan::spawn`), and if they ever drift the crosshair says one thing
     // and the cyan outline another.
-    let mut app = app();
+    //
+    // **The one test here that is not pinned**, and deliberately: it names no coordinate and
+    // no fixture, so it says something about *every* map — including the one that ships. It
+    // is what still measures ashgate when the eight fixture tests around it measure the
+    // graybox.
+    let mut app = app_on_current_map();
     let world = app.world_mut();
     let mut q = world.query::<(&Name, &Body, Has<AnchorSurface>)>();
     let disagreeing: Vec<String> = q
@@ -529,6 +577,10 @@ fn f002_the_aim_names_the_body_it_hit() {
     // the map is aimed at from straight above, and the id in `AimPoint` is compared against
     // the `BodyId` that very entity carries. A constant, a counter or an off-by-one all go
     // red here; `is_some()` alone would not.
+    //
+    // Pinned to the graybox for two reasons: it shoots from straight above (same premise as
+    // test 4, see there), and its last block measures the untagged wall at `z = -33.5`, which
+    // exists only in that map.
     let mut app = app();
     let (e, id) = test_player(&mut app, Vec3::new(0.0, 4.0, 0.0));
     let eye_height_m = data(&app).game.player.eye_height_m;

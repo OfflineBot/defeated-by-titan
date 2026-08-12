@@ -78,11 +78,15 @@ fn record(
 /// The **real** app, headless, one simulation step per `update()`. Not started yet: the caller
 /// may still change `GameData` before `Startup` reads it.
 fn built(mission: Option<&str>) -> App {
-    let mut app = defeated_by_titan::app(Cli {
+    built_from(Cli {
         headless: true,
         mission: mission.map(|s| s.to_string()),
         ..default()
-    });
+    })
+}
+
+fn built_from(start: Cli) -> App {
+    let mut app = defeated_by_titan::app(start);
     // avian takes its step size from the generic `Time`, which only `run_fixed_main_schedule`
     // switches over to `Time<Fixed>`. One `update()` is then exactly one simulation step, on
     // every machine — the same reasoning as in `tests/titan.rs`.
@@ -100,6 +104,18 @@ fn built(mission: Option<&str>) -> App {
 /// would fail on an off-by-one that has nothing to do with the mission.
 fn started(mission: Option<&str>) -> App {
     let mut app = built(mission);
+    for _ in 0..4 {
+        app.update();
+        if !app.world().resource::<Log>().0.is_empty() {
+            return app;
+        }
+    }
+    panic!("four frames and not one simulation tick — the fixed step is not running");
+}
+
+/// A started app that is standing **in the hub** — `--hub`, and the first tick recorded.
+fn in_the_hub() -> App {
+    let mut app = built_from(Cli { headless: true, hub: true, ..default() });
     for _ in 0..4 {
         app.update();
         if !app.world().resource::<Log>().0.is_empty() {
@@ -604,4 +620,403 @@ fn f071_the_waves_come_out_of_the_file_at_the_ticks_the_file_says() {
         (first + template.waves[1].count) as usize,
         "the second wave did not come at its tick"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The hub — the loop the game did not have (user, 2026-08-12)
+// ---------------------------------------------------------------------------
+//
+// Four ways this feature can be wrong while every one of the tests above stays green, and one
+// test here for each:
+//
+// 1. **The pad triggers on nothing.** A trigger volume that fires from anywhere (or from
+//    nowhere) is the difference between a door and a teleport
+//    (`f072_a_player_beside_the_pad_starts_nothing`).
+// 2. **The difficulty is decoration.** The pad names `elite` and the sortie flies the
+//    template's own three numbers — everything *looks* right, the mission is simply the wrong
+//    one (`f072_the_difficulty_and_not_the_template_decides_the_numbers`).
+// 3. **The way back leaks into the drop-in.** `Won`/`Lost` returning to the hub for a mission
+//    that was started with `--mission <name>` silently breaks `scripts/f070-lost.txt`,
+//    `scripts/game-full.txt` and `tests/combat.rs`, which all read the verdict long after it
+//    fell (`f072_a_sortie_that_came_from_nowhere_stays_on_its_verdict`).
+// 4. **The refill is a timer again.** Gas that comes back anywhere but at a station is exactly
+//    the assumption the user threw out on 2026-08-12 (`docs/QUESTIONS.md` Q-033,
+//    `f072_gas_comes_back_at_a_station_and_nowhere_else`).
+
+use defeated_by_titan::mission::{DeploymentPoint, RefuelStation, ReturnToHub};
+use defeated_by_titan::shared::Gas;
+
+/// The hub's layout out of `missions.ron` — never a literal in this file.
+fn hub_layout(app: &App) -> defeated_by_titan::data::HubLayout {
+    app.world().resource::<GameData>().missions.hub.clone()
+}
+
+fn pads(app: &mut App) -> usize {
+    let mut q = app.world_mut().query::<&DeploymentPoint>();
+    q.iter(app.world()).count()
+}
+
+fn stations(app: &mut App) -> usize {
+    let mut q = app.world_mut().query::<&RefuelStation>();
+    q.iter(app.world()).count()
+}
+
+/// Puts every player exactly there. The `Transform`, not `Position` — avian takes the teleport
+/// over in `PhysicsSystems::Prepare`, the same move `park_players_out_of_aggro` makes.
+fn place_players(app: &mut App, at: Vec3) {
+    let mut q = app.world_mut().query_filtered::<Entity, With<PlayerId>>();
+    let players: Vec<Entity> = q.iter(app.world()).collect();
+    assert!(!players.is_empty(), "no player to place");
+    for player in players {
+        app.world_mut().entity_mut(player).insert(Transform::from_translation(at));
+    }
+}
+
+/// Asserts that a spot is inside **no** trigger of the hub — no pad, no station — and hands it
+/// back. The layout is data and it moves; a test that says "away from everything" and means a
+/// coordinate somebody typed in once is a test that goes green for the wrong reason.
+fn nowhere_in_particular(app: &App, at: Vec3) -> Vec3 {
+    let hub = hub_layout(app);
+    let range = data(app).gear.resupply.range_m;
+    for pad in &hub.deployments {
+        let d = at.distance(Vec3::from(pad.center_m));
+        assert!(
+            d > pad.radius_m,
+            "{at:?} is {d:.1} m from the {:?} pad of radius {} — that is not 'outside'",
+            pad.difficulty,
+            pad.radius_m
+        );
+    }
+    for station in &hub.refuel_stations {
+        let d = at.distance(Vec3::from(station.center_m));
+        assert!(d > range, "{at:?} is {d:.1} m from a station of range {range}");
+    }
+    at
+}
+
+/// The center of the pad that offers this difficulty, out of the file.
+fn pad_center(app: &App, difficulty: &str) -> Vec3 {
+    let hub = hub_layout(app);
+    let pad = hub
+        .deployments
+        .iter()
+        .find(|p| p.difficulty == difficulty)
+        .unwrap_or_else(|| panic!("missions.ron: hub has no {difficulty:?} pad"));
+    Vec3::from(pad.center_m)
+}
+
+fn player_pos(app: &mut App) -> Vec3 {
+    let mut q = app.world_mut().query_filtered::<&Transform, With<PlayerId>>();
+    q.iter(app.world()).next().expect("no player").translation
+}
+
+fn gas_left(app: &mut App) -> f32 {
+    let mut q = app.world_mut().query_filtered::<&Gas, With<PlayerId>>();
+    q.iter(app.world()).next().expect("no player carries a tank").current
+}
+
+/// Empties every tank, so that a refill is visible as a rise and not as "still full".
+fn drain_tanks(app: &mut App) {
+    let mut q = app.world_mut().query_filtered::<&mut Gas, With<PlayerId>>();
+    for mut gas in q.iter_mut(app.world_mut()) {
+        gas.current = 0.0;
+    }
+}
+
+#[test]
+fn f072_the_hub_is_a_place_that_stands_there_before_the_first_tick() {
+    // `--hub` has to be as immediate as `--mission`: pads in the world at tick 1, or the first
+    // thing a player does is walk through a door that is not built yet.
+    let mut app = in_the_hub();
+    assert_eq!(phase(&app), MissionPhase::Hub);
+    assert_eq!(log(&app)[0].phase, MissionPhase::Hub, "not in the hub at the first tick");
+
+    let hub = hub_layout(&app);
+    assert_eq!(pads(&mut app), hub.deployments.len(), "the doors come out of missions.ron");
+    assert_eq!(stations(&mut app), hub.refuel_stations.len(), "and so do the stations");
+    assert!(hub.deployments.len() >= 3, "the user asked for difficulty levels, and there are {} doors", hub.deployments.len());
+
+    // And no sortie: standing in the hub is not being in a mission.
+    let mut missions = app.world_mut().query::<&Mission>();
+    assert_eq!(missions.iter(app.world()).count(), 0, "a mission deployed in the hub");
+}
+
+#[test]
+fn f072_a_player_beside_the_pad_starts_nothing() {
+    // ⭐ The half that makes the other half mean something. Without it "walking onto the pad
+    // deploys" is satisfied by a system that deploys on tick 1 from anywhere in the world.
+    let mut app = in_the_hub();
+    let center = pad_center(&app, "recruit");
+    let hub = hub_layout(&app);
+    let radius = hub.deployments[0].radius_m;
+
+    // One metre outside the circle, and outside every other trigger in the hub — the tightest
+    // miss the layout allows, because "he was thirty metres away" is a claim about nothing.
+    let beside = nowhere_in_particular(&app, center - Vec3::Z * (radius + 1.0));
+    place_players(&mut app, beside);
+    ticks(&mut app, 30);
+    assert_eq!(
+        phase(&app),
+        MissionPhase::Hub,
+        "a player 1 m outside a pad of radius {radius} m started a sortie"
+    );
+    let mut missions = app.world_mut().query::<&Mission>();
+    assert_eq!(missions.iter(app.world()).count(), 0);
+}
+
+#[test]
+fn f072_walking_onto_a_pad_deploys_that_pads_sortie() {
+    let mut app = in_the_hub();
+    let center = pad_center(&app, "recruit");
+    place_players(&mut app, center);
+    ticks(&mut app, 10);
+
+    assert_eq!(phase(&app), MissionPhase::Active, "the pad did not start a sortie");
+    let mut q = app.world_mut().query::<&Mission>();
+    let mission = q.iter(app.world()).next().expect("no mission entity").clone();
+    assert_eq!(mission.template, "skirmish", "the pad's mission, not somebody else's");
+
+    // The numbers are the difficulty's, read back out of the file rather than written here.
+    let d = data(&app);
+    let level = &d.missions.templates["skirmish"].difficulties["recruit"];
+    assert_eq!(tally(&mut app).target, level.kill_target);
+    assert_eq!(
+        clock(&mut app).duration_ticks,
+        (level.target_duration_s as f64 * d.game.simulation_hz).round() as u64
+    );
+    assert!(mission.name.contains(&level.name), "the name says which level is being flown: {:?}", mission.name);
+
+    // The pads are gone with the hub — a deployment pad standing in the middle of a fight would
+    // deploy you again on the way past it.
+    assert_eq!(pads(&mut app), 0, "the hub's furniture survived the deployment");
+    assert_eq!(stations(&mut app), 0, "a refuel station survived into the mission — Q-033");
+}
+
+#[test]
+fn f072_the_difficulty_and_not_the_template_decides_the_numbers() {
+    // ⭐ The one that catches a difficulty that is only a label. `elite` and the template must
+    // disagree in the file, or this test proves nothing — which is asserted first.
+    let mut app = in_the_hub();
+    let d = data(&app);
+    let template = &d.missions.templates["skirmish"];
+    let elite = &template.difficulties["elite"];
+    assert_ne!(
+        elite.kill_target, template.kill_target,
+        "missions.ron: `elite` and the template's own kill_target are the same number — this \
+         test cannot tell the two apart"
+    );
+
+    let elite_pad = pad_center(&app, "elite");
+    place_players(&mut app, elite_pad);
+    ticks(&mut app, 10);
+
+    assert_eq!(tally(&mut app).target, elite.kill_target, "the template's target was flown");
+    assert_eq!(
+        clock(&mut app).duration_ticks,
+        (elite.target_duration_s as f64 * d.game.simulation_hz).round() as u64,
+        "the template's deadline was flown"
+    );
+}
+
+#[test]
+fn f072_a_won_sortie_lands_back_in_the_hub_at_the_spawn_point() {
+    // The whole ring in one test: hub → pad → Active → kills → Won → hub.
+    let mut app = in_the_hub();
+    let pad = pad_center(&app, "recruit");
+    place_players(&mut app, pad);
+    ticks(&mut app, 10);
+    assert_eq!(phase(&app), MissionPhase::Active);
+
+    let player = a_player(&mut app);
+    let target = tally(&mut app).target;
+    for i in 0..target {
+        hit(&mut app, TitanId(100 + i as u32), player, HitZone::Cortex);
+    }
+    ticks(&mut app, 3);
+    assert_eq!(phase(&app), MissionPhase::Won, "{target} cortex kills did not win it");
+
+    // The verdict stays up for `hub.debrief_s` and not one tick less: a WON that is gone before
+    // it can be read is a WON nobody saw.
+    let hub = hub_layout(&app);
+    let debrief = (hub.debrief_s as f64 * data(&app).game.simulation_hz).round() as u64;
+    ticks(&mut app, debrief / 2);
+    assert_eq!(phase(&app), MissionPhase::Won, "the debrief was cut short");
+
+    ticks(&mut app, debrief / 2 + 5);
+    assert_eq!(phase(&app), MissionPhase::Hub, "the sortie never came back to the hub");
+
+    // And the hub is a hub again: furniture back, no mission entity left over, and the player
+    // standing at the spawn point instead of on the pad he deployed from — which is what stops
+    // the next tick from deploying him all over again.
+    assert_eq!(pads(&mut app), hub.deployments.len());
+    let mut missions = app.world_mut().query::<&Mission>();
+    assert_eq!(
+        missions.iter(app.world()).count(),
+        0,
+        "the finished mission is still there — a second sortie would run two kill counters"
+    );
+    ticks(&mut app, 5);
+    let at = player_pos(&mut app);
+    let landing = Vec3::from(hub.spawn_m);
+    assert!(
+        (at.x - landing.x).abs() < 2.0 && (at.z - landing.z).abs() < 2.0,
+        "the player came back at {at:?} instead of at the hub's spawn point {landing:?}"
+    );
+    assert_eq!(phase(&app), MissionPhase::Hub, "he redeployed himself by standing still");
+}
+
+#[test]
+fn f072_a_lost_sortie_comes_back_too() {
+    // The second way out of a sortie. `P5`'s loss path (every player down) is used because the
+    // recruit clock is 420 s = 25 200 ticks and a test that waits for it would measure the
+    // walking speed of a husk instead of the way back.
+    let mut app = in_the_hub();
+    let pad = pad_center(&app, "recruit");
+    place_players(&mut app, pad);
+    ticks(&mut app, 10);
+    assert_eq!(phase(&app), MissionPhase::Active);
+
+    let mut q = app.world_mut().query_filtered::<Entity, With<PlayerId>>();
+    let players: Vec<Entity> = q.iter(app.world()).collect();
+    for p in players {
+        app.world_mut().entity_mut(p).insert(Health { current: 0.0, max: 100.0 });
+    }
+    ticks(&mut app, 3);
+    assert_eq!(phase(&app), MissionPhase::Lost, "a squad that is down has not lost");
+
+    let debrief = (hub_layout(&app).debrief_s as f64 * data(&app).game.simulation_hz).round() as u64;
+    ticks(&mut app, debrief + 5);
+    assert_eq!(phase(&app), MissionPhase::Hub, "a lost sortie is a dead end");
+}
+
+#[test]
+fn f072_a_sortie_that_came_from_nowhere_stays_on_its_verdict() {
+    // ⭐ The regression guard for three scripts and two tests that are not this job's to run:
+    // `scripts/f070-lost.txt` reads the verdict 120 ticks after it falls and
+    // `tests/combat.rs::p5_the_mission_is_lost_when_every_player_is_down` up to 250 ticks
+    // after. A `--mission <name>` run that quietly walked into a hub would turn every one of
+    // them red for a reason that has nothing to do with what they measure.
+    let mut app = started(Some("tutorial"));
+    let player = a_player(&mut app);
+    let target = tally(&mut app).target;
+    for i in 0..target {
+        hit(&mut app, TitanId(200 + i as u32), player, HitZone::Cortex);
+    }
+    ticks(&mut app, 3);
+    assert_eq!(phase(&app), MissionPhase::Won);
+
+    let mut q = app.world_mut().query::<&ReturnToHub>();
+    assert_eq!(q.iter(app.world()).count(), 0, "a drop-in mission was marked to return");
+
+    let debrief = (hub_layout(&app).debrief_s as f64 * data(&app).game.simulation_hz).round() as u64;
+    ticks(&mut app, debrief * 4);
+    assert_eq!(
+        phase(&app),
+        MissionPhase::Won,
+        "`--mission tutorial` walked into the hub — every script that reads the verdict after \
+         the fact is now measuring the hub"
+    );
+}
+
+#[test]
+fn f072_gas_comes_back_at_a_station_and_nowhere_else() {
+    // `docs/QUESTIONS.md` Q-033 as a test. Three claims in one run, because the third is the
+    // only one that makes the first two more than "some system adds gas somewhere".
+    let mut app = in_the_hub();
+    let station = Vec3::from(hub_layout(&app).refuel_stations[0].center_m);
+
+    // 1. Far away from every station: nothing comes back, ever. This is the assumption the user
+    //    threw out — a tank that fills itself while you stand around.
+    let outside = nowhere_in_particular(&app, Vec3::new(0.0, 2.0, -6.0));
+    place_players(&mut app, outside);
+    drain_tanks(&mut app);
+    ticks(&mut app, 60);
+    assert_eq!(gas_left(&mut app), 0.0, "the tank refilled itself away from any station");
+
+    // 2. Standing in one: it comes back at `gear.ron: resupply.gas_per_s`.
+    place_players(&mut app, station);
+    ticks(&mut app, 30);
+    let after = gas_left(&mut app);
+    let expected = data(&app).gear.resupply.gas_per_s * 30.0 / data(&app).game.simulation_hz as f32;
+    assert!(
+        (after - expected).abs() < expected * 0.2,
+        "30 ticks in a station gave {after} of the expected {expected}"
+    );
+
+    // 3. And never above the tank.
+    ticks(&mut app, 1200);
+    let full = gas_left(&mut app);
+    let max = data(&app).game.vector.gas_tank;
+    assert!((full - max).abs() < 1e-3, "the station overfilled the tank: {full} of {max}");
+}
+
+#[test]
+fn f072_a_station_is_a_hub_thing_and_does_not_follow_you_into_a_sortie() {
+    // The other half of Q-033: refuelling is not "wherever a station used to be". Same spot,
+    // same player, a running mission — and nothing comes back.
+    //
+    // ⚠️ Measured while breaking it: this is carried by **two** mechanisms — the `run_if` on
+    // the system and `DespawnOnExit(MissionPhase::Hub)` on the station itself — and it only
+    // goes red when both are taken away. Written down rather than left as a test that looks
+    // sharper than it is.
+    let mut app = in_the_hub();
+    let station = Vec3::from(hub_layout(&app).refuel_stations[0].center_m);
+    let pad = pad_center(&app, "recruit");
+    place_players(&mut app, pad);
+    ticks(&mut app, 10);
+    assert_eq!(phase(&app), MissionPhase::Active, "this test needs a running sortie");
+
+    place_players(&mut app, station);
+    drain_tanks(&mut app);
+    ticks(&mut app, 60);
+    assert_eq!(
+        gas_left(&mut app),
+        0.0,
+        "the tank refilled itself inside a mission, at the place a station stands in the hub"
+    );
+}
+
+#[test]
+fn f072_every_door_names_a_mission_and_a_difficulty_the_file_knows() {
+    // A pad pointing at nothing is a door that does not open, and nothing in the game says so
+    // until somebody walks into it. Plus the shape the user asked for: three levels, and every
+    // one of them a real set of numbers.
+    let d = data(&started(None));
+    let hub = &d.missions.hub;
+    for pad in &hub.deployments {
+        let template = d
+            .missions
+            .templates
+            .get(&pad.mission)
+            .unwrap_or_else(|| panic!("hub pad names mission {:?}, which is not a template", pad.mission));
+        let level = template.difficulties.get(&pad.difficulty).unwrap_or_else(|| {
+            panic!("hub pad names difficulty {:?} of {:?}, which is not in the file", pad.difficulty, pad.mission)
+        });
+        assert!(pad.radius_m > 0.0, "a pad of radius {} cannot be walked into", pad.radius_m);
+        assert!(level.kill_target > 0, "{:?} is won before it starts", pad.difficulty);
+        assert!(
+            (300.0..=420.0).contains(&level.target_duration_s),
+            "{:?}: {} s — the bible wants a 5–7 min arc out of every level, not only out of the template",
+            pad.difficulty,
+            level.target_duration_s
+        );
+        for wave in &level.waves {
+            assert!(
+                d.titans.kinds.contains_key(&wave.kind),
+                "{:?} wants {:?}, which is not in titan.ron",
+                pad.difficulty,
+                wave.kind
+            );
+            assert!(wave.count > 0, "{:?}: a wave with zero titans", pad.difficulty);
+            assert!(
+                wave.at_s <= level.target_duration_s,
+                "{:?}: a wave at {} s in a {} s sortie",
+                pad.difficulty,
+                wave.at_s,
+                level.target_duration_s
+            );
+        }
+    }
+    let levels: Vec<&String> = hub.deployments.iter().map(|p| &p.difficulty).collect();
+    assert!(levels.len() >= 3, "the user asked for difficulty levels; the hub offers {levels:?}");
 }

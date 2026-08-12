@@ -50,7 +50,7 @@
 use avian3d::prelude::{Collider, RigidBody};
 use bevy::prelude::*;
 
-use crate::data::{GameData, Map};
+use crate::data::{GameData, Map, Perimeter};
 use crate::shared::{AnchorSurface, Block, Body, Rng};
 
 use super::index::mask_from;
@@ -68,6 +68,17 @@ const STREAM_BUILT: u64 = 0xF003_0001;
 const STREAM_HEIGHT: u64 = 0xF003_0002;
 const STREAM_COLOR: u64 = 0xF003_0003;
 const STREAM_ANCHORABLE: u64 = 0xF003_0004;
+
+/// How many rng ticks one grid cell owns.
+///
+/// A closed block draws **per house**, not per cell — otherwise every house in the ring is
+/// the same height and the same colour, and the town reads as a stack of identical bars. The
+/// tick of house `i` in cell `lot` is `lot * TICKS_PER_LOT + i`, which stays injective as
+/// long as a ring never holds more than `TICKS_PER_LOT - 1` houses; [`perimeter_houses`]
+/// asserts that instead of silently letting two cells share a draw.
+///
+/// This is a name, not a tuning number (§4): it says how the rng stream is partitioned.
+const TICKS_PER_LOT: u64 = 64;
 
 /// A planned cuboid, **before** it is an entity.
 ///
@@ -182,49 +193,151 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
             let center_x = start_x + ix as f32 * period_m + r.lot_m * 0.5;
             let center_z = start_z + iz as f32 * period_m + r.lot_m * 0.5;
 
-            if in_clear_radius(center_x, center_z, r.lot_m * 0.5, r.clear_radius_m) {
-                continue;
-            }
+            // One draw per CELL, not per house: a block is built or it is an open yard.
+            // Were this per house, `density` would punch holes into the ring, and a hole in
+            // a closed block perimeter is exactly the thing this layout exists to remove.
             if !rng.chance(lot, STREAM_BUILT, r.density) {
                 continue;
             }
 
-            let height_m = rng.range(lot, STREAM_HEIGHT, r.min_height_m, r.max_height_m);
-            // A house stands ON the ground: bottom edge y = 0, center at half its height.
-            let center_m = Vec3::new(center_x, height_m * 0.5, center_z);
-            let size_m = Vec3::new(r.lot_m, height_m, r.lot_m);
+            // Suburb or old town — the two shapes a cell can have. The `None` arm is
+            // deliberately still the old one, box for box and draw for draw, because the
+            // graybox is the fixture eight tests in `tests/vector_aiming.rs` are pinned to.
+            let footprints: Vec<Footprint> = match &r.perimeter {
+                None => vec![Footprint {
+                    center_x,
+                    center_z,
+                    size_x: r.lot_m,
+                    size_z: r.lot_m,
+                }],
+                Some(p) => perimeter_houses(center_x, center_z, r.lot_m, p),
+            };
+            let single = r.perimeter.is_none();
 
-            // What is explicitly placed wins (`maps.ron`). Only the placed blocks are
-            // tested against: two layout houses can never overlap, the street sees to
-            // that.
-            let blocked = plan[..placed]
-                .iter()
-                .any(|g| overlaps(center_m, size_m * 0.5, g.center_m, g.half_size_m()));
-            if blocked {
-                continue;
-            }
+            for (i, f) in footprints.iter().enumerate() {
+                // `lot` itself for the single box, so the graybox draws exactly what it drew
+                // before this function learned about rings.
+                let tick = if single { lot } else { lot * TICKS_PER_LOT + i as u64 };
 
-            let colors = &r.colors;
-            let color = colors
-                .get(rng.index(lot, STREAM_COLOR, colors.len()))
-                .unwrap_or_else(|| {
-                    panic!("maps.ron: layout.colors is empty — every house would be colorless")
+                if in_clear_radius(
+                    f.center_x,
+                    f.center_z,
+                    f.size_x * 0.5,
+                    f.size_z * 0.5,
+                    r.clear_radius_m,
+                ) {
+                    continue;
+                }
+
+                let height_m = rng.range(tick, STREAM_HEIGHT, r.min_height_m, r.max_height_m);
+                // A house stands ON the ground: bottom edge y = 0, center at half its height.
+                let center_m = Vec3::new(f.center_x, height_m * 0.5, f.center_z);
+                let size_m = Vec3::new(f.size_x, height_m, f.size_z);
+
+                // What is explicitly placed wins (`maps.ron`). Only the placed blocks are
+                // tested against: two layout houses can never overlap, the ring geometry
+                // and the street see to that.
+                //
+                // ⚠️ The test is **per house, not per cell**. A cell-wide test was what made
+                // the aprons cost 43 m of frontage each: the main street's 48 m apron
+                // clipped the corner of a block and deleted the whole ring, so the street
+                // measured 134 m facade to facade. Per house, an apron deletes exactly the
+                // houses standing on it and the rest of the ring keeps the street closed.
+                let blocked = plan[..placed]
+                    .iter()
+                    .any(|g| overlaps(center_m, size_m * 0.5, g.center_m, g.half_size_m()));
+                if blocked {
+                    continue;
+                }
+
+                let colors = &r.colors;
+                let color = colors
+                    .get(rng.index(tick, STREAM_COLOR, colors.len()))
+                    .unwrap_or_else(|| {
+                        panic!("maps.ron: layout.colors is empty — every house would be colorless")
+                    });
+
+                plan.push(BlockPlan {
+                    name: if single { format!("house_{lot}") } else { format!("house_{lot}_{i}") },
+                    center_m,
+                    size_m,
+                    color: color_of(data, color),
+                    anchorable: rng.chance(tick, STREAM_ANCHORABLE, r.anchorable_fraction),
+                    // A house stops you. That is mechanics and not a tuning question — there
+                    // is deliberately no `solid_fraction` in `maps.ron`.
+                    solid: true,
                 });
-
-            plan.push(BlockPlan {
-                name: format!("house_{lot}"),
-                center_m,
-                size_m,
-                color: color_of(data, color),
-                anchorable: rng.chance(lot, STREAM_ANCHORABLE, r.anchorable_fraction),
-                // A house stops you. That is mechanics and not a tuning question — there
-                // is deliberately no `solid_fraction` in `maps.ron`.
-                solid: true,
-            });
+            }
         }
     }
 
     plan
+}
+
+/// One house's ground plan inside a cell — everything but its height.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Footprint {
+    center_x: f32,
+    center_z: f32,
+    size_x: f32,
+    size_z: f32,
+}
+
+/// A closed block: the ring of touching row houses around one cell's courtyard.
+///
+/// Four runs, and they do **not** overlap: north and south take the full `lot_m` in x and are
+/// `wing_depth_m` deep; west and east take only the strip between them. Every run is divided
+/// into whole houses of the same width, so two neighbours share a party wall and the gap
+/// between them is exactly zero — that is the single change that turns a suburb into a town.
+///
+/// The courtyard is what is left over, `lot_m - 2 * wing_depth_m` on a side. It is a **gap**,
+/// because this world has no subtraction (`docs/FINDINGS.md` FIND-056).
+fn perimeter_houses(cx: f32, cz: f32, lot_m: f32, p: &Perimeter) -> Vec<Footprint> {
+    let w = p.wing_depth_m;
+    let court_m = lot_m - 2.0 * w;
+    assert!(
+        court_m > 0.0,
+        "maps.ron: layout.perimeter.wing_depth_m = {w} leaves no courtyard in a {lot_m} m \
+         block — the two wings would grow through each other"
+    );
+
+    let mut out = Vec::new();
+    // North and south: the street fronts. They carry the run along x.
+    let n = runs(lot_m, p.frontage_m);
+    let front_m = lot_m / n as f32;
+    for k in 0..n {
+        let x = cx - lot_m * 0.5 + (k as f32 + 0.5) * front_m;
+        out.push(Footprint { center_x: x, center_z: cz - lot_m * 0.5 + w * 0.5, size_x: front_m, size_z: w });
+        out.push(Footprint { center_x: x, center_z: cz + lot_m * 0.5 - w * 0.5, size_x: front_m, size_z: w });
+    }
+    // West and east: only the strip between the two fronts, or the corners would be built
+    // twice — and two cuboids in the same place are a z-fight and a doubled collider.
+    let m = runs(court_m, p.frontage_m);
+    let side_m = court_m / m as f32;
+    for k in 0..m {
+        let z = cz - court_m * 0.5 + (k as f32 + 0.5) * side_m;
+        out.push(Footprint { center_x: cx - lot_m * 0.5 + w * 0.5, center_z: z, size_x: w, size_z: side_m });
+        out.push(Footprint { center_x: cx + lot_m * 0.5 - w * 0.5, center_z: z, size_x: w, size_z: side_m });
+    }
+
+    assert!(
+        (out.len() as u64) < TICKS_PER_LOT,
+        "a block of {lot_m} m at a {} m frontage holds {} houses, and only {} rng ticks \
+         belong to a cell — two cells would draw the same height",
+        p.frontage_m,
+        out.len(),
+        TICKS_PER_LOT
+    );
+    out
+}
+
+/// How many whole houses a run of `len_m` is divided into. Never zero: a 6 m stub is one
+/// narrow house, not a gap in the block.
+fn runs(len_m: f32, frontage_m: f32) -> u32 {
+    if !(len_m.is_finite() && frontage_m.is_finite()) || frontage_m <= 0.0 {
+        return 1;
+    }
+    ((len_m / frontage_m).round() as i64).max(1) as u32
 }
 
 /// How many layout lots fit along one edge. `0` means: no layout.
@@ -239,9 +352,18 @@ fn lot_count(edge_m: f32, period_m: f32) -> u32 {
 ///
 /// Measured from the origin to the **edge** of the block, not to its center: otherwise the
 /// clear space depends on the block size, and `clear_radius_m` would stop being a promise.
-fn in_clear_radius(center_x: f32, center_z: f32, half_size_m: f32, clear_radius_m: f32) -> bool {
-    let dx = (center_x.abs() - half_size_m).max(0.0);
-    let dz = (center_z.abs() - half_size_m).max(0.0);
+///
+/// The two halves are separate since the ring layout: a row house is 12 m of frontage and
+/// 11 m of depth, and one number for both would clear the wrong amount on one of the axes.
+fn in_clear_radius(
+    center_x: f32,
+    center_z: f32,
+    half_x_m: f32,
+    half_z_m: f32,
+    clear_radius_m: f32,
+) -> bool {
+    let dx = (center_x.abs() - half_x_m).max(0.0);
+    let dz = (center_z.abs() - half_z_m).max(0.0);
     dx * dx + dz * dz < clear_radius_m * clear_radius_m
 }
 
@@ -298,10 +420,64 @@ mod tests {
     #[test]
     fn f003_the_clear_radius_measures_to_the_edge_not_the_center() {
         // A block whose center is 30 m away but whose edge is 16 m: it is in the way.
-        assert!(in_clear_radius(30.0, 0.0, 14.0, 24.0), "edge at 16 m, radius 24 m");
-        assert!(!in_clear_radius(40.0, 0.0, 14.0, 24.0), "edge at 26 m, radius 24 m");
+        assert!(in_clear_radius(30.0, 0.0, 14.0, 14.0, 24.0), "edge at 16 m, radius 24 m");
+        assert!(!in_clear_radius(40.0, 0.0, 14.0, 14.0, 24.0), "edge at 26 m, radius 24 m");
         // Diagonally the real distance counts, not the larger of the two axes.
-        assert!(!in_clear_radius(35.0, 35.0, 14.0, 24.0), "edge diagonally at 29.7 m");
+        assert!(!in_clear_radius(35.0, 35.0, 14.0, 14.0, 24.0), "edge diagonally at 29.7 m");
+        // A row house is wide and shallow, and the two halves are NOT interchangeable. The
+        // same 12 x 11 m footprint, once with its frontage along x and once along z:
+        assert!(!in_clear_radius(0.0, 29.5, 6.0, 5.5, 24.0), "edge in z at 24.0 m, radius 24");
+        assert!(in_clear_radius(0.0, 29.5, 5.5, 6.0, 24.0), "edge in z at 23.5 m, radius 24");
+    }
+
+    #[test]
+    fn f003_a_closed_block_is_a_ring_with_no_gap_and_a_courtyard() {
+        // The whole point of the layout change. Red the moment a run stops dividing into
+        // whole houses — then the block has a slot in it and the street is no longer closed.
+        let p = Perimeter { frontage_m: 12.0, wing_depth_m: 11.0 };
+        let houses = perimeter_houses(0.0, 0.0, 36.0, &p);
+        assert_eq!(houses.len(), 8, "3 + 3 fronts and 1 + 1 flanks");
+
+        // The two street fronts: three houses each, touching, spanning the full 36 m.
+        let mut north: Vec<&Footprint> = houses.iter().filter(|f| f.center_z < -6.0).collect();
+        north.sort_by(|a, b| a.center_x.total_cmp(&b.center_x));
+        assert_eq!(north.len(), 3);
+        assert!((north[0].center_x - north[0].size_x * 0.5 + 18.0).abs() < 1e-4);
+        for pair in north.windows(2) {
+            let gap = (pair[1].center_x - pair[1].size_x * 0.5)
+                - (pair[0].center_x + pair[0].size_x * 0.5);
+            assert!(gap.abs() < 1e-4, "party wall, not a {gap} m gap");
+        }
+        assert!((north[2].center_x + north[2].size_x * 0.5 - 18.0).abs() < 1e-4);
+
+        // The courtyard really is empty: nothing overlaps the inner 14 x 14 m.
+        for f in &houses {
+            let clear = (f.center_x.abs() - f.size_x * 0.5).max(f.center_z.abs() - f.size_z * 0.5);
+            assert!(clear >= 7.0 - 1e-4, "{f:?} eats into the 14 m courtyard");
+        }
+
+        // And no two houses of a ring overlap — the corners belong to the fronts.
+        for (i, a) in houses.iter().enumerate() {
+            for b in &houses[i + 1..] {
+                let dx = (a.center_x - b.center_x).abs();
+                let dz = (a.center_z - b.center_z).abs();
+                assert!(
+                    !(dx < (a.size_x + b.size_x) * 0.5 - 1e-4
+                        && dz < (a.size_z + b.size_z) * 0.5 - 1e-4),
+                    "{a:?} and {b:?} stand in the same place"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn f003_a_run_is_divided_into_whole_houses() {
+        assert_eq!(runs(36.0, 12.0), 3);
+        assert_eq!(runs(14.0, 12.0), 1);
+        // Never zero: a stub is one narrow house, never a hole in the perimeter.
+        assert_eq!(runs(4.0, 12.0), 1);
+        assert_eq!(runs(36.0, 0.0), 1);
+        assert_eq!(runs(f32::NAN, 12.0), 1);
     }
 
     #[test]

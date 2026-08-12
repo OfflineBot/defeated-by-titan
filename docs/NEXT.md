@@ -7,6 +7,12 @@ first, then do the session ritual from [`CLAUDE.md`](../CLAUDE.md), then start a
 
 **Branch: `session-2026-08-09`.** `main` is still diverged — see `HANDOVER.md` §7.
 
+> ⚠️ **The literal first item is at the BOTTOM of this file, under `## 0.`** — `Gas` has two
+> writers since the hub landed, and that is the violation rule 4 exists to prevent. It is ~30 lines
+> and it should be done before anything else builds on the hub.
+> *(It sits at the bottom because appending with `>>` costs nothing to read and opening this file to
+> insert at the top costs ~4 000 tokens. Order by the number, not by the position.)*
+
 ---
 
 ## 0. Before anything: the three files the user answers in
@@ -248,3 +254,115 @@ And the one that outranks all three: **the user played the game for a few minute
 real problems than a day of instrumented measurement did.** Gas that never refilled, a rope that
 went slack on every fast approach, an overshoot invisible to every test we own because no test ever
 flew at an anchor without holding reel. **Ask him to play. Then measure what he says.**
+
+## 0. ⚠️ FIRST, and it is small: give `Gas` back its single writer
+
+`mission::hub::refuel_at_stations` writes `Gas` directly (2026-08-12). `vector::gas` owns every
+debit. **Two writers on one field is the violation rule 4 exists to prevent** — it works today only
+because the two are disjoint *by phase*, and "disjoint by phase" is precisely the argument that
+stops being true over the network, where it becomes two authorities on one value.
+
+**The fix is ~30 lines:** the hub sends a `RefuelRequest` (or reuses the `GasGrant` seam), and
+`vector::gas` is the only thing that ever touches the tank. `docs/architecture.md`'s authority table
+carries the entry, `FINDINGS.md` FIND-057 §2 the two alternatives and the rollback.
+
+Do this before anything else builds on the hub — the longer two writers stand, the more code
+assumes it is allowed.
+
+**While you are there:** `src/lib.rs`'s flag help omits `--hub`, and the hub is opt-in rather than
+the default start (`FIND-057` §5 carries the ASSUMPTION and the rollback). Whether the game should
+*boot* into the hub is the user's call.
+
+## 3. Ashgate: make the houses the swing route, and take the scaffolding out
+
+`ashgate` is built and 🟧 for geometry — wall, two gates on one axis, canal with bridges, towers,
+25 hand-placed houses, 471 blocks, a measured swing at 33.328 m arc bottom / 31.375 m/s on zero gas
+(`FIND-056`). **It looks like a district.** Two things are wrong with it and they are one thing:
+
+**The gantries read as scaffolding through a medieval quarter**, and they only exist because the lot
+grid is suburban. `FIND-058`: a rope swings while `d < H`, the pitch is `lot_m 28 + street_m 7` =
+**35 m**, the houses are **11.5 m** — so nothing swings and a gantry had to be invented. **At ~10 m
+of pitch the houses themselves are the lane** (10 < 11.5), the arc bottom sits over the pavement
+where the reference puts it, and the scaffolding can go.
+**"Make it look right" and "make the rope worth using" have the same answer: shrink the grid.**
+⚠️ **Measure the block cost first** — ~12x the blocks at a 10 m pitch over 700 m; `half_extent_m` is
+already 600 and the index 22 500 cells. It is the body count, not the grid, that will bite.
+
+**Two numbers that are the user's, both cheap:**
+- `scale.ron: architecture.eaves_m` has **no `house_large`**, so every 11.5 m house stays a flat box
+  while 4.5 / 8.0 get pitched caps. One number turns a third of the street front into roofs.
+- The 56/60 m gantries stand above the church (35 m) — the same open question as the graybox's
+  (Q-022/Q-023), and it goes away entirely if the gantries do.
+
+**And the mission still plays in the graybox.** `scripts/game-full.txt` warps to graybox
+coordinates; moving the shipped mission into ashgate is a separate, deliberate step.
+
+## 3b. The main building — you must be able to walk INTO it, and the resupply is inside
+
+The user, 2026-08-12: *"auch das main gebäude in dem der gas und schwert nachschub ist muss da sein
+(in das gebäude muss man rein laufen können. drinnen sind die nachschübe)"*.
+
+**Today the hub is three amber circles on open ground.** `mission::hub` has `DeploymentPoint` and
+`RefuelStation` and they work (`f070-hub.txt`, 20 asserts, exit 0) — but there is no building, no
+door, no interior. That is the gap between "the loop runs" and "there is a place".
+
+What it needs:
+1. **An enterable building in `ashgate`** — walls with a real doorway, a floor, a roof, and an
+   interior big enough to walk around in. ⚠️ **This world has no subtraction**: every block is a
+   cuboid, so a doorway is a *gap between blocks*, not a hole cut in one. `FIND-056` already
+   records the trap that bit the wall gates ("the plinth ate the gate" — decorative courses were
+   emitted straight across the openings).
+2. **Gas AND blade resupply inside it.** Gas exists (`RefuelStation`, `Gas::refill`, `F-019`).
+   **Blades do not** — `Blades` is written by `blades`, and there is no resupply for them at all;
+   `F-033 Klingenhaltbarkeit` is ⬜. Adding blade resupply means either a second station type or one
+   station that restores both. **`blades` owns `Blades`** — do not add a second writer, we already
+   have that problem with `Gas` (item 0).
+3. **The interior must not break the aiming invariant**: `f002_every_tagged_surface_in_the_map_is_reachable_by_free_aiming`
+   walks every anchorable block. An interior wall nothing can hook from outside is a tagged surface
+   nothing can reach — either mark the interior `anchorable: false` or accept it and say why.
+4. Roof reachable by rope, so arriving by air is the natural way in.
+
+The layout research for the district is at
+`…/scratchpad/shiganshina-spec.md` — build the HQ where the reference puts the garrison, not
+wherever there is room.
+
+## 3c. Two defects the map flip exposed — fix them in the rebuild, not separately
+
+**1. 28 row houses cannot be hooked where the player aims.** They are built as a body plus a
+narrower ridge cap, and the cap is `anchorable: false` sitting exactly over the roof centre. So the
+highest point — the thing a player swinging the main street looks at and shoots — answers
+`NoAnchor`, while a 2 m tagged ledge survives on either side. `FIND-059` measured it: 28 of 228
+anchorable blocks report unreachable, and **none of them is genuinely unreachable** — it is the
+caps. Either the caps become `anchorable: true` or the roof stops being a lie. **This is level
+design, not a test bug**, which is why `f002_every_tagged_surface_...` stayed pinned to the graybox
+rather than being loosened.
+
+**2. `scripts/game-full.txt` breaks in ashgate and was deliberately not fixed.** 5 of 23 asserts,
+**all in ACT 1**, which does `warp 24 0 -20` and hooks a graybox watchtower that does not exist
+here: `Speed > 25 → 0.000`, `Height > 12 → 0.050`, `Gas < 300 → 300.000`. No anchor → no reel → the
+tank is untouched → he never leaves the pavement. **The other 18 hold and the mission still wins:**
+`MISSION WON at tick 898 — 3/3 kills`, because ACTs 2–4 are falls, not swings.
+⚠️ **~30 other scripts also warp into graybox coordinates and were not checked.** Moving the shipped
+mission into ashgate is a deliberate step, not a repair: it means re-cutting ACT 1 against real
+district geometry.
+
+## 3d. Unexplained: something over the ashgate origin stops a body at y = 200
+
+Found while pinning the physics tests (`FIND-061`) and **not chased**, because pinning the test to
+the graybox removed the question from that test rather than answering it:
+
+`tests/vector_boost.rs::f007_the_boost_does_not_outrun_the_top_speed` spawns a flier at **y = 200**
+and boosts it. Against ashgate it measured **exactly 0.0000 m/s** — *"below the clamp, so this test
+is measuring something other than the clamp"*. The wall is 120 m; **nothing in the map should exist
+at 200 m**, and a body in open air 80 m above the tallest structure should accelerate.
+
+Either something is up there that should not be, or a body over ashgate's origin is being stopped
+by something else entirely — and a mechanism that can silently zero a flier's velocity is worth
+knowing about before it does it to a player. **One script, a per-tick trace of position and
+velocity at y = 200 over ashgate, should settle it in minutes.**
+
+Related and probably unconnected, from the same round: ashgate's **aprons are 0.3 m thick on a
+ground slab whose top is exactly y = 0**, so every apron edge — street, square, boulevard, quay — is
+a **5 cm lip**, and the player spawns on one (he rests at 0.04996878 m instead of 0). The overlap is
+deliberate: it is what makes `world/map.rs` drop a generated lot. Whether a player at 40 m/s trips
+on it is unmeasured.
