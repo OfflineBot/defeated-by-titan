@@ -124,11 +124,22 @@ impl RopeLength {
     }
 }
 
-/// Where a hook would fly **right now** (`F-002`, free aiming).
+/// Where a hook would fly **right now** (`F-002`, free aiming) — the **centre** ray.
 ///
 /// Valid for one tick, recomputed every tick. `F-002` in its own words: "this layer stays
 /// ALWAYS active and is never replaceable by the snap system."
+///
+/// Since `F-023` this is the **crosshair's** source and no longer the hook's: what the two
+/// arms fire at stands in [`ArmAim`], which `vector::aim` writes in the same tick out of two
+/// further rays. The two are kept apart because they answer different questions — "what is
+/// under the crosshair" is one point, "where would Q and E take me" is two.
+///
+/// `#[require(ArmAim)]`: an entity that aims carries both, always, without anybody having to
+/// remember it at the spawn site. `player::spawn_player` is not this domain's file, and a
+/// component that has to be inserted in a foreign file to be written here is a rule nobody
+/// can see (`docs/architecture.md`, file ownership).
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[require(ArmAim)]
 pub struct AimPoint {
     /// First **solid** hit of the look ray, in world coordinates. `None` means: nothing in
     /// range.
@@ -142,6 +153,49 @@ pub struct AimPoint {
     pub anchorable: bool,
 }
 
+/// Where **each arm's** hook would fly right now — the hemisphere split of `F-023`.
+///
+/// The user, 2026-08-12: *„es muss mehr rechts und links spreaden!! … und da wo das seil am
+/// ende auch landet soll die markierung hin vom seil"*. `F-023` had specified it long before
+/// that: the candidate set is split relative to the camera forward axis, "Q bedient
+/// ausschliesslich die linke Menge, E ausschliesslich die rechte".
+///
+/// **Same type per side as the centre ray**, not a third shape. The plan sketched an
+/// `ArmAim { point_m, body, anchorable }`, which is [`AimPoint`] field for field; a second
+/// struct with the same three fields would mean two spellings of one answer, and
+/// `vector::hook::anchor_target` would need a copy. What is per-arm here is the *ray*, not
+/// the *answer's shape* — so the arms hold `[AimPoint; 2]`, indexed like [`Hook::arms`] and
+/// [`RopeLength::lengths_m`] by [`Side::index`].
+///
+/// ## The one rule that makes it worth a component
+///
+/// **This is what the hook fires at, and what the HUD draws — the same value, the same
+/// tick.** `vector::aim` resolves everything here, including the fallback to the centre ray
+/// when a side ray finds nothing anchorable; `vector::hook` re-casts nothing at fire time and
+/// `hud::arm_aim` computes nothing of its own. That is why the user's *„und dann muss das
+/// seil auch dahin!!"* holds by construction instead of by agreement between two files
+/// (`docs/FINDINGS.md` FIND-047: the markers used to be fixed screen badges that never moved).
+///
+/// **One writer:** `vector::aim::aim`.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ArmAim {
+    pub arms: [AimPoint; 2],
+}
+
+impl ArmAim {
+    pub fn side(&self, side: Side) -> &AimPoint {
+        &self.arms[side.index()]
+    }
+
+    /// Where this arm's rope would land, or `None` when the arm has nothing to fire at.
+    ///
+    /// The HUD marker and the hook read **this**; whoever draws a marker from anything else
+    /// is drawing a promise the rope does not keep.
+    pub fn target_of(&self, side: Side) -> Option<Vec3> {
+        self.side(side).point_m
+    }
+}
+
 /// Result of **this** tick's gas booking (`F-018`).
 ///
 /// Whoever reads `false` here got no gas and writes zero into its drive. Without that detour
@@ -153,6 +207,13 @@ pub struct AimPoint {
 pub struct GasGrant {
     pub boost: bool,
     pub reel_in: bool,
+    /// `F-006` rope steering (`docs/NEXT.md` §1B). True while a hook is anchored, a movement key
+    /// is down **and** this tick's `gas_steer_per_s` was paid — so
+    /// `player::locomotion::air_control` needs no second condition of its own, exactly like
+    /// [`boost`](Self::boost). **On `false` the rope term is zero, not halved**: the free-air
+    /// look term keeps `air_accel_empty_fraction` on an empty tank, the rope term does not exist
+    /// without gas.
+    pub steer: bool,
     /// `F-008` dodge — **true on exactly one tick per double-tap**, never on two in a row.
     ///
     /// The other two are grants for a *held* button and stay true while it is held. This one

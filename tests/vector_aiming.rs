@@ -54,9 +54,10 @@ use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::net::Inbox;
 use defeated_by_titan::player::spawn_player;
+use defeated_by_titan::vector::aim::side_dirs;
 use defeated_by_titan::shared::{
-    AimPoint, AnchorSurface, Body, BodyId, BodyMask, Cli, IdCounter, Intent, PlayerId, Tick,
-    WarpPlayer,
+    AimPoint, AnchorSurface, ArmAim, Body, BodyId, BodyMask, Buttons, Cli, Hook, HookState,
+    IdCounter, Intent, PlayerId, Side, Tick, WarpPlayer,
 };
 
 /// Builds the **real** app, headless, one simulation step per `update()`, on the map named
@@ -669,5 +670,230 @@ fn f002_the_aim_names_the_body_it_hit() {
     assert!(
         !distinct.contains(&named),
         "the untagged wall reports body {named:?}, which is one of the tagged blocks"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// 10. F-023 — the hemisphere split: Q serves the left set, E the right
+// ---------------------------------------------------------------------------------------
+
+/// Posts a look direction **and** buttons and runs one step. Same channel as [`look`] — the
+/// inbox — because nobody writes an `Intent` straight onto a player, not even a test.
+fn look_and_press(
+    app: &mut App,
+    id: PlayerId,
+    yaw_deg: f32,
+    pitch_deg: f32,
+    buttons: Buttons,
+    spread_deg: f32,
+) {
+    let tick = app.world().resource::<Tick>().0;
+    app.world_mut().resource_mut::<Inbox>().push(
+        id,
+        Intent {
+            yaw: yaw_deg.to_radians(),
+            pitch: pitch_deg.to_radians(),
+            buttons,
+            // The wheel setting travels **in the intent**, absolutely, the same way it will
+            // arrive over the wire (`src/shared/intent.rs`). Spelled out in every call instead
+            // of defaulted: `Intent::default()` is `0.0`, which the clamp turns into
+            // `aim_spread_min_deg` — a perfectly good angle that is not the one that ships.
+            aim_spread_deg: spread_deg,
+            tick,
+            ..default()
+        },
+        tick,
+    );
+    app.update();
+}
+
+/// Where the arm's shot is actually going — the target frozen into `HookState::Flying` at the
+/// moment the trigger was pulled. **Not** an aim point: this is the number the rope flies to.
+fn fired_target(app: &App, e: Entity, side: Side) -> Vec3 {
+    let hook = *app.world().get::<Hook>(e).expect("every player carries both arms");
+    match hook.arm(side).state {
+        HookState::Flying { target_m, .. } => target_m,
+        other => panic!("the {side:?} arm is {other:?} — no shot left"),
+    }
+}
+
+#[test]
+fn f002_q_and_e_can_target_two_different_points() {
+    // The user, 2026-08-12: „und es muss mehr rechts und links spreaden!!" — and the backlog
+    // had already specified it: `F-023` splits the candidate set relative to the camera
+    // forward axis into a LEFT and a RIGHT hemisphere, "Q bedient ausschliesslich die linke
+    // Menge, E ausschliesslich die rechte" (`docs/backlog/gameplay.ron`).
+    //
+    // Until this test existed `vector::hook` handed **one** `AimPoint` to both arms
+    // (`docs/FINDINGS.md` FIND-039), so both ropes flew at the same world point and the two
+    // HUD markers described one place. That is the state this measures away.
+    //
+    // The fixtures are the graybox's three explicit blocks, and the numbers below are
+    // computed from `maps.ron`, not read off a run: standing in the clear circle at the
+    // origin (`layout.clear_radius_m: 24`, so nothing procedural stands in the way), looking
+    // along -Z, the centre ray ends on the small sand-brown cube (0, 2, -12) at z = -10, the
+    // left ray on the brick-red cube (-12, 4, -20) and the right one on the stone-gray tower
+    // (10, 5.75, -28). All three are `anchorable: true`.
+    let mut app = app();
+    let (e, id) = test_player(&mut app, Vec3::new(0.0, 0.0, 0.0));
+    ticks(&mut app, 60); // land and settle — the eye has to be a stable number
+
+    let both = Buttons(Buttons::HOOK_LEFT.0 | Buttons::HOOK_RIGHT.0);
+    let spread_deg = data(&app).game.vector.aim_spread_deg;
+    look_and_press(&mut app, id, 0.0, 0.0, both, spread_deg);
+
+    let left = fired_target(&app, e, Side::Left);
+    let right = fired_target(&app, e, Side::Right);
+    let apart = (left - right).length();
+    assert!(
+        apart > 15.0,
+        "the two ropes flew {apart:.2} m apart — left {left:?}, right {right:?}. At 0.00 m \
+         they are one point, which is what `vector::hook` handed both arms before F-023"
+    );
+
+    // The hemispheres are not swappable: `Q` (`Side::Left`) is the LEFT one, and left of a
+    // player looking along -Z is -X (`docs/conventions.md`, the axis contract).
+    assert!(
+        left.x < right.x,
+        "Q fired at x = {}, E at x = {} — the two hemispheres are swapped",
+        left.x,
+        right.x
+    );
+
+    // §1A requirement 9 — *„und dann muss das seil auch dahin!!"*. What `hud::arm_aim` draws
+    // and what the rope flew at is **the same number in the same tick**, not two numbers that
+    // agree to within a tolerance: `vector::hook` fires at `ArmAim` and re-casts nothing.
+    // Exact equality on purpose — a marker that is 1 ULP off a target is a marker computed a
+    // second time somewhere (`docs/FINDINGS.md` FIND-047).
+    let arms = *app.world().get::<ArmAim>(e).expect("every player that aims carries an ArmAim");
+    assert_eq!(arms.target_of(Side::Left), Some(left), "the Q marker is not where Q flew");
+    assert_eq!(arms.target_of(Side::Right), Some(right), "the E marker is not where E flew");
+    assert!(
+        arms.side(Side::Left).anchorable && arms.side(Side::Right).anchorable,
+        "a shot left although the arm's own ray reports a surface that does not hold"
+    );
+
+    // And the centre ray is untouched: the crosshair still comes off `AimPoint`, and it still
+    // points at the block straight ahead.
+    let centre = aim_of(&app, e).point_m.expect("the small cube stands 10 m ahead");
+    assert!(
+        (centre.z + 10.0).abs() < 0.05 && centre.x.abs() < 0.05,
+        "the centre ray moved to {centre:?} — it is the crosshair's source and must not"
+    );
+}
+
+#[test]
+fn f002_a_side_ray_that_finds_nothing_falls_back_to_the_centre_ray() {
+    // **The line between a feature and a regression.** The spread is worth nothing if it
+    // costs hit rate on every target narrower than the spread itself: aiming at a lone tower
+    // has to keep working exactly as well as it did when both arms shared one point.
+    //
+    // The fixture is built out of the range, not out of the map, so that it does not depend
+    // on what stands 40 m away: the small sand-brown cube (0, 2, -12) has its near face
+    // 10.00 m ahead, the two side rays at 28° would need 10 / cos(28°) = 11.33 m to reach the
+    // same face — so with `hook_range_m` at 11 m the centre ray hits and both side rays reach
+    // nothing at all. The number is moved in `GameData` and not in the file, the same way
+    // `tests/vector_hooks.rs` moves the flight speed.
+    let mut app = app();
+    let (e, id) = test_player(&mut app, Vec3::new(0.0, 0.0, 0.0));
+    ticks(&mut app, 60);
+    app.world_mut().resource_mut::<GameData>().game.vector.hook_range_m = 11.0;
+
+    let both = Buttons(Buttons::HOOK_LEFT.0 | Buttons::HOOK_RIGHT.0);
+    let spread_deg = data(&app).game.vector.aim_spread_deg;
+    look_and_press(&mut app, id, 0.0, 0.0, both, spread_deg);
+
+    let centre = aim_of(&app, e).point_m.expect("the cube stands 10 m ahead, inside 11 m");
+    assert!((centre.z + 10.0).abs() < 0.05, "the centre ray landed at {centre:?}");
+    for side in Side::ALL {
+        assert!(
+            (fired_target(&app, e, side) - centre).length() < 1e-4,
+            "the {side:?} arm fired at {:?} instead of falling back to the centre {centre:?} \
+             — its own ray reaches nothing inside {} m",
+            fired_target(&app, e, side),
+            data(&app).game.vector.hook_range_m
+        );
+    }
+}
+
+#[test]
+fn f023_the_two_side_rays_are_a_city_block_apart_at_a_hundred_metres() {
+    // The acceptance number for the spread, and it is pure geometry — no map, no physics, so
+    // it cannot be argued with: at `game.ron`'s `aim_spread_deg` and 100 m of aim distance the
+    // two side points must be at least 45 m apart. The file's own comment does the arithmetic
+    // and arrives at 2 · 100 · sin(28°) = 93.9 m; both numbers are asserted, because the
+    // second one is what pins the reading of the key as a HALF-angle
+    // (`src/vector/aim.rs::side_angle_rad`, `docs/FINDINGS.md` FIND-083).
+    let app = app();
+    let v = data(&app).game.vector.clone();
+
+    // The angle arrives the way the running game delivers it: out of the player's own intent,
+    // through the clamp that lives on `Intent` (`W2`) — not out of a second reading here.
+    let shipped = Intent { aim_spread_deg: v.aim_spread_deg, ..default() };
+    let spread_rad = shipped.aim_spread_rad(v.aim_spread_min_deg, v.aim_spread_max_deg);
+    assert!(
+        (spread_rad.to_degrees() - v.aim_spread_deg).abs() < 1e-4,
+        "the file's own starting value does not survive its own window"
+    );
+
+    let eye = Vec3::new(0.0, 1.6, 0.0);
+    let [left, right] = side_dirs(&shipped, spread_rad);
+    let apart = ((eye + left * 100.0) - (eye + right * 100.0)).length();
+    assert!(
+        apart >= 45.0,
+        "at {}° the two side points are {apart:.2} m apart at 100 m — the acceptance is 45 m, \
+         and at 0.00 m the two arms share one ray again (FIND-039)",
+        v.aim_spread_deg
+    );
+    let by_hand = 2.0 * 100.0 * spread_rad.sin();
+    assert!(
+        (apart - by_hand).abs() < 0.05,
+        "{apart:.2} m instead of the {by_hand:.2} m `game.ron` computes in its own comment — \
+         `aim_spread_deg` is a HALF-angle, and something has started halving it"
+    );
+    // Left is left: -X for a player looking along -Z (`docs/conventions.md`).
+    assert!(left.x < 0.0 && right.x > 0.0, "the hemispheres are swapped: {left:?} / {right:?}");
+
+    // The spread is a SCREEN spread — the same angle off the look direction at every pitch,
+    // including straight up and straight down. A yaw around world Y instead of around the
+    // camera's up axis passes at pitch 0 and collapses to nothing at ±90°.
+    for pitch_deg in [-89.0_f32, -60.0, -30.0, 0.0, 30.0, 60.0, 89.0] {
+        for yaw_deg in [-170.0_f32, -45.0, 0.0, 90.0] {
+            let intent = Intent {
+                yaw: yaw_deg.to_radians(),
+                pitch: pitch_deg.to_radians(),
+                ..shipped
+            };
+            let look = intent.look_dir();
+            for dir in side_dirs(&intent, spread_rad) {
+                assert!(
+                    (dir.length() - 1.0).abs() < 1e-5,
+                    "yaw {yaw_deg} pitch {pitch_deg}: {dir:?} is not a direction"
+                );
+                let off_deg = look.dot(dir).clamp(-1.0, 1.0).acos().to_degrees();
+                assert!(
+                    (off_deg - v.aim_spread_deg).abs() < 0.01,
+                    "yaw {yaw_deg} pitch {pitch_deg}: the side ray sits {off_deg:.3}° off the \
+                     look direction instead of {}°",
+                    v.aim_spread_deg
+                );
+            }
+        }
+    }
+
+    // What an `Intent` nobody has wheeled yet means for THIS system. `0.0` is not "no spread"
+    // — at 0 both arms fire along one ray again, the state `F-023` exists to end (FIND-039) —
+    // so the narrowest the two rays ever get is the file's floor, and never zero.
+    let unwheeled = Intent::default();
+    let narrow = unwheeled.aim_spread_rad(v.aim_spread_min_deg, v.aim_spread_max_deg);
+    assert!(
+        (narrow.to_degrees() - v.aim_spread_min_deg).abs() < 1e-4,
+        "an intent nobody has wheeled aims at {}° — 0° is one ray, not two",
+        narrow.to_degrees()
+    );
+    let [l, r] = side_dirs(&unwheeled, narrow);
+    assert!(
+        ((eye + l * 100.0) - (eye + r * 100.0)).length() > 30.0,
+        "even at the floor the two rays have to be two rays"
     );
 }

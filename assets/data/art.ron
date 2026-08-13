@@ -101,13 +101,40 @@
         // "dark grey". No hue invented — this is the sky's own colour bouncing.
         ambient: (
             color: (0.45, 0.55, 0.80),
-            // cd/m^2. 3000 puts the fill at ~11 % of a sunlit face:
-            //   0.43 * 0.55 * 2400 * exposure(12.85) = 0.064 linear  vs  0.618 in the sun,
-            // = 10.4 %.
-            // Under 5 % a shadow is a hole you cannot read a rooftop out of at 30 m/s; over
-            // ~20 % the shadow stops being a shadow. The old value was 220 against an
-            // illuminance of 10 000 — a *ratio* of 2 %, which would have been contrasty if
-            // the sunlit side had not been clipping at white anyway.
+            // cd/m^2. **The one number two tests squeeze from both ends**, and the window
+            // between them is now half a stop wide:
+            //
+            //   stone_gray (0.43) must stay UNDER 20 % of a sunlit face, or an outdoor shadow
+            //     stops being a shadow                            -> brightness <= 4630
+            //     `f071_a_roof_a_sunlit_wall_and_a_shaded_wall_are_three_different_values`
+            //   the LAMP over the aisle must stay at least 5x the fill on the same surface,
+            //     or somebody has raised the world instead of lighting the room
+            //                                                     -> brightness <= 3528
+            //   and the fill must still lift `brick_red` to 5 % of that lamplit floor, or the
+            //     face no lamp reaches is black                   -> brightness >= 1459
+            //     both in `f019_a_roofed_room_lives_on_its_lamp_and_the_fill_is_the_second_term`
+            //
+            // 2400 sits in that window: stone_gray 10.4 % of the sun, the lamp 7.3x the fill,
+            // brick_red 8.2 % of the lamplit floor.
+            //
+            // ## Why it came back DOWN from 4200 on 2026-08-13
+            //
+            // 4200 was put here the same morning as an explicit **mitigation** (FIND-078): the
+            // hall had no light of its own, so the only lever on it was the world's fill, and
+            // the fill was raised until the racks were 10.6 sRGB levels off the wall behind
+            // them. That lever cost the exterior 1:1 — a shadowed wall rose with everything
+            // else, and shadow-against-sun went 29.1 % -> 38.0 % in sRGB, which is the contrast
+            // `FIND-071` was fought for.
+            //
+            // The hall has two lamps now (`maps.ron: ashgate.lights`), and they do what no
+            // amount of fill could: they give a box a lit face and a shaded one. Four runs of
+            // the same binary, same tick, same camera (FIND-080 §4):
+            //
+            //   4200 + lamps: rack 90.6  wall 141.7  floor 150.3  EXT shadow/sun 38.0 %
+            //   2400 + lamps: rack 83.9  wall 137.8  floor 147.0  EXT shadow/sun 29.1 %
+            //
+            // **6.7 sRGB levels inside for the exterior's whole contrast back.** The interior
+            // is no longer paid for out of the world, and that is the trade this line takes.
             brightness: 2400.0,
         ),
 

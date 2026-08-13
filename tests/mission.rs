@@ -1277,6 +1277,57 @@ fn f019_a_supply_station_has_floor_you_can_actually_stand_on_inside_its_reach() 
     }
 }
 
+/// Where a player who walks **straight in and keeps walking** ends up: the westernmost spot on
+/// the aisle centre line he can still stand on, which is the back wall of the hall.
+///
+/// Derived and never a literal — it is the map's own geometry read from the far side. Scanning
+/// from the back of the depot floor eastwards, the first standable cell *is* the stop, because
+/// everything west of it is the wall.
+fn end_of_the_aisle(d: &GameData) -> Vec3 {
+    let (floor_min, floor_max) = floor_under_the_stations(d);
+    let solids = solid_boxes(d);
+    let y = d.missions.hub.refuel_stations[0].center_m.1;
+    let mut x = floor_min.x;
+    while x < floor_max.x {
+        let spot = Vec3::new(x, y, 0.0);
+        if standable(spot, d, &solids) {
+            return spot;
+        }
+        x += 0.05;
+    }
+    panic!("no standable spot anywhere on the aisle centre line — the hall has no interior");
+}
+
+#[test]
+fn f019_walking_straight_down_the_aisle_puts_you_in_reach_of_every_rack() {
+    // ⭐ The difference between "a player *can* reach the supply" and "a player who walks in
+    // finds it". The test above only asks whether standing room exists inside the reach — and
+    // it passed with the stations at the **centre** of the two 5 x 9 m racks, where the only
+    // standing room was a 1.15 m strip between the rack's east face and a roof post, plus a
+    // 1.0 m slot behind the rack against the back wall. 57 cells, all of them threaded
+    // (`docs/FINDINGS.md` FIND-075).
+    //
+    // What the user asked for is a place you walk into: „in das gebäude muss man rein laufen
+    // können. drinnen sind die nachschübe". So the criterion is the walk itself — the door is
+    // on the aisle centre line, the aisle is 29 m of clear floor, and a player who holds W from
+    // his own spawn point is stopped by the back wall. **From that spot every rack has to be in
+    // reach**, or the supply is a puzzle.
+    let d = data(&started(None));
+    let stop = end_of_the_aisle(&d);
+    let range = d.gear.resupply.range_m;
+
+    for station in &d.missions.hub.refuel_stations {
+        let at = Vec3::from(station.center_m);
+        let distance = stop.distance(at);
+        assert!(
+            distance <= range,
+            "a player who walks straight in stops at {stop:?} and the station at {at:?} is \
+             {distance:.2} m away — outside the {range} m of gear.ron: resupply.range_m. \
+             The supply of the main building has to be where the walk ends"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // One writer of `Blades` — the same shape, built in rather than repaired in
 // ---------------------------------------------------------------------------

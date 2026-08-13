@@ -214,6 +214,35 @@ pub struct PlayerTuning {
     /// etwas movement aufzubauen (aber hälfte ca)"* (`docs/NEXT.md` §1e). The air control is
     /// therefore not gated on gas; it only gets weaker.
     pub air_accel_empty_fraction: f32,
+    /// **⚠️ UNTUNED, and read by nothing yet** — `W4` (`player::locomotion`) bills it. What `W`
+    /// adds **on top of** [`air_accel_m_s2`](Self::air_accel_m_s2) along the rope while a hook
+    /// is anchored, in m/s².
+    ///
+    /// The user, 2026-08-12 (`docs/NEXT.md` §1A): *„wenn ich mit seilen festhake … und w in die
+    /// richtung drücke will ich dass man deutlich mehr geboosted wird"*. Two bounds, both in
+    /// `tests/data.rs`: strictly **above** `air_accel_m_s2` (or "deutlich mehr" is untrue and
+    /// the key buys nothing), and at most [`VectorTuning::boost_m_s2`] (or free thrust beats
+    /// the thrust you pay gas for).
+    ///
+    /// No `serde(default)`: at `0.0` this is the old behaviour, and that has to be a decision
+    /// somebody wrote into the file rather than a value nobody noticed was missing.
+    pub air_pull_m_s2: f32,
+    /// **⚠️ UNTUNED, and read by nothing yet.** What `A`/`D` add on top while a hook is
+    /// anchored, in m/s² — on the **horizontal right vector**, never the rope tangent, which
+    /// flips sign when the anchor passes beside you (`docs/NEXT.md` §1B).
+    ///
+    /// The bound is a **sum**: `air_accel_m_s2 + air_lateral_m_s2 <= boost_m_s2`, so that
+    /// holding one strafe key can never beat one boost.
+    pub air_lateral_m_s2: f32,
+    /// **⚠️ UNTUNED, and read by nothing yet.** Over how many metres of rope length the rope
+    /// pull fades out above [`VectorTuning::min_rope_m`].
+    ///
+    /// Exists because of a **measured** cliff, not a feeling: `docs/FINDINGS.md` FIND-035 —
+    /// at `min_rope_m` the length constraint takes 17 m/s out of the player in one tick, and
+    /// thrusting at an anchor you are already next to feeds exactly that. Bounds:
+    /// `>= 2 * min_rope_m` (or the fade is shorter than the cliff) and `<= 0.1 * hook_range_m`
+    /// (or a near-anchor special case runs over a tenth of every rope in the game).
+    pub air_pull_fade_m: f32,
     pub eye_height_m: f32,
     /// Largest distance per substep of the integrator. Has to be strictly smaller than
     /// [`WorldTuning::min_wall_m`], or the player tunnels through the thinnest wall.
@@ -239,7 +268,31 @@ pub struct PlayerTuning {
 pub struct VectorTuning {
     pub hook_range_m: f32,
     pub hook_speed_m_s: f32,
+    /// How fast a **missed** hook comes back, in m/s. The bound is not "faster than the
+    /// outward flight" any more — since 2026-08-12 both are 500 — but a player-visible one that
+    /// `tests/data.rs` holds: `hook_range_m / this <= 1.0 s`, i.e. a miss at maximum range is
+    /// cleared inside a second, because §1A's first requirement is that firing again is never
+    /// blocked.
     pub hook_retract_speed_m_s: f32,
+    /// **⚠️ UNTUNED, and read by nothing yet** — `W3` (`vector::aim`) and `W2` (the wheel)
+    /// consume it. Half-angle between the two arms' aim rays, in degrees off the look
+    /// direction; degrees in the RON, radians in the code (`docs/conventions.md`).
+    ///
+    /// The user, 2026-08-12: *„und es muss mehr rechts und links spreaden!! (mit mausrad soll
+    /// man einstellen können wie weit auseinander es gehen darf!)"* — so this is the **starting
+    /// value of a number the player then sets at runtime**, and the next three keys are the
+    /// window he sets it in. ⚠️ The wheel carries the **absolute** angle, never a delta: a
+    /// delta desyncs over the network and never re-converges (`docs/multiplayer.md`).
+    pub aim_spread_deg: f32,
+    /// Floor of the wheel's window. **Strictly above 0** — at 0 both arms share one ray again,
+    /// which is the state `F-023` exists to end (`docs/FINDINGS.md` FIND-039).
+    pub aim_spread_min_deg: f32,
+    /// Ceiling of the wheel's window. **At most 60°**: past that the side ray leaves the
+    /// horizontal frustum and the marker the user asks for would be drawn off-screen.
+    pub aim_spread_max_deg: f32,
+    /// One notch of the wheel, in degrees. `(max - min) / step` has to be at least 8 notches,
+    /// or the wheel is a three-position switch a player reads as broken.
+    pub aim_spread_step_deg: f32,
     pub reel_speed_m_s: f32,
     pub min_rope_m: f32,
     /// Gauss-Seidel iterations over both rope constraints (`shared::rope::rope_step`).
@@ -247,6 +300,22 @@ pub struct VectorTuning {
     pub gas_tank: f32,
     pub gas_boost_per_s: f32,
     pub gas_reel_per_s: f32,
+    /// **⚠️ UNTUNED, and nothing spends it yet.** What the rope-pull thrust
+    /// ([`PlayerTuning::air_pull_m_s2`] / [`PlayerTuning::air_lateral_m_s2`]) will cost per
+    /// second once `W4` bills it in `vector::gas`.
+    ///
+    /// It exists because that thrust would otherwise be **free**, which every one of the nine
+    /// judges of the `docs/NEXT.md` §1B plan named as its biggest flaw independently. The
+    /// number is solved, not chosen, out of the same ratio that decides
+    /// [`gas_dodge`](Self::gas_dodge) — **gas per m/s of speed bought**:
+    /// `gas_steer_per_s / air_pull_m_s2` = 16/30 = 0.533 against the held boost's
+    /// `gas_boost_per_s / boost_m_s2` = 18/34 = 0.529. The two thrusts cost the same per metre
+    /// per second on purpose, and `tests/data.rs` pins the difference at `<= 0.15`.
+    ///
+    /// Spent since 2026-08-13 by [`GasConsumer::Steer`], booked in `vector::gas::book` and read
+    /// by `player::locomotion::air_control` — a rope term that costs nothing was what the nine
+    /// judges refused, and it does not.
+    pub gas_steer_per_s: f32,
     /// `F-008`. **⚠️ UNTUNED.** What **one** dodge costs — a flat amount, not a rate, and the
     /// only gas number in this block without a `_per_s`. That is the whole difference between
     /// the two boosts the user asked for (`docs/NEXT.md` §1c): `Shift` bills a rate for as long
@@ -306,6 +375,12 @@ pub enum GasConsumer {
     Boost,
     /// `F-005` reel-in.
     ReelIn,
+    /// `F-006` rope steering — the `W`/`A`/`D` thrust that an **anchored** rope adds on top of
+    /// the free-air control (`docs/NEXT.md` §1B, `player::locomotion::rope_steer`). A rate,
+    /// billed at [`VectorTuning::gas_steer_per_s`] per second for as long as a hook holds and a
+    /// movement key is down. **Not** the free-air control itself: that one is never gated on gas,
+    /// it only halves (`PlayerTuning::air_accel_empty_fraction`).
+    Steer,
     /// `F-008` dodge. **The one consumer that is not a rate** — it bills
     /// [`gas_dodge`](VectorTuning::gas_dodge) once, on the tick the double-tap lands, and
     /// nothing on any other tick.
@@ -380,6 +455,19 @@ pub struct Map {
     pub layout: Layout,
     /// Explicitly placed boxes. They beat the generated layout.
     pub blocks: Vec<MapBlock>,
+    /// The lamps that hang **inside** this map's buildings.
+    ///
+    /// **Explicit, never defaulted** (§4, and `#[serde(default)]` is forbidden for game
+    /// values): a map that forgets the key fails to load. A map with no interiors writes
+    /// `lights: []` and says so — an empty list is a statement, a missing field is a
+    /// silence that looks exactly like a bug when the room turns out dark.
+    ///
+    /// Why it is per **map** and not per `art.ron`: a lamp is part of a building, it stands
+    /// at a coordinate, and `docs/FINDINGS.md` FIND-078 measured why the global fill cannot
+    /// stand in for it — ambient has no direction, so 5x the brightness buys 5.8 sRGB levels
+    /// and costs the exterior its shadows 1:1, and the boxes in the room stay flat
+    /// rectangles because nothing gives them a lit face and a dark one.
+    pub lights: Vec<MapLight>,
 }
 
 /// The rule `world` deterministically generates buildings from.
@@ -514,6 +602,55 @@ pub struct MapBlock {
     pub landmark: bool,
 }
 
+/// One lamp inside a building — spawned by `render::light::setup_interior_lights` as a
+/// **`PointLight`**, placed by hand exactly like a [`MapBlock`].
+///
+/// ## Why a point light and not a spot
+///
+/// A hall lamp hangs under a roof and throws light in every direction; that IS a point light.
+/// A [`SpotLight`](bevy::light::SpotLight) would need an aim vector and two cone angles —
+/// three more numbers per lamp that can be got wrong — and to cover a 29 x 23 m hall from
+/// 8.5 m up its outer angle would have to be near-hemispherical, at which point it is a point
+/// light with extra fields. A spot is the right shape when a pool of light on **one** object
+/// is wanted; here the whole room has to become readable.
+///
+/// ## Why a lamp inside a room does not brighten the world
+///
+/// Bevy's point light is clustered forward and unoccluded: with [`Self::shadows`] off it
+/// reaches every fragment inside [`Self::range_m`], wall or no wall. That is safe here and it
+/// is Lambert that makes it safe — **the outer face of the wall a lamp stands behind points
+/// away from that lamp**, so `NdotL <= 0` and it receives nothing however long the range. The
+/// only faces that could leak are the ones pointing **up** (street, aprons, quays) and the way
+/// to keep those out is the range: `attenuation = (1 - (d/r)^4)^2 / d^2`
+/// (`bevy_pbr .. lighting.wgsl`) is a **hard** cut-off at `d = r`, not an asymptote.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MapLight {
+    /// Where the lamp hangs, in metres.
+    pub center_m: (f32, f32, f32),
+    /// A key from [`Maps::palette`] — **not** an RGB triple, and for the same reason a block
+    /// may not carry one: the moment a light may name its own colour, one of the three signal
+    /// colours becomes an amber lantern (`docs/conventions.md` §3).
+    pub color: String,
+    /// Luminous power in **lumens** — Bevy divides by `4*pi` to get candela
+    /// (`bevy_pbr-0.19.0/src/render/light.rs:530`).
+    ///
+    /// ⚠️ **The numbers here are in the tens of millions and that is not a typo.**
+    /// `art.ron: exposure_ev100 = 12.85` is stopped down for a 52 000 lux sun, and under that
+    /// exposure a real 1 500 lm bulb delivers 1.2 lux at 10 m — five stops under a shadow. A
+    /// lamp that is *legible* against a sunlit street has to be a floodlight; a lamp that is
+    /// photometrically honest leaves the room exactly as unreadable as FIND-078 found it.
+    pub intensity_lm: f32,
+    /// Hard cut-off in metres. Nothing outside it is touched at all, which is what keeps a
+    /// lamp's effect inside its own building — see the type docs.
+    pub range_m: f32,
+    /// **The expensive switch** (`docs/lessons/performance.md` rule 5). A shadow-casting point
+    /// light costs a **cube** map — six depth passes over everything in range, per light, per
+    /// frame — where the sun costs one pass per cascade. Never switched on without a measured
+    /// number.
+    pub shadows: bool,
+}
+
 // ---------------------------------------------------------------------------
 // gear.ron
 // ---------------------------------------------------------------------------
@@ -548,7 +685,13 @@ pub struct FeelTuning {
 #[serde(deny_unknown_fields)]
 pub struct BladeTuning {
     pub start_pairs: u8,
+    /// What one **reported** hit costs the pair in the harness, in sharpness. The cortex cut is
+    /// this number; a graze is this number times [`Self::wear_torso_factor`].
     pub wear_per_hit: f32,
+    /// The graze's share of [`Self::wear_per_hit`]. **Below 1.0 on purpose** — a pass that ends
+    /// in a nape reports `[Torso, Cortex]` on every titan, because every titan is wider than his
+    /// own neck. See the comment in `gear.ron`, which carries the argument.
+    pub wear_torso_factor: f32,
     pub damage_per_m_s: f32,
     pub min_speed_m_s: f32,
     /// **Decides whether a cut lands at all**, and did not exist before 2026-08-09.

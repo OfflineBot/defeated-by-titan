@@ -26,8 +26,12 @@
 //! not merely dark, put the boxes' own shadows back on the ground, and replace the single-colour
 //! `ClearColor` with a dome and a fog that agree on their horizon.
 //!
-//! # The four things it does
+//! # The five things it does
 //!
+//! 0. **[`setup_interior_lights`]** — the lamps out of `maps.ron: lights`, one `PointLight`
+//!    each. It is numbered zero because it is the youngest and because it is the one that is
+//!    **not** global: everything else in this file is the weather, and a lamp is furniture.
+//!    It exists because the fill could not do its job — `docs/FINDINGS.md` FIND-078.
 //! 1. **[`setup_sun`]** — one `DirectionalLight`, aimed from an azimuth/elevation pair rather
 //!    than from a point in metres, with cascaded shadows sized for a 400 m district.
 //! 2. **[`setup_sky`]** — a dome with a three-stop vertical gradient in its **vertex colours**,
@@ -124,6 +128,82 @@ pub fn setup_sun(mut commands: Commands, data: Res<GameData>) {
         cascades,
         Transform::from_translation(eye).looking_at(Vec3::ZERO, Vec3::Y),
     ));
+}
+
+/// Marks a lamp that came out of `maps.ron: lights`, so a test can count them without
+/// catching a light some other system spawned.
+#[derive(Component)]
+pub struct InteriorLamp;
+
+/// The lamps **inside** the buildings — one [`PointLight`] per `maps.ron: lights` entry.
+///
+/// # Why this exists, and it is the second measurement and not the first opinion
+///
+/// The user could walk into the garrison hall and could not see what was in it. The diagnosis
+/// handed over was "the roof blocks the sun and there is no ambient term"; `docs/FINDINGS.md`
+/// FIND-078 measured it and **both halves were wrong**. The ambient term exists, comes out of
+/// `art.ron` and works. And the room is not dark:
+///
+/// | patch, same frame | luminance |
+/// |---|---|
+/// | hall back wall | 51.9 |
+/// | **an EXTERIOR wall in shadow** | **51.5** |
+/// | sunlit street | 179.6 |
+///
+/// A roofed room is not darker than a shadow — it has **nothing bright to read against**, and
+/// raising the fill cannot give it one: ambient has no direction, so 5x the brightness buys
+/// 5.8 sRGB levels, costs the exterior its shadows at 1:1, and leaves every box in the room a
+/// flat rectangle because nothing gives it a lit face and a dark one.
+///
+/// A lamp in the room does exactly that, and it does it **without touching one exterior
+/// pixel** — the containment argument is on [`crate::data::MapLight`], and it is Lambert and
+/// the hard range cut-off, not the wall.
+///
+/// # Why it is `render` and not `world`
+///
+/// `world::map` builds the geometry a player collides with; a lamp has no body, no collider
+/// and no mask, and it is presentation exactly like the sun and the sky above it. The
+/// coordinates come from `maps.ron` because they belong to a building, not because they are
+/// simulation — the same way the block colours in that file are read by `render` and not by
+/// `world` (`docs/architecture.md`).
+///
+/// A missing map is **not** reported here: `world::map::build_map` already panics on it in the
+/// same `Startup`, and the second copy of that message would only be noise.
+pub fn setup_interior_lights(mut commands: Commands, data: Res<GameData>) {
+    let Some(map) = data.current_map() else {
+        return;
+    };
+    for (i, lamp) in map.lights.iter().enumerate() {
+        let c = data.color(&lamp.color).unwrap_or_else(|| {
+            panic!(
+                "maps.ron: light {i} of {:?} names colour {:?}, which is not in `palette` — a \
+                 lamp with an invented colour is how a signal colour becomes set dressing",
+                map.name, lamp.color
+            )
+        });
+        commands.spawn((
+            Name::new(format!("lamp_{i}")),
+            InteriorLamp,
+            PointLight {
+                color: Color::linear_rgb(c[0], c[1], c[2]),
+                intensity: lamp.intensity_lm,
+                range: lamp.range_m,
+                // A point source. `radius` only widens specular highlights and the PCSS
+                // penumbra, and with `shadows` off it would buy the second of those nothing.
+                radius: 0.0,
+                // ⚠️ The expensive switch, and it comes from the file for exactly the reason
+                // `docs/lessons/performance.md` rule 5 gives: a shadow-casting point light is
+                // a CUBE map — six depth passes over everything in range, per light, per
+                // frame. Today both lamps say `false`.
+                shadow_maps_enabled: lamp.shadows,
+                ..default()
+            },
+            Transform::from_xyz(lamp.center_m.0, lamp.center_m.1, lamp.center_m.2),
+        ));
+    }
+    if !map.lights.is_empty() {
+        info!("map {:?}: {} interior lamps lit", map.name, map.lights.len());
+    }
 }
 
 /// The sky dome.

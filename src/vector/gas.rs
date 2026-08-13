@@ -21,6 +21,11 @@
 //! condition to live in two places, one of them would be wrong by next week, and it would
 //! be wrong as a **free** boost.
 //!
+//! `GasGrant.steer` is the same contract for the rope half of the mixing rule
+//! (`docs/NEXT.md` §1B, `player::locomotion::rope_steer`) — and it is the one all nine judges of
+//! that plan asked for independently, because without it the strongest thrust in the game would
+//! have been the only free one.
+//!
 //! Written **every tick, for every player**, and by assignment — there is no clearing
 //! system and no grant that lives one tick too long.
 //!
@@ -131,6 +136,11 @@ pub fn gas_budget(
     // `tests/vector_gas.rs` goes red on it.
     let boost_cost = vector.gas_boost_per_s * dt;
     let reel_cost = vector.gas_reel_per_s * dt;
+    // A rate like the two above, and billed per tick like them: 16/s is 0.2667 per tick at
+    // 60 Hz. It buys `player.air_pull_m_s2` / `air_lateral_m_s2` of thrust in
+    // `player::locomotion::air_control`, and the price is the boost's own price per m/s of
+    // speed bought — 16/30 against 18/34 (`assets/data/game.ron`, `tests/data.rs` holds it).
+    let steer_cost = vector.gas_steer_per_s * dt;
     // **Not multiplied by `dt`, and that is the point of `F-008`.** The other two are rates and
     // are billed per tick; a dodge is one impulse and is billed once, on the tick the double-tap
     // lands. `gas_dodge` therefore has no `_per_s` in its name and must not grow one.
@@ -146,8 +156,15 @@ pub fn gas_budget(
         // that whole detour exists to prevent. One rule, one function, two callers.
         let wants_dodge =
             intent.pressed(Buttons::DODGE) && super::boost::dodge_direction(intent).is_some();
+        // **`docs/NEXT.md` §1B, and the same rule a third time: the cost follows the effect.**
+        // The rope term of the mixing rule is `n > 0 && (w⁺ > 0 || mx ≠ 0)` — no anchored hook
+        // means there is no rope direction to push along and no lateral boost to add, and no
+        // movement key means both halves of it are multiplied by zero. `S` alone is `w⁺ = 0`
+        // (*„mit s »spannt« man nur das seil"*) and buys nothing, so it pays nothing.
+        let wants_steer = hook.anchored_count() > 0
+            && (intent.move_y.max(0.0) > 0.0 || intent.move_x != 0.0);
 
-        if !wants_boost && !wants_reel_in && !wants_dodge {
+        if !wants_boost && !wants_reel_in && !wants_dodge && !wants_steer {
             // Nobody wants anything, so **the tank is not touched at all** — not even to
             // write the same number back. `Changed<Gas>` is a signal the HUD and one day the
             // wire read, and a tank that reports a change every tick without changing is a
@@ -162,8 +179,18 @@ pub fn gas_budget(
         let mut tank = *gas;
         let booked = book(
             &vector.gas_priority,
-            Wants { boost: wants_boost, reel_in: wants_reel_in, dodge: wants_dodge },
-            Costs { boost: boost_cost, reel_in: reel_cost, dodge: dodge_cost },
+            Wants {
+                boost: wants_boost,
+                reel_in: wants_reel_in,
+                steer: wants_steer,
+                dodge: wants_dodge,
+            },
+            Costs {
+                boost: boost_cost,
+                reel_in: reel_cost,
+                steer: steer_cost,
+                dodge: dodge_cost,
+            },
             &mut tank,
         );
         gas.set_if_neq(tank);
@@ -196,6 +223,11 @@ pub fn book(priority: &[GasConsumer], wants: Wants, costs: Costs, gas: &mut Gas)
                     grant.reel_in = gas.try_spend(costs.reel_in);
                 }
             }
+            GasConsumer::Steer => {
+                if wants.steer && !grant.steer {
+                    grant.steer = gas.try_spend(costs.steer);
+                }
+            }
             GasConsumer::Dodge => {
                 if wants.dodge && !grant.dodge {
                     grant.dodge = gas.try_spend(costs.dodge);
@@ -217,12 +249,15 @@ pub fn book(priority: &[GasConsumer], wants: Wants, costs: Costs, gas: &mut Gas)
 pub struct Wants {
     pub boost: bool,
     pub reel_in: bool,
+    /// `F-006` rope steering: `anchored_count() > 0` **and** a movement key that is not only
+    /// `S`. Both halves are the effect, not the button.
+    pub steer: bool,
     pub dodge: bool,
 }
 
 /// What one tick of each consumer costs, in gas.
 ///
-/// ⚠️ **`boost` and `reel_in` are per-tick amounts** — the rate out of the file already
+/// ⚠️ **`boost`, `reel_in` and `steer` are per-tick amounts** — the rate out of the file already
 /// multiplied by `dt` — **and `dodge` is not.** A dodge is one impulse and is billed whole, on
 /// the one tick its grant is true. Multiplying it by `dt` as well would make it 60 times
 /// cheaper and nobody would see why.
@@ -230,6 +265,7 @@ pub struct Wants {
 pub struct Costs {
     pub boost: f32,
     pub reel_in: f32,
+    pub steer: f32,
     pub dodge: f32,
 }
 
@@ -240,18 +276,21 @@ mod tests {
     /// 60 Hz, the numbers from `game.ron` as of 2026-08-09: 18/s and 6/s.
     const BOOST: f32 = 18.0 / 60.0; // 0.3
     const REEL: f32 = 6.0 / 60.0; //  0.1
+    /// `F-006` rope steering, 16/s from `game.ron` as of 2026-08-13.
+    const STEER: f32 = 16.0 / 60.0; // 0.26667
     /// `F-008`, and **flat** — not divided by 60. The dodge is billed once, not per second.
     const DODGE: f32 = 45.0;
 
-    /// The two continuous consumers as every test below spells them; `F-008` is off unless a
-    /// test says otherwise. A helper and not three literals per call, so that adding a fourth
-    /// consumer one day touches one line rather than nine.
+    /// The two oldest continuous consumers as every test below spells them; `F-006` and `F-008`
+    /// are off unless a test says otherwise. A helper and not four literals per call, so that
+    /// adding a fifth consumer one day touches one line rather than nine — which is exactly what
+    /// `Steer` did on 2026-08-13.
     fn wants(boost: bool, reel_in: bool) -> Wants {
-        Wants { boost, reel_in, dodge: false }
+        Wants { boost, reel_in, steer: false, dodge: false }
     }
 
     fn costs() -> Costs {
-        Costs { boost: BOOST, reel_in: REEL, dodge: DODGE }
+        Costs { boost: BOOST, reel_in: REEL, steer: STEER, dodge: DODGE }
     }
 
     #[test]
@@ -350,6 +389,53 @@ mod tests {
                 previous = gas.current;
             }
         }
+    }
+
+    /// The fourth arm exists and it debits. Without this the `Steer` entry in `gas_priority`
+    /// would be a consumer that is named and never served — which is exactly the state
+    /// `FIND-082` describes and this file was left un-compiling to prevent.
+    #[test]
+    fn f006_the_rope_steer_is_billed_and_is_not_free() {
+        let mut gas = Gas::full(100.0);
+        let g = book(
+            &[GasConsumer::Boost, GasConsumer::Steer, GasConsumer::ReelIn],
+            Wants { steer: true, ..wants(false, false) },
+            costs(),
+            &mut gas,
+        );
+        assert!(g.steer, "an anchored rope with W held got no grant: {g:?}");
+        assert!(
+            (gas.current - (100.0 - STEER)).abs() < 1e-6,
+            "one tick of rope steering took {} instead of {STEER} — all nine judges of \
+             docs/NEXT.md §1B named a free rope thrust as its biggest flaw",
+            100.0 - gas.current
+        );
+        assert!(!g.boost && !g.reel_in, "and it paid for nobody else: {g:?}");
+    }
+
+    /// `Steer` stands **second** in `game.ron`, so the deliberate press wins the last drop over
+    /// the one that is held all flight long (`docs/QUESTIONS.md` Q-037). Both directions, so the
+    /// claim is about the file and not about an `if`.
+    #[test]
+    fn f006_the_file_decides_whether_the_last_drop_boosts_or_steers() {
+        let mut boost_first = Gas { current: 0.35, ..Gas::full(100.0) };
+        let g = book(
+            &[GasConsumer::Boost, GasConsumer::Steer],
+            Wants { steer: true, ..wants(true, false) },
+            costs(),
+            &mut boost_first,
+        );
+        assert!(g.boost && !g.steer, "Boost stands first: {g:?}");
+
+        let mut steer_first = Gas { current: 0.35, ..Gas::full(100.0) };
+        let g = book(
+            &[GasConsumer::Steer, GasConsumer::Boost],
+            Wants { steer: true, ..wants(true, false) },
+            costs(),
+            &mut steer_first,
+        );
+        assert!(g.steer, "Steer stands first here: {g:?}");
+        assert!(!g.boost, "0.35 - 0.2667 = 0.0833 does not cover a boost costing 0.3");
     }
 
     #[test]

@@ -47,7 +47,7 @@ use defeated_by_titan::debug::gizmo::GizmoToggle;
 use bevy::camera::Exposure;
 use bevy::light::NotShadowCaster;
 use bevy::mesh::VertexAttributeValues;
-use defeated_by_titan::render::light::{to_sun, SkyDome};
+use defeated_by_titan::render::light::{to_sun, InteriorLamp, SkyDome};
 use defeated_by_titan::render::model::{
     load_configured_models, ModelAnchors, ModelAssets, ModelBody, ModelName, PendingScene,
     PrimitiveFallback, CORTEX_ANCHOR,
@@ -1155,6 +1155,151 @@ fn f071_a_roof_a_sunlit_wall_and_a_shaded_wall_are_three_different_values() {
 }
 
 #[test]
+fn f019_a_roofed_room_lives_on_its_lamp_and_the_fill_is_the_second_term() {
+    // **Retired and rewritten on 2026-08-13, and the premise is why.** Until today this test was
+    // called `f019_the_fill_lifts_the_darkest_material_inside_a_roofed_room` and it floored
+    // `art.ron: lighting.ambient.brightness` at 3830, on the argument that *under a roof there is
+    // no sunlit surface anywhere in the frame, so the only contrast left is between two
+    // ambient-lit materials*. That argument was true when it was written (`FIND-078`) and it
+    // stopped being true the moment the hall got a lamp of its own (`FIND-080`,
+    // `maps.ron: ashgate.lights`): the room is now lit BY something, and the fill is no longer
+    // the only term in it.
+    //
+    // ⚠️ Lowering the number without moving this test would have left a red suite; deleting this
+    // test without replacing it would have thrown a guard away for nothing. So the claim moves
+    // instead of disappearing, and it moves onto the failure that is now the real one:
+    //
+    //   **somebody raises the world's fill instead of lighting the room.**
+    //
+    // That is not hypothetical — it is exactly what happened here on 2026-08-13 06:00, when the
+    // fill went 2400 -> 4200 as a documented mitigation and the exterior paid for it 1:1
+    // (shadow-against-sun 29.1 % -> 38.0 % in sRGB, measured; `FIND-071` is the contrast that
+    // buys). `FIND-078 §3` had already measured the ceiling on that lever: at **12000** the racks
+    // were *still* flat rectangles, because a directionless fill gives nothing a lit face and a
+    // shaded one. No fill is ever the answer to an unreadable room.
+    //
+    // The two bounds below, both computed from the files and neither one a literal:
+    //
+    //   brightness       lamp/fill    brick_red on the fill, as % of the lamplit floor
+    //          0             inf        0.00 %   <- fails (2): the shaded flank is black
+    //       1459           12.09        5.00 %   <- the floor
+    //       2400            7.35        8.23 %   <- what stands in art.ron
+    //       3528            5.00       12.09 %   <- the ceiling
+    //       4200            4.20       14.40 %   <- fails (1): the mitigation this replaced
+    //      12000            1.47       41.14 %   <- fails (1), hard
+    let mut app = app();
+    let exposure = {
+        let mut q = app.world_mut().query_filtered::<&Exposure, With<Camera3d>>();
+        *q.iter(app.world()).next().expect("the camera carries an Exposure out of art.ron")
+    };
+    let ambient = {
+        let mut q = app.world_mut().query_filtered::<&AmbientLight, With<Camera3d>>();
+        q.iter(app.world()).next().expect("the camera carries an AmbientLight").clone()
+    };
+    let e = exposure.exposure();
+
+    // 1. The fill is the FILE's, not a literal and not Bevy's own default. `AmbientLight` is a
+    //    component with `#[require(Camera)]` in 0.19: drop it and the scene silently falls back
+    //    to `GlobalAmbientLight` (brightness 80, white) — a term 30x too small and the wrong
+    //    colour, with no error and no missing entity to find.
+    let data = app.world().resource::<GameData>().clone();
+    let file = &data.art.lighting.ambient;
+    assert_eq!(
+        (ambient.brightness, ambient.color.to_linear().to_f32_array_no_alpha()),
+        (file.brightness, [file.color.0, file.color.1, file.color.2]),
+        "the camera's fill is not the one in art.ron: lighting.ambient — a literal in Rust is a \
+         game number in the wrong file (rule 2)"
+    );
+    assert_ne!(
+        ambient.brightness, 80.0,
+        "80 is Bevy's GlobalAmbientLight default — the camera's own AmbientLight has gone missing"
+    );
+
+    // 2. ⭐ The premise, made structural. Everything below reads "the room has a light of its
+    //    own"; delete the lamps and this test has to say so instead of quietly measuring air.
+    let map = data.current_map().expect("current map");
+    assert!(
+        !map.lights.is_empty(),
+        "the start map declares no interior lamp — then the old premise is back (the fill IS the \
+         room's only light) and so is the floor of 3830 this test used to carry"
+    );
+
+    // The strongest lamp in the map, and the surface it hangs over: the top of the highest solid
+    // block whose footprint contains it and that lies below it. Derived, so it moves with the
+    // hall's own floor instead of pinning 0.15 m here.
+    let lit_by_the_lamp = map
+        .lights
+        .iter()
+        .map(|lamp| {
+            let (lx, ly, lz) = lamp.center_m;
+            let floor_y = map
+                .blocks
+                .iter()
+                .filter(|b| {
+                    b.solid
+                        && lx >= b.center_m.0 - b.size_m.0 / 2.0
+                        && lx <= b.center_m.0 + b.size_m.0 / 2.0
+                        && lz >= b.center_m.2 - b.size_m.2 / 2.0
+                        && lz <= b.center_m.2 + b.size_m.2 / 2.0
+                        && b.center_m.1 + b.size_m.1 / 2.0 <= ly
+                })
+                .map(|b| b.center_m.1 + b.size_m.1 / 2.0)
+                .fold(f32::NEG_INFINITY, f32::max);
+            assert!(
+                floor_y.is_finite(),
+                "a lamp at ({lx}, {ly}, {lz}) has no floor under it — \
+                 tests/world.rs::f019_every_interior_lamp_stands_in_a_room_with_a_roof_over_it_and_a_floor_under_it \
+                 is the one that should have caught that first"
+            );
+            // Bevy's own point-light falloff, straight down onto an up-facing face (NdotL = 1):
+            // lumens/4pi candela, `(1 - (d/r)^4)^2 / d^2` attenuation, and that attenuation is a
+            // HARD zero at d = r (`bevy_pbr .. pbr_functions.wgsl`, `bevy_pbr/src/render/light.rs`).
+            let d = ly - floor_y;
+            let intensity = lamp.intensity_lm / (4.0 * core::f32::consts::PI);
+            let factor = (d * d) / (lamp.range_m * lamp.range_m);
+            let smooth = (1.0 - factor * factor).max(0.0);
+            let lux = intensity * smooth * smooth / (d * d).max(1e-4);
+            STONE_GRAY_G / core::f32::consts::PI * lux * e
+        })
+        .fold(0.0f32, f32::max);
+
+    // 3. ⭐ THE CEILING, and it is the one that bites. The lamp has to stay the room's light: on
+    //    the very surface it hangs over, it must deliver at least five times what the world's
+    //    fill does. A fill that creeps up on the lamp is a fill that is paying for the interior
+    //    out of the exterior's shadows, and it buys nothing a lamp has not already bought —
+    //    `FIND-080 §4`: going 4200 -> 2400 cost 6.7 sRGB levels on the rack and handed back the
+    //    whole 29.1 % contrast outside.
+    let fill_on_the_same_face = STONE_GRAY_G * ambient.color.to_linear().green * ambient.brightness * e;
+    let dominance = lit_by_the_lamp / fill_on_the_same_face;
+    assert!(
+        dominance >= 5.0,
+        "the lamp delivers {lit_by_the_lamp:.4} on the floor it hangs over and the ambient fill \
+         {fill_on_the_same_face:.4} — only {dominance:.2}x. Under 5x the room is being lit by the \
+         WORLD and not by its own lamp, and every shadow in the district is paying for it \
+         (brightness {}, ev100 {})",
+        ambient.brightness,
+        exposure.ev100
+    );
+
+    // 4. ⭐ THE FLOOR. The fill is the second term, not no term: the outboard flank of a rack, the
+    //    corners of the hall and every exterior shadow face away from every lamp (`NdotL <= 0`),
+    //    so they live on the fill alone and nothing else in this file bounds them from below in a
+    //    ROOM. `brick_red` is the darkest thing the palette puts in here — it is the blade rack's
+    //    back panel (`maps.ron: ashgate`) — and it has to stay a visible fraction of the floor it
+    //    stands on. Read from the file, because an albedo is a game number too.
+    let darkest = data.color("brick_red").expect("brick_red stands in maps.ron: palette")[1];
+    let on_the_fill_alone = darkest * ambient.color.to_linear().green * ambient.brightness * e;
+    let against_the_floor = on_the_fill_alone / lit_by_the_lamp;
+    assert!(
+        against_the_floor >= 0.05,
+        "the darkest material in the room sits at {:.2} % of the lamplit floor it stands on \
+         ({on_the_fill_alone:.4} vs {lit_by_the_lamp:.4}) — a face no lamp reaches is then a hole, \
+         and at 0 the fill has stopped existing",
+        against_the_floor * 100.0
+    );
+}
+
+#[test]
 fn f071_the_sky_is_a_gradient_and_not_one_colour() {
     // The `ClearColor` the district used to stand against was a single flat value; the user
     // named it in the same breath as the light. The dome carries its gradient in vertex
@@ -1292,4 +1437,119 @@ fn f071_the_sky_is_wound_so_you_see_it_from_the_inside() {
          `Face::Front` cull then throws away the side you stand on. The sky is invisible and \
          nothing reports it"
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// F-019 — THE LAMPS IN THE HALL. `maps.ron: lights` -> `PointLight`
+// ---------------------------------------------------------------------------------------
+//
+// `docs/FINDINGS.md` FIND-078 measured the room and named the fix: a light INSIDE the
+// building, because ambient has no direction and therefore cannot make shape. These two tests
+// are the seam between the file and the world — a lamp declared in the map has to be a light
+// entity, and a map that declares none has to have none. The second half is not decoration:
+// the failure it catches is a lamp that is spawned from somewhere other than the map, which
+// would brighten every map in the game and be invisible in the map data.
+
+/// Every [`InteriorLamp`] in the world, with what the renderer will actually use.
+fn the_lamps(app: &mut App) -> Vec<(PointLight, Vec3)> {
+    let mut q = app.world_mut().query_filtered::<(&PointLight, &Transform), With<InteriorLamp>>();
+    q.iter(app.world()).map(|(l, t)| (l.clone(), t.translation)).collect()
+}
+
+#[test]
+fn f019_a_lamp_in_the_map_is_a_light_in_the_world() {
+    let mut app = app_on("ashgate");
+    let map = app.world().resource::<GameData>().map("ashgate").expect("ashgate is a map").clone();
+    let palette_free = app.world().resource::<GameData>().clone();
+
+    assert!(
+        !map.lights.is_empty(),
+        "ashgate declares no interior lamps — then the garrison hall is back to the state \
+         FIND-078 measured: a back wall at 51.9 against an EXTERIOR wall in shadow at 51.5"
+    );
+
+    let lamps = the_lamps(&mut app);
+    assert_eq!(
+        lamps.len(),
+        map.lights.len(),
+        "maps.ron declares {} lamps and {} are in the world",
+        map.lights.len(),
+        lamps.len()
+    );
+
+    // Value by value against the file — the number, not "a light is there". An intensity that
+    // silently became Bevy's default (1 000 000 lm) is 35x too dark at this exposure and looks
+    // in the picture exactly like the unlit room this whole feature exists to end.
+    for (i, want) in map.lights.iter().enumerate() {
+        let (got, at) = &lamps[i];
+        let c = palette_free.color(&want.color).expect("the lamp's colour is in maps.ron: palette");
+        assert_eq!(
+            *at,
+            Vec3::new(want.center_m.0, want.center_m.1, want.center_m.2),
+            "lamp {i} hangs somewhere other than where maps.ron puts it"
+        );
+        assert_eq!(got.intensity, want.intensity_lm, "lamp {i}: intensity is not the file's");
+        assert_eq!(got.range, want.range_m, "lamp {i}: range is not the file's — and range is \
+             the ONE number that keeps a lamp's effect inside its own building");
+        assert_eq!(got.shadow_maps_enabled, want.shadows, "lamp {i}: the expensive switch is \
+             not the file's (a shadowed point light is a CUBE map, six passes a frame)");
+        let rgb = got.color.to_linear();
+        assert!(
+            (rgb.red - c[0]).abs() < 1e-5 && (rgb.green - c[1]).abs() < 1e-5 && (rgb.blue - c[2]).abs() < 1e-5,
+            "lamp {i} burns {rgb:?} and maps.ron: palette {:?} is {c:?}",
+            want.color
+        );
+    }
+
+    // And no lamp may name one of the three signal colours. That rule is the reason the colour
+    // is a palette KEY and not a triple on the light — as a triple it would be a sentence in a
+    // document again, and an amber lantern is the exact thing it was written against.
+    for (i, lamp) in map.lights.iter().enumerate() {
+        assert!(
+            !palette_free.maps.signals.contains_key(&lamp.color),
+            "lamp {i} burns the signal colour {:?} — cyan, amber and crimson are gameplay and \
+             nothing else (docs/conventions.md §3)",
+            lamp.color
+        );
+    }
+}
+
+#[test]
+fn f019_a_map_without_lamps_has_not_a_single_light_in_it() {
+    // The graybox has no interiors — every box in it is solid. If a lamp turns up here, it did
+    // not come out of `maps.ron: lights`, and whatever did spawn it is lighting every map in
+    // the game from a place no map data mentions.
+    let mut app = app_on("graybox");
+    let declared = app.world().resource::<GameData>().map("graybox").expect("graybox is a map").lights.len();
+    assert_eq!(declared, 0, "this test measures the empty case; graybox now declares {declared} lamps");
+
+    assert!(the_lamps(&mut app).is_empty(), "a map that declares no lamp got one anyway");
+
+    let mut any = app.world_mut().query::<&PointLight>();
+    let all: Vec<_> = any.iter(app.world()).collect();
+    assert!(
+        all.is_empty(),
+        "{} point light(s) stand in a map that declares none — the district is being lit from \
+         outside its own data, and no file says so",
+        all.len()
+    );
+}
+
+/// The real app on a **named** map instead of whatever `maps.ron: current` happens to say.
+///
+/// The same pattern as `tests/vector_aiming.rs::app_on`: the override lands on `GameData`
+/// before the first `update()`, which is when `Startup` — and with it
+/// `render::light::setup_interior_lights` — runs. A test about a map has to name that map, or
+/// it silently becomes a test about the day's shipping map.
+fn app_on(map: &str) -> App {
+    let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    app.world_mut().resource_mut::<GameData>().maps.current = map.to_string();
+    assert!(
+        app.world().resource::<GameData>().current_map().is_some(),
+        "maps.ron lists no map {map:?} — a typo here builds an empty world and every assertion \
+         below turns into `nothing is there`"
+    );
+    app.update();
+    app.update();
+    app
 }

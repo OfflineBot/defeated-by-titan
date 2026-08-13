@@ -44,7 +44,12 @@ impl Plugin for RenderPlugin {
         app.init_resource::<model::ModelAssets>()
             .add_systems(
                 Startup,
-                (light::setup_sun, light::setup_sky, model::load_configured_models),
+                (
+                    light::setup_sun,
+                    light::setup_sky,
+                    light::setup_interior_lights,
+                    model::load_configured_models,
+                ),
             )
             .add_observer(model::read_the_models_anchors)
             .add_systems(

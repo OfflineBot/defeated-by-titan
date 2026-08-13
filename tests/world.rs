@@ -1097,3 +1097,51 @@ fn t036a_a_body_spawned_late_is_taken_in_and_stands_right_one_tick_later() {
     assert_eq!(app.world().resource::<SpatialIndex>().len(), before + 1, "and not inserted twice");
 }
 
+
+// ---------------------------------------------------------------------------------------
+// F-019 — A LAMP THAT STANDS OUTDOORS IS A BRIGHTER WORLD, AND NOBODY WOULD SEE IT COMING
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn f019_every_interior_lamp_stands_in_a_room_with_a_roof_over_it_and_a_floor_under_it() {
+    // `maps.ron: lights` exists to lift ONE room without touching a single exterior pixel
+    // (`docs/FINDINGS.md` FIND-078). The containment argument is Lambert — the outer face of
+    // the wall a lamp stands behind points away from it — and that argument holds only while
+    // the lamp is actually **behind** a wall. A lamp dropped a few metres off, out over the
+    // street, breaks nothing that compiles, breaks no other test, and lights the district from
+    // a place no measurement in this repository looks at.
+    //
+    // So: over every lamp there has to be a solid block whose footprint contains it, and under
+    // every lamp another one. That is what "indoors" means, and it is checkable from the file.
+    let data = data();
+    for (id, map) in &data.maps.maps {
+        for (i, lamp) in map.lights.iter().enumerate() {
+            let (lx, ly, lz) = lamp.center_m;
+            let covers = |b: &defeated_by_titan::data::MapBlock| {
+                lx >= b.center_m.0 - b.size_m.0 / 2.0
+                    && lx <= b.center_m.0 + b.size_m.0 / 2.0
+                    && lz >= b.center_m.2 - b.size_m.2 / 2.0
+                    && lz <= b.center_m.2 + b.size_m.2 / 2.0
+            };
+            let roof = map
+                .blocks
+                .iter()
+                .any(|b| b.solid && covers(b) && b.center_m.1 - b.size_m.1 / 2.0 >= ly);
+            let floor = map
+                .blocks
+                .iter()
+                .any(|b| b.solid && covers(b) && b.center_m.1 + b.size_m.1 / 2.0 <= ly);
+            assert!(
+                roof,
+                "{id}: lamp {i} at ({lx}, {ly}, {lz}) has no solid block above it — it hangs \
+                 in the open air and lights the whole district, and the ONLY way anybody \
+                 finds that out is by looking at a screenshot"
+            );
+            assert!(
+                floor,
+                "{id}: lamp {i} at ({lx}, {ly}, {lz}) has no solid block under it — a lamp \
+                 over a hole lights whatever is at the bottom of it"
+            );
+        }
+    }
+}

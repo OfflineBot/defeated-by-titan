@@ -44,9 +44,10 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::player::integrator::movement_state;
+use defeated_by_titan::player::locomotion::{SteerTuning, air_thrust, rope_steer};
 use defeated_by_titan::player::spawn_player;
 use defeated_by_titan::shared::{
-    Block, BodyId, Cli, Gas, Hook, HookState, IdCounter, Intent, LocalPlayer, MovementState,
+    Block, BodyId, Buttons, Cli, Gas, Hook, HookState, IdCounter, Intent, LocalPlayer, MovementState,
     PlayerId, RunAccel, Side, SpatialIndex, Velocity,
 };
 
@@ -1082,5 +1083,349 @@ fn t007_a_second_player_is_a_body_of_his_own() {
         q.iter(app.world()).count(),
         2,
         "both players carry the full physics body, not just the local one"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// 3bc. F-006 the MIXING RULE — what an anchored rope adds to WASD (`docs/NEXT.md` §1B)
+//
+// The user, 2026-08-12 (`docs/NEXT.md` §1A, verbatim): *„wenn ich mit seilen festhake (was
+// instant sein soll) und w in die richtung drücke will ich dass man deutlich mehr geboosted
+// wird. also dass man dort richtig hingezogen wird. wenn man aber a oder d drückt wird nach
+// links/rechts geboostet! wenn man zur seite schaut soll die steuerung mitdrehen. also wenn ich
+// 45 grad nach links und w drücke dann etwas eingezogen aber auch boost zur seite."*
+//
+// The plan was designed three ways and judged nine times; what came out is one line of
+// arithmetic, and these five tests are its five acceptance numbers. They drive
+// `locomotion::rope_steer` and `locomotion::air_thrust` **directly**, without an `App`: an
+// acceleration is a function of its arguments, and measuring it through a physics step would
+// mean measuring gravity, the solver and the ground contact at the same time. The whole-app
+// half of the claim is `f006_the_swerve_bends_the_flight_without_letting_go_of_the_hook` above
+// and `tests/vector_gas.rs::f006_a_second_of_rope_steering_costs_what_the_file_says`.
+//
+// Every number below is READ OUT OF `game.ron`, never typed: the asserts are the *shape* of the
+// rule (10 + 30 at 0°, the cosine split at 45°, nothing at 90°), not a snapshot of today's
+// tuning — all three keys are ⚠️ UNTUNED and are meant to move.
+// ---------------------------------------------------------------------------------------
+
+/// The RON, without an `App` — the same loader `tests/data.rs` uses.
+fn game_data() -> GameData {
+    GameData::load(&std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/data"))
+}
+
+fn steer_tuning(d: &GameData) -> SteerTuning {
+    SteerTuning {
+        pull_m_s2: d.game.player.air_pull_m_s2,
+        lateral_m_s2: d.game.player.air_lateral_m_s2,
+        fade_m: d.game.player.air_pull_fade_m,
+        min_rope_m: d.game.vector.min_rope_m,
+    }
+}
+
+/// An anchor `length_m` away, in the horizontal direction `yaw` looks at — so `yaw = 0` puts it
+/// straight ahead along −Z and the look/rope angle is exactly the yaw difference.
+fn anchor_at(yaw: f32, length_m: f32) -> Vec3 {
+    let (sin, cos) = yaw.sin_cos();
+    Vec3::new(-sin, 0.0, -cos) * length_m
+}
+
+/// `look + rope` for one anchor — the full mixing rule, the way `air_control` assembles it with
+/// a full tank and the steer grant paid.
+fn mixed(d: &GameData, look_yaw: f32, anchor: Vec3, move_x: f32, move_y: f32) -> Vec3 {
+    let look_dir = Intent { yaw: look_yaw, ..default() }.look_dir();
+    let look = air_thrust(look_dir, look_yaw, move_x, move_y, d.game.player.air_accel_m_s2);
+    look + rope_steer(&[anchor], look_dir, look_yaw, move_x, move_y, steer_tuning(d))
+}
+
+#[test]
+fn f006_looking_straight_at_the_anchor_w_hauls_at_the_sum_of_both_numbers() {
+    // *„dass man dort richtig hingezogen wird"* — and it is a SUM, not a blend: the pull sits
+    // outside the `clamp_length_max(1.0)` that makes W+D one thrust. 10 + 30 = 40 m/s², four
+    // times what a rope-less player gets and 88 % of `boost_m_s2`, so Shift is still the
+    // strong option.
+    let d = game_data();
+    let due = d.game.player.air_accel_m_s2 + d.game.player.air_pull_m_s2;
+
+    // 60 m of rope: far past `min_rope_m + air_pull_fade_m`, so the fade is 1 and out of the way.
+    let anchor = anchor_at(0.0, 60.0);
+    let a = mixed(&d, 0.0, anchor, 0.0, 1.0);
+
+    let towards = anchor.normalize();
+    let closing = a.dot(towards);
+    assert!(
+        (closing - due).abs() < 0.5,
+        "W straight at the anchor closes at {closing:.4} m/s² instead of the \
+         air_accel_m_s2 {} + air_pull_m_s2 {} = {due} that game.ron owes — before the mixing \
+         rule this was {} and the user's word for it was that a rope „bringt gar nichts\"",
+        d.game.player.air_accel_m_s2,
+        d.game.player.air_pull_m_s2,
+        d.game.player.air_accel_m_s2
+    );
+    // And nothing sideways: at 0° there is no tangent to spend anything on.
+    let sideways = (a - towards * closing).length();
+    assert!(sideways < 0.05, "{sideways:.4} m/s² across a rope the player is looking straight down");
+}
+
+#[test]
+fn f006_at_forty_five_degrees_w_is_part_haul_and_part_side_boost() {
+    // *„wenn ich 45 grad nach links und w drücke dann etwas eingezogen aber auch boost zur
+    // seite"* — one sentence, two numbers, and they are the cosine projection's:
+    //   radial     = air_accel·cos45 + air_pull·cos45 = 7.071 + 21.213 = 28.284
+    //   tangential = air_accel·sin45                  =                   7.071
+    // ⚠️ **This is the test that dies if anybody puts `nlerp` back** (FIND-046): a slerp/nlerp
+    // between look and rope keeps the magnitude and turns the direction, so it cannot produce
+    // 28.28 radial *and* 7.07 tangential out of a 10 m/s² look term at all.
+    let d = game_data();
+    let root_half = std::f32::consts::FRAC_1_SQRT_2;
+    let radial_due = (d.game.player.air_accel_m_s2 + d.game.player.air_pull_m_s2) * root_half;
+    let tangential_due = d.game.player.air_accel_m_s2 * root_half;
+
+    let anchor = anchor_at(0.0, 60.0); // the rope stays on −Z
+    let a = mixed(&d, std::f32::consts::FRAC_PI_4, anchor, 0.0, 1.0); // and the head turns 45°
+
+    let towards = anchor.normalize();
+    let radial = a.dot(towards);
+    let tangential = (a - towards * radial).length();
+    assert!(
+        (radial - radial_due).abs() < 0.5,
+        "45° off the rope the haul is {radial:.4} m/s², not the {radial_due:.4} the cosine \
+         projection owes — {a:?}"
+    );
+    assert!(
+        (tangential - tangential_due).abs() < 0.3,
+        "and {tangential:.4} m/s² across it instead of {tangential_due:.4}: „etwas eingezogen \
+         aber auch boost zur seite\" is BOTH, and this half is the „zur seite\""
+    );
+}
+
+#[test]
+fn f006_across_the_rope_there_is_no_haul_left_at_all() {
+    // *„das a d sorgt dafür dass man nicht immer direkt zum seil gezogen wird"* as arithmetic:
+    // at 90° `max(0, l̂·r̂)` is exactly zero, so the rope adds NOTHING towards the anchor and
+    // what is left is the free-air control, pure swing steer. Behind 90° it stays zero — which
+    // is also requirement 7 („aktuell wenn ich seil spanne und s drücke werde ich stark zum
+    // seil gezogen! das soll nicht sein!") from the other side: looking away can never haul.
+    let d = game_data();
+    let anchor = anchor_at(0.0, 60.0);
+
+    for (name, look_yaw) in [
+        ("90° across", std::f32::consts::FRAC_PI_2),
+        ("135° behind", 3.0 * std::f32::consts::FRAC_PI_4),
+        ("180° away", std::f32::consts::PI),
+    ] {
+        let a = mixed(&d, look_yaw, anchor, 0.0, 1.0);
+        let radial = a.dot(anchor.normalize());
+        assert!(
+            radial < 0.05,
+            "{name} from the rope, W held, the player is still hauled at {radial:.4} m/s² — \
+             the projection has to be max(0, dot) and nothing else ({a:?})"
+        );
+        // ...and the free-air control is untouched: the whole 10 m/s² is still there.
+        assert!(
+            (a.length() - d.game.player.air_accel_m_s2).abs() < 0.05,
+            "{name}: {:.4} m/s² of thrust instead of the plain air control {} — the rope must \
+             subtract nothing either",
+            a.length(),
+            d.game.player.air_accel_m_s2
+        );
+    }
+}
+
+#[test]
+fn f006_without_a_rope_the_air_control_is_bit_identical_to_before() {
+    // The regression guard for everything else in this block: an unhooked player must come out
+    // of the new code with the **same bits**, not the same number to five places. `assert_eq!`
+    // on the `Vec3` and no epsilon anywhere — a `+ Vec3::ZERO` that rounds a −0.0 into a +0.0
+    // is exactly the kind of change that looks free and is not.
+    let d = game_data();
+    for (yaw, pitch, move_x, move_y) in [
+        (0.0, 0.0, 0.0, 1.0),
+        (0.7, -0.9, 1.0, 0.0),
+        (-2.4, 0.4, -1.0, 1.0),
+        (1.1, 0.0, 0.3, -1.0), // S, which is never a thrust
+        (3.0, 1.2, 0.0, 0.0),
+    ] {
+        let look_dir = Intent { yaw, pitch, ..default() }.look_dir();
+        let before = air_thrust(look_dir, yaw, move_x, move_y, d.game.player.air_accel_m_s2);
+        let with_no_anchors =
+            before + rope_steer(&[], look_dir, yaw, move_x, move_y, steer_tuning(&d));
+        assert_eq!(
+            with_no_anchors, before,
+            "yaw {yaw}, pitch {pitch}, ({move_x}, {move_y}): a player with no rope must be \
+             untouched by the mixing rule, and `rope_steer` on an empty slice is the whole of \
+             that promise"
+        );
+    }
+}
+
+#[test]
+fn f006_the_pull_lets_go_before_the_short_rope_cliff() {
+    // **FIND-035 is the reason this key exists**: at `min_rope_m` the length constraint takes
+    // 17 m/s out of the player in ONE tick, and W straight at an anchor 3 m away feeds exactly
+    // that. So the pull is **exactly zero at `min_rope_m`** and climbs to full over
+    // `air_pull_fade_m` above it — zero at 3 m, full at 15 m with the numbers of 2026-08-13.
+    //
+    // ⚠️ The lateral term is deliberately NOT faded: `A`/`D` next to an anchor pushes you AWAY
+    // from the cliff, which is the one thing you want close in.
+    let d = game_data();
+    let t = steer_tuning(&d);
+    let full = d.game.player.air_pull_m_s2;
+
+    for length_m in [0.5, 1.0, t.min_rope_m] {
+        let anchor = anchor_at(0.0, length_m);
+        let pull = rope_steer(&[anchor], anchor.normalize(), 0.0, 0.0, 1.0, t).length();
+        assert!(
+            pull < 1e-4,
+            "a rope {length_m} m long (min_rope_m = {}) still hauls at {pull:.4} m/s² — that \
+             thrust runs straight into FIND-035's 17 m/s cliff",
+            t.min_rope_m
+        );
+    }
+
+    // The band in between rises, and nowhere in it is the pull already full.
+    let mut previous = 0.0;
+    for step in 1..12 {
+        let length_m = t.min_rope_m + t.fade_m * step as f32 / 12.0;
+        let anchor = anchor_at(0.0, length_m);
+        let pull = rope_steer(&[anchor], anchor.normalize(), 0.0, 0.0, 1.0, t).length();
+        assert!(pull > previous, "the fade is not monotone at {length_m:.2} m: {pull} <= {previous}");
+        assert!(pull < full, "at {length_m:.2} m the pull is already the full {full}");
+        previous = pull;
+    }
+
+    // And at the top of the band it is the whole number, with no fade left to pay.
+    let anchor = anchor_at(0.0, t.min_rope_m + t.fade_m);
+    let pull = rope_steer(&[anchor], anchor.normalize(), 0.0, 0.0, 1.0, t).length();
+    assert!(
+        (pull - full).abs() < 1e-3,
+        "at min_rope_m + air_pull_fade_m = {} m the pull is {pull:.4} instead of the full {full}",
+        t.min_rope_m + t.fade_m
+    );
+}
+
+#[test]
+fn f006_two_opposed_ropes_do_not_average_themselves_away() {
+    // Judge-forced detail 2, and it is the reason `rope_steer` takes a SLICE and not a mean
+    // direction: `unit(r̂₁ + r̂₂)` for two anchors 180° apart is the zero vector, so the
+    // strongest place in the game — hanging between two buildings — would be the one where W
+    // does nothing at all. Each arm projects on its own; only the forces are averaged.
+    let d = game_data();
+    let t = steer_tuning(&d);
+    let look_dir = Intent::default().look_dir(); // −Z
+    let ahead = anchor_at(0.0, 60.0);
+    let behind = -ahead;
+
+    let both = rope_steer(&[ahead, behind], look_dir, 0.0, 0.0, 1.0, t);
+    let one = rope_steer(&[ahead], look_dir, 0.0, 0.0, 1.0, t);
+    assert!(
+        both.length() > 0.4 * d.game.player.air_pull_m_s2,
+        "two anchors 180° apart pull at {:.4} m/s² — a mean direction would make this zero \
+         ({both:?})",
+        both.length()
+    );
+    // The one behind him contributes nothing (its projection is 0), so the budget it does own
+    // is what the halving costs: exactly half of the single-rope pull.
+    assert!(
+        (both.length() - one.length() * 0.5).abs() < 0.05,
+        "the pull budget is shared, so the anchor he is looking at should give {:.4} of the \
+         {:.4} a single rope gives — got {:.4}",
+        one.length() * 0.5,
+        one.length(),
+        both.length()
+    );
+}
+
+#[test]
+fn f006_the_strafe_rides_the_look_right_and_never_the_rope_tangent() {
+    // Judge-forced detail 3. A rope tangent **flips sign** the moment the anchor passes beside
+    // the player, which inverts `A`/`D` in the middle of a swing — the one moment he is
+    // committed and cannot correct. So `D` is +X at `yaw = 0` whatever the rope is doing, and
+    // it stays +X while the anchor walks all the way round him.
+    let d = game_data();
+    let t = steer_tuning(&d);
+    let look_dir = Intent::default().look_dir();
+    for step in 0..12 {
+        let anchor = anchor_at(std::f32::consts::TAU * step as f32 / 12.0, 40.0);
+        let a = rope_steer(&[anchor], look_dir, 0.0, 1.0, 0.0, t); // D alone, no W
+        assert!(
+            (a.x - d.game.player.air_lateral_m_s2).abs() < 1e-3 && a.z.abs() < 1e-3,
+            "with the anchor at step {step}/12 around him, D gave {a:?} instead of \
+             +X · air_lateral_m_s2 {} — the strafe is riding the rope instead of the look",
+            d.game.player.air_lateral_m_s2
+        );
+        assert!(a.y.abs() < 1e-6, "and it stays horizontal: {a:?}");
+    }
+}
+
+#[test]
+fn f006_in_the_real_app_the_rope_pull_is_there_and_an_empty_tank_gets_none_of_it() {
+    // **The whole-app half of the 40 m/s² headline**, and the one claim the pure-function tests
+    // above cannot make: that `air_control` really assembles `look + rope`, off the real
+    // `Hook`, the real `Transform` and the real `GasGrant`, in the real schedule. Two bodies,
+    // one rope each, one tick — the only difference between them is the tank.
+    //
+    // *„ohne gas kann man immernoch w a d nutzen um etwas movement aufzubauen (aber hälfte
+    // ca)"* — so the LOOK term halves. **The rope term does not halve, it disappears**: it is
+    // gated on `GasGrant::steer`, and half a rope pull for no gas would be exactly the free
+    // thrust all nine judges of `docs/NEXT.md` §1B refused.
+    let mut app = app();
+    let d = data(&app);
+    ticks(&mut app, 2); // the spatial index is filled in the first steps, not in `Startup`
+    let body = a_real_body(&mut app);
+    // 50 m up, not the 200 m of `flyers`: the rope has to stay well inside `hook_range_m` or
+    // `update_hooks` lets go of it as `Overextended` and this measures an unhooked player.
+    let full = second_player(&mut app, Vec3::new(0.0, 50.0, 0.0));
+    let dry = second_player(&mut app, Vec3::new(24.0, 50.0, 0.0));
+
+    let hang = |app: &mut App, e: Entity| {
+        let mut hook = app.world_mut().get_mut::<Hook>(e).expect("a player carries two hooks");
+        hook.arms[Side::Left.index()].state =
+            HookState::Anchored { body, local_m: Vec3::ZERO };
+    };
+    // `Buttons::HOOK_LEFT` held, or `update_hooks` releases the arm as `Released` next tick —
+    // these two carry no `LocalPlayer`, so their `Intent` is whatever `fly` last wrote.
+    let held = |yaw: f32, pitch: f32| Intent {
+        move_y: 1.0,
+        yaw,
+        pitch,
+        buttons: Buttons::HOOK_LEFT,
+        ..default()
+    };
+    for e in [full, dry] {
+        hang(&mut app, e);
+        fly(&mut app, e, held(0.0, 0.0));
+    }
+    app.update(); // `update_hooks` puts `tip_m` onto the body
+
+    // Now look straight down each rope, so the projection is 1 and the number is the sum.
+    for e in [full, dry] {
+        let tip = app.world().get::<Hook>(e).unwrap().arm(Side::Left).tip_m;
+        let hand = at(&app, e) + Vec3::Y * d.game.player.eye_height_m;
+        let along = (tip - hand).normalize();
+        fly(&mut app, e, held((-along.x).atan2(-along.z), along.y.asin()));
+        hang(&mut app, e);
+    }
+    app.world_mut().get_mut::<Gas>(dry).unwrap().current = 0.0;
+    app.update();
+
+    let due = d.game.player.air_accel_m_s2 + d.game.player.air_pull_m_s2;
+    let hauling = run_accel(&app, full).length();
+    assert!(
+        (hauling - due).abs() < 1.0,
+        "W straight down a real rope in the real app gives {hauling:.4} m/s² instead of \
+         air_accel_m_s2 {} + air_pull_m_s2 {} = {due} — the pure function is right and the \
+         wiring is not",
+        d.game.player.air_accel_m_s2,
+        d.game.player.air_pull_m_s2
+    );
+
+    let empty = run_accel(&app, dry).length();
+    let half_look = d.game.player.air_accel_m_s2 * d.game.player.air_accel_empty_fraction;
+    assert!(
+        (empty - half_look).abs() < 0.2,
+        "the same rope on an empty tank gives {empty:.4} m/s²; the look term halved is \
+         {half_look} and the rope term is ZERO, so that is the whole of it. {:.4} would be \
+         half the rope pull smuggled in for free",
+        half_look + d.game.player.air_pull_m_s2 * 0.5
     );
 }

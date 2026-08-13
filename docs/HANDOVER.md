@@ -234,6 +234,39 @@ point. The four that will bite soonest:
 
 ---
 
+## 5a. 2026-08-12/13 — the game got a loop, a district and a building
+
+**Start at [`NEXT.md`](NEXT.md).** §1A is the user's verbatim hook/boost spec, §1B the execution
+plan for it (designed three ways, judged nine ways). Everything below is done and pushed.
+
+- **`prompts/init.md` is deleted** after a section-by-section audit (`FIND-048`). `docs/gameplay/`
+  and `RELEASE.md` were created to hold what it uniquely carried. Only the design bible remains,
+  deliberately (`NEXT.md` §1z).
+- **The core loop no longer crashes.** `B-004` — cutting while roped panicked avian's island
+  assertion — is fixed, and `Gas` has one writer again.
+- **There is a game loop:** hub → walk into the HQ → refuel gas **and** blades → deploy at a chosen
+  difficulty → fight → win → return. `scripts/f070-hub.txt`, **35 asserts, exit 0**.
+- **There is a district.** `ashgate` is live and shipped (`maps.ron: current`), 987 blocks, closed
+  block perimeters, canal, two aligned gates, wall with crown towers. `game-full.txt` wins in it:
+  **23/23, `MISSION WON at tick 898`**.
+- **Models are swappable** (`art.ron` registry, glTF or primitive, clips driven by game state,
+  `ModelAnchors` overriding the computed cortex) and **interiors are lit** (per-map lamps; rack
+  57.6 → 90.6 with the exterior at **+0.0**).
+- **`F-033` is nearly whole:** blades wear (0.12 per cortex hit, half for a graze), break, and
+  restock at the racks. Only manual swapping is missing.
+
+**Three things a newcomer must not misread:**
+1. **`scripts/f-001-hooks.txt` exits 1 on purpose** — it is `B-004`'s regression tripwire. A sweep
+   that greps for exit 1 will "fix" it and lose the guard.
+2. **Risk 1 is NOT retired.** `assert speed > 25` clears at **28.741 m/s** only because `game-full`
+   ACT 1 hooks the **church** (66.6° rope). Ordinary housing gives ~34° and **19–20 m/s**, which is
+   what `f-001-hooks` still measures. Whether a player swinging the *streets* reaches 25 m/s is
+   **unmeasured** (`FIND-077` and its correction).
+3. **An exit code ranks a script's asserts, not its evidence** (`FIND-076`). Two scripts were green
+   for a day while proving nothing: `f171-crosshair`'s "anchored" panel was pixel-identical to its
+   "free" panel, and `f070-lost`'s "the clock ran out" was actually the player being beaten to death
+   at tick 629. Both had passing asserts.
+
 ## 5b. The honest paragraph for 2026-08-10 — what went unseen, and what I got wrong
 
 **Start here: [`NEXT.md`](NEXT.md).** It is the queue, in order, with the reason for each item.

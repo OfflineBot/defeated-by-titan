@@ -10,12 +10,17 @@
 //! **How many pips there are is a number and therefore lives in RON**
 //! (`gear.ron: blades.start_pairs`), not as a `5` in this file (`CLAUDE.md` rule 2).
 //!
-//! What has a producer and what does not: `player::spawn_player` inserts
-//! [`Blades::fresh`](crate::shared::Blades::fresh), so the component is real. The **wear** —
-//! `blades` taking sharpness off on a cut — is not built yet, so `sharpness` sits at 1.0 and
-//! `pairs_left` at its start value in every run today. The bar is therefore correct and
-//! currently constant, which is a different thing from hard-coded: change the component and
-//! it moves, and `tests/hud.rs` is what says so.
+//! **Everything on this cluster has a producer, and both halves of the economy run.**
+//! `player::spawn_player` inserts [`Blades::fresh`](crate::shared::Blades::fresh);
+//! `blades::cut` books `gear.ron: blades.wear_per_hit` (0.12) off `sharpness` on every reported
+//! `TitanHit`, a torso graze costing `× wear_torso_factor`; a pair spent to zero draws a spare
+//! through `swap_pair`, and with no spare left [`Blades::is_broken`](crate::shared::Blades) makes
+//! `cut` cast nothing at all. `blades::resupply` is the way back up, at a rack of the hub.
+//!
+//! So the three things this file paints are the three things that move:
+//! **how many pips** ← `pairs_left` · **how wide the fill** ← `sharpness` · **crimson plate** ←
+//! `is_broken()`. `tests/hud.rs` is what says the bar follows the component, and
+//! `scripts/f070-hub.txt` is where a whole sortie blunts it (0.760) and a rack hones it back.
 
 use bevy::prelude::*;
 

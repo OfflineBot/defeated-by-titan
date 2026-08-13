@@ -10,34 +10,69 @@
 #   cargo run -q -- --offscreen --script scripts/f171-crosshair.txt --ticks 238 \
 #       --screenshot <tmp>/f171-cortex.png     # cortex in range     -> 8 nodes, amber
 #
-# The three crops are laid side by side into `docs/images/f171-crosshair.png`. And the run
-# that returns a usable exit code is a fourth, separate one:
+# The three crops are laid side by side into `docs/images/f171-crosshair.png`. Each shot is
+# centre-cropped to **404 x 260** around (640, 360) — the crosshair centre, and wide enough for
+# the largest of the three states (356 x 212) — then glued with the sanctioned tool, twice,
+# because it takes two panels at a time:
+#
+#   python3 tools/two_panels.py <tmp>/f171-free.png   <tmp>/f171-anchor.png <tmp>/ab.png
+#   python3 tools/two_panels.py <tmp>/ab.png          <tmp>/f171-cortex.png \
+#                                                     docs/images/f171-crosshair.png
+#
+# ⚠️ The crop step needs Pillow, which **machine A does not have** (`docs/environment.md`, and
+# `tools/two_panels.py`'s own docstring is about exactly this). The glue does not. Retaken on
+# machine B on 2026-08-13; a machine-A hand needs a crop that is not Pillow.
+#
+# And the run that returns a usable exit code is a fourth, separate one:
 #
 #   cargo run -q -- --headless --script scripts/f171-crosshair.txt --ticks 600
 #
 # ## The three viewpoints, and why each one really is its state
 #
-#   FREE   (24, 0, -20), `look 0 60` — 60 degrees up is sky. `vector::aim` finds nothing, so
+#   FREE   (51, 0, 13), `look 0 60` — 60 degrees up is sky. `vector::aim` finds nothing, so
 #          `AimPoint::anchorable` is false and no cortex ray hits: the neutral, short cross.
-#   ANCHOR (24, 0, -20), `look 0 34` — the watchtower at (24, 6, -40) in `maps.ron`, near face
-#          z = -34, roof y = 12, `anchorable: true`. The ray lands at (24, 11.04, -34); the
-#          same aim `scripts/f-001-hooks.txt` hooks with. Long ticks, cyan.
+#          Probed: `hook right` from exactly here reports `found nothing anchorable`.
+#   ANCHOR (51, 0, 13), `look 0 34` — the nave of the market-square church, `(51, 5.75, -8)`,
+#          `26 x 11.5 x 14`, `anchorable: true` in `maps.ron`: near face z = -1, roof y = 11.5.
+#          The ray lands at (51, 11.09, -1); the same aim `scripts/f-001-hooks.txt` hooks with.
+#          Long ticks, cyan.
 #   CORTEX (17.5, 0.05, 76.5), `look 0 17` — a husk stands 24 m away. `titan.ron` puts his
 #          cortex at 8.9 m with a radius of 0.55 m; 17 degrees from an eye at 1.65 m reaches
 #          8.99 m at that distance, inside the sphere. Eight nodes, amber.
 #
+# ⚠️ **RE-AIMED 2026-08-13: FREE and ANCHOR stood at (24, 0, -20) and the ANCHOR state was a
+# LIE.** That spot and its `look 0 34` were the graybox watchtower at (24, 6, -40) — a block
+# that ashgate does not build. Probed on the shipped map, `hook right` from (24, 0, -20) at
+# `look 0 34` reports **`found nothing anchorable`**, so `AimPoint::anchorable` was false and
+# the middle panel of `docs/images/f171-crosshair.png` was showing the **neutral** cross while
+# claiming to show the cyan one. **Nothing said so**: this file's only assert was
+# `titans == 1`, which is true in both worlds, so the run exited 0 the whole time
+# (`docs/NEXT.md` §4: "a script that anchors nothing still exits 0 if its asserts never fire").
+#
+# The replacement is not invented — it is `scripts/f-001-hooks.txt`'s own ashgate stand, the
+# one place in this repo where an anchor at `look 0 34` is already measured. **The pitch and
+# the standoff are unchanged (34 degrees, 14 m in front of the face); only the coordinates
+# moved**, which is the same move ACT 1 of `scripts/game-full.txt` made. Measured here, one
+# shot: `hook Right of player 1 anchored on body 58 at 51.00 11.09 -1.00`.
+#
 # ## Two placements that are not arbitrary
 #
-# **The husk stands at (17.5, 0, 52.5) and not next to the tower.** `titan.ron` gives the husk
+# **The husk stands at (17.5, 0, 52.5) and not next to the church.** `titan.ron` gives the husk
 # `aggro_radius_m: 45`, and a husk inside that radius turns and walks — which would move the
-# cortex out from under an aim written down in advance. From the tower spot he is 72.8 m away
-# and stands still through the first two states.
+# cortex out from under an aim written down in advance. From the anchor stand at (51, 0, 13) he
+# is 51.5 m away and stands still through the first two states.
 #
-# **Both x = 17.5 and z = 52.5 are street centre lines.** `maps.ron` puts lot centres on
-# multiples of `lot_m + street_m` = 35 m, so a lot reaches 14 m out and the street between two
-# of them is 14..21 m. A titan spawned on a lot stands inside a house.
+# **Both spots are on open ground, and that is measured rather than derived.** The old note here
+# computed street centre lines from `lot_m + street_m = 35 m`, which was the graybox's pitch;
+# ashgate's is `36 + 6 = 42 m` and the arithmetic no longer lands. What actually matters is that
+# nothing is built on either spot, so the probe reads the ground instead: the husk's tile
+# (17.5, 52.5) and the cortex stand (17.5, 76.5) both measure **height -0.000** — the bare
+# ground slab, no apron and no lot. The anchor stand (51, 13) measures **0.050**, the
+# market-square apron. All three are asserted below.
 #
 # ⚠️ The three tick numbers belong to THIS file. Whoever changes a `wait` changes all three.
+# `assert` is instantaneous, so the asserts added on 2026-08-13 cost no ticks and the shutter
+# ticks 126 / 188 / 238 are the ones they always were.
 
 warp 180 2 180             # park far away while the husk comes up: no aggro, no walking
 spawn titan husk 17.5 0 52.5
@@ -46,15 +81,19 @@ wait 1.5                   # 90 ticks: world, camera, meshes and the render pipe
 
 # ---- 1: nothing in range ---------------------------------------------------------------
 look 0 60
-warp 24 0 -20
+warp 51 0 13               # 24 0 -20 until 2026-08-13 — the graybox watchtower's stand
 wait 0.5
 mark f171-free
+assert height > 0.0        # on the market-square apron, not sunk and not on a roof: 0.050
+assert height < 0.10
+assert rope == 0           # and holding nothing: the cross in this frame is the FREE one
 
 # ---- 2: an anchorable face in range -----------------------------------------------------
 wait 0.5
 look 0 34
 wait 0.5
 mark f171-anchor
+assert rope == 0           # still nothing HELD — the state is what the ray SEES, not a hook
 
 # ---- 3: a cortex in range ---------------------------------------------------------------
 wait 0.5
@@ -63,5 +102,31 @@ look 0 17
 wait 0.3
 mark f171-cortex
 assert titans == 1         # the husk is really standing there, and it is exactly one
+assert height > -0.10      # and the stand is bare ground, not a lot: measured -0.000
+assert height < 0.10
+
+# ---- 4: and the ANCHOR panel is not a lie ------------------------------------------------
+#
+# ⚠️ **THIS BLOCK IS THE ONLY REASON THE MIDDLE PANEL CAN GO RED**, and it is why this file
+# is no longer hollow. `CrosshairState::Anchor` is view state on the tick nodes
+# (`src/hud/crosshair.rs`) and no script metric reads it — so the claim "the crosshair was
+# cyan at tick 188" cannot be asserted directly. What CAN be asserted is the thing the state
+# is computed from: `vector::aim`'s `AimPoint::anchorable` over that exact ray. A `hook` down
+# the same ray from the same spot either anchors or does not, and that is the same boolean.
+#
+# It runs **after** the last shutter tick (238), so not one of the three images changes: the
+# rope in it is measured to exist from **t=287**, 49 ticks past the last shutter. This is the
+# assert that was missing on 2026-08-12 and it would have caught the graybox aim on the day the
+# map flipped. The whole file now ends at **552 ticks**, so the header's `--ticks 600` still
+# clears it (`docs/FINDINGS.md` FIND-032: a truncated run is an error).
+wait 0.4
+warp 51 0 13
+look 0 34
+wait 0.3
+hook right 0.6
+wait 0.5
+mark f171-anchor-proved
+assert rope == 1           # ⭐ the ANCHOR ray really does land on anchorable geometry
+                           # measured: anchored on body 58 at (51.00, 11.09, -1.00)
 
 wait 4                     # keep the run alive: if it ends, the process ends before the image

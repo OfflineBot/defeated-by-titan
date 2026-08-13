@@ -428,11 +428,13 @@ fn f018_the_priority_list_names_every_consumer_exactly_once() {
     // doubled entry is a data error even though `vector::gas::book` refuses to debit twice.
     let d = data(&app());
     let list = &d.game.vector.gas_priority;
-    for consumer in [GasConsumer::Boost, GasConsumer::ReelIn, GasConsumer::Dodge] {
+    for consumer in
+        [GasConsumer::Boost, GasConsumer::Steer, GasConsumer::ReelIn, GasConsumer::Dodge]
+    {
         let n = list.iter().filter(|c| **c == consumer).count();
         assert_eq!(n, 1, "game.ron: vector.gas_priority names {consumer:?} {n} times: {list:?}");
     }
-    assert_eq!(list.len(), 3, "and nothing else: {list:?}");
+    assert_eq!(list.len(), 4, "and nothing else: {list:?}");
 }
 
 #[test]
@@ -817,5 +819,104 @@ fn f018_a_refuel_request_is_the_only_thing_that_ever_raises_a_tank() {
         0,
         "30 requests against a full tank woke `Changed<Gas>` {} times",
         gas_changes(&app) - before
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// 6. F-006 rope steering — the new thrust is NOT free (`docs/NEXT.md` §1B, FIND-082)
+//
+// All nine judges of the §1B plan named the same biggest flaw independently: the mixing rule
+// added the strongest thrust in the game and charged nothing for it. `GasConsumer::Steer` is
+// the answer, priced at the boost's own gas per m/s of speed bought — 16/30 against 18/34.
+//
+// These two are the whole-app half of the claim; the booking itself is unit-tested in
+// `src/vector/gas.rs`, and what the thrust then *does* is `tests/player.rs` §3bc.
+// ---------------------------------------------------------------------------------------
+
+/// `W` — `Buttons::MOVE` comes out of the movement keys in `src/net/local.rs`.
+const FORWARD_KEY: KeyCode = KeyCode::KeyW;
+
+#[test]
+fn f006_a_second_of_rope_steering_costs_what_the_file_says() {
+    // The same shape as `f018_a_second_of_boost_costs_exactly_the_value_from_the_file`, and
+    // against the same failure: multiplied by `dt` twice it costs 0.0044/s, which is invisible
+    // while playing and wrong at balancing time.
+    let mut app = app();
+    let d = data(&app);
+    let e = me(&mut app);
+    ticks(&mut app, 60); // land first; nothing is pressed, so nothing is spent
+    let before = gas(&app, e).current;
+
+    hold(&mut app, FORWARD_KEY);
+    // Re-anchored before every tick for the reason `anchor_left` gives: `update_hooks` is the
+    // real writer and lets go of a hook nobody is holding the trigger for.
+    for _ in 0..60 {
+        anchor_left(&mut app, e);
+        ticks(&mut app, 1);
+    }
+    release(&mut app, FORWARD_KEY);
+
+    let spent = before - gas(&app, e).current;
+    let expected = d.game.vector.gas_steer_per_s;
+    assert!(
+        (spent - expected).abs() < 0.01,
+        "60 ticks of W on an anchored rope cost {spent:.4} gas; game.ron says \
+         gas_steer_per_s = {expected}. A rope thrust that costs nothing is the flaw every one \
+         of the nine judges of docs/NEXT.md §1B named"
+    );
+    assert!(grant(&app, e).steer, "and the grant that gates the thrust was actually issued");
+}
+
+#[test]
+fn f006_a_rope_with_no_key_and_a_key_with_no_rope_both_cost_nothing() {
+    // *The cost follows the effect, not the button* — the same rule reel-in and the dodge
+    // already live by. Neither half of the want alone produces any thrust in
+    // `player::locomotion::air_control`, so neither may bill.
+    let mut app = app();
+    let e = me(&mut app);
+    ticks(&mut app, 60);
+
+    // A rope and no key at all.
+    let before = gas(&app, e).current;
+    for _ in 0..60 {
+        anchor_left(&mut app, e);
+        ticks(&mut app, 1);
+    }
+    let after_idle = gas(&app, e).current;
+    assert!(
+        (before - after_idle).abs() < 1e-6,
+        "an anchored rope with no movement key held cost {:.4} gas — hanging still is free",
+        before - after_idle
+    );
+    assert!(!grant(&app, e).steer, "and no grant was issued for it");
+
+    // A key and no rope. `S` is deliberately part of this: it is `w⁺ = 0`
+    // („mit s »spannt« man nur das seil"), so it buys nothing and pays nothing even WITH a rope.
+    for key in [FORWARD_KEY, KeyCode::KeyD, KeyCode::KeyS] {
+        let before = gas(&app, e).current;
+        hold(&mut app, key);
+        ticks(&mut app, 60);
+        release(&mut app, key);
+        let spent = before - gas(&app, e).current;
+        assert!(
+            spent.abs() < 1e-6,
+            "{key:?} held for a second without a hook cost {spent:.4} gas — the free-air \
+             control is not gated on gas and never bills for it"
+        );
+    }
+
+    // And `S` with a rope: still nothing, because the pull term is `max(0, move_y)`.
+    let before = gas(&app, e).current;
+    hold(&mut app, KeyCode::KeyS);
+    for _ in 0..60 {
+        anchor_left(&mut app, e);
+        ticks(&mut app, 1);
+    }
+    release(&mut app, KeyCode::KeyS);
+    let spent = before - gas(&app, e).current;
+    assert!(
+        spent.abs() < 1e-6,
+        "S on a taut rope cost {spent:.4} gas — requirement 7 of docs/NEXT.md §1A is that S \
+         never hauls you at the rope, and what does not haul does not bill"
     );
 }

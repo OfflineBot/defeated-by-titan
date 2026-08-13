@@ -1,49 +1,97 @@
-# f070-hub — THE LOOP THE GAME DID NOT HAVE, end to end, in one run.
+# f070-hub — THE LOOP THE GAME DID NOT HAVE, end to end, in one run — and since 2026-08-13 the
+# building is part of it: he WALKS IN, is supplied, and WALKS OUT again.
 #
-#   the verdict:  cargo run -q -- --headless --hub --script scripts/f070-hub.txt --ticks 2000
+#   the verdict:  cargo run -q -- --headless --hub --script scripts/f070-hub.txt --ticks 3600
+#   the picture:  cargo run -q -- --offscreen --screenshot docs/images/f070-hub-supply.png \
+#                                 --hub --script scripts/f070-hub.txt --ticks 1035
 #
-# ⚠️ `--ticks 2000` is far past this script's own end (~1 200 ticks). A run that is cut off
-# before the script finishes is an ERROR since 2026-08-10 (`docs/FINDINGS.md` FIND-032) — it
-# used to exit 0 with red asserts in its own log. Raising the limit is free; lowering it turns a
-# green feature red for a reason that is not in the game.
+# ⚠️ **Two runs, two `--ticks`, and the second number is not a typo.** The screenshot is taken
+# at the last tick of its run, so the picture has to be aimed at a moment: t = 1035 is halfway
+# through ACT 3, inside the hall and looking back east at the open gate. That run reports red —
+# it is cut off before the script ends — and the verdict is the first line, never the second.
+# Same split as `scripts/f019-hq.txt`.
+#
+# ⚠️ `--ticks 3600` is past this script's own end (~2 900 ticks, ACT 7 added 640 of them). A run
+# that is cut off before the script finishes is an ERROR since 2026-08-10 (`docs/FINDINGS.md` FIND-032) — it used to
+# exit 0 with red asserts in its own log. Raising the limit is free; lowering it turns a green
+# feature red for a reason that is not in the game.
 #
 # ---------------------------------------------------------------------------------------
-# WHAT THIS FILE CLAIMS — five things, and every one of them is an `assert`
+# WHAT THIS FILE CLAIMS — nine things, and every one of them is an `assert`
 #
 #   1. `--hub` starts the game **in the hub**, not in a fight        (`assert phase == 5`)
-#   2. gas comes back **at a station and only there**                (`assert gas` twice, Q-033)
-#   3. walking onto a deployment pad **starts that pad's sortie**    (`assert phase == 2`)
-#   4. the sortie can be **won**                                     (`assert kills`, `phase == 3`)
-#   5. and a won sortie **lands you back in the hub**                (`assert phase == 5`)
+#   2. the main building is a building you **walk into**             (`assert height > 0.10`)
+#   3. gas comes back **inside it and nowhere else**                 (`assert gas`, twice, Q-033)
+#   4. you **walk out** again through the same gate                  (`assert height < 0.10`)
+#   5. walking onto a deployment pad **starts that pad's sortie**    (`assert phase == 2`)
+#   6. the sortie can be **won**                                     (`assert kills`, `phase == 3`)
+#   7. and a won sortie **lands you back in the hub**                (`assert phase == 5`)
+#   8. **fighting blunts the blades** and the wear survives the debrief (`assert sharpness < 0.80`)
+#   9. and the racks **hone them back** when he walks in a second time (`assert sharpness > 0.99`)
+#
+# ⚠️ **8 and 9 are one claim in two halves, and the order is the whole point.** Until 2026-08-13
+# this file asserted `blades == 5` at the rack in ACT 2 and called it "the harness is full" — a
+# tautology twice over (`docs/FINDINGS.md` FIND-079): it fired at t≈865, some 900 ticks before the
+# first titan even exists, and `blades` counts **spare pairs**, of which a whole sortie spends
+# none. `sharpness` is the metric that moves. So the file now **cuts first and walks in after**:
+# two cortex kills cost `gear.ron: blades.wear_per_hit` 0.12 each, he carries **0.760 — measured,
+# 2026-08-13** back into the hub, and ACT 7 walks him to the racks to get it back. Neither half
+# can pass without the other having happened, and both halves have been watched going red
+# (a run with the two `slash` lines removed reads 1.000 at ACT 6; a run whose ACT 7 turns EAST
+# instead of west reads 0.760 at the rack).
+#
+# ⚠️ **0.24 and not 0.36: this fall-cut books ONE hit per pass, the cortex one.** `blades::cut`
+# charges a torso graze `× wear_torso_factor` on top *when the blade passes the body as well*,
+# and `src/blades/cut.rs`'s own budget test adds the two up. The arranged pass of ACT 5 reaches
+# 0.15 m into the cortex sphere from 1.75 m to the side and never touches the torso capsule, so
+# a script kill is cheaper than a fought one. That is why the bound is `< 0.80` and not `== 0.64`.
 #
 # The phase numbers are `mission::MissionPhase::code`, and 5 was appended and took nobody's
 # number: 0 Briefing · 1 Deploying · 2 Active · 3 Won · 4 Lost · **5 Hub**.
 #
 # ---------------------------------------------------------------------------------------
-# THE GEOMETRY — where the hub's furniture stands, and why the player walks +Z
+# THE GEOMETRY — and why `height` is the only thing that can say "inside"
 #
-# `assets/data/missions.ron: hub` puts everything on **+Z**, because the graybox has an
-# explicitly placed house at (0, 2, −12) and the player spawns at (0, 2, 0) looking −Z. So the
-# first thing this script does after burning its gas is turn around: `look 180 0`, and
-# `forward = (−sin yaw, 0, −cos yaw)` makes yaw 180 the +Z axis (the sign lesson of
-# `scripts/f-flight-cut.txt`, which cost that file nine red asserts).
+# The script language measures `height` and cannot measure x or z. It does not have to: the
+# depot floor of the garrison headquarters is at **0.15 m and it is the only 0.15 m floor in
+# `maps.ron: ashgate`** — the ground is 0.0, every apron 0.05, the quays and bridges 0.4. So
 #
-#   supply station  (-42, 0.15, ∓6.5)  reach 4.0 m — INSIDE the hall; stand at (-38.75, ·, -6.0)
-#                                 `gear.ron: resupply.range_m`, the racks of `maps.ron: ashgate`
-#   recruit pad      (0, 0, 16)   radius 3.0 m  straight ahead of the spawn point
-#   veteran pad     (−9, 0, 16)   elite pad (9, 0, 16)  — off to the sides, not on this line
+#     assert height > 0.10   means INSIDE the main building, and nothing else satisfies it
+#     assert height < 0.10   means OUT on the pavement
 #
-# `game.ron: player.run_speed_m_s` is 6.0, so a second of `key W` is about six metres. The two
-# walks are deliberately loose: what proves the player arrived is not arithmetic but the assert
-# on the other side of the trigger — `gas > 299` for the station, `phase == 2` for the pad.
+# and a run that shows 0.05 → 0.15 → 0.05 has walked in through the gate and back out of it,
+# because the gate is the only gap in the facade (`tests/world.rs::
+# f019_the_headquarters_doorway_is_a_gap_a_player_really_fits_through` sweeps a 0.35 m capsule
+# through all 1.5 m of the wall to say so).
+#
+#   the hall        x = -45.5 .. -16.5   |z| <= 11.5   29 x 23 m, 10 m in the clear
+#   the gate        x = -16.5 .. -15     |z| <= 3      6 m wide, 4.5 m to the lintel
+#   the two racks   (-42, 0.15, -2.0) gas · (-42, 0.15, 2.0) blades — the racks' AISLE FACES,
+#                   reach 4.0 m out of `gear.ron: resupply.range_m`
+#   the spawn point (0, 2, 0), 15 m in front of the gate and looking at it
+#
+# ⚠️ **The stations sat at the racks' CENTRES until 2026-08-13 and the walk did not work**
+# (`docs/FINDINGS.md` FIND-075): a rack is 5 x 9 m of collider, so a trigger in its middle left
+# 57 standable cells inside the reach — a 1.15 m strip between the rack and a roof post, and a
+# 1.0 m slot behind it. This file's ACT 2 used to be a `warp -38.75 1.0 -6.0` into that strip,
+# and a warp is exactly the evidence a supply point must not need. `tests/mission.rs::
+# f019_walking_straight_down_the_aisle_puts_you_in_reach_of_every_rack` is the criterion now.
+#
+# `look 90 0` faces WEST and `look 270 0` faces EAST: `forward = (-sin yaw, 0, -cos yaw)`. That
+# sign cost `scripts/f-flight-cut.txt` nine red asserts once, so it is spelled out here too.
+# `game.ron: player.run_speed_m_s` is 6.0, so `key W 9.0` is 54 m of intent against 45 m of
+# floor — the walk ends at a wall in both directions, which is what makes it reproducible
+# without arithmetic.
 #
 # ---------------------------------------------------------------------------------------
 # ⚠️ WHAT THIS FILE DOES **NOT** CLAIM
 #
-# - **Not a hub you can look at.** The hub is three amber deployment pads and **two** cyan
-#   supply racks, and since 2026-08-12 the racks stand **inside** the garrison headquarters of
-#   `maps.ron: ashgate` (`docs/FINDINGS.md` FIND-066). There is no picture in this run and none
-#   is claimed — it is `--headless`.
+# - **NOT that the racks hand out a fresh PAIR.** `blades` never leaves 5 in this run and it is
+#   not supposed to: two kills cost 0.24 of one pair's sharpness and a spare is only drawn when a
+#   pair is spent to zero, which takes eight of these cuts. What ACT 7 proves is the
+#   **honing** (`gear.ron: resupply.sharpen_per_s` 2.0). The pair *counter* going back up is
+#   proven where a harness can be emptied first, which a script cannot do:
+#   `tests/mission.rs::f033_a_player_at_a_rack_of_the_hub_walks_away_restocked`.
 # - **Not a cut a human could land.** The two kills are the fall-cut of
 #   `scripts/f030-cortex.txt`, arranged by arithmetic: `warp` to 18.5 m, fall, and the blade
 #   passes a husk standing 1.75 m to the side. Both husks are **spawned by the script**, and
@@ -61,17 +109,18 @@ wait 1.5              # the world, the pads and the render pipelines come up (90
 
 assert phase == 5     # ⭐ 1. the game starts in the HUB
 assert gas > 299      # a full tank: 300.0 out of game.ron
+assert blades == 5    # and a full harness: gear.ron: blades.start_pairs
 assert titans == 0    # a hub is not a fight
 mark f072-in-the-hub
 
 # =========================================================================================
-# ACT 1 — the gas. It only comes back at a station, and this is what that looks like.
+# ACT 1 — the gas goes. It only comes back at a station, so it has to be spent first.
 # =========================================================================================
 #
-# Burning it first, because "the tank is full" proves nothing about a refill. `look 180 -89`
-# points the boost almost straight into the ground: `boost_m_s2` is 34, and at 89 degrees the
-# horizontal share of it is 1.7 %, so the player burns 18 gas/s standing where he is instead of
-# sliding across the hub on the way to the station.
+# "The tank is full" proves nothing about a refill. `look 180 -89` points the boost almost
+# straight into the ground: `boost_m_s2` is 34, and at 89 degrees the horizontal share of it is
+# 1.7 %, so the player burns 18 gas/s standing where he is instead of sliding across the hub on
+# the way to the building.
 
 look 180 -89
 key Shift 2.0         # BOOST (src/net/local.rs) — 2 s at gas_boost_per_s 18.0 = 36 gas
@@ -81,42 +130,69 @@ assert gas < 285      # the tank really emptied: 300 − 36 = 264, and nothing r
 assert gas > 200      # it was being spent
 mark f072-gas-burnt
 
-# ⚠️ `warp`, not `key W`. The station is no longer on the hub apron: it moved into the garrison
-# hall at x = −42 (FIND-066 §1), and **walking down the aisle refuels nothing** — the aisle is
-# z = −3..3 and both racks sit 6.5 m off it, so a player who walks straight in stays outside a
-# 4 m reach the whole way (FIND-066 §2). `(-38.75, ·, -6.0)` is the aisle-side spot at the east
-# end of the south rack: 3.29 m from its centre, 0.40 m of clearance off the rack and 0.65 m off
-# the roof post — the one place a 0.35 m capsule fits *and* trips the trigger.
-warp -38.75 1.0 -6.0  # into the hall, beside the south rack
-wait 0.6              # land and settle onto the depot floor (y 0.15)
-wait 1.6              # gear.ron: resupply.gas_per_s 40.0 — a second and a half covers 36
-
-assert gas > 299      # ⭐ 2. gas came back, at a station, and the tank is full again
-mark f072-refuelled
-
-warp 0 2 6            # back onto the hub apron, on the spawn line — so ACT 2 below is unchanged
-wait 1.0              # from the day the station still stood out here
+# Back onto his own spawn point. The `warp` is a reset and not a shortcut: the 89-degree boost
+# above slides him a metre or two off it, and the thing being measured from here on is the WALK,
+# which starts where every player's walk starts.
+warp 0 2 0
+wait 1.0              # 2 m of fall onto the main street apron
+assert height < 0.10  # ⭐ outside: the apron tops out at 0.05 m
 
 # =========================================================================================
-# ACT 2 — the door. A trigger volume you walk into, not a click.
+# ACT 2 — HE WALKS IN. Through the gate, down the aisle, and the supply is where he stops.
+# =========================================================================================
+#
+# „in das gebäude muss man rein laufen können. drinnen sind die nachschübe" — the user,
+# 2026-08-12. One key, held, from the spawn point: 15 m of street, 1.5 m of gate, 29 m of hall,
+# and the back wall stops him at x = -45.10 — 3.69 m from each rack, inside the 4 m reach.
+
+look 90 0             # WEST, at the gate the spawn point already looks at
+key W 9.0             # 54 m of intent against 45 m of floor: the wall is the backstop
+wait 9.5              # ⚠️ LONGER than the key is held. `key` does not block, and an assert
+                      # inside the walk measures a player who is still walking.
+
+assert height > 0.10  # ⭐ 2. INSIDE. Nothing but the depot floor of the main building is here
+assert height < 0.30
+assert speed < 0.5    # standing at the back wall of the hall, not still crossing it
+assert gas > 299      # ⭐ 3. the tank is full again — 40 gas/s out of gear.ron: resupply
+assert blades == 5    # the BASELINE of claim 8/9, not a claim of its own: he flies out with a
+assert sharpness > 0.99  #  full harness, so every point of sharpness missing in ACT 6 was cut off
+mark f072-supplied-inside
+
+# =========================================================================================
+# ACT 3 — AND HE WALKS OUT. A door you can only go through one way is a trap.
+# =========================================================================================
+
+look 270 0            # EAST, back at the gate
+key W 9.0             # the same 54 m the other way
+wait 9.5
+
+assert height < 0.10  # ⭐ 4. out on the pavement again, through the only gap in the facade
+mark f072-walked-out
+
+# =========================================================================================
+# ACT 4 — the door of the hub. A trigger volume you walk into, not a click.
 # =========================================================================================
 #
 # There is no cursor while playing (`menu`, `P4`), so the difficulty is a place: three pads,
 # one per level. This one is `recruit` — two kills, seven minutes, first wave at 60 s.
+#
+# The `warp` is the same reset ACT 1 used: 54 m of eastward intent leaves him somewhere around
+# x = +6, and the elite pad stands at (9, 0, 16). Which pad a player who wanders east ends up on
+# is not this run's claim — `f072_walking_onto_a_pad_deploys_that_pads_sortie` is.
+warp 0 2 0
+wait 1.0
 
-key W 1.6             # ~9 m further, onto the pad at (0, 0, 16), radius 3.0
-wait 2.0              # ⚠️ LONGER than the key is held. `key` does not block: the script runs
-                      # on in the same tick, and the first version of this file asserted after
-                      # 0.6 s of a 1.6 s walk — the player was 5 m short of the pad and the run
-                      # said "the hub does not deploy".
+look 180 0            # +Z: the recruit pad is straight ahead of the spawn point, 16 m out
+key W 3.4             # ~20 m, and the pad's circle is 3.0 m — it fires on entry at z = 13
+wait 4.0
 
-assert phase == 2     # ⭐ 3. ACTIVE — the pad started its sortie
+assert phase == 2     # ⭐ 5. ACTIVE — the pad started its sortie
 assert kills == 0     # and nothing has been counted yet
 assert titans == 0    # recruit's first wave is at 60 s: the field is still empty
 mark f072-deployed
 
 # =========================================================================================
-# ACT 3 — the sortie. Two cortex cuts, out of a fall, exactly as scripts/f030-cortex.txt.
+# ACT 5 — the sortie. Two cortex cuts, out of a fall, exactly as scripts/f030-cortex.txt.
 # =========================================================================================
 #
 # Why the player falls instead of flies: `gear.ron: blades.min_speed_m_s` is 8.0 and a running
@@ -149,33 +225,61 @@ wait 0.90
 slash right 0.40
 wait 1.45
 
-assert kills >= 2     # ⭐ 4. the recruit target out of missions.ron is reached
+assert kills >= 2     # ⭐ 6. the recruit target out of missions.ron is reached
 assert titans == 0
+assert sharpness < 0.80  # ⭐ 8a. THE BLADES ARE BLUNT. Measured 0.760: two cortex passes at
+                      # wear_per_hit 0.12 and no torso graze (see the header). The bound is
+                      # one-sided on purpose — a pass that also clips the body makes it lower,
+                      # never higher, and the claim is "fighting costs blade", not "exactly this".
+assert blades == 5    # and a kill did NOT cost a whole spare — that takes ~5.5 kills
 wait 0.2
 assert phase == 3     # WON
 mark f072-won
 
 # =========================================================================================
-# ACT 4 — the way back. This is the half that did not exist before 2026-08-12.
+# ACT 6 — the way back. This is the half that did not exist before 2026-08-12.
 # =========================================================================================
 #
 # `missions.ron: hub.debrief_s` is 3.0 s: the verdict stays up long enough to read, then the
 # hub takes you back and puts you at its spawn point — which is also what stops the pad you
 # deployed from re-deploying you the moment you land.
-
-# MEASURED, 2026-08-12: the second cortex cut lands at t=656, the verdict is decided at 657,
-# and the hub takes over at 838 — 180 ticks = the 3.0 s of `hub.debrief_s`, to the tick. The
-# check below therefore stands at ~t=800 (still WON) and the one after it at ~t=920 (hub). The
-# first version of this file waited 2.0 s here, landed at t=873 and read the hub — a red assert
-# that was measuring the script's own arithmetic and not the game's.
+#
+# MEASURED, 2026-08-12: the second cortex cut lands 1 tick before the verdict is decided, and
+# the hub takes over 180 ticks later — the 3.0 s of `hub.debrief_s`, to the tick. The check
+# below therefore stands inside the debrief and the one after it past its end. An earlier
+# version waited 2.0 s here, landed inside the transition and read the hub — a red assert that
+# was measuring the script's own arithmetic and not the game's.
 wait 0.8
 assert phase == 3     # still WON: the debrief is not cut short
 wait 2.5
 
-assert phase == 5     # ⭐ 5. back in the HUB. The loop is closed.
+assert phase == 5     # ⭐ 7. back in the HUB. The loop is closed.
 assert height < 3     # standing on the ground at the spawn point, not 14 m up over a husk
 assert titans == 0
+assert blades == 5    # the spares he flew out with
+assert sharpness < 0.80  # ⭐ 8b. and the WEAR CAME HOME WITH HIM. The sortie ending does not
+                      # quietly hand him a fresh harness — if the debrief or the hub transition
+                      # ever resets `Blades`, this is the line that says so.
 mark f072-home
 
 wait 0.5
 assert phase == 5     # and standing there does not deploy him again
+
+# =========================================================================================
+# ACT 7 — the reason the loop is a loop: he goes back in and is made ready for the next one.
+# =========================================================================================
+#
+# The same walk as ACT 2, from the same point — the hub puts him back on `missions.ron:
+# hub.spawn_m` (0, 2, 0), which is why one `look 90 0` and one held W is enough a second time.
+# What is different is the state he arrives in: 0.760 of a pair instead of a fresh one. At
+# `gear.ron: resupply.sharpen_per_s` 2.0 the racks need 0.12 s of that, so anything reaching the
+# aisle at all passes — the claim is the CONNECTION between wear and rack, not the rate.
+
+look 90 0             # WEST, at the gate again
+key W 9.0
+wait 9.5
+
+assert height > 0.10  # inside the hall, at the back wall, in reach of both racks
+assert sharpness > 0.99  # ⭐ 9. HONED BACK. The blunt pair of ACT 6 is fresh again, and the two
+assert blades == 5    #     asserts together are the before/after this file did not have before
+mark f072-resupplied-after-the-sortie

@@ -239,7 +239,7 @@ the user has said nothing about.
 | **Camera / Vector Gear** | | |
 | Camera height | 1.6 m | |
 | Ground-combat field of view | 55–65 degrees | biggest lever — vertical or horizontal? [Q-021](QUESTIONS.md) |
-| Anchor range | 200 m | 90 m until 2026-08-10, see below |
+| Anchor range | 500 m | 90 m until 2026-08-10, 200 m until 2026-08-12, see below |
 | Speed | ×1.5 | vs. standard — reference open, [Q-018](QUESTIONS.md) |
 
 *The user labelled the last four rows with the reference work's own terms; here they stand
@@ -270,6 +270,25 @@ with the project terms from [`docs/conventions.md`](conventions.md) §2.*
 > `tests/data.rs::t005_a_hook_shot_at_full_range_arrives_before_the_target_has_moved` holds that
 > under 1.5 s) and `world.half_extent_m` 300 → **400**, because the spatial grid has to carry
 > half the map plus one full range.
+
+> ⚠️ **And 200 m → 500 m on 2026-08-12 — the user named the number himself.** Verbatim
+> ([`docs/NEXT.md`](NEXT.md) §1A): *„und das seil muss deutlich deutlich schneller gespannt
+> werden. nicht frame perfekt aber mit ca 500m pro sekunde. **mit der range 500 meter!**"* Third
+> time the same precedence rule decides it and third time in the same direction.
+>
+> **What made the old ceiling movable is that its argument had expired**: "half the 400 m
+> graybox" was written against a map that has not shipped since 2026-08-12. Ashgate is 700 m
+> across, so 500 m is 71 % of the district's edge — *where you stand* is still a decision, but a
+> much looser one, and from here the lever that keeps it one is **the map, not the range**.
+>
+> **For the modeler this is the same change as last time, one size up:** heights do not move and
+> the anchor ceiling stays 14.5 m, but the church (35 m) is now reachable from *anywhere* in
+> ashgate, so a tall silhouette is worth its polygons across the whole district and a landmark
+> that only reads from its own block is wasted. Three numbers moved with the range, all in
+> `assets/data/game.ron`: `hook_speed_m_s` 160 → **500** (the user's own figure, and it puts a
+> full-range shot back at 1.0 s), `hook_retract_speed_m_s` 120 → **500** (new guard: a miss is
+> back inside 1.0 s) and `world.half_extent_m` 600 → **900**, because the grid still has to
+> carry half the map plus one full range — 350 + 500 = 850, so 900 is that floor plus 50 m.
 
 ### The three scales — and why nobody "corrects" them
 

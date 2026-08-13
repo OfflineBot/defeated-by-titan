@@ -38,7 +38,8 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::shared::{
-    AimPoint, BodyId, BodyMask, Cli, HitStop, HitZone, Hook, HookReleased, HookState, IndexEntry,
+    AimPoint, ArmAim, BodyId, BodyMask, Cli, HitStop, HitZone, Hook, HookReleased, HookState,
+    IndexEntry,
     LocalPlayer, PlayerId, ReleaseReason, RopeLength, Side, SimulationSystems, SpatialIndex,
     TitanHit, TitanId, WarpPlayer,
 };
@@ -52,11 +53,16 @@ use defeated_by_titan::vector::aim::aim;
 #[derive(Component, Clone, Copy, Debug, Default)]
 struct ForcedAim(AimPoint);
 
-fn force_aim(mut players: Query<(&ForcedAim, &mut AimPoint)>) {
-    for (forced, mut point) in &mut players {
-        if *point != forced.0 {
-            *point = forced.0;
-        }
+/// Writes the forced point into **both** carriers: the centre ray the crosshair reads
+/// ([`AimPoint`]) and the per-arm ray `vector::hook` fires at ([`ArmAim`]).
+///
+/// Both, with the same value, because that is what the real `vector::aim` produces for a
+/// target the whole spread covers — a side ray that finds nothing anchorable falls back to the
+/// centre ray (`F-023`). This file is about the rope, not about the hemisphere split.
+fn force_aim(mut players: Query<(&ForcedAim, &mut AimPoint, &mut ArmAim)>) {
+    for (forced, mut point, mut arms) in &mut players {
+        point.set_if_neq(forced.0);
+        arms.set_if_neq(ArmAim { arms: [forced.0; 2] });
     }
 }
 

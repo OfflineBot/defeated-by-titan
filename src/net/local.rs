@@ -13,7 +13,12 @@
 //!
 //! `Q` `HOOK_LEFT` · `E` `HOOK_RIGHT` · `LMB` `SLASH_LEFT` · `RMB` `SLASH_RIGHT` ·
 //! `F` `SLASH_LEFT` (second binding) · `Shift` `BOOST` · `Ctrl` `REEL_IN` · `Space` `JUMP` ·
-//! `C` `DODGE` · `Tab` `MARK` · `WASD` movement.
+//! `C` `DODGE` · `Tab` `MARK` · `WASD` movement · **the wheel sets the aim spread**.
+//!
+//! ⚠️ **`S` is movement and nothing else.** It was briefly a second binding for `REEL_IN`;
+//! that was a misreading of *„mit s spannt man nur das seil"* and the user reported it as a
+//! defect the first time he played it (`docs/NEXT.md` §1A req 7). See the `REEL_IN` line
+//! below.
 //!
 //! The ropes moved from the mouse to the keyboard because the user asked for them to be
 //! **steerable**: a hand holds `Q` and `E` and still aims, and it cannot hold two mouse
@@ -47,7 +52,7 @@
 //! per tick. Every other button in this file is sampled with `pressed()` per tick as well, so
 //! `Space` now behaves like all of them and no differently.
 
-use bevy::input::mouse::AccumulatedMouseMotion;
+use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 
 use super::Inbox;
@@ -71,6 +76,7 @@ pub fn read_input(
     mut inbox: ResMut<Inbox>,
     mut look_override: ResMut<LookOverride>,
     mut look: Local<Look>,
+    mut spread: Local<Spread>,
     mut space: Local<DodgeTap>,
     local: Query<&PlayerId, With<LocalPlayer>>,
 ) {
@@ -111,16 +117,18 @@ pub fn read_input(
     // one.
     t.set(Buttons::JUMP, jump);
     t.set(Buttons::BOOST, keys.pressed(KeyCode::ShiftLeft));
-    // `Ctrl` **and** `S`. The user, 2026-08-12 (`docs/NEXT.md` §1a): *„mit s »spannt« man nur
-    // das seil!"* — in the air `S` is the one WASD key that produces no thrust
-    // (`player::locomotion::air_thrust`), and what it does instead is tension the rope. A
-    // SECOND binding and not a move: `Ctrl` has to stay reachable for a hand that is holding
-    // `W`, and `scripts/f-flight-cut.txt` presses it. On the ground `S` keeps walking him
-    // backwards — the axis below is untouched.
-    t.set(
-        Buttons::REEL_IN,
-        keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::KeyS),
-    );
+    // 🔴 **`Ctrl` and NOTHING else.** `S` was a second binding for `REEL_IN` here between
+    // 2026-08-12 and 2026-08-13, and it was a **misreading**: *„mit s »spannt« man nur das
+    // seil!"* was taken to mean "reel in", but **„spannen" is keeping a rope taut, not hauling
+    // it in**. The user played it and said so in one sentence (`docs/NEXT.md` §1A, req 7):
+    // *„aktuell wenn ich seil spanne und s drücke werde ich stark zum seil gezogen! das soll
+    // nicht sein!"* — measured, a held `S` closed **56 m** in 120 ticks
+    // (`tests/input.rs::r7_s_held_on_a_taut_rope_does_not_close_the_distance`), because
+    // `reel_speed_m_s` is 28 and 120 ticks are 2 s.
+    //
+    // So `S` is nothing but the backwards axis again (the `forward` line below), and the rope
+    // stays taut because the rope constraint keeps it taut — not because a key asks for it.
+    t.set(Buttons::REEL_IN, keys.pressed(KeyCode::ControlLeft));
     // **`C` stays, and it is not a leftover.** Two routes to one bit, exactly like `F` next to
     // the left mouse button above:
     //   - a double-tap is a **gesture**, and the bible asks for accessibility (3.5) — a player
@@ -149,6 +157,19 @@ pub fn read_input(
     let forward = f32::from(keys.pressed(KeyCode::KeyW)) - f32::from(keys.pressed(KeyCode::KeyS));
     let strafe = f32::from(keys.pressed(KeyCode::KeyD)) - f32::from(keys.pressed(KeyCode::KeyA));
 
+    // The wheel, and it is **taken** like the mouse motion above: one notch has to be counted
+    // once, on one tick, whatever the frame rate is doing (`B-002`, and [`gather_mouse_motion`]
+    // is where it is summed). What travels is the resulting **absolute** angle — see
+    // [`Spread`] and `Intent::aim_spread_deg` for why a delta on the wire is not an option.
+    let v = &data.game.vector;
+    let aim_spread_deg = spread.turn(
+        std::mem::take(&mut mouse_motion.scroll_notches),
+        v.aim_spread_deg,
+        v.aim_spread_step_deg,
+        v.aim_spread_min_deg,
+        v.aim_spread_max_deg,
+    );
+
     inbox.push(
         me,
         Intent {
@@ -157,6 +178,7 @@ pub fn read_input(
             yaw: look.yaw,
             pitch: look.pitch,
             buttons: t,
+            aim_spread_deg,
             tick: tick.0,
         },
         tick.0,
@@ -231,6 +253,49 @@ pub struct Look {
     pub pitch: f32,
 }
 
+/// How far apart the player has dialled the two arms' aim rays — `F-023`'s spread, in
+/// **degrees**, and the wheel's accumulator.
+///
+/// The user, 2026-08-12: *„es muss mehr rechts und links spreaden!! (mit mausrad soll man
+/// einstellen können wie weit auseinander es gehen darf!)"*.
+///
+/// ⚠️ **The accumulation lives HERE, on the sending side, and the wire carries the result.**
+/// A notch is a delta, and a delta on a wire is a desync that never re-converges: one lost or
+/// duplicated packet and the two machines stay one notch apart until somebody restarts the
+/// game. The absolute angle re-converges with the next intent (§6 rule 4,
+/// `docs/multiplayer.md`). That is also why this is the same `Local` shape as [`Look`], which
+/// accumulates the mouse for exactly the same reason.
+///
+/// `None` until the first tick: a `Local` cannot be initialised out of a resource, so the
+/// starting value is fetched from `game.ron` (`vector.aim_spread_deg`) the first time
+/// [`Spread::turn`] is called. **No copy of that number lives in this file** (§6 rule 2).
+#[derive(Default)]
+pub struct Spread(Option<f32>);
+
+impl Spread {
+    /// Turns the wheel by `notches` and returns the **absolute** angle in degrees.
+    ///
+    /// One notch is one `step_deg`, and the result is clamped into `[min_deg, max_deg]` —
+    /// so the window in `game.ron` is what the player can reach and nothing else.
+    ///
+    /// **Clamping and not wrapping**, and the clamp is what makes the value converge: two
+    /// players who turned the wheel differently and then run it into an end stop end on the
+    /// same number. A wrap would make the two paths permanently different.
+    pub fn turn(
+        &mut self,
+        notches: f32,
+        start_deg: f32,
+        step_deg: f32,
+        min_deg: f32,
+        max_deg: f32,
+    ) -> f32 {
+        let current = self.0.unwrap_or(start_deg);
+        let next = (current + notches * step_deg).clamp(min_deg, max_deg);
+        self.0 = Some(next);
+        next
+    }
+}
+
 /// The mouse motion of every **frame** since the last simulation **tick**.
 ///
 /// A `Resource` and not a component: this is the state of a *device*, not of a player. There
@@ -242,7 +307,25 @@ pub struct Look {
 #[derive(Resource, Debug, Default)]
 pub struct MouseSinceTick {
     pub delta: Vec2,
+    /// The wheel since the last tick, **in notches** — a wheel's own detents, whatever unit
+    /// the device reported them in (see [`PIXELS_PER_NOTCH`]). Sign follows the device:
+    /// scrolling **up/away is positive** and widens the spread.
+    pub scroll_notches: f32,
 }
+
+/// What one wheel detent is worth when the device reports **pixels** instead of lines.
+///
+/// A wheel sends [`MouseScrollUnit::Line`] (one detent = 1.0) and a touchpad sends
+/// [`MouseScrollUnit::Pixel`] — the same gesture, two units, and the second one has no detents
+/// at all. 20 px is winit's own line height on the platforms that convert, and it is here for
+/// one reason: without it a touchpad would move the spread by **hundreds** of degrees in one
+/// swipe and the clamp would be the only thing the player ever saw.
+///
+/// ⚠️ It is a **device** constant, not a game value — the same class as the key bindings in
+/// this file's header, and it moves into the options RON on the same day they do. It is
+/// deliberately not in `game.ron`: a tuning file that carries a touchpad's pixel pitch invites
+/// somebody to balance the game with it.
+const PIXELS_PER_NOTCH: f32 = 20.0;
 
 /// Sums the frame's mouse motion into [`MouseSinceTick`] — **once per frame**, before the
 /// fixed loop.
@@ -267,9 +350,22 @@ pub struct MouseSinceTick {
 /// (`bevy_app-0.19.0/src/main_schedule.rs:401-403`), and it sits after `PreUpdate` in the main
 /// schedule order (`:224-232`) — so Bevy's own accumulation has already happened when this
 /// runs.
+/// ## It gathers the **wheel** too, and for the identical reason
+///
+/// `AccumulatedMouseScroll` is assigned in `PreUpdate` exactly like the motion above
+/// (`bevy_input-0.19.0/src/mouse.rs:272-286` — `= delta`, not `+=`), so a wheel read straight
+/// out of `FixedPreUpdate` would drop notches on frames without a fixed step and count them
+/// twice on catch-up frames. The name of this system stays as it is because
+/// `src/net/mod.rs` registers it and that file is not this job's; what it does is in this
+/// paragraph and in `tests/input.rs::f023_the_wheel_notches_survive_any_frame_rate`.
 pub fn gather_mouse_motion(
     motion: Res<AccumulatedMouseMotion>,
+    scroll: Res<AccumulatedMouseScroll>,
     mut pending: ResMut<MouseSinceTick>,
 ) {
     pending.delta += motion.delta;
+    pending.scroll_notches += match scroll.unit {
+        MouseScrollUnit::Line => scroll.delta.y,
+        MouseScrollUnit::Pixel => scroll.delta.y / PIXELS_PER_NOTCH,
+    };
 }

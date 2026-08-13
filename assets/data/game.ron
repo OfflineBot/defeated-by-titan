@@ -64,6 +64,46 @@
         // (aber hälfte ca)" (docs/NEXT.md §1e). So the air control is not gated on gas, it only
         // gets weaker, and an empty tank stops being the dead end behind „seile ohne boost
         // bringen gar nichts". Dimensionless — no unit suffix.
+
+        // ⚠️ THE NEXT THREE ARE NEW ON 2026-08-13 AND NOTHING READS THEM YET. They are the
+        // numbers of the mixing rule (docs/NEXT.md §1B), which `W4` builds in
+        // src/player/locomotion.rs. They stand here first, alone, so that the keys are frozen
+        // before four agents start consuming them — and so that a missing one crashes on load
+        // instead of being defaulted (§4: no serde(default) for a game value).
+        //
+        // The user, 2026-08-12: „wenn ich mit seilen festhake ... und w in die richtung drücke
+        // will ich dass man deutlich mehr geboosted wird. also dass man dort richtig
+        // hingezogen wird. wenn man aber a oder d drückt wird nach links/rechts geboostet!"
+        //
+        // ⚠️ UNTUNED. What `W` adds ON TOP of air_accel_m_s2 when a rope is anchored, pulling
+        // along the rope direction. **3x the free-air control**, and both bounds are real:
+        //   - strictly ABOVE air_accel_m_s2 (10), or „deutlich mehr geboosted" is a lie and
+        //     the key buys nothing a rope-less player does not already have;
+        //   - at most boost_m_s2 (34), or the free `W` outruns the boost you pay gas for and
+        //     Shift stops being the strong option — the same bound air_accel_m_s2 carries,
+        //     one rung higher. 30 is 88 % of the boost: unmistakably strong, still second.
+        // tests/data.rs holds both ends.
+        air_pull_m_s2: 30.0,
+        // ⚠️ UNTUNED. What `A`/`D` add on top when a rope is anchored — on the horizontal
+        // right vector, NOT the rope tangent (a tangent flips sign when the anchor passes
+        // beside you and would invert the strafe mid-swing, docs/NEXT.md §1B).
+        //
+        // The bound is a SUM and that is the point: air_accel_m_s2 + air_lateral_m_s2 <= 34,
+        // i.e. holding `D` alone may never beat one boost. 10 + 18 = 28 leaves 6 m/s² of head
+        // room. Below air_accel_m_s2 it would not read as a „boost" at all; the floor is
+        // therefore the same 10.
+        air_lateral_m_s2: 18.0,
+        // ⚠️ UNTUNED. How far above min_rope_m the rope pull has already faded to zero, in
+        // metres of rope length. **This key exists because of a measured cliff, not a feeling:**
+        // FIND-035 — at min_rope_m the constraint takes 17 m/s out of the player in ONE tick.
+        // Thrusting straight at an anchor you are already 3 m from feeds exactly that cliff, so
+        // the pull lets go before it: full strength at 15 m of rope, zero at 3 m.
+        //
+        // Two bounds, both derived and both in tests/data.rs:
+        //   - >= 2 * min_rope_m (6 m), or the fade is shorter than the cliff it exists to avoid;
+        //   - <= 0.1 * hook_range_m (50 m), or a "near the anchor" special case is running over
+        //     a tenth of every rope in the game and the pull is no longer what steers a swing.
+        air_pull_fade_m: 12.0,
         // 1.65 -> 1.60: the user gives the camera height directly
         // (scale.ron:camera.height_m). The old 1.65 was estimated from the body height;
         // a stated figure beats an estimate.
@@ -102,17 +142,70 @@
         // ever drift apart). The user, 2026-08-10, after playing it: *"zudem muss die hook
         // range sehr viel laenger sein!"* — see docs/QUESTIONS.md Q-035 for why 200 and not
         // 400.
-        hook_range_m: 200.0,
+        // **200 -> 500 on 2026-08-12, and the number is his, verbatim**: „und das seil muss
+        // deutlich deutlich schneller gespannt werden. nicht frame perfekt aber mit ca 500m pro
+        // sekunde. mit der range 500 meter!" (docs/NEXT.md §1A). Same precedence rule as the
+        // last two times — a direct figure in metres beats every derivation, including his own
+        // earlier 90 and 200. It costs world.half_extent_m 600 -> 900, and that price is
+        // written out down there rather than re-derived here.
+        hook_range_m: 500.0,
         // 90 -> 160. NOT a taste change: it follows from the range. A hook is a projectile,
         // so at the old 90 m/s a shot to the new maximum range would take **2.22 s** to
         // arrive — longer than most of a swing, and long enough that the anchor you aimed at
         // is not where you are any more. 160 m/s holds the worst-case flight at 1.25 s, which
         // is what a 90 m shot cost before (1.0 s) plus a little. ⚠️ UNTUNED.
-        hook_speed_m_s: 160.0,
+        //
+        // **160 -> 500 on 2026-08-12, and this one is a stated speed, not a consequence**:
+        // „mit ca 500m pro sekunde". It happens to be exactly what the range needs — 500/500 =
+        // **1.0 s** of worst-case flight, back to what a 90 m shot cost in the very first
+        // version — but that is a coincidence worth naming, not the reason. The reason is that
+        // he asked for the two halves of one feeling at once: „(was instant sein soll)" and
+        // „aber man soll sehen wie es aufspannt". 1 s at full range is fast enough to read as
+        // instant at the 20-60 m most shots actually are (0.04-0.12 s) and still slow enough
+        // that the line is drawn, not teleported.
+        hook_speed_m_s: 500.0,
         // F-001 names „einziehend" as the fourth hook state; game.ron knew only the outward
         // flight so far. Faster than the outward flight, so a missed shot is not punished.
         // ⚠️ Pure starting value, no source (docs/QUESTIONS.md Q-016).
-        hook_retract_speed_m_s: 120.0,
+        //
+        // **120 -> 500 on 2026-08-12.** The old rule „faster than the outward flight" is dead —
+        // the outward flight is 500 now and „faster than instant" is not a number. What
+        // replaces it is a bound with a player-visible meaning, and tests/data.rs holds it:
+        // **hook_range_m / this <= 1.0 s**, i.e. a miss at maximum range is cleared up inside
+        // one second. Above that the punishment for a bad shot is not the miss, it is the wait
+        // — and §1A's whole first requirement is that firing again is never blocked.
+        // At 500 the retract equals the shot: out and back is 2.0 s worst case, 0.24 s at the
+        // 60 m a real miss happens at. ⚠️ UNTUNED.
+        hook_retract_speed_m_s: 500.0,
+        // ⚠️ THE NEXT FOUR ARE NEW ON 2026-08-13 AND NOTHING READS THEM YET — `W3`
+        // (src/vector/aim.rs) and `W2` (the wheel) consume them. Frozen here first so that the
+        // key names cannot drift while four agents build against them.
+        //
+        // The user, 2026-08-12: „und es muss mehr rechts und links spreaden!! (mit mausrad soll
+        // man einstellen können wie weit auseinander es gehen darf!)" — so the spread is a
+        // number the PLAYER sets at runtime, and these four are the window he sets it in.
+        //
+        // ⚠️ UNTUNED. The current half-angle between the two arms' aim rays, in degrees off the
+        // look direction. At 100 m of aim distance 28° puts the two side points
+        // 2 * 100 * sin(28°) = **93.9 m** apart — that is a whole city block between your two
+        // hooks, which is what „mehr spreaden" has to mean if it is to change how a swing
+        // feels. It is a starting value inside the window below and nothing else.
+        aim_spread_deg: 28.0,
+        // The floor of the wheel's window. **Strictly above 0**: at 0 the two arms share one
+        // ray again, which is exactly the state F-023 exists to end (FIND-039) — a player who
+        // can wheel the spread back to zero can turn the feature off by accident.
+        aim_spread_min_deg: 10.0,
+        // The ceiling. **At most 60°**, and that is geometry, not taste: past 60° off the look
+        // direction the side ray leaves the 91.5° horizontal frustum (camera.fov_deg 60
+        // vertical on 16:9), so the marker the user demands („da wo das seil am ende auch
+        // landet soll die markierung hin") would have to be drawn off-screen. 44 keeps both
+        // markers inside the image with 1.75° to spare at the widest setting.
+        aim_spread_max_deg: 44.0,
+        // One notch of the wheel. (max - min) / step = (44 - 10) / 2 = **17 notches**, and
+        // tests/data.rs asks for at least 8: fewer than that and the wheel is a three-position
+        // switch the player will read as broken rather than as a setting. Fine enough to feel
+        // like a dial, coarse enough that one flick crosses the window.
+        aim_spread_step_deg: 2.0,
         reel_speed_m_s: 28.0,        // F-005 Reel-In
         min_rope_m: 3.0,          // any closer would drag the camera into the wall
         // Gauss-Seidel iterations over both rope constraints. With one iteration the second
@@ -153,6 +246,36 @@
         // For scale, the other consumer: reeling a full rope in from 90 m to the 3 m minimum
         // takes (90-3)/28 = 3.1 s and costs 18.6 gas — 6.2 % of the tank.
         gas_reel_per_s: 6.0,
+        // ⚠️ NEW ON 2026-08-13, AND NOTHING SPENDS IT YET. What the rope-pull thrust
+        // (player.air_pull_m_s2 / air_lateral_m_s2) costs per second once `W4` bills it.
+        //
+        // **It exists because the thrust would otherwise be free**, and that was the one flaw
+        // all nine judges of the §1B plan named independently: a `W` that pulls at 30 m/s²
+        // with no meter moving is a stronger boost than the boost, for nothing, and the whole
+        // game is „flight costs gas".
+        //
+        // The number is not chosen, it is SOLVED — from the same ratio that already decides
+        // gas_dodge, gas per m/s of speed bought:
+        //
+        //     held boost   gas_boost_per_s / boost_m_s2    = 18 / 34 = 0.5294 gas per m/s
+        //     rope steer   gas_steer_per_s / air_pull_m_s2 = 16 / 30 = 0.5333 gas per m/s
+        //                                                   -------------------------------
+        //     difference 0.0039 — the two thrusts cost the SAME per metre per second
+        //
+        // That is deliberate and it is what tests/data.rs pins (|delta| <= 0.15). The dodge is
+        // the expensive one (1.875) and it is meant to be; the steer is not a third price
+        // point, it is the boost's price on a different button. What a player therefore has to
+        // learn is WHICH thrust the situation wants, never which one is cheap.
+        //
+        // In tank terms: 300 gas is 18.75 s of held steering, a little longer than the 16.67 s
+        // of held boost — and on an empty tank the rope term is ZERO (the look term keeps
+        // air_accel_empty_fraction, §1e). ⚠️ UNTUNED.
+        //
+        // Spent since 2026-08-13: GasConsumer::Steer, booked in src/vector/gas.rs and read by
+        // player::locomotion::air_control. Wanted whenever a hook is anchored AND a movement key
+        // is down — the cost follows the effect, not the button, so a rope with no key held and
+        // a key held with no rope both cost nothing.
+        gas_steer_per_s: 16.0,
         // F-008, and the ONE gas number in this block that is not a rate: what a single dodge
         // costs, billed once on the tick the double-tap lands. No `_per_s` in the name because
         // there is no per second about it — vector/gas.rs does NOT multiply it by dt.
@@ -193,7 +316,14 @@
         // flat while boost+reel together cost 0.4 per tick, so being served last can cost a
         // dodge at most 0.4 gas, i.e. 0.9 % of its own price. Putting it first would look like a
         // decision and buy nothing.
-        gas_priority: [Boost, ReelIn, Dodge],
+        // Steer is INSERTED second and that position is a decision, not an append
+        // (docs/QUESTIONS.md Q-037, and it is the user's to overturn). Steer and Boost are both
+        // rates, both wanted on the very same tick of a swing, so on a nearly empty tank this
+        // list decides which of the two the last drop buys. Boost stays first because it is the
+        // deliberate press: Shift means "I need speed NOW", while W/A/D on a rope is held almost
+        // continuously in flight — putting Steer first would let the ambient input eat the drop
+        // the explicit one asked for, and an ignored Shift reads as a broken game.
+        gas_priority: [Boost, Steer, ReelIn, Dodge],
         boost_m_s2: 34.0,
         // How much of the boost DIRECTION comes from the rope instead of from the look
         // direction: 0.0 = pure look direction (the behaviour up to 2026-08-10), 1.0 = straight
@@ -324,7 +454,32 @@
         // 800 x 800 at `cell_m: 8.0`, i.e. **22 500 cells against 10 000 — 2.25x the index
         // memory**. That is the price of a district with a 120 m wall in it, and it buys
         // nothing on its own.
-        half_extent_m: 600.0,
+        // **600 -> 900 on 2026-08-13**, and this one is forced by arithmetic, not chosen: the
+        // guard is `half_extent_m >= longest_map_edge/2 + hook_range_m`, ashgate is 700 m
+        // across and the range is 500 now, so the floor is 350 + 500 = **850**. 900 is that
+        // floor plus 50 m — enough that the next block placed at the district's edge does not
+        // move this number again, not so much that the grid pays for a map nobody built.
+        //
+        // The cost, MEASURED and not estimated this time (2026-08-13, machine B, 8 interleaved
+        // headless runs of 900 ticks on ashgate, A/B/A/B so that background load hits both
+        // sides): the grid covers 1800 x 1800 m instead of 1200 x 1200 at `cell_m: 8.0`, i.e.
+        // **50 625 cells against 22 500 — 2.25x again**, and it costs **+0.09 %** of process
+        // CPU (6.174 s -> 6.180 s, best run of four each; the means are 6.847 -> 6.612 and
+        // that -3.4 % is another agent's render job, not a speed-up).
+        //
+        // WHY it is free, and this is the part worth keeping: `SpatialIndex::new` allocates
+        // `columns²` cells **once at startup and never per tick** (src/shared/spatial.rs says
+        // so in the field's own comment), and `maintain_index` touches only bodies that moved.
+        // So 2.25x the cells is 1.2 MB of empty `Vec` headers at load and nothing at 60 Hz.
+        // What would NOT be free is `cell_m`, because that changes how many cells every ray
+        // walks — it stays 8.0, it is unmeasured (docs/QUESTIONS.md Q-014), and it does not
+        // get touched on a hunch.
+        //
+        // ⚠️ Note for whoever measures this next: in `--headless` the frame time is NOT the
+        // metric. `ScheduleRunnerPlugin::run_loop(1/240 s)` paces the loop, so DBT_FRAMETIME
+        // reads 4.221 ms/frame before AND after — that is the cap, not the work. Process CPU
+        // over a fixed tick count is what moves.
+        half_extent_m: 900.0,
         // Whoever occupies more cells lands in the linear large-body list instead of in the
         // grid. The ground (400 x 400 m) occupies 2500 cells at 8 m cells; every horizontal
         // ray would otherwise test it once per visited cell.

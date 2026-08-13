@@ -51,9 +51,9 @@ use defeated_by_titan::blades::cut::{blade_segment, sweep};
 use defeated_by_titan::blades::swing::{BladeTiming, SweptFrom, Swings};
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::shared::{
-    BodyId, Cli, Health, HitStop, HitZone, HookAnchored, HookReleased, LocalPlayer, MovementState,
-    PlayerId, ReleaseReason, Side, SpawnTitan, Tick, TitanHit, TitanId, TitanState, Velocity,
-    LAYER_PLAYER, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
+    BladeRestockRequest, Blades, BodyId, Cli, Health, HitStop, HitZone, HookAnchored, HookReleased,
+    LocalPlayer, MovementState, PlayerId, ReleaseReason, Side, SpawnTitan, Tick, TitanHit, TitanId,
+    TitanState, Velocity, LAYER_PLAYER, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
 };
 use defeated_by_titan::titan::rig::TitanPart;
 
@@ -770,6 +770,171 @@ fn f030_the_cost_of_one_thousand_casts() {
     println!(
         "F-030 cost: {:.2} µs per cast over 1000 casts ({} of them hit) [debian]",
         cost.0, cost.1
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F-033 — the blade wears out, which is the half that makes the rack mean anything
+// ---------------------------------------------------------------------------
+
+/// Reads the local player's harness.
+fn harness(app: &mut App) -> Blades {
+    let me = player(app);
+    *app.world().get::<Blades>(me).expect("`player::spawn_player` gives every player a harness")
+}
+
+/// ★ **The one that falls on a monotone harness.**
+///
+/// Until 2026-08-13 `gear.ron: blades.wear_per_hit` had **no reader anywhere in `src/`**
+/// (`docs/FINDINGS.md` FIND-075). [`Blades`] only ever grew — at a rack — so *economy instead of
+/// cooldowns* had a way back and nothing to come back from: `scripts/f070-hub.txt`'s
+/// `assert blades == 5` was a tautology written down as one, and the five HUD pips of `F-170`
+/// were a constant dressed as a gauge.
+///
+/// This flies the pass [`f030_the_cortex_wins_over_the_body_it_hides_in`] flies and then asks
+/// the harness. **Nothing here is compared against a literal**: the floor is `wear_per_hit` read
+/// out of the file, so retuning the number moves the test with it.
+#[test]
+fn f033_a_cut_costs_the_blade_that_made_it() {
+    let mut app = app();
+    let d = data(&app);
+    let cortex = Vec3::new(REACH_X, LANE_Y + 1.6, 0.0);
+    spawn_target(&mut app, 1, cortex, 0.55, false);
+
+    let before = harness(&mut app);
+    assert_eq!(before.sharpness, 1.0, "the pass has to start on a fresh pair, got {before:?}");
+
+    fly_past(&mut app, cortex, 0.55, 30.0, LANE_Y + 1.6, 2, 6);
+    let zones: Vec<HitZone> = hits(&app).into_iter().map(|(_, h)| h.zone).collect();
+    assert!(
+        zones.contains(&HitZone::Cortex),
+        "the pass never reached the nape, so there is nothing to charge for: {zones:?}"
+    );
+
+    let after = harness(&mut app);
+    assert!(
+        after.sharpness < before.sharpness,
+        "the blade cut {zones:?} and the harness is untouched at {after:?}. \
+         `gear.ron: blades.wear_per_hit` ({}) has no reader, `Blades` is monotone upward, and a \
+         rack that hands back what was never taken is a no-op with a floor pad under it",
+        d.gear.blades.wear_per_hit
+    );
+    // **The exact arithmetic, re-derived from the file rather than from `wear_of`.** A wear
+    // number typed into Rust does not pass this, and neither does a system that charges the
+    // right amount for the wrong zone.
+    let b = &d.gear.blades;
+    let expected: f32 = zones
+        .iter()
+        .map(|z| if *z == HitZone::Cortex { b.wear_per_hit } else { b.wear_per_hit * b.wear_torso_factor })
+        .sum();
+    assert!(
+        (before.sharpness - after.sharpness - expected).abs() < 1e-5,
+        "the pass cut {zones:?} and cost {} sharpness; gear.ron says {expected}",
+        before.sharpness - after.sharpness
+    );
+    println!(
+        "F-033 one pass: zones {zones:?}, sharpness {:.3} -> {:.3}, pairs {} -> {}",
+        before.sharpness, after.sharpness, before.pairs_left, after.pairs_left
+    );
+}
+
+/// ★ **The design claim as a test, against the file and not against a fixture.**
+///
+/// The unit tests in `src/blades/cut.rs` spell `gear.ron`'s numbers out in a `tuning()` fixture,
+/// which is the house style — and it means they stay green when the **file** changes. This one
+/// is the guard on the file itself, and it exists because flipping `wear_torso_factor` from 0.5
+/// to 2.0 was measured to break nothing else in the suite.
+///
+/// The claim: **a graze must cost less than a cut.** A pass that ends in a nape reports
+/// `[Torso, Cortex]` on every titan in the game, because every titan is wider than his own neck
+/// ([`f030_the_cortex_wins_over_the_body_it_hides_in`]) — so a factor above 1.0 charges the
+/// player more for the shape of the titan's shoulders than for the nape he actually hit, and the
+/// harness becomes a tax on winning. That is the cooldown-shaped design `docs/gameplay/` rejects.
+#[test]
+fn f033_the_file_charges_a_graze_less_than_a_cut() {
+    let app = app();
+    let b = data(&app).gear.blades;
+    assert!(
+        b.wear_torso_factor > 0.0,
+        "gear.ron: blades.wear_torso_factor is {} — a free graze means a player can flail at \
+         bodies all mission long at no cost",
+        b.wear_torso_factor
+    );
+    assert!(
+        b.wear_torso_factor < 1.0,
+        "gear.ron: blades.wear_torso_factor is {} — at or above 1.0 the graze every successful \
+         kill pays on the way in costs at least as much as the cut itself, and the harness \
+         becomes a tax on winning instead of on imprecision",
+        b.wear_torso_factor
+    );
+    // And the budget the whole feature is judged on, stated out loud so it cannot drift silently.
+    let per_kill = b.wear_per_hit * (1.0 + b.wear_torso_factor);
+    let kills = (1.0 / per_kill) * (f32::from(b.start_pairs) + 1.0);
+    assert!(
+        (4.0..=80.0).contains(&kills),
+        "a full harness is worth {kills:.1} kills at {per_kill:.3} sharpness each — outside the \
+         range in which walking to a rack is a decision rather than a formality or a chore"
+    );
+    println!(
+        "F-033 budget: {per_kill:.3} sharpness a kill, {kills:.1} kills out of a full harness \
+         ({} spares + the pair in hand)",
+        b.start_pairs
+    );
+}
+
+/// ★ **The one that says "out of blades" is a place to go and not a dead end.**
+///
+/// Two claims in one pass, and both of them are `F-033`'s reason to exist:
+///
+/// 1. **A dry harness cuts nothing.** Not "cuts for less" — `titan::brain::receive_hits` kills on
+///    `Cortex` by rule and never looks at the speed, so a broken blade that still wrote a
+///    `TitanHit` would be a free kill with no steel behind it.
+/// 2. **And the rack gives it back.** Which is the sentence the whole hub was built for, and the
+///    one that could not be tested in a running game until something took a blade away
+///    (`docs/FINDINGS.md` FIND-075 §2).
+///
+/// The **walk** to the hall is `tests/mission.rs`'s claim, not this file's — so the request the
+/// rack sends is written straight into the world here.
+#[test]
+fn f033_a_dry_harness_cannot_cut_and_a_rack_is_the_way_back() {
+    let mut app = app();
+    let cortex = Vec3::new(REACH_X, LANE_Y + 1.6, 0.0);
+    spawn_target(&mut app, 1, cortex, 0.55, false);
+
+    // The pair in his hands is spent and there is no spare behind it.
+    let me = player(&mut app);
+    app.world_mut().entity_mut(me).insert(Blades { pairs_left: 0, sharpness: 0.0 });
+    assert!(harness(&mut app).is_broken(), "the fixture did not start dry");
+
+    fly_past(&mut app, cortex, 0.55, 30.0, LANE_Y + 1.6, 2, 6);
+    let on_empty: Vec<HitZone> = hits(&app).into_iter().map(|(_, h)| h.zone).collect();
+    assert!(
+        on_empty.is_empty(),
+        "a broken blade reported {on_empty:?}. `titan::brain::receive_hits` kills on Cortex by \
+         rule, so that is a kill with no steel behind it"
+    );
+
+    // The way back. One second of the rack: `sharpen_per_s: 2.0` makes the pair in his hands
+    // fresh, `blade_pairs_per_s: 1.5` puts a spare behind it.
+    let id = *app.world().get::<PlayerId>(me).expect("the player carries his id");
+    app.world_mut().write_message(BladeRestockRequest { player: id, seconds: 1.0 });
+    ticks(&mut app, 2);
+    let back = harness(&mut app);
+    assert!(!back.is_broken(), "a second at a rack left the harness broken: {back:?}");
+    assert_eq!(back.sharpness, 1.0, "the pair in his hands was not honed: {back:?}");
+    assert_eq!(back.pairs_left, 1, "a second at 1.5 pairs/s owes exactly one spare: {back:?}");
+
+    // Same pass, same geometry, and now it lands.
+    fly_past(&mut app, cortex, 0.55, 30.0, LANE_Y + 1.6, 2, 6);
+    let restocked: Vec<HitZone> = hits(&app).into_iter().map(|(_, h)| h.zone).collect();
+    assert!(
+        restocked.contains(&HitZone::Cortex),
+        "restocked at a rack and the same pass still cuts nothing: {restocked:?}"
+    );
+    let after = harness(&mut app);
+    assert!(after.sharpness < 1.0, "the restocked pair cut and was not charged: {after:?}");
+    println!(
+        "F-033 dry -> rack -> cutting again: {on_empty:?} then {restocked:?}, harness {after:?}"
     );
 }
 

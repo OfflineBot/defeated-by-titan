@@ -114,15 +114,36 @@ fn t005_hook_range_stays_in_the_design_window() {
     // exactly half the map. Beyond that every anchor in the world is always in reach and
     // *where you stand stops being a decision* — the map would no longer be a design surface.
     // A guard with no upper bound is not a guard, it is a comment.
+    //
+    // ⚠️ **Widened again to 60..=500 on 2026-08-12, and the ceiling this test wrote down as
+    // "the user's call, not a tuning step" is exactly what he called.** Verbatim
+    // (`docs/NEXT.md` §1A): *„und das seil muss deutlich deutlich schneller gespannt werden.
+    // nicht frame perfekt aber mit ca 500m pro sekunde. **mit der range 500 meter!**"*. Third
+    // time the same precedence rule decides it and third time in the same direction — a direct
+    // figure in metres from the user beats every derivation, including his own 90 and his own
+    // 200.
+    //
+    // **What made the old ceiling movable is that its argument had already expired.** "Half
+    // the 400 m graybox" was written against a map that has not shipped since 2026-08-12;
+    // ashgate is 700 m across, and 500 m is 71 % of that edge, not 125 % of it. So the
+    // sentence the ceiling defended — *where you stand is a decision* — survives the widening,
+    // but only just, and the lever that keeps it true from here is **the map, not this
+    // number**: a district under ~1000 m across cannot make a 500 m rope positional again.
+    //
+    // The new ceiling is 500 and still not "no ceiling", and it is bounded from the outside as
+    // well: `world.half_extent_m` has to carry half the longest map plus one full range
+    // (`t005_the_grid_covers_map_and_hook_range`), so every metre added here is paid for in
+    // index memory. Moving it a fourth time is the user's call, not a tuning step — and it is
+    // now also a `half_extent_m` change, which that test will say out loud.
     let r = data().game.vector.hook_range_m;
     assert!(
-        (60.0..=200.0).contains(&r),
-        "hook_range_m = {r} — the window is 60..=200 m. Its floor is init.md §3 („ein Haken \
-         fliegt 60–120\"); its ceiling is half the 400 m graybox, raised from 120 to 200 on \
-         2026-08-10 because the user overrode his own 90 m after playing (\"die hook range \
-         [muss] sehr viel länger sein\", docs/QUESTIONS.md Q-035). Above 200 m the whole map \
-         is always in reach and position stops being a decision — moving that ceiling again \
-         is the user's call, not a tuning step"
+        (60.0..=500.0).contains(&r),
+        "hook_range_m = {r} — the window is 60..=500 m. Its floor is init.md §3 („ein Haken \
+         fliegt 60–120\"); its ceiling was half the 400 m graybox (200) until 2026-08-12, when \
+         the user named the range himself: \"mit der range 500 meter!\" (docs/NEXT.md §1A). \
+         Against ashgate's 700 m edge that is 71 % of the district, so position still decides \
+         something — above 500 it stops deciding anything, and the map, not this key, is what \
+         has to grow first. Moving this ceiling again is the user's call, not a tuning step"
     );
 }
 
@@ -169,6 +190,193 @@ fn t005_a_hook_shot_at_full_range_arrives_before_the_target_has_moved() {
 }
 
 #[test]
+fn t005_a_missed_hook_is_back_inside_one_second() {
+    // **New on 2026-08-13, and the guard `hook_retract_speed_m_s` never had.** Until today the
+    // only rule on it was a sentence in `game.ron` — "faster than the outward flight, so a
+    // missed shot is not punished" — and that rule died the moment both numbers became 500.
+    // "Faster than instant" is not a bound, and a key whose bound has expired is a key that
+    // drifts.
+    //
+    // What replaces it is the requirement out of `docs/NEXT.md` §1A itself: hooking is
+    // *„instant"*, and the first thing that makes hooking feel non-instant is not the flight
+    // out — it is not being allowed to fire again because the last shot is still crawling
+    // home. `hook_range_m / hook_retract_speed_m_s` is exactly how long that block can last in
+    // the worst case, and one second is where a miss stops being a miss and becomes a
+    // punishment.
+    //
+    // 1.0 s and not 1.5 s (the outward ceiling) on purpose: the outward flight is time the
+    // player CHOSE to spend and can watch — „man soll sehen wie es aufspannt". The retract is
+    // time he did not choose and cannot use. The number that buys him nothing gets the
+    // tighter bound.
+    let v = &data().game.vector;
+    let retract_s = v.hook_range_m / v.hook_retract_speed_m_s;
+    assert!(
+        retract_s <= 1.0,
+        "a miss at maximum range takes {retract_s} s to come back ({} m at {} m/s) — the \
+         ceiling is 1.0 s. That is dead time the player did not choose, and §1A's first \
+         requirement is that firing again is never blocked. If the range grew, the retract \
+         speed has to grow with it (2026-08-12: 200 m/120 m/s = 1.67 s became \
+         500 m/500 m/s = 1.0 s; leaving the retract at 120 would have meant 4.17 s)",
+        v.hook_range_m, v.hook_retract_speed_m_s
+    );
+}
+
+#[test]
+fn t005_the_aim_spread_is_a_window_a_wheel_can_turn() {
+    // `F-023`, and the user's own sentence for it (`docs/NEXT.md` §1A): *„und es muss mehr
+    // rechts und links spreaden!! (mit mausrad soll man einstellen können wie weit auseinander
+    // es gehen darf!)"*. Four keys, and every one of them has a way of being quietly wrong
+    // that no other test in this repository would catch.
+    let v = &data().game.vector;
+    // A floor of 0 gives both arms one ray again — the exact state `F-023` exists to end
+    // (docs/FINDINGS.md FIND-039). A player must not be able to wheel the feature off.
+    assert!(
+        v.aim_spread_min_deg > 0.0,
+        "aim_spread_min_deg = {} — at 0 both arms share one aim ray and F-023 is switched off \
+         by a flick of the wheel",
+        v.aim_spread_min_deg
+    );
+    // 60° is geometry, not taste: `camera.fov_deg` 60 vertical is 91.5° horizontal on 16:9,
+    // so a ray more than ~46° off the look direction leaves the image — and the marker the
+    // user calls „wichtig" would have to be drawn where there is no screen.
+    assert!(
+        v.aim_spread_max_deg <= 60.0,
+        "aim_spread_max_deg = {} — above 60° the side ray leaves the frustum and its marker \
+         cannot be drawn where the rope lands",
+        v.aim_spread_max_deg
+    );
+    assert!(
+        v.aim_spread_min_deg < v.aim_spread_max_deg,
+        "aim_spread window {}..{} is empty or inverted",
+        v.aim_spread_min_deg, v.aim_spread_max_deg
+    );
+    assert!(
+        (v.aim_spread_min_deg..=v.aim_spread_max_deg).contains(&v.aim_spread_deg),
+        "aim_spread_deg = {} lies outside its own window {}..={}",
+        v.aim_spread_deg, v.aim_spread_min_deg, v.aim_spread_max_deg
+    );
+    // The step is what turns the window into a wheel. Fewer than 8 notches and a player reads
+    // the wheel as broken rather than as a setting; a step that does not divide the window
+    // leaves a last notch the wheel can never reach.
+    assert!(v.aim_spread_step_deg > 0.0, "aim_spread_step_deg = 0 — the wheel would do nothing");
+    let notches = (v.aim_spread_max_deg - v.aim_spread_min_deg) / v.aim_spread_step_deg;
+    assert!(
+        notches >= 8.0,
+        "{notches} notches between {} and {} at a step of {} — under 8 the wheel is a \
+         three-position switch, not a dial",
+        v.aim_spread_min_deg, v.aim_spread_max_deg, v.aim_spread_step_deg
+    );
+    assert!(
+        (notches - notches.round()).abs() < 1e-3,
+        "{notches} notches is not a whole number — the step has to divide the window, or the \
+         widest setting is one the wheel can never land on"
+    );
+}
+
+#[test]
+fn t005_the_rope_pull_is_the_second_strongest_thrust_in_the_game() {
+    // `docs/NEXT.md` §1A, requirement 4: *„dass man dort richtig hingezogen wird"* — and the
+    // whole point of the key is that it is **more** than the air control a rope-less player
+    // already has. Below `air_accel_m_s2` the feature is a rename.
+    //
+    // The upper bound is the one all nine judges of the §1B plan hit independently, from the
+    // other side: a free thrust that beats `boost_m_s2` makes the gas boost pointless, and
+    // "flight costs gas" is the game.
+    let d = data();
+    let p = &d.game.player;
+    let boost = d.game.vector.boost_m_s2;
+    assert!(
+        p.air_pull_m_s2 > p.air_accel_m_s2,
+        "air_pull_m_s2 = {} is not above air_accel_m_s2 = {} — then holding W on a rope is \
+         what holding W in free air already does, and „deutlich mehr geboosted\" is untrue",
+        p.air_pull_m_s2, p.air_accel_m_s2
+    );
+    assert!(
+        p.air_pull_m_s2 <= boost,
+        "air_pull_m_s2 = {} is above boost_m_s2 = {boost} — the thrust that costs nothing \
+         would beat the thrust that costs gas",
+        p.air_pull_m_s2
+    );
+    // The lateral is a SUM bound, and that is the difference between the two: W and D can be
+    // held at the same time, so what must not beat one boost is `look + strafe`, not the
+    // strafe alone.
+    assert!(
+        p.air_lateral_m_s2 >= p.air_accel_m_s2,
+        "air_lateral_m_s2 = {} is below air_accel_m_s2 = {} — A/D on a rope would be weaker \
+         than A/D without one, and §1A calls it a „boost\"",
+        p.air_lateral_m_s2, p.air_accel_m_s2
+    );
+    let together = p.air_accel_m_s2 + p.air_lateral_m_s2;
+    assert!(
+        together <= boost,
+        "air_accel_m_s2 + air_lateral_m_s2 = {together} exceeds boost_m_s2 = {boost} — \
+         holding one strafe key would out-thrust a boost you paid for"
+    );
+}
+
+#[test]
+fn t005_the_rope_pull_lets_go_before_the_length_cliff() {
+    // **The one bound in this group that is measured rather than argued.**
+    // `docs/FINDINGS.md` FIND-035: at `min_rope_m` the length constraint takes 17 m/s out of
+    // the player in a single tick. `air_pull_m_s2` thrusts straight at the anchor, i.e.
+    // straight into that cliff, so the fade has to be over before the cliff starts — and
+    // "before" has to be measured in the same unit the cliff is: rope length.
+    let d = data();
+    let fade = d.game.player.air_pull_fade_m;
+    let min_rope = d.game.vector.min_rope_m;
+    assert!(
+        fade >= 2.0 * min_rope,
+        "air_pull_fade_m = {fade} is under 2 * min_rope_m = {} — the fade would be shorter \
+         than the cliff it exists to avoid (FIND-035: 17 m/s lost in one tick at min_rope_m)",
+        2.0 * min_rope
+    );
+    assert!(
+        fade <= 0.1 * d.game.vector.hook_range_m,
+        "air_pull_fade_m = {fade} is over a tenth of hook_range_m = {} — a „near the anchor\" \
+         special case that runs over a tenth of every rope in the game is not a special case, \
+         and the pull would stop being what steers a swing",
+        d.game.vector.hook_range_m
+    );
+}
+
+#[test]
+fn t005_rope_steering_costs_what_the_boost_costs_per_metre_per_second() {
+    // The flaw all nine judges of the §1B plan named, made into a number: the new thrust must
+    // not be free, and it must not be a third price point either. `gas_dodge` already
+    // established the only honest way to compare two thrusts in this game — **gas per m/s of
+    // speed bought**, not gas per second:
+    //
+    //     held boost   gas_boost_per_s / boost_m_s2    = 18 / 34 = 0.529
+    //     rope steer   gas_steer_per_s / air_pull_m_s2 = 16 / 30 = 0.533
+    //
+    // 0.15 of tolerance is wide on purpose: this pins the *shape* of the decision (which
+    // thrust the situation wants), not the tuning (how much either costs). At 0.15 the steer
+    // could cost 28 % more or less per m/s than the boost and still pass — beyond that a
+    // player stops choosing on situation and starts choosing on price, and the mixing rule
+    // becomes a gas-saving trick.
+    let d = data();
+    let v = &d.game.vector;
+    let boost_ratio = v.gas_boost_per_s / v.boost_m_s2;
+    let steer_ratio = v.gas_steer_per_s / d.game.player.air_pull_m_s2;
+    let delta = (steer_ratio - boost_ratio).abs();
+    assert!(
+        delta <= 0.15,
+        "rope steering costs {steer_ratio} gas per m/s ({} / {}), the held boost {boost_ratio} \
+         ({} / {}) — a difference of {delta} against a tolerance of 0.15. Then the cheap \
+         thrust wins on price instead of on situation",
+        v.gas_steer_per_s, d.game.player.air_pull_m_s2, v.gas_boost_per_s, v.boost_m_s2
+    );
+    // And the trivial half nobody would think to write down: a rate of 0 is a free thrust,
+    // which is the whole thing this key exists to prevent.
+    assert!(
+        v.gas_steer_per_s > 0.0,
+        "gas_steer_per_s = {} — the rope thrust would be free, and „flight costs gas\" is the \
+         game",
+        v.gas_steer_per_s
+    );
+}
+
+#[test]
 fn t005_no_value_is_zero_negative_or_nan() {
     // The edge case, not the normal one: a zero in a tank size is a division by zero three
     // systems later (§9d).
@@ -182,6 +390,14 @@ fn t005_no_value_is_zero_negative_or_nan() {
         ("min_rope_m", v.min_rope_m),
         ("boost_m_s2", v.boost_m_s2),
         ("max_speed_m_s", v.max_speed_m_s),
+        ("gas_steer_per_s", v.gas_steer_per_s),
+        ("aim_spread_deg", v.aim_spread_deg),
+        ("aim_spread_min_deg", v.aim_spread_min_deg),
+        ("aim_spread_max_deg", v.aim_spread_max_deg),
+        ("aim_spread_step_deg", v.aim_spread_step_deg),
+        ("player.air_pull_m_s2", d.game.player.air_pull_m_s2),
+        ("player.air_lateral_m_s2", d.game.player.air_lateral_m_s2),
+        ("player.air_pull_fade_m", d.game.player.air_pull_fade_m),
         ("player.height_m", d.game.player.height_m),
         ("player.run_speed_m_s", d.game.player.run_speed_m_s),
         ("player.max_substep_m", d.game.player.max_substep_m),
@@ -289,15 +505,44 @@ fn t005_the_grid_covers_map_and_hook_range() {
     assert!(w.cell_m > 0.0, "world.cell_m = {} — division by zero in the DDA", w.cell_m);
     assert!(w.large_body_cells >= 1, "large_body_cells = 0 puts every body into the linear list — that is exactly \
          the iteration §11 forbids");
+    let mut tightest: f32 = 0.0;
     for (name, map) in &d.maps.maps {
         let needed = map.size_m.0.max(map.size_m.1) * 0.5
             + d.game.vector.hook_range_m;
+        tightest = tightest.max(needed);
         assert!(
             w.half_extent_m >= needed,
-            "{name}: half_extent_m = {} does not cover {needed} m",
-            w.half_extent_m
+            "{name}: half_extent_m = {} does not cover {needed} m ({} m map edge / 2 + \
+             {} m hook_range_m). Raising the range raises this number with it — on \
+             2026-08-12 the range went 200 -> 500 and this floor went 600 -> 850",
+            w.half_extent_m,
+            map.size_m.0.max(map.size_m.1),
+            d.game.vector.hook_range_m
         );
     }
+    // ⚠️ **And the ceiling, new on 2026-08-13.** Until today this guard had only a floor, and
+    // a bound in one direction is not a guard: nothing here would have noticed a
+    // `half_extent_m` of 5000, which is 1.56 million cells and 37 MB of empty `Vec` headers
+    // for a district that needs 850 m.
+    //
+    // The ceiling is **25 % over the tightest map's requirement** and it is a memory statement,
+    // because that is the only thing this number costs: `SpatialIndex::new` allocates
+    // `columns²` cells once at startup and never per tick (`src/shared/spatial.rs`), and
+    // `columns` is `2 * half_extent_m / cell_m`. So 25 % of slack is **1.56x the cells**, and
+    // the measurement behind allowing even that much stands in `game.ron` next to the key: the
+    // 600 -> 900 step (2.25x the cells) cost +0.5 % of user CPU over 900 headless ticks, inside
+    // a 3 % run-to-run spread. Slack is cheap; unbounded slack is a leak nobody sees.
+    let ceiling = tightest * 1.25;
+    assert!(
+        w.half_extent_m <= ceiling,
+        "half_extent_m = {} is more than 25 % over the {tightest} m the widest map + one hook \
+         range actually needs (ceiling {ceiling} m). The index is `columns²` cells with \
+         `columns = 2 * half_extent_m / cell_m`, so this is quadratic: {} cells against the \
+         {} the maps ask for. Grow the map or the range, not the padding",
+        w.half_extent_m,
+        (2.0 * w.half_extent_m / w.cell_m).ceil().powi(2),
+        (2.0 * tightest / w.cell_m).ceil().powi(2)
+    );
     // A cell bigger than the map would be a grid with one cell in it.
     assert!(w.cell_m < w.half_extent_m, "world.cell_m = {} is not a grid", w.cell_m);
 }
@@ -307,14 +552,16 @@ fn t005_gas_priority_names_every_consumer_exactly_once() {
     // Who pays when the tank runs low is a game-value decision (docs/QUESTIONS.md Q-017).
     // If a consumer is missing it never gets gas, and nobody goes looking for it in the RON.
     let r = &data().game.vector.gas_priority;
-    for who in [GasConsumer::Boost, GasConsumer::ReelIn, GasConsumer::Dodge] {
+    for who in [GasConsumer::Boost, GasConsumer::Steer, GasConsumer::ReelIn, GasConsumer::Dodge] {
         assert_eq!(
             r.iter().filter(|x| **x == who).count(),
             1,
             "gas_priority = {r:?} — {who:?} must appear exactly once"
         );
     }
-    assert_eq!(r.len(), 3, "gas_priority = {r:?} — exactly three consumers, no more");
+    // Four since 2026-08-13: `Steer` (docs/NEXT.md §1B, FIND-082) is the rope half of the air
+    // control, and it is a rate like the first two.
+    assert_eq!(r.len(), 4, "gas_priority = {r:?} — exactly four consumers, no more");
 }
 
 #[test]

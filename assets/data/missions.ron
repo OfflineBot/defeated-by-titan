@@ -22,8 +22,9 @@
     //                    generator keeps free, and on **+Z**, because the graybox has an
     //                    explicitly placed house at (0, 2, −12).
     //   refuel_stations  INSIDE the garrison headquarters (`maps.ron: ashgate`, the hall at
-    //                    x = −47..−15, |z| ≤ 13, door at (−15, ., 0)). „drinnen sind die
-    //                    nachschübe" — the user, 2026-08-12. See `refuel_stations` below.
+    //                    x = −47..−15, |z| ≤ 13, door at (−15, ., 0)), **on the aisle the door
+    //                    opens onto**. „drinnen sind die nachschübe" — the user, 2026-08-12.
+    //                    See `refuel_stations` below.
     hub: (
         name: "The Rookery",
 
@@ -58,10 +59,24 @@
         // **How fast and how far stands in `gear.ron: resupply`**, not here — this file says
         // where the supply is, that file says what it gives back.
         //
-        // The two coordinates are the two racks of `maps.ron: ashgate`, to the centimetre:
+        // The two coordinates are the **serving faces** of the two racks of `maps.ron: ashgate`
+        // — the aisle side, not the middle:
         //
-        //     (-42.0, 0.15, -6.5)   the south rack — the gas tanks
-        //     (-42.0, 0.15,  6.5)   the north rack — the blades
+        //     (-42.0, 0.15, -2.0)   the south rack — the gas tanks
+        //     (-42.0, 0.15,  2.0)   the north rack — the blades
+        //
+        // ⚠️ **They stood at z = ±6.5, the racks' centres, until 2026-08-13, and that made the
+        // supply a puzzle** (`docs/FINDINGS.md` FIND-075). A rack is 5 x 9 m of collider, so a
+        // trigger at its centre is 4.5 m inside solid stone: the only standing room left inside
+        // the 4 m reach was a 1.15 m strip between the rack's east face and a roof post, and a
+        // 1.0 m slot behind the rack against the back wall — 57 standable cells, every one of
+        // them threaded. A player who walked in down the aisle and stopped at the back wall was
+        // **7.20 m** from the number that decides and got nothing.
+        // The rack is 5 m wide in x and its aisle face is z = ∓2.0, which is where a person
+        // stands to be served. From there the reach covers 6.93 m of the aisle centre line, the
+        // back-wall stop is 3.69 m out, and the standing room goes from 57 cells to 373.
+        // `tests/mission.rs::f019_walking_straight_down_the_aisle_puts_you_in_reach_of_every_rack`
+        // is that criterion: **hold W from the spawn point and you are supplied.**
         //
         // ⚠️ **0.15 is not decoration, it is the proof.** It is the top face of the depot floor
         // slab, and no other block in the district has that height (ground 0.0, aprons 0.05,
@@ -82,11 +97,12 @@
         // `BladeRack` insert in `src/mission/hub.rs::open_hub`.**
         //
         // ⚠️ The three positions these replaced — (0, 0, 6), (±14, 0, 6) — stood on the
-        // pavement outside, and `scripts/f070-hub.txt` walks onto the first of them. That
-        // script has to be re-cut with the walk into the hall; it is not this hand's file.
+        // pavement outside. `scripts/f070-hub.txt` was re-cut against these two on 2026-08-13
+        // and its ACT 1 is now the walk itself: `look 90 0`, `key W`, through the gate, down
+        // the aisle, into the back wall, tank full. No `warp` anywhere in it.
         refuel_stations: [
-            (center_m: (-42.0, 0.15, -6.5)),
-            (center_m: (-42.0, 0.15,  6.5)),
+            (center_m: (-42.0, 0.15, -2.0)),
+            (center_m: (-42.0, 0.15,  2.0)),
         ],
     ),
 

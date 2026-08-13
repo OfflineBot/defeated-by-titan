@@ -119,12 +119,38 @@
 //!
 //! **The jump stays.** Nobody asked to lose it, and a jump is vertical: it produces no
 //! horizontal speed the threshold could be about.
+//!
+//! ## `F-006` again, 2026-08-13: the rope is now half of the air control
+//!
+//! > *„wenn ich mit seilen festhake (was instant sein soll) und w in die richtung drücke will ich
+//! > dass man deutlich mehr geboosted wird. also dass man dort richtig hingezogen wird. wenn man
+//! > aber a oder d drückt wird nach links/rechts geboostet! wenn man zur seite schaut soll die
+//! > steuerung mitdrehen. also wenn ich 45 grad nach links und w drücke dann etwas eingezogen aber
+//! > auch boost zur seite."* (2026-08-12, `docs/NEXT.md` §1A)
+//!
+//! What [`air_thrust`] does is unchanged and stays the whole answer for a player with no rope.
+//! What an **anchored** rope adds is [`rope_steer`], and the two are **added**, not blended:
+//!
+//! ```text
+//! a = clamp_len₁(l̂·w⁺ + ê_right·mx)·air_accel_m_s2·(empty ? fraction : 1)      // the look term
+//!   + (1/n)·Σᵢ r̂ᵢ·air_pull_m_s2·w⁺·max(0, l̂·r̂ᵢ)·fadeᵢ + ê_right·air_lateral_m_s2·mx
+//! ```
+//!
+//! **The pull sits outside the `clamp_len₁`**, and that is the point of the whole plan: the clamp
+//! is what makes `W`+`D` one thrust instead of 1.41 of them, and putting the rope pull inside it
+//! would cap *„deutlich mehr geboosted"* at the free-air number it is meant to be three times.
+//! At 0° the two agree in direction and the player closes at 10 + 30 = **40 m/s²**; at 90° the
+//! projection is zero and there is no haul left at all, only the swing — which is the user's
+//! *„das a d sorgt dafür dass man nicht immer direkt zum seil gezogen wird"* made arithmetic.
+//!
+//! It is not free: the rope half is gated on [`GasGrant::steer`], `vector.gas_steer_per_s: 16.0`,
+//! priced at the boost's own gas-per-m/s (16/30 against 18/34).
 
 use avian3d::prelude::{Forces, LinearVelocity, WriteRigidBodyForces};
 use bevy::prelude::*;
 
 use crate::data::GameData;
-use crate::shared::{Buttons, Gas, Intent, MovementState, RunAccel, Velocity};
+use crate::shared::{Buttons, Gas, GasGrant, Hook, Intent, MovementState, RunAccel, Velocity};
 
 /// One tick of horizontal ground movement, as a function of nothing but its arguments.
 ///
@@ -278,6 +304,105 @@ pub fn air_thrust(look_dir: Vec3, yaw: f32, move_x: f32, move_y: f32, accel_m_s2
     (look_dir * move_y.max(0.0) + right * move_x).clamp_length_max(1.0) * accel_m_s2
 }
 
+/// The three numbers the rope half of the mixing rule needs, plus the rope floor it fades
+/// against — **a struct and not four `f32` in a row**, the same argument
+/// `vector::gas::Costs` makes: swap two of them and the compiler says nothing while the
+/// strafe silently becomes the haul.
+///
+/// All four come out of RON: three from `game.ron: player`, `min_rope_m` from
+/// `game.ron: vector` — deliberately the *same* key `vector::rope` enforces, not a second copy
+/// of it, because the whole point of the fade is to end before that constraint begins.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SteerTuning {
+    /// [`crate::data::PlayerTuning::air_pull_m_s2`] — what `W` adds **along the rope**.
+    pub pull_m_s2: f32,
+    /// [`crate::data::PlayerTuning::air_lateral_m_s2`] — what `A`/`D` add across it.
+    pub lateral_m_s2: f32,
+    /// [`crate::data::PlayerTuning::air_pull_fade_m`] — the band above `min_rope_m` over which
+    /// the pull comes up from nothing to full.
+    pub fade_m: f32,
+    /// [`crate::data::VectorTuning::min_rope_m`] — where the pull is **exactly zero**.
+    pub min_rope_m: f32,
+}
+
+/// What an **anchored** rope adds to the air control, in m/s² — the rope half of the mixing
+/// rule (`docs/NEXT.md` §1B), and the whole of the user's *„wenn ich mit seilen festhake und w
+/// in die richtung drücke will ich dass man deutlich mehr geboosted wird"*.
+///
+/// `to_anchors_m` is one `tipᵢ − hand` per **anchored** arm, unnormalised, in world space; the
+/// length and the direction both come out of it, so a caller cannot pass a direction that
+/// disagrees with its own distance. An empty slice is the whole of the "no rope" case and
+/// returns [`Vec3::ZERO`].
+///
+/// ```text
+/// r̂ᵢ = unit(tipᵢ − h)   Lᵢ = |tipᵢ − h|   w⁺ = max(0, move_y)   ê_right = (cos yaw, 0, −sin yaw)
+/// cᵢ = max(0, l̂ · r̂ᵢ)                     fᵢ = clamp((Lᵢ − min_rope_m) / fade_m, 0, 1)
+/// rope = (1/n)·Σᵢ r̂ᵢ·pull_m_s2·w⁺·cᵢ·fᵢ  +  ê_right·lateral_m_s2·mx
+/// ```
+///
+/// ## Three details that are the whole design, and each one is a trap already paid for once
+///
+/// 1. **`cᵢ` is a cosine projection, not an `nlerp` between look and rope.** `nlerp` is
+///    `FIND-046`'s bug: at 170° of separation it moves the result 3 % of the way and sends the
+///    player ~90° off his look direction — a dead band exactly where the player is most sure
+///    what he asked for. `max(0, dot)` has no such band: it falls smoothly to zero at 90° and
+///    stays there behind it, so looking away from the anchor *never* hauls you at it. That is
+///    the answer to *„aktuell wenn ich seil spanne und s drücke werde ich stark zum seil
+///    gezogen! das soll nicht sein!"* from the other side — `W` while looking away is the same
+///    complaint with a different key.
+/// 2. **Per-arm `r̂ᵢ`, never a mean direction.** Two ropes 180° apart average to the **zero
+///    vector**, so a mean would make the strongest configuration in the game — hanging between
+///    two anchors — the one where `W` does nothing. Each arm projects on its own and the *forces*
+///    are what get averaged.
+/// 3. **`A`/`D` ride `ê_right`, the horizontal look-right, never the rope tangent.** A tangent
+///    **flips sign** the moment the anchor passes beside you, which inverts the strafe in the
+///    middle of a swing — the one place a player is committed and cannot correct.
+///
+/// **The `1/n` covers the pull only.** The lateral term is the player's own thrust, not the
+/// rope's, so it does not get halved for owning two ropes; the pull is one budget shared out,
+/// so two ropes at 60° apart pull as hard as one, just in a direction between them.
+///
+/// **The fade ends where `FIND-035`'s cliff begins.** At `min_rope_m` the length constraint
+/// takes 17 m/s out of the player in a single tick, and thrusting straight at an anchor you are
+/// 3 m from feeds exactly that. So `fᵢ` is 0 at `min_rope_m` and 1 at `min_rope_m + fade_m` —
+/// 0 at 3 m and full at 15 m with the numbers of 2026-08-13.
+pub fn rope_steer(
+    to_anchors_m: &[Vec3],
+    look_dir: Vec3,
+    yaw: f32,
+    move_x: f32,
+    move_y: f32,
+    t: SteerTuning,
+) -> Vec3 {
+    if to_anchors_m.is_empty() {
+        return Vec3::ZERO;
+    }
+    // `S` is not a thrust and it is not a haul either — the same `.max(0.0)` as [`air_thrust`],
+    // and for the user's same sentence about what `S` means (*„mit s »spannt« man nur das
+    // seil"*). Requirement 7 of `docs/NEXT.md` §1A is that `S` must **never** pull you at the
+    // rope, and this is where that would otherwise have crept back in.
+    let forward = move_y.max(0.0);
+
+    let mut pull = Vec3::ZERO;
+    for to_anchor in to_anchors_m {
+        let length_m = to_anchor.length();
+        // A tip that sits exactly on the hand has no direction. It cannot happen for an
+        // anchored arm at `min_rope_m: 3.0`, but `normalize()` would answer `NaN` and NaN in a
+        // velocity is unrecoverable — so it is skipped, and skipped **without** shrinking `n`:
+        // the budget stays shared between the arms the player actually holds.
+        let Some(direction) = to_anchor.try_normalize() else {
+            continue;
+        };
+        let projection = look_dir.dot(direction).max(0.0);
+        let fade = ((length_m - t.min_rope_m) / t.fade_m).clamp(0.0, 1.0);
+        pull += direction * (t.pull_m_s2 * forward * projection * fade);
+    }
+
+    let (sin, cos) = yaw.sin_cos();
+    let right = Vec3::new(cos, 0.0, -sin);
+    pull / to_anchors_m.len() as f32 + right * (t.lateral_m_s2 * move_x)
+}
+
 /// `F-006` Swerve — WASD in the air, as an acceleration.
 ///
 /// **Sole writer of [`RunAccel`].** Contributor — never sole writer — of
@@ -315,10 +440,16 @@ pub fn air_thrust(look_dir: Vec3, yaw: f32, move_x: f32, move_y: f32, accel_m_s2
 ///
 /// ## What is read and what is not
 ///
-/// [`Gas`] is **read**, never written — `vector::gas::gas_budget` is its one writer, and this
-/// system books nothing, because it costs nothing. That is the difference to
-/// `vector::boost::gas_boost`, which may not even look at the button without the grant: there,
-/// thrust and debit have to be one decision. Here there is no debit to get out of step with.
+/// [`Gas`] is **read**, never written — `vector::gas::gas_budget` is its one writer, and that did
+/// not change when the rope term started costing something. This system reads the *verdict*
+/// ([`GasGrant::steer`]) instead of the tank, exactly like `vector::boost::gas_boost` reads
+/// `grant.boost`: thrust and debit are one decision, made once, in the file that owns the tank.
+/// The free-air look term still reads `Gas` directly, because it is not gated on gas at all —
+/// it only halves.
+///
+/// [`Hook`] and [`Transform`] joined the query with the mixing rule and are read-only here;
+/// `vector::hook::update_hooks` keeps `tip_m` on an anchored arm in world space, and it runs in
+/// `SimulationSystems::Intent`, one set ahead of this one.
 ///
 /// [`Velocity`] and [`MovementState`] both come from the **end of the previous tick**
 /// (`super::integrator::readback`), so the state and the speed this decides on are one
@@ -326,19 +457,73 @@ pub fn air_thrust(look_dir: Vec3, yaw: f32, move_x: f32, move_y: f32, accel_m_s2
 /// query, which [`Forces`] declares `Write` access to.
 pub fn air_control(
     data: Res<GameData>,
-    mut players: Query<(&Intent, &MovementState, &Velocity, &Gas, &mut RunAccel, Option<Forces>)>,
+    mut players: Query<(
+        &Intent,
+        &MovementState,
+        &Velocity,
+        &Gas,
+        &Hook,
+        &GasGrant,
+        &Transform,
+        &mut RunAccel,
+        Option<Forces>,
+    )>,
 ) {
     let s = &data.game.player;
     let top_m_s = super::integrator::ground_top_speed_m_s(&data);
     // Out of the file, not out of gravity — see the header. `tests/data.rs` guards the bound
     // the old derivation used to guarantee on its own.
     let full_m_s2 = s.air_accel_m_s2;
+    let steer = SteerTuning {
+        pull_m_s2: s.air_pull_m_s2,
+        lateral_m_s2: s.air_lateral_m_s2,
+        fade_m: s.air_pull_fade_m,
+        min_rope_m: data.game.vector.min_rope_m,
+    };
 
-    for (intent, state, velocity, gas, mut drive, forces) in &mut players {
+    for (intent, state, velocity, gas, hook, grant, transform, mut drive, forces) in &mut players {
         let wanted = if in_flight(*state, velocity.0.xz().length(), top_m_s) {
             let accel_m_s2 =
                 if gas.is_empty() { full_m_s2 * s.air_accel_empty_fraction } else { full_m_s2 };
-            air_thrust(intent.look_dir(), intent.yaw, intent.move_x, intent.move_y, accel_m_s2)
+            let look =
+                air_thrust(intent.look_dir(), intent.yaw, intent.move_x, intent.move_y, accel_m_s2);
+
+            // The hand, not the feet — the same point `vector::hook` fires from and
+            // `hud::crosshair` measures from, so the rope this steers along is the rope that is
+            // drawn (`player.eye_height_m`, one key, three readers).
+            let hand_m = transform.translation + Vec3::Y * s.eye_height_m;
+            let mut to_anchors_m = [Vec3::ZERO; 2];
+            let mut anchored = 0;
+            for arm in &hook.arms {
+                if arm.state.is_anchored() {
+                    to_anchors_m[anchored] = arm.tip_m - hand_m;
+                    anchored += 1;
+                }
+            }
+
+            // **`grant.steer` is the whole check** — it already means "a rope holds, a key is
+            // down and this tick's gas was paid" (`vector::gas`). And the branch is a branch and
+            // not a `+ Vec3::ZERO`: an unhooked player has to come out of this function
+            // **bit-identical** to the version before the mixing rule existed, which
+            // `tests/player.rs::f006_without_a_rope_the_air_control_is_bit_identical_to_before`
+            // asserts with `assert_eq!` and not with an epsilon.
+            //
+            // On an empty tank the two halves part company on purpose: `look` keeps
+            // `air_accel_empty_fraction` (*„ohne gas kann man immernoch w a d nutzen … aber
+            // hälfte ca"*), the rope term is **zero**. Half a rope pull for no gas would be the
+            // free thrust §1B was rewritten to remove.
+            if anchored > 0 && grant.steer {
+                look + rope_steer(
+                    &to_anchors_m[..anchored],
+                    intent.look_dir(),
+                    intent.yaw,
+                    intent.move_x,
+                    intent.move_y,
+                    steer,
+                )
+            } else {
+                look
+            }
         } else {
             Vec3::ZERO
         };

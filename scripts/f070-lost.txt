@@ -13,9 +13,16 @@
 # nothing about the mission. 19 950 is the right tick for the PICTURE and stays: it is 30 ticks
 # after the asserts, and `--screenshot` fires at `--ticks` and then exits. It is the wrong tick
 # for the RUN, because the script does not end there. **Measured: the script ends at 20 525** —
-# `key F3 0.5` (30) + `look` (1) + `wait 332` (19 920) + three asserts + the closing `wait 10`
-# (600) — so 19 950 was 575 ticks short. Cutting a run off before its last instruction has been
-# an ERROR since FIND-032, and correctly so. Verified at `--ticks 21000`: 3 asserts held.
+# `key F3 0.5` (30) + `look` (1) + `wait 332` (19 920) + the closing `wait 10` (600); `warp` and
+# the four `assert`s are instantaneous and cost nothing, which is why the re-cut below added two
+# instructions without moving this number. So 19 950 was 575 ticks short. Cutting a run off
+# before its last instruction has been an ERROR since FIND-032, and correctly so. Verified at
+# `--ticks 21000`: **4 asserts held, 20 525 ticks, exit 0** (three asserts until the 2026-08-13
+# re-cut below added `assert health > 0`).
+#
+# ⚠️ **The PICTURE tick 19 950 still stands, but the FRAMING changed with the re-cut** — the
+# player is on the church roof now, not on the pavement, so `docs/images/f070-lost.png` is
+# stale and has to be retaken from the new pose.
 #
 # ⚠️ **A `--screenshot` run is not a verdict either way.** `debug::screenshot::exit_when_written`
 # writes `AppExit::Success` the moment the PNG is on disk and never reads `run.failures`, so the
@@ -34,16 +41,46 @@
 # ⚠️ The run takes 5-6 REAL minutes: the fixed step is driven by real time, and the mission
 # is five and a half minutes long. That is not a hang.
 #
-# The camera stands where the player spawns and looks along +X (yaw 0 is -Z, so +X is -90;
-# docs/conventions.md), eight degrees up at a 10 m titan 24 m away — that is where the first
-# titan of the ring stands. The framing was arrived at by looking at the image, not by
-# reasoning about it.
+# The camera looks along +X (yaw 0 is -Z, so +X is -90; docs/conventions.md) and eight degrees
+# DOWN, over the district the clock is running out on.
+#
+# ⚠️⚠️ **RE-CUT 2026-08-13: THIS FILE WAS GREEN AND IT WAS MEASURING THE WRONG LOSS.**
+#
+# Until today the player stood where he spawns, on the pavement, for 332 seconds — inside the
+# first wave's 24 m ring. Measured on the shipped map:
+#
+#   strike: player 1 takes 34.0 — 66.0/100.0 left
+#   strike: player 1 takes 34.0 — 32.0/100.0 left
+#   strike: player 1 takes 34.0 —  0.0/100.0 left
+#   MISSION LOST at tick 629 (decided at Some(629)) — 0/3 kills
+#
+# **He was dead at tick 629 and the mission was lost by DEATH, not by the CLOCK** — 31x earlier
+# than the 19 800 this file is about. All three asserts still held, because they are read at
+# t≈19 920 and `phase == 4` is `Lost` either way; the run exited 0 and the remaining 19 300
+# ticks were a corpse on the pavement. `docs/FINDINGS.md` FIND-076 §3 is the same defect in
+# `f171-crosshair`: **an exit code ranks a script's asserts, not its evidence.**
+#
+# Death is already `scripts/p5-downed.txt`'s job (5 asserts, the bar at 32/100 between the
+# second blow and the third). The one thing only THIS file can show is the deadline, so the
+# player is moved out of reach and left there:
+#
+#   `combat::strike`'s ceiling is the shoulder of a 10 m titan, 0.82 x 10 = **8.2 m**, and
+#   ashgate's church roof is at **y = 35** (`maps.ron`: a 14 x 35 x 14 block at (45, 17.5, -22),
+#   so x 38..52, z -29..-15). That is the same roof `scripts/game-full.txt` ACT 1 reels onto and
+#   stands on at `height 35.000` — 27 m above anything that can hit him.
+#
+# `assert health > 0` is the tripwire that makes the distinction falsifiable: **it is the line
+# that would have gone red on the day this file started measuring a death.** If a titan ever
+# reaches a roof, this goes red and says so instead of passing for the wrong reason.
 
 key F3 0.5        # the overlay carries the phase, the kills and the tick into the PNG
-look -90 8
+warp 45 35.1 -22  # the church roof — out of `combat::strike`'s 8.2 m reach for the whole run
+look -90 -8
 
 wait 332          # 19 920 ticks — 120 past the deadline
 
+assert health > 0     # ⭐ ALIVE when the clock decides. Without this line the file cannot tell
+                      # "the deadline expired" from "the player was killed at tick 629".
 assert phase == 4     # Lost, and not Won: nobody cut anything in this run
 assert kills == 0
 assert tick > 19800

@@ -849,8 +849,8 @@ fn f008_the_priority_list_can_refuse_a_dodge_the_tank_cannot_pay() {
     let mut gas = Gas { current: 1.0, ..Gas::full(300.0) };
     let g = book(
         &[GasConsumer::Boost, GasConsumer::ReelIn, GasConsumer::Dodge],
-        Wants { boost: true, reel_in: false, dodge: true },
-        Costs { boost: 0.3, reel_in: 0.1, dodge: 45.0 },
+        Wants { boost: true, reel_in: false, steer: false, dodge: true },
+        Costs { boost: 0.3, reel_in: 0.1, steer: 0.2667, dodge: 45.0 },
         &mut gas,
     );
     assert!(g.boost, "1.0 gas covers a boost tick of 0.3");

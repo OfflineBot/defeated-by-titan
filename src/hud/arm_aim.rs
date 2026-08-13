@@ -13,38 +13,55 @@
 //! `top 65 %` / `left|right 52 %` and were photographed **at the same pixels across four runs
 //! with four different aims**. They were state badges wearing a location's clothes.
 //!
-//! # What moved, and what still cannot
+//! # Where a marker stands, and why it cannot be anywhere else
 //!
-//! [`place_arm_aim`] projects each arm's own world target through the real camera
-//! (`Camera::world_to_viewport`) and puts the marker there. For the three states in which an arm
-//! has a world point of its own that is **not** on the camera axis — `Anchored`, and `Flying` /
-//! `Retracting` while the tip is out — the marker now travels across the screen with that point,
-//! and the two arms genuinely stand on two different places.
+//! [`place_arm_aim`] projects **that arm's own** landing point through the real camera
+//! (`Camera::world_to_viewport`) and puts the marker there. The point comes out of
+//! [`ArmAim`](crate::shared::ArmAim), which `vector::aim` fills from that arm's own side ray and
+//! `vector::hook` fires at **without re-casting** — so the marker and the rope read the same
+//! `Vec3` in the same tick. `tests/hud.rs::f026_the_marker_stands_exactly_where_that_arm_fires`
+//! asserts that with `assert_eq!` and no tolerance, and
+//! `f026_the_rope_flies_at_the_point_the_marker_stood_on` fires the hook and compares
+//! `HookState::Flying { target_m }` against the same value. That pair is the user's
+//! *„und dann muss das seil auch dahin!!"* (2026-08-12) as a test, and it is the only reason to
+//! believe the sentence.
 //!
-//! For an **idle** arm it cannot, and that is measured rather than argued.
-//! `tests/hud.rs::f171_a_free_aim_point_projects_onto_the_crosshair` casts the same ray
-//! `vector::aim` casts and projects the result: at three look angles and two distances it lands
-//! **0.000 px from the centre of the screen**, every time. The reason is a chain of equalities the
-//! repo already relies on — `vector::aim` starts at `translation + Y·eye_height_m`,
-//! `render::attach_camera` hangs the camera on the player at exactly
-//! `Transform::from_xyz(0, eye_height_m, 0)`, and `tests/render.rs` nails
-//! `Transform::forward() == Intent::look_dir()`. The aim ray **is** the view ray, so every point on
-//! it is the crosshair pixel. This is the same fact `render::rope` ran into when it could not draw
-//! a rope from the hand.
+//! An arm whose tip is out (`Flying`, `Retracting`, `Anchored`) previews **its tip** instead —
+//! the point `render::rope` draws to, so marker and rope cannot disagree there either.
 //!
-//! **So a free arm's honest preview is the crosshair, and two idle arms cannot stand on two
-//! points until the two arms are aimed at two points.** That is `docs/backlog/gameplay.ron`
-//! `F-023` (*Kandidatensuche mit Hemisphaeren-Aufteilung*: the candidate set is split relative to
-//! the camera forward axis, `Q` serves the left set and `E` the right), it hangs on `F-021`
-//! (discrete anchor points, ⬜), and its spread is a **tuning number** — which under `CLAUDE.md`
-//! rule 2 has to live in `assets/data/game.ron` under `vector:`. The gap is written up in
-//! `docs/FINDINGS.md` FIND-070 with exactly what is missing.
+//! ## What an idle marker says, and what it cannot say
 //!
-//! What the idle pair *can* honestly say is **which side each arm serves**, and it now says it
-//! loudly: with nothing to project onto, the two markers part around `F-170`'s keep-out box
-//! instead of huddling ~55 px under the crosshair. That is the second sentence — *"weiter rechts
-//! und links"* — and the number is not invented: it is the one rectangle this HUD already may not
-//! cover.
+//! A side ray is a **fixed direction relative to the camera** (`vector::aim::side_dirs` yaws the
+//! look direction by ±`aim_spread_deg` around the camera's up axis), and a fixed direction
+//! projects to a fixed pixel: `aim_spread_deg` off the crosshair, at the crosshair's height. Two
+//! consequences, both measured rather than argued:
+//!
+//! - **The distance to the hit is not in the picture.** A projection has no depth; a wall at 6 m
+//!   and a roof at 300 m along the same ray are the same pixel. What the marker promises is the
+//!   *bearing* the rope takes, and that promise is exact.
+//! - **A side ray that finds nothing anchorable falls back to the centre ray** (`vector::aim`),
+//!   which lands on the crosshair —
+//!   `tests/hud.rs::f171_a_free_aim_point_projects_onto_the_crosshair` measures 0.000 px, because
+//!   `vector::aim` starts at `translation + Y·eye_height_m` and `render::attach_camera` hangs the
+//!   camera on exactly that offset. So a pair that collapses onto the middle is not a bug, it is
+//!   the reading *"neither side found anything of its own"*.
+//!
+//! # Off the screen, and behind you
+//!
+//! `Camera::world_to_viewport` hands back a **usable** pixel for a point beside the viewport: NDC
+//! x/y outside ±1 is not an error, only z outside `0..1` is
+//! (`bevy_camera-0.19.0/src/camera.rs:546-556`). The ordinary off-screen case therefore needs
+//! nothing but step 2 of [`layout_for`]. What it refuses is a point **behind the near plane**, and
+//! that is not an edge case here: a swing spends half of its arc with the anchor behind the
+//! player.
+//!
+//! Such a marker is **clamped to the screen edge on the side the point really is**
+//! ([`edge_pixel`]), not hidden. Hiding it would blink the pair out exactly during the manoeuvre
+//! it exists for, and *which side the rope pulls from* is what the player needs mid-swing. The
+//! price of that choice, written down instead of hidden: an edge marker says *"that arm's point
+//! is over there"* and does **not** separate "just off the edge, in front" from "behind you".
+//! Distinguishing them would need a fifth glyph, and the fifth glyph would have to carry
+//! `F-026`'s colour-blindness clause too (`docs/FINDINGS.md` FIND-087 §3).
 //!
 //! # Why the middle of the screen survives a world-tracked marker
 //!
@@ -56,6 +73,27 @@
 //! claims the wrong half of the screen. Ties (a point dead on the axis) go to the arm's own side.
 //! The push is applied **last**, after the screen clamp: on a viewport small enough for the two to
 //! disagree, the proven claim wins and a few pixels of the marker leave the screen instead.
+//!
+//! **The rule does not bend and the marker does not fade**, and the reason is that the price is
+//! bounded and the case is degenerate. It is a *slide to the box edge*, never a jump: the
+//! displacement is at most half the box (128 px of 1280) and it grows continuously as the point
+//! walks in, so nothing teleports. Measured at the two ends of the wheel
+//! (`tests/hud.rs::f026_two_idle_arms_preview_two_different_points`): at `aim_spread_deg: 28`
+//! the two markers stand **331 px** off the crosshair and the push never runs; at the narrowest
+//! 10° the side ray projects to 110 px, inside the box, and the marker is held at **146** — a
+//! bounded 36 px, and *which side* the arm shoots at is still true.
+//!
+//! ⚠️ **The one case where that costs truth is written down and not hidden**: an arm whose side
+//! ray found nothing falls back to the centre ray, and the centre ray projects into the box — so
+//! the marker parks at the edge while the rope will fly at the crosshair. In that one case the
+//! marker is a *state badge*, not a location, and the reading is "this arm has no point of its
+//! own". `docs/FINDINGS.md` FIND-087 §2 has the measurement, the photograph and the three
+//! alternatives that were weighed against it. And a point inside the box is, for an idle arm, exactly the
+//! fallback case above — that arm found nothing of its own and is firing at the centre ray, which
+//! the crosshair is already standing on. Fading the marker there would take away the state
+//! (`Ready` against `Free`) at the moment the player is about to press the key; the whole element
+//! is `F-026` *"immer sichtbar"*, and `tests/hud.rs::f170_the_arm_markers_stay_out_of_the_middle_in_every_state`
+//! counts the nodes so a "fade" cannot quietly become a disappearance.
 //!
 //! # Four shapes, and the colour carries nothing
 //!
@@ -82,8 +120,10 @@
 //!
 //! # What it costs per frame
 //!
-//! **No ray and no spatial query.** [`sense_arm_aim`] reads [`Hook`] and [`AimPoint`] off the
-//! local player — both already written this tick by `vector` — and [`place_arm_aim`] adds two
+//! **No ray and no spatial query.** [`sense_arm_aim`] reads [`Hook`] and
+//! [`ArmAim`](crate::shared::ArmAim) off the local player — both already written this tick by
+//! `vector`, and the three rays behind them are cast once there, not again here — and
+//! [`place_arm_aim`] adds two
 //! matrix multiplications, one per arm. Every write is guarded by a comparison, so a standing
 //! player with a still camera produces zero writes (`CLAUDE.md` rule 6).
 
@@ -93,7 +133,7 @@ use bevy::text::FontSize;
 use crate::data::GameData;
 use crate::hud::crosshair::NEUTRAL;
 use crate::hud::{signal, HudElement, KEEP_OUT_HIGH_PCT, KEEP_OUT_LOW_PCT};
-use crate::shared::{AimPoint, Hook, HookState, LocalPlayer, Side};
+use crate::shared::{ArmAim, Hook, HookState, LocalPlayer, Side};
 
 /// Which arm this node belongs to, and which of its two nodes it is.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,16 +192,23 @@ pub fn state_for(hook: &HookState, anchorable: bool) -> ArmAimState {
 
 /// **The world point this arm's marker stands on**, or `None` when it has none.
 ///
-/// The three states with a point of their own take [`HookArm::tip_m`](crate::shared::HookArm),
-/// which `vector::hook` walks along on every tick and `render::rope` already draws to — so the
-/// marker and the rope can never disagree about where the arm is holding. An idle arm has no
-/// point of its own and falls back to the shared [`AimPoint`], which is measured to be the
-/// crosshair (module header); `None` there means the ray found nothing at all and the marker goes
-/// to its side slot.
-pub fn target_of(hook: &Hook, aim: &AimPoint, side: Side) -> Option<Vec3> {
+/// An idle arm stands on [`ArmAim::target_of`](crate::shared::ArmAim::target_of) — **this arm's
+/// own side ray**, the exact value `vector::hook::fire` turns into
+/// `HookState::Flying { target_m }` when the key is pressed. Not the shared centre
+/// [`AimPoint`](crate::shared::AimPoint): that one is the crosshair's, and a marker fed from it
+/// would be drawing a promise the rope does not keep (`docs/FINDINGS.md` FIND-047 is the day that
+/// promise was measured and found broken).
+///
+/// The three states with a tip out take [`HookArm::tip_m`](crate::shared::HookArm), which
+/// `vector::hook` walks along on every tick and `render::rope` already draws to — so the marker
+/// and the rope cannot disagree about where the arm is holding either.
+///
+/// `None` means this arm has nothing at all: the side ray found nothing and the centre ray it
+/// falls back to found nothing either. Then the marker goes to its side slot.
+pub fn target_of(hook: &Hook, aim: &ArmAim, side: Side) -> Option<Vec3> {
     let arm = hook.arm(side);
     match arm.state {
-        HookState::Idle => aim.point_m,
+        HookState::Idle => aim.target_of(side),
         HookState::Flying { .. } | HookState::Retracting | HookState::Anchored { .. } => {
             Some(arm.tip_m)
         }
@@ -263,6 +310,15 @@ pub const LABEL_PX: f32 = 15.0;
 /// inward. `tests/hud.rs` measures the real rects afterwards and falls over if this is ever too
 /// small.
 const LABEL_W_PX: f32 = 12.0;
+/// How far clear of `F-170`'s keep-out box a pushed marker stands.
+///
+/// **Not zero, and the reason is measured.** Flush against the box, the widest glyph puts its
+/// centre 142 px from the middle of a 1280 px screen and the narrowest 138 —
+/// `docs/NEXT.md` §1B asks W5 for **145**, and a glyph whose edge lies exactly on the boundary
+/// is already touching the rectangle `F-170` exists to keep readable. 8 px clears every state
+/// (146 px for a 20 px glyph, 150 for the 28 px one) and costs nothing else: the push only ever
+/// runs for a point that is inside the box anyway.
+const KEEP_OUT_GAP_PX: f32 = 8.0;
 
 /// Where one arm's three nodes stand this frame, in logical UI pixels (top-left corners).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -277,10 +333,10 @@ pub struct ArmLayout {
 
 /// **The whole placement rule, as one pure function** — no camera, no `World`, no `Node`.
 ///
-/// `at` is the arm's world target already projected into logical viewport pixels, or `None` when
-/// there is nothing to project (no camera hit, nothing in range, or the point is behind the
-/// player and `Camera::world_to_viewport` refused it — it returns `Err` for anything outside the
-/// frustum, `bevy_camera-0.19.0/src/camera.rs:551-557`).
+/// `at` is the arm's world target already projected into logical viewport pixels — a real pixel
+/// from `Camera::world_to_viewport`, or [`edge_pixel`]'s bearing when the point is behind the near
+/// plane. `None` means the arm has **no target at all**: neither its side ray nor the centre ray
+/// it falls back to found anything.
 ///
 /// Three steps, in this order and the order is the design:
 /// 1. put the glyph's centre on the projected point, or in the arm's side slot if there is none;
@@ -301,14 +357,15 @@ pub fn layout_for(side: Side, shape: ArmShape, at: Option<Vec2>, viewport: Vec2)
     let full_h = shape.glyph_h_px + shape.tether_px.map_or(0.0, |t| TETHER_GAP_PX + t);
     let label_out = LABEL_GAP_PX + LABEL_W_PX;
 
-    // The slot an arm falls back to: hard against its own side of the keep-out box, at eye
-    // level. That is the "weiter rechts und links" the player asked for, and the number is the
-    // box rather than a taste.
+    // The slot an arm falls back to, and the place a marker is pushed to when it would cover
+    // the middle: [`KEEP_OUT_GAP_PX`] clear of its own side of the keep-out box, at eye level.
+    // That is the "weiter rechts und links" the player asked for, and the number is the box
+    // rather than a taste.
     let slot_x = |right: bool| {
         if right {
-            box_max_x
+            box_max_x + KEEP_OUT_GAP_PX
         } else {
-            box_min_x - shape.glyph_w_px
+            box_min_x - KEEP_OUT_GAP_PX - shape.glyph_w_px
         }
     };
 
@@ -364,6 +421,29 @@ pub fn layout_for(side: Side, shape: ArmShape, at: Option<Vec2>, viewport: Vec2)
         ),
         label_right,
     }
+}
+
+/// **The screen point for a target the camera refuses to project**: a pseudo-pixel far outside
+/// the viewport, on the bearing the target really lies.
+///
+/// `camera_space_m` is the target in the camera's own frame — `+X` right, `+Y` up, `-Z` forward
+/// (Bevy's view convention; `docs/conventions.md`'s axes are the world's). Only the two lateral
+/// components are read: past the near plane there is no pixel, but there is still a side.
+///
+/// [`layout_for`] clamps whatever comes out of here into the viewport, so the marker lands on the
+/// edge that points at the target, and the handover is continuous — a point drifting towards the
+/// camera plane projects further and further out on the same side, and this keeps it there.
+///
+/// A target **dead** behind the camera has no bearing at all (`x` and `y` both ~0). Then the arm's
+/// own side decides, which is the same tie-break [`layout_for`] uses on the screen axis.
+pub fn edge_pixel(camera_space_m: Vec3, viewport: Vec2, side: Side) -> Vec2 {
+    // Screen y grows downwards and the camera's y upwards — hence the one sign.
+    let mut dir = Vec2::new(camera_space_m.x, -camera_space_m.y);
+    if !dir.is_finite() || dir.length_squared() < 1e-6 {
+        dir = Vec2::new(if matches!(side, Side::Right) { 1.0 } else { -1.0 }, 0.0);
+    }
+    // Longer than the diagonal, so the clamp really reaches an edge whichever way it points.
+    viewport * 0.5 + dir.normalize() * (viewport.length() + 1.0)
 }
 
 /// Six nodes: a glyph, a tether and a letter per arm.
@@ -461,19 +541,21 @@ fn shape_node(part: MarkerPart, shape: ArmShape) -> Node {
 
 /// Reads the local player's two arms, writes [`ArmAimState`] and nothing else.
 ///
-/// `anchorable` is the **shared** aim answer — one ray, two arms, which is what
-/// `vector::hook::update_hooks` does with it. The day `F-023`'s hemispheres land, this is the
-/// one line that changes: the two arms then read two different candidates, and every shape,
-/// colour and test below stays as it is.
+/// `anchorable` is **this arm's own** answer, out of [`ArmAim`] — `F-023`'s hemispheres landed on
+/// 2026-08-13, so the left ring and the right dash can now disagree, and that is the point: `Q`
+/// catching while `E` does not is a fact about the world that the pair may not average away.
+/// `vector::hook::update_hooks` decides the shot from exactly the same field
+/// (`anchor_target(arm_aim.side(side))`), so a `Ready` ring is a promise the simulation keeps.
 pub fn sense_arm_aim(
-    players: Query<(&Hook, &AimPoint), With<LocalPlayer>>,
+    players: Query<(&Hook, &ArmAim), With<LocalPlayer>>,
     mut markers: Query<(&ArmMarker, &mut ArmAimState)>,
 ) {
     let Some((hook, aim)) = players.iter().next() else {
         return;
     };
     for (marker, mut state) in &mut markers {
-        state.set_if_neq(state_for(&hook.arm(marker.side).state, aim.anchorable));
+        let side = marker.side;
+        state.set_if_neq(state_for(&hook.arm(side).state, aim.side(side).anchorable));
     }
 }
 
@@ -528,7 +610,7 @@ fn put(node: &mut Node, at: Vec2) {
 /// `Camera3d` without a further filter is enough because there is at most one 3D camera:
 /// `render::attach_camera` bails out as soon as one exists.
 pub fn place_arm_aim(
-    players: Query<(&Hook, &AimPoint), With<LocalPlayer>>,
+    players: Query<(&Hook, &ArmAim), With<LocalPlayer>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     mut markers: Query<(&ArmMarker, &ArmAimState, &mut Node), Without<ArmMarkerLabel>>,
     mut labels: Query<(&ArmMarkerLabel, &mut Node), Without<ArmMarker>>,
@@ -550,10 +632,14 @@ pub fn place_arm_aim(
     let mut layout = [ArmLayout::default(); 2];
     for side in Side::ALL {
         let world = aim.and_then(|(hook, point)| target_of(hook, point, side));
-        // `.ok()` and not an `expect`: a target behind the player or past the far plane is a
-        // normal thing to be holding, and `world_to_viewport` reports it as an error. It becomes
-        // the side slot, which is the truthful answer — "that arm is not in view".
-        let at = world.and_then(|p| camera.world_to_viewport(camera_at, p).ok());
+        // Not an `expect` and not a drop: a target behind the near plane is a normal thing to be
+        // holding — half a swing looks like that — and `world_to_viewport` reports it as an
+        // error. It keeps its **bearing** through [`edge_pixel`], and the clamp in `layout_for`
+        // turns that into the screen edge on the right side (module header).
+        let at = world.map(|p| match camera.world_to_viewport(camera_at, p) {
+            Ok(px) => px,
+            Err(_) => edge_pixel(camera_at.affine().inverse().transform_point3(p), viewport, side),
+        });
         layout[side.index()] = layout_for(side, shapes[side.index()], at, viewport);
     }
 
@@ -613,7 +699,7 @@ pub fn paint_arm_aim(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::{BodyId, HookArm};
+    use crate::shared::{AimPoint, BodyId, HookArm};
 
     const SCREEN: Vec2 = Vec2::new(1280.0, 720.0);
 
@@ -652,14 +738,10 @@ mod tests {
 
     #[test]
     fn f171_an_arm_with_its_tip_out_previews_its_own_tip_and_not_the_shared_aim() {
-        // The wiring that makes the two markers two markers. A shared `AimPoint` sits at one
-        // place; each arm's tip sits somewhere else, and the arm that is holding has to preview
-        // ITS point. Goes red the day somebody wires all four states to `aim.point_m`.
-        let aim = AimPoint {
-            point_m: Some(Vec3::new(0.0, 2.0, -50.0)),
-            body: Some(BodyId(1)),
-            anchorable: true,
-        };
+        // The wiring that makes the two markers two markers. Each arm's tip sits somewhere of
+        // its own, and the arm that is holding has to preview ITS point. Goes red the day
+        // somebody wires all four states back to one shared value.
+        let aim = two_sided_aim();
         let held = Vec3::new(-31.0, 17.0, -12.0);
         let flown = Vec3::new(44.0, 3.0, -20.0);
         let hook = Hook {
@@ -673,14 +755,80 @@ mod tests {
         };
         assert_eq!(target_of(&hook, &aim, Side::Left), Some(held));
         assert_eq!(target_of(&hook, &aim, Side::Right), Some(flown));
+    }
 
-        // ...and an idle arm has no point of its own, so it falls back to the shared answer.
+    /// Two idle arms aimed at two genuinely different places — `F-023`'s hemispheres, as
+    /// `vector::aim` writes them.
+    fn two_sided_aim() -> ArmAim {
+        ArmAim {
+            arms: [
+                AimPoint {
+                    point_m: Some(Vec3::new(-24.0, 9.0, -40.0)),
+                    body: Some(BodyId(7)),
+                    anchorable: true,
+                },
+                AimPoint {
+                    point_m: Some(Vec3::new(31.0, 5.0, -55.0)),
+                    body: Some(BodyId(8)),
+                    anchorable: true,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn f026_an_idle_marker_stands_on_its_own_arms_point() {
+        // ★ **The user's sentence as a rule, at the smallest level there is.** *"und da wo das
+        // seil am ende auch landet soll die markierung hin"* — the idle preview reads
+        // `ArmAim::target_of(side)`, which is the same field `vector::hook::fire` turns into
+        // `Flying { target_m }`. Two arms, two points, and neither may be the other's.
+        let aim = two_sided_aim();
         let idle = Hook::default();
-        assert_eq!(target_of(&idle, &aim, Side::Left), aim.point_m);
+        assert_eq!(target_of(&idle, &aim, Side::Left), aim.target_of(Side::Left));
+        assert_eq!(target_of(&idle, &aim, Side::Right), aim.target_of(Side::Right));
+        assert_ne!(
+            target_of(&idle, &aim, Side::Left),
+            target_of(&idle, &aim, Side::Right),
+            "the two arms aim at two different places and the markers say the same thing — \
+             then the pair is one marker drawn twice (FIND-047)"
+        );
         assert_eq!(
-            target_of(&idle, &AimPoint::default(), Side::Left),
+            target_of(&idle, &ArmAim::default(), Side::Left),
             None,
             "nothing in range is not a point at the origin"
+        );
+    }
+
+    #[test]
+    fn f026_a_target_behind_the_camera_keeps_its_side() {
+        // Behind the near plane there is no pixel, and `world_to_viewport` says so. There is
+        // still a side, and mid-swing that side is the whole message. The pseudo-pixel has to
+        // be far enough out that `layout_for`'s clamp puts the marker on that edge.
+        let behind_right = Vec3::new(12.0, 1.0, 40.0); // camera space: +Z is BEHIND
+        let behind_left = Vec3::new(-12.0, 1.0, 40.0);
+        for side in Side::ALL {
+            let r = edge_pixel(behind_right, SCREEN, side);
+            let l = edge_pixel(behind_left, SCREEN, side);
+            assert!(r.x > SCREEN.x, "a point behind and to the right went to {r:?}");
+            assert!(l.x < 0.0, "a point behind and to the left went to {l:?}");
+
+            // And through the layout: the marker sits ON the edge, not off it.
+            let shape = shape_of(ArmAimState::Anchored);
+            let laid = layout_for(side, shape, Some(r), SCREEN);
+            assert!(
+                laid.glyph.x + shape.glyph_w_px <= SCREEN.x && laid.glyph.x > SCREEN.x * 0.5,
+                "{side:?} behind-right was laid out at {:?}",
+                laid.glyph
+            );
+        }
+
+        // Dead behind: no bearing at all, so the arm's own side decides instead of (0, 0).
+        let dead = Vec3::new(0.0, 0.0, 30.0);
+        assert!(edge_pixel(dead, SCREEN, Side::Left).x < 0.0);
+        assert!(edge_pixel(dead, SCREEN, Side::Right).x > SCREEN.x);
+        assert!(
+            edge_pixel(Vec3::new(f32::NAN, 1.0, 9.0), SCREEN, Side::Right).is_finite(),
+            "a NaN target must not become a NaN pixel"
         );
     }
 

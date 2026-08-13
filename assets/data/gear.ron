@@ -3,7 +3,29 @@
 (
     blades: (
         start_pairs: 5,
+        // **What one landed hit costs the pair in your hands**, in sharpness (1.0 = fresh).
+        // Read by `blades::cut::wear_of` since 2026-08-13 — before that this number had no
+        // reader anywhere in `src/`, `Blades` was monotone upward, and the racks of the
+        // headquarters handed back something nothing had ever taken (`FINDINGS.md` FIND-075).
+        //
+        // 0.12 is the **cortex** cut: 8 clean napes out of one pair, plus the ninth that
+        // finishes it. Only a hit that is actually reported costs anything — a touch under
+        // `min_speed_m_s` writes no `TitanHit` and does nothing to the titan, and a cost the
+        // player cannot see the effect of is a cost he cannot learn from.
         wear_per_hit: 0.12,
+        // **The graze costs LESS than the cut, and that direction is measured, not assumed.**
+        // A pass that ends in a nape reports `[Torso, Cortex]` and always will: every titan is
+        // wider than his own neck, so the blade meets the shoulder on the way in
+        // (`tests/combat.rs::f030_the_cortex_wins_over_the_body_it_hides_in`). A torso factor
+        // above 1.0 would therefore tax every successful kill for the geometry of the titan's
+        // body rather than for the player's imprecision — the game charging you for winning,
+        // which is the cooldown-shaped design the bible rejects.
+        //
+        // So the deep cut through hide, flesh and nape is what dulls steel; skidding off a
+        // hardened flank is a scrape. One kill costs 0.12 + 0.06 = 0.18, so 5.5 kills per pair
+        // and about 33 out of a full harness (five spares plus the pair in hand).
+        // ⚠️ UNTUNED — see `docs/FINDINGS.md` FIND-079 for the two open tuning questions.
+        wear_torso_factor: 0.5,
         // Damage comes out of SPEED: a slash from standing still scratches,
         // the same slash out of 30 m/s kills (init.md §1). The formula stands
         // here, not in Rust.

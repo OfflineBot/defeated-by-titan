@@ -83,12 +83,12 @@ impl Plugin for BladesPlugin {
             // the same tick would mean ordering a `blades` system against a `mission` system,
             // which is a hidden edge past the allow list of `docs/architecture.md`.
             //
-            // **Deliberately not chained against the swing.** This is today the only writer of
-            // `Blades` in the whole simulation — the wear half of `F-033` is not built, so
-            // nothing lowers a harness yet and there is no order to get wrong. The day
-            // `cut::cut` starts booking `gear.ron: blades.wear_per_hit` it will do it in
-            // `PostStep`, which is a different set, and the order is still fixed by the
-            // schedule rather than by a `.chain()` here.
+            // **Deliberately not chained against the swing**, and it does not need to be even
+            // now that a second system writes `Blades`. Since 2026-08-13 `cut::cut` books
+            // `gear.ron: blades.wear_per_hit` — but it does it in `PostStep`, a different set,
+            // so the order inside a tick is fixed by the schedule and not by a `.chain()` here:
+            // **restock first, then pay for what you cut.** That is also the order a player
+            // standing at a rack while fighting would expect.
             resupply::apply_restock_requests.in_set(SimulationSystems::Intent),
         )
         .add_systems(

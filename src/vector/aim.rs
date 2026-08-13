@@ -41,14 +41,63 @@ use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
 use bevy::prelude::*;
 
 use crate::data::GameData;
-use crate::shared::{AimPoint, Body, BodyId, BodyMask, Intent};
+use crate::shared::{AimPoint, ArmAim, Body, BodyId, BodyMask, Intent, Side};
 
-/// Writes [`AimPoint`] for every player, once per fixed step.
+use super::hook::anchor_target;
+
+/// How far off the look direction one side ray sits, given the player's spread setting.
+/// Radians in, radians out (`docs/conventions.md`).
+///
+/// ⚠️ **`aim_spread_deg` is a HALF-angle**, and that is a decision with two sources pulling
+/// against each other:
+///
+/// - `assets/data/game.ron` says so and does the arithmetic in its own comment: *"At 100 m of
+///   aim distance 28° puts the two side points 2 · 100 · sin(28°) = **93.9 m** apart"*, and
+///   its ceiling `aim_spread_max_deg: 44.0` is justified as *"1.75° to spare"* against the
+///   45.75° half of the 91.5° horizontal frustum. Both numbers are only true for a half-angle.
+/// - `docs/NEXT.md` §1B's `W3` brief says *"two side rays at ±`aim_spread_deg`/2"*.
+///
+/// **The file wins** (rule 2: the number and its meaning live in the RON), and the acceptance
+/// criterion holds either way — the brief asks for ≥ 45 m at 28°/100 m and this gives 93.9.
+/// The contradiction is written down in `docs/FINDINGS.md` FIND-083; flipping the reading is
+/// this one function.
+pub fn side_angle_rad(spread_rad: f32) -> f32 {
+    spread_rad
+}
+
+/// The two side directions, `Side::Left` first — the look direction yawed by
+/// ±[`side_angle_rad`] **around the camera's up axis**, not around world Y.
+///
+/// `spread_rad` is what [`Intent::aim_spread_rad`] hands over: the player's own wheel setting,
+/// already clamped into the window from `game.ron`. That clamp lives on the `Intent` and not
+/// here, so that the wheel, the HUD and this ray can never disagree about what 0° means.
+///
+/// Around the camera's up axis, because the spread the user asks for is a *screen* spread:
+/// looking 60° down, a yaw around world Y rolls the two rays into the ground on one side and
+/// into the sky on the other, and the two markers stop being left and right of the crosshair.
+///
+/// `look` and `right` are orthonormal by construction — `right` is the horizontal
+/// `(cos yaw, 0, -sin yaw)` of `docs/conventions.md`'s axis contract, and the look direction
+/// has no component along it at any pitch — so `look·cos ∓ right·sin` is a unit vector
+/// without a normalize, at every pitch including straight up and straight down.
+pub fn side_dirs(intent: &Intent, spread_rad: f32) -> [Vec3; 2] {
+    let look = intent.look_dir();
+    let (sin_yaw, cos_yaw) = intent.yaw.sin_cos();
+    let right = Vec3::new(cos_yaw, 0.0, -sin_yaw);
+    let (sin, cos) = side_angle_rad(spread_rad).sin_cos();
+    // Index order is `Side::index()`: left = 0, right = 1. Left of a player looking along -Z
+    // is -X, so the left ray leans against `right`.
+    [look * cos - right * sin, look * cos + right * sin]
+}
+
+/// Writes [`AimPoint`] and [`ArmAim`] for every player, once per fixed step.
 ///
 /// Runs in `SimulationSystems::World`: a question to the world, asked **before** anything
 /// moves, so that every system in that stage sees the same world (`shared::schedule`).
 ///
-/// **One writer:** [`AimPoint`] is written here and nowhere else. `vector::hook` reads it.
+/// **One writer:** [`AimPoint`] and [`ArmAim`] are written here and nowhere else. `hud` reads
+/// the centre point for the crosshair; `vector::hook` reads **only** [`ArmAim`], so what the
+/// rope flies at and what the marker shows is one number and not two (`F-023`).
 ///
 /// ## What this system does not see, and why that is safe today
 ///
@@ -63,24 +112,47 @@ pub fn aim(
     data: Res<GameData>,
     space: SpatialQuery,
     bodies: Query<(&Body, Option<&BodyId>)>,
-    mut players: Query<(Entity, &Intent, &Transform, &mut AimPoint)>,
+    mut players: Query<(Entity, &Intent, &Transform, &mut AimPoint, &mut ArmAim)>,
 ) {
-    let range_m = data.game.vector.hook_range_m;
+    let v = &data.game.vector;
+    let range_m = v.hook_range_m;
     let eye_height_m = data.game.player.eye_height_m;
 
-    for (player, intent, transform, mut point) in &mut players {
-        let found = cast(
-            &space,
-            &bodies,
-            player,
-            eye(transform.translation, eye_height_m),
-            intent.look_dir(),
-            range_m,
-        );
+    for (player, intent, transform, mut point, mut arms) in &mut players {
+        let eye_m = eye(transform.translation, eye_height_m);
+        let centre = cast(&space, &bodies, player, eye_m, intent.look_dir(), range_m);
+
+        // Three rays, not one. The centre stays the crosshair's source and is cast from the
+        // look direction alone; the two side rays are what Q and E fly at (`F-023`).
+        //
+        // Three `cast_ray` instead of one is the whole added cost: measured 0.21 us per ray
+        // against 4000 blocks (module header), so 0.63 us per player per tick against a
+        // 16 666 us budget. It is a BVH walk, not an iteration over the world (§11).
+        // The player's own wheel setting (`W2`), absolute and never a delta, clamped into the
+        // file's window by the `Intent` itself — a per-player number, not a resource, because
+        // there is no such thing as *the* player (`docs/multiplayer.md` rule 3).
+        let spread_rad = intent.aim_spread_rad(v.aim_spread_min_deg, v.aim_spread_max_deg);
+        let dirs = side_dirs(intent, spread_rad);
+        let sides = Side::ALL.map(|side| {
+            let found = cast(&space, &bodies, player, eye_m, dirs[side.index()], range_m);
+            // **The fallback, and it is the difference between a feature and a regression.**
+            // A side ray that finds nothing to hook — off the roof edge, into the sky, or
+            // onto an untagged wall — hands the arm the centre ray instead of nothing. Aiming
+            // at a lone tower has to keep working exactly as well as it did when both arms
+            // shared one point; without this line the spread would cost hit rate on every
+            // target narrower than the spread itself.
+            //
+            // Resolved HERE and not at fire time: what is written into `ArmAim` is what the
+            // rope flies at and what the HUD draws, and a rule applied twice in two files is
+            // how a marker and a rope end up in two places (`user-messages.md`, 2026-08-12).
+            if anchor_target(&found).is_some() { found } else { centre }
+        });
+
         // `set_if_neq` and not a plain assignment: a standing player aims at the same point
         // every tick, and a `Mut` that is written unconditionally triggers change detection
         // 60 times a second for nothing (`docs/lessons/performance.md`, rule 1).
-        point.set_if_neq(found);
+        point.set_if_neq(centre);
+        arms.set_if_neq(ArmAim { arms: sides });
     }
 }
 

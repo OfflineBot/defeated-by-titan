@@ -1661,7 +1661,11 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 
 ---
 
-## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE — and append with `>>`, never with an edit tool
+## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
+**NEXT FREE ID: FIND-088.** Claim it by bumping this line in the same `cat >>` that
+appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
+file separately and both read the same maximum. One line beats a 108 kB grep.
+ — and append with `>>`, never with an edit tool
 
 This file is **over 100 kB**. Reading it whole to add ten lines costs ~27 000 tokens, and on
 2026-08-12 every agent in a five-agent round was doing exactly that. So:
@@ -3561,4 +3565,983 @@ has not been run under `--offscreen --screenshot` since (the commission's cargo 
 `--test debug` and `cargo check`). **The next session that builds should repeat the repro command
 and see exit 1 with the PNG still on disk.**
 
+
+
+## FIND-075 — The supply was inside the building and behind a 1.15 m thread; and nothing wears a blade, so the rack cannot be proven in a live run
+
+**2026-08-13, `assets/data/missions.ron`, `scripts/f070-hub.txt`, `tests/mission.rs`.** The
+headquarters, the doorway, the two racks and the whole blade-restock seam already existed —
+they landed inside the sweep commit `3b0dbe6`, whose message says only *"B-004 was fixed twice"*.
+This entry is what an independent walk over them found.
+
+### 1. „drinnen sind die nachschübe" was true by coordinate and false by walking
+
+The two stations stood at `(-42, 0.15, ∓6.5)` — the **centres** of the two 5 × 9 m racks. A
+station's trigger is a 3D distance to its centre, so a trigger in the middle of a rack is 4.5 m
+inside solid stone. Measured (replica of `tests/mission.rs::approaches_to`, flood-filled from the
+spawn point with a 0.35 m capsule on a 0.25 m grid):
+
+| station at | standable cells inside the 4 m reach | where they are |
+|---|---|---|
+| `(-42, -6.5)` rack centre | **57** | a 1.15 m strip between the rack's east face and a roof post, plus a 1.0 m slot behind the rack against the back wall |
+| `(-42, -2.0)` rack **face** | **373** | 6.93 m of the aisle centre line the door opens onto |
+
+`f019_a_supply_station_has_floor_you_can_actually_stand_on_inside_its_reach` passed on the old
+position: 57 ≥ its `NEEDED` of 16. It asks whether standing room **exists**, not whether a player
+who walks in **finds** it. A player who held W from his own spawn point was stopped by the back
+wall **7.20 m** from the number that decides and got nothing — and `scripts/f070-hub.txt` hid it
+with `warp -38.75 1.0 -6.0`, a warp threading exactly that 1.15 m strip.
+
+**Fixed** by moving the two stations to the racks' aisle faces, `(-42, 0.15, ∓2.0)`. The new
+criterion is the walk itself:
+`tests/mission.rs::f019_walking_straight_down_the_aisle_puts_you_in_reach_of_every_rack` derives
+the end of the aisle from the map (westernmost standable cell on `z = 0`) and demands every
+station be inside `gear.ron: resupply.range_m` of it. Red at 7.20 m before, green at 3.69 m
+after, red again when one station is put back to `-6.5`.
+
+**The general lesson, and it is not about this building:** "there is room" and "the room is on the
+path" are two different tests, and only the second one is the feature. A reach test that scans a
+disc will pass on any pocket inside that disc, including one nothing can walk to.
+
+### 2. The blade rack gives back nothing in a running game, because nothing takes anything away
+
+`blades::resupply::restock` is built, wired and singly-owned — the rack sends
+`BladeRestockRequest`, `blades` applies it, and `mission` holds no `&mut Blades` (FIND-066). But
+**`gear.ron: blades.wear_per_hit` has no reader anywhere in `src/`**: `grep -rn 'pairs_left\|\.sharpness' src/`
+outside `resupply.rs` finds `shared/state.rs` (the definition) and `hud/blade_pips.rs` (the
+drawing) and nothing else. `blades/mod.rs` says so out loud in a comment — *"the wear half of
+`F-033` is not built"* — and the consequence had not been drawn: **`Blades` is monotone, so in a
+live run the harness is always 5/1.0 and the rack is a no-op.**
+
+So the evidence chain the commission asked for — *walk in → gas refills → **blades refill** →
+walk out* — has no live half for blades, and no script can produce one: the script vocabulary can
+warp, spawn and slash, and none of those lowers a harness. `assert blades == 5` inside the hall is
+a **tautology**, and it is written into `scripts/f070-hub.txt` labelled as one.
+
+What was added anyway, and why: `assert blades` / `assert sharpness` now exist as metrics
+(`src/debug/script.rs`, `src/debug/mod.rs`, reading `shared::Blades` — no `debug -> blades` edge
+was bought). They cost nothing today and they are the lines that go red the day the rack breaks.
+The restock itself stays proven where a harness can be emptied first:
+`tests/mission.rs::f033_a_player_at_a_rack_of_the_hub_walks_away_restocked`, which goes red when
+one line of `mission::hub::restock_at_stations` is cut (verified 2026-08-13).
+
+**`F-033` is therefore half a feature and should read that way on `STATUS.md`.** The resupply is
+🟧 by test and by a live walk to the rack; the wear is ⬜ and it is the half that makes the
+resupply mean anything. Until it exists, "economy instead of cooldowns" has an economy with no
+spending.
+
+### 3. The interior is a dark room
+
+`docs/images/f070-hub-supply.png` (t = 1035, inside the hall looking back at the gate): the hall
+reads clearly as an interior with a lit doorway — but the interior itself is **unlit**. The roof
+blocks the directional light and there is no ambient term inside, so the racks are silhouettes and
+the two cyan station pads on the floor are the only thing with a colour. It photographs as a
+building you are inside of; it does not photograph as a depot you can find the supply in. Not
+fixed here (`src/render/**` was not this hand's), and it is a real answer to "would a player
+recognise it".
+
+
+## FIND-076 — the corpus repair holds under an independent re-run, and the two scripts it passed over were green and hollow
+
+**2026-08-13, machine B (offlinebot). Owner: the `scripts/` job.** This is the **refutation round**
+for `FIND-065` and `FIND-073` — the map-flip damage report and its repair. The commission was
+written against `docs/NEXT.md` §3c/§4, which still describe `scripts/game-full.txt` as failing 5 of
+23 asserts and "~30 other scripts" as unchecked. **Both statements were already stale when the
+commission was written**: commit `3b0dbe6` swept 25 scripts and `6b748a2` a 26th. So the job became
+what a refutation round is for — re-measure the claim instead of re-doing the work.
+
+### §1 The repair holds. 35 of 35 scripts, measured today, one at a time
+
+Every script in `scripts/` was run headless against shipped `ashgate` (`maps.ron: current`) with a
+`--ticks` above its own end. **Result: 34 exit 0, one exit 1, and the exit 1 is deliberate.**
+
+```
+game-full     exit 0   23/23 asserts   MISSION WON at tick 898 — 3/3 kills, 1200 ticks
+f-flight-cut  exit 0   25/25           363 ticks
+f003-ashgate  exit 0   40/40    f004-towers exit 0  39/39    f019-hq   exit 0  13/13
+f-007-boost   exit 0   13/13    f-018-gas   exit 0  10/10    f170-hud  exit 0   4/4
+f-001-hooks   exit 1   2 of 14 RED — LEFT RED ON PURPOSE (see §2)
+```
+
+`FIND-073`'s headline — *"8 red scripts down to 1 deliberate red"* — **is confirmed by an
+independent run.** `game-full.txt`'s ACT 1 in particular does now what `docs/NEXT.md` §3c says it
+cannot: it anchors ashgate's church at `(45.00, 34.00, -29.00)`, reels, and clears
+`assert speed > 25` at **28.741 m/s** / **15.521 m**.
+
+### §2 `f-001-hooks`' exit 1 is not damage — do not "fix" it
+
+It anchors correctly (`body 58 at (51.00, 11.09, -1.00)`, the ashgate church nave) and then fails
+`height > 12` (**9.980**) and `speed > 35` (**20.147**). The file argues at length that these two
+are `B-004`'s regression tripwire and that rewriting the brackets *"would hide a movement
+regression inside a hook test"*. That is right and it stays. **A red script is not automatically a
+broken script**, and a sweep that greps for exit 1 will get this one wrong.
+
+### §3 🔴 The refutation: `f171-crosshair` was counted green in `FIND-065`, and its evidence was a lie
+
+`FIND-065`'s table lists `f171-crosshair` in the **green** row. It is green — exit 0, and it was
+exit 0 all through the map flip. **It is also the one script in the corpus whose evidence the flip
+destroyed outright**, and nothing could say so, because the file's only assert was
+`assert titans == 1` — true in graybox and true in ashgate.
+
+The file's three panels are the three `CrosshairState`s. Its ANCHOR viewpoint was
+`warp 24 0 -20` / `look 0 34` — *"the watchtower at (24, 6, -40)"*, a block ashgate does not build.
+Probed on the shipped map:
+
+```
+warp 24 0 -20 · look 0 34 · hook right   ->  found nothing anchorable      (the ANCHOR panel)
+warp 51 0 13  · look 0 34 · hook right   ->  anchored on body 58 at 51.00 11.09 -1.00
+```
+
+So `AimPoint::anchorable` was **false** over that ray and the crosshair was drawing
+`CrosshairState::Free`. Measured in the pixels, at the documented shutter tick 188:
+
+| panel | old script (graybox aim) | new script (ashgate aim) |
+|---|---|---|
+| 1 FREE   | white bbox **302x178**, cyan 88 (gas bar) | unchanged |
+| 2 ANCHOR | white bbox **302x178**, cyan 80 (gas bar) | **cyan bbox 328x202, 654 cyan px, white 0** |
+| 3 CORTEX | amber bbox 356x212 | unchanged |
+
+**Panel 2 was pixel-identical to panel 1.** `docs/images/f171-crosshair.png`, and the `F-171` 🟧 row
+in `docs/STATUS.md` that cites it — *"(4, 302x178), (4, 326x202), (8, 356x212)"* — rested on an
+image whose middle third no longer showed the state it names. The picture on disk was honest when
+it was taken on 2026-08-10; the map moved under it on 2026-08-12 and **no exit code moved with
+it.**
+
+### §4 The fix, and the assert that makes it falsifiable
+
+The ANCHOR/FREE stand moved to `(51, 0, 13)` — `scripts/f-001-hooks.txt`'s own measured ashgate
+anchor. **Pitch and standoff are unchanged (34 degrees, 14 m out); only the coordinates moved**,
+the same move `game-full` ACT 1 made. `assert` costs no ticks, so the shutter ticks **126 / 188 /
+238 are the ones they always were** and the marks still land at t=123/185/235.
+
+`CrosshairState` is view state on eight tick nodes and **no script metric reads it** — which is
+exactly why this went unseen. It cannot be asserted directly, but the boolean it is computed from
+can: a `hook` down the same ray from the same spot either anchors or does not. So the file now
+ends, **after the last shutter tick**, with a fourth block that re-visits the anchor stand and
+asserts `rope == 1`. Red-checked both ways:
+
+```
+ashgate stand (51 0 13)  ->  8 asserts held, 552 ticks, exit 0
+graybox stand (24 0 -20) ->  line 115: assert Rope == 1 — measured 0.000, exit 1
+```
+
+`docs/images/f171-crosshair.png` retaken on ashgate (three `--offscreen` runs at 126/188/238,
+centre-cropped 404x260, glued with `tools/two_panels.py`). The three bounding boxes reproduce
+`STATUS.md`'s recorded numbers — 302x178, 328x202, 356x212 — so the row's evidence is **restored,
+not restated**.
+
+### §4b The same defect a second time, and worse: `f070-lost` never let the clock run out
+
+Found by re-running the one script the survey had missed. `scripts/f070-lost.txt` is *"the mission
+clock runs out, and the run says so"*, and its header derives the deadline carefully:
+*"330 s x 60 Hz = 19 800 ticks … The verdict is decided at tick 19 800"*. It was green — 3 asserts,
+exit 0, and `FIND-065` lists it green too. Measured on the shipped map:
+
+```
+strike: player 1 takes 34.0 — 66.0/100.0 left
+strike: player 1 takes 34.0 — 32.0/100.0 left
+strike: player 1 takes 34.0 —  0.0/100.0 left
+MISSION LOST at tick 629 (decided at Some(629)) — 0/3 kills
+```
+
+**The player was dead at tick 629 and the mission was lost by DEATH, 31x earlier than the deadline
+the file is about.** He stood where he spawns, inside the first wave's 24 m ring, for 332 seconds.
+All three asserts still held, because they are read at t≈19 920 and `phase == 4` is `Lost` either
+way — so the run exited 0 and the remaining **19 300 ticks were a corpse on the pavement**. Death
+is already `scripts/p5-downed.txt`'s job; the deadline is the only thing this file is for, and it
+was the one thing it was not measuring.
+
+Re-cut: the player is warped to ashgate's church roof (`warp 45 35.1 -22`, y = 35), which is 27 m
+above `combat::strike`'s ceiling — the shoulder of a 10 m titan, 0.82 x 10 = 8.2 m. The new
+`assert health > 0` is the tripwire that separates the two losses and **is the line that would have
+gone red the day this started measuring a death**. Measured after:
+
+```
+strikes: 0        MISSION LOST at tick 19800 (decided at Some(19800)) — 0/3 kills
+script run finished: 4 asserts held, 20525 ticks, exit 0
+```
+
+**629 -> 19 800, the deadline to the tick.**
+
+`docs/images/f070-lost.png` retaken from the new pose, and **the picture now carries the
+distinction the file was missing**: the F3 overlay reads `t=19950  pos 45.0 35.0 -22.0  gas
+300/300  Grounded  spd 0.0` beside `mission LOST  kills 0/3`, over a **full health bar**. The old
+image could not have shown that — he had been dead for 19 300 ticks. A reader can now see from the
+PNG alone that the clock ended this run and not a titan.
+
+### §5 The rule this earns
+
+`FIND-065` §1 and `docs/NEXT.md` §4 both already say *"a script that anchors nothing still exits 0
+if its asserts never fire"*. The corpus was then repaired **by exit code**, and both files above sit
+in the green column of that same document. **An exit code ranks a script's asserts, not its
+evidence.** The two are different things whenever the claim is a picture or a *reason*, and the
+guards are cheap:
+
+- a picture that claims *a ray hit something* gets one `hook` + `assert rope`, placed **after the
+  shutter tick** where it cannot change the frame (`f171-crosshair` §4);
+- an assert on an **end state** (`phase == 4`) is worthless without an assert on the **path** to it
+  (`health > 0`) — `Lost` is reached by two roads and the file only cared about one (`f070-lost`).
+
+Both defects share one shape: **the asserts were true, and true for the wrong reason.** Neither a
+red test nor an exit code can find that; only re-deriving what the file claims and checking it
+against a measurement can.
+
+### §6 What went unseen
+
+`scripts/f070-hub.txt` measured 20 of 29 asserts here and that number is **not reportable** — a
+concurrent agent was mid-write in it, in `assets/data/missions.ron` and in `src/debug/script.rs`
+(adding the `blades` and `sharpness` metrics this binary does not have, which is what the missing
+nine asserts are). It was re-run against a stale binary and a half-written file; both of its
+numbers belong to that agent's round, not this one. `p4-cursor` is a windowed observation fixture
+(`wait 600` = 36 000 ticks) whose three asserts fire at t≈300 and whose documented invocation is
+`--ticks 0`; run to the end it is **3 asserts held, 36 312 ticks, exit 0**, and it costs ten real
+minutes to learn that, because these runs are driven at real time and not as fast as the CPU can
+go. The first attempt at the `f070-lost` retake **died on the other agent's half-written tree** —
+`assets/data/gear.ron: Unexpected field named `wear_torso_factor`` — and only succeeded after they
+rebuilt; so that PNG was shot against a dirty working tree and should be re-checked when their
+round lands. And the crosshair panels were checked for **colour and bounding box**, not for whether
+a human reads panel 2 as a wall — it is 404x260 of flat grey church face.
+
+## FIND-078 — an interior is not dark; the whole shadow range is. The fill had a ceiling and no floor
+
+**2026-08-13, render.** Raised out of "you cannot see anything inside the main building"
+(`docs/images/f070-hub-supply.png`). The diagnosis handed over with it was: *"the roof blocks the
+directional light and there is no ambient term, so the racks are black shapes."* **Both halves of
+that are wrong, and the second one is wrong in a way that matters.**
+
+### 1. There is an ambient term, it comes from the file, and it works
+
+`assets/data/art.ron: lighting.ambient` has existed since FIND-071, and
+`render::light::camera_light_settings` attaches it. In Bevy 0.19 `AmbientLight` is a **component**
+with `#[require(Camera)]` that overrides `GlobalAmbientLight`
+(`bevy_light-0.19.0/src/ambient_light.rs:9-12,42-45`) — so hanging it on the camera is correct, not
+a bug. It is measurably in effect: the hall's back wall is `stone_gray` under a blue fill and
+renders **B > G > R** (46.8, 52.5, 61.5); the racks are `brick_red` and render **R > B > G**
+(48.3, 41.4, 44.9). Those are the two albedos times the fill colour. Nothing is unlit.
+
+### 2. The racks are not black — they are 8.8 sRGB levels from the wall behind them
+
+`docs/images/f019-hq-dark.png`, the resupply hall through its own gate, tick 1350:
+
+| patch | lum |
+|---|---|
+| hall back wall (`stone_gray`, fill only) | **51.9** |
+| resupply rack (`brick_red`, fill only) | **43.1** |
+| **an EXTERIOR wall in shadow, same frame** | **51.5** |
+| sunlit street floor | 179.6 |
+
+**The control is the finding.** An interior at 51.9 and an outdoor shadow at 51.5 — 0.4 apart. A
+roofed room is *not* darker than a shadow. What it lacks is anything bright to read against: outdoors
+a shadow sits next to a 180, indoors the whole frame is 43-52, so the only contrast left is between
+two ambient-lit albedos, and `brick_red`/`stone_gray` are 0.60 apart in green — 8.8 sRGB levels at
+that level. That is the whole symptom.
+
+### 3. The sweep — and why ambient is a mitigation, not the fix
+
+Four runs, same script, same tick, same camera; only `ambient.brightness` moved:
+
+| brightness | wall | rack | separation | ext. shadow | shadow/sun |
+|---|---|---|---|---|---|
+| 2400 (was) | 51.9 | 43.1 | 8.8 | 51.5 | 28.9 % |
+| **4200 (now)** | **68.1** | **57.4** | **10.7** | 67.8 | 37.6 % |
+| 7200 | 87.0 | 74.2 | 12.8 | 86.7 | 47.3 % |
+| 12000 | 107.7 | 93.1 | 14.6 | 107.4 | 57.4 % |
+
+**5x the fill buys 5.8 sRGB levels and costs the exterior its shadows.** The reason is structural:
+ambient has no direction, so it raises a room's *level* without giving anything in it a lit face and
+a shaded one. At 12000 the racks are still two flat rectangles — brighter flat rectangles. The
+exterior shadow tracks the interior to within 0.4 at every step, so every gain indoors is paid for
+outdoors at 1:1. That is the trade FIND-071 was fought to win, in reverse.
+
+### 4. The window is one stop wide, and the floor did not exist
+
+Two tests now squeeze the number from both ends, and `tests/render.rs` proves each side by going red:
+
+- `f071_a_roof_a_sunlit_wall_and_a_shaded_wall_are_three_different_values` caps `stone_gray` at
+  **20 %** of a sunlit face -> brightness <= 4630. It was the only bound, and 2400 satisfied it.
+- `f019_the_fill_lifts_the_darkest_material_inside_a_roofed_room` (new) floors `brick_red` at
+  **10 %** -> brightness >= 3830. Red at 2400 (6.3 %), green at 4200 (11.0 %); 7200 turns the
+  ceiling test red at 31.1 %.
+
+**Changed:** `art.ron: lighting.ambient.brightness` 2400 -> **4200** (stone_gray 18.1 %,
+brick_red 11.0 %).
+
+**The three signal colours are untouched, measured not argued.** The HUD is UI and never sees a
+light: `hud_cyan` **(63, 237, 249)** and `hud_crimson` **(243, 97, 111)** are **bit-identical, sd
+0.0**, at brightness 2400, 4200, 7200 *and* 12000. `F-170`/`F-171` evidence stands.
+
+### 5. What this does NOT solve — and what would
+
+**A player still cannot tell what is in that room.** 10.7 levels makes the racks unambiguously
+*present* instead of nearly invisible; it does not make them legible as gas tanks and blade racks.
+They are flat silhouettes, because a directionless fill cannot produce shape.
+
+The fix is **a light inside the building** — a point or spot light in the hall, which lifts the
+interior without touching a single exterior shadow and gives every box a lit face and a dark one.
+That is per-interior, per-map data and therefore belongs in `assets/data/maps.ron`, which this hand
+does not own. **Recommended to whoever owns it**, and it is the one change that would let the fill
+go back down toward 2400 and give FIND-071 its exterior contrast back.
+
 <!-- APPEND NEW ENTRIES ABOVE THIS LINE -->
+
+## FIND-077 — Risk 1's tripwire is MET in ashgate, and the shortfall was geometry after all
+
+**Symptom:** `docs/PLAN-GAME.md` §3.1 Risk 1 asks for a player who moves at 30 m/s, and its only
+tripwire is `assert speed > 25` in `scripts/game-full.txt`. That assert has been **red since
+2026-08-10** at 20.147 m/s, and `FIND-033`/`FIND-036` concluded the shortfall "travels with the
+code, not with the geometry" — i.e. that no map would fix it.
+
+**Measurement [cachy], 2026-08-13, in the shipped district:** `game-full` ACT 1 now anchors on
+ashgate's church at **(45.00, 34.00, −29.00)** and reels to **28.741 m/s at 15.521 m** — and the
+whole run is **23 of 23 asserts, exit 0, `MISSION WON at tick 898`, 3/3 kills.** Reproduced on two
+binaries. **`assert speed > 25` was not touched.**
+
+**So the conclusion was wrong in its general form.** Against the same code, the graybox's watchtower
+gives **20.147 m/s** and ashgate's church gives **28.741** — a 43 % difference from the anchor alone.
+What FIND-036 established (that the old 46.414 m/s was a `ground_locomotion` artefact and must not
+come back) still stands; what does **not** stand is "the geometry cannot help".
+
+**The open half:** `scripts/f-001-hooks.txt` still reaches only 20.147 m/s, and its header claims the
+shortfall is code-borne while `game-full`'s header now says the opposite. **Both cannot be right.**
+The difference between the two runs is the anchor's height and standoff — i.e. `L < H` again
+(`FIND-041`). Somebody should reconcile the two headers with one measurement rather than leaving two
+files asserting opposite causes.
+
+**Why it counts:** this is the first time the rope alone has cleared Risk 1's bar in a shipped map,
+and it happened as a side effect of building a district rather than as a movement fix.
+
+### ⚠️ FIND-077 was overstated the moment it was written — corrected the same hour
+
+The headline *"Risk 1's tripwire is MET"* is true of **one anchor** and not of the district. The
+measuring agent said so in its own report and the supervisor read past it:
+
+> *"Risk 1 is not retired. `speed > 25` passes only on a steep anchor: **28.741 m/s at 66.6°** vs
+> **19–20 m/s at 34°**. The district's 6.5–11.5 m housing is shallow, so the number a player
+> actually gets is still unmeasured."*
+
+**The honest statement:** `game-full` clears the bar because ACT 1 hooks the **church** — 34 m tall,
+giving a 66.6° rope. Ordinary housing gives ~34° and ~20 m/s, which is exactly what
+`scripts/f-001-hooks.txt` still measures. So:
+
+- what is **settled**: the shortfall is **not purely code-borne**; anchor geometry moves it by 43 %,
+  and FIND-033/FIND-036's general form was wrong.
+- what is **not settled**: whether a player swinging the *streets* — not the one cathedral — ever
+  reaches 25 m/s. **Nobody has measured that**, and it is the question Risk 1 actually asks.
+
+**This is the seventh supervisor claim this session overturned by a measurement, and the first
+overturned by a sentence that was already in the report being summarised.** The lesson is narrower
+than "be careful": *read the Open section before writing the finding.*
+
+## FIND-079 — A blade now wears out, and the direction of the wear was decided by a measurement, not by a story
+
+**2026-08-13, `src/blades/cut.rs`, `assets/data/gear.ron`, `tests/combat.rs`.** The answer to
+FIND-075 §2: `gear.ron: blades.wear_per_hit` has a reader. `blades::cut::spend` books it at the
+one place a hit is reported, so `Blades` is no longer monotone and the racks of the headquarters
+give back something that was taken.
+
+### 1. The graze costs LESS than the cut, and that is measured
+
+The obvious design — *"a bounce off the torso should cost more than a clean nape"* — is **wrong
+here, and the repo already contained the proof.** A pass that ends in a kill reports
+`[Torso, Cortex]`, not `[Cortex]`: every titan is wider than his own neck, so the blade meets the
+shoulder one or more ticks before the nape, and `Swing::has_grazed` exists precisely because that
+is unavoidable (`src/blades/swing.rs`, and `f030_the_cortex_wins_over_the_body_it_hides_in`
+asserts the order). Measured on the fixture pass at 30 m/s: zones `[Torso, Cortex]`, every time.
+
+So a torso factor above 1.0 charges the player **more for the shape of the titan's shoulders than
+for the nape he actually hit** — the game taxing him for winning, which is the cooldown-shaped
+design the bible rejects. The direction is therefore inverted from the intuition:
+
+| event | cost | why |
+|---|---|---|
+| cortex cut | `wear_per_hit` = 0.12 | the blade's actual work: through hide, flesh and nape at speed |
+| any other zone | `× wear_torso_factor` = 0.06 | skidding off a hardened flank is a scrape, not a cut |
+| a touch under `min_speed_m_s` | **nothing** | it writes no `TitanHit` and does nothing to the titan; a cost whose effect the player cannot see is a cost he cannot learn from |
+
+**One kill = 0.18 sharpness.** `pairs_left` counts *spares* and `sharpness` is the pair in hand
+(`resupply::restock` hones that one first), so `start_pairs: 5` is six pairs' worth: **33 kills out
+of a full harness**, 5.5 to a pair. ⚠️ UNTUNED, and that budget is the open question below.
+
+At zero the pair breaks and `Blades::swap_pair` draws a spare. With no spare left the harness is
+`is_broken()` and `cut` casts **nothing at all** — not "cuts for less damage", because
+`titan::brain::receive_hits` kills on `Cortex` by rule and never consults the speed, so a broken
+blade that still wrote a `TitanHit` would be a free kill with no steel behind it. **That is a
+state, not a soft lock:** he flies, swings, and is still a target; the way back is a rack, which
+hones the pair in his hands to fresh in half a second.
+
+### 2. The HUD needed nothing — `hud::blade_pips` was correct and waiting
+
+`update_blade_pips` already reads `Blades` off the `LocalPlayer` every frame: pips light by
+`pairs_left`, the fill's width **is** `sharpness`, and the plate goes crimson on `is_broken()`.
+Not one line of `src/hud/` was touched and the `F-170` row is intact — the gauge simply stopped
+being a constant. **Its module doc is now stale** (`src/hud/blade_pips.rs:14-18` still says *"the
+wear … is not built yet, so `sharpness` sits at 1.0"*); that file was not this hand's.
+
+### 3. A break that went green, and the guard that came out of it
+
+The falsification round caught a real hole. Removing the `spend` call went red, and removing the
+`is_broken()` guard went red — but **flipping `wear_torso_factor` from 0.5 to 2.0 broke nothing in
+the whole suite.** The unit tests in `cut.rs` spell the file's numbers out in a `tuning()` fixture
+(the house style, copied from `resupply.rs`), so they are blind to the file, and the app-level test
+only had a *lower* bound. The design claim was therefore undefended in exactly the place it lives.
+
+`tests/combat.rs::f033_the_file_charges_a_graze_less_than_a_cut` is the repair: it asserts
+`0 < wear_torso_factor < 1.0` **against `GameData`**, plus a sanity band on the resulting kill
+budget. Red at 2.0, green at 0.5. **The general lesson: a fixture that spells out a RON file's
+numbers tests the arithmetic and not the file, and every design claim that lives in a number needs
+one test that reads the number.**
+
+### 4. `scripts/f070-hub.txt`'s `assert blades == 5` is STILL a tautology — and now fixable
+
+Run read-only after the change: 29 asserts held, exit 0, and both kills landed as pure `Cortex` at
+20.67 m/s (0.12 each, no graze — the script cuts out of a fall, straight at the nape). It stays a
+tautology for two reasons, both of them the script's and neither of them the mechanism's:
+
+1. **Position.** `assert blades == 5` / `assert sharpness > 0.99` sit at `f072-supplied-inside`
+   (t = 865), and the first titan is not spawned until t ≈ 1740. Nothing has been cut yet.
+2. **Amount.** Even at the end of the run only 0.24 sharpness is spent, so `pairs_left` never
+   leaves 5 at all. `blades` is the wrong metric for this script; `sharpness` is the one that moves.
+
+**What makes it real, for whoever owns the script:** cut *first*, then walk to the rack — spawn the
+husks, take the two kills, `assert sharpness < 0.80`, then walk in and `assert sharpness > 0.99`.
+That is the supply loop the hub was built for, end to end, and it is now expressible.
+
+Proven live in the meantime on a scratch script with the sortie block copied verbatim out of
+`f070-hub.txt` ACT 5: `assert sharpness < 0.99` after one kill and `< 0.80` after two — 6 asserts
+held, exit 0, 290 ticks. Both of those asserts fail on yesterday's build.
+
+### 5. Two open tuning questions, deliberately not decided here
+
+- **Is 33 kills a full harness worth walking for?** A tutorial has two titans, so today the rack is
+  a formality outside a long raid. `wear_per_hit` was the number already in the file and it was
+  used as found (`CLAUDE.md` rule 2); raising it is a tuning decision with a player behind it.
+- **Should wear scale with the closing speed?** Argued against and not built: the closing speed
+  already gates whether the hit *exists* (`min_speed_m_s`), and a second cost on the same axis
+  pulling the other way would make the fast cut both the only lethal one and the most expensive
+  one. Two costs of opposite sign on one axis is how a system stops reading.
+- **`F-033` is still not whole:** wear ✔, breakage ✔, resupply ✔ — but **swapping is manual
+  nowhere.** `swap_pair` fires automatically at zero; there is no button for it, because a button
+  needs a bit in `shared::Buttons` and that is another domain's file.
+
+---
+
+## FIND-080 — the lamp did what five times the ambient could not, and it changed 35 490 pixels and not one more
+
+**2026-08-13, render/world.** The follow-through on `FIND-078`, which measured the resupply hall
+and named the fix it could not build: *a light inside the building*. Built as per-map data —
+`assets/data/maps.ron: lights`, `data::MapLight`, `render::light::setup_interior_lights`, two
+`PointLight`s over the aisle of the garrison hall at `(-37, 8.5, 0)` and `(-27, 8.5, 0)`.
+
+### 1. The experiment, and why it is one binary
+
+`docs/images/f019-hq-lamp-before.png` and `docs/images/f019-hq-lamp-after.png` are the **same binary, the same script
+(`scripts/f019-hq.txt`), the same tick (1350) and the same camera**; the only difference between
+them is whether `maps.ron: ashgate.lights` holds the two entries or `[]`. Nothing was rebuilt in
+between, so no other hand's change can be hiding in the delta.
+
+| patch, tick 1350 | before | after | Δ |
+|---|---|---|---|
+| resupply rack (`brick_red`) | 57.6 | **90.6** | +33.0 |
+| back wall through the gate | 67.8 | **141.7** | +73.9 |
+| hall floor in front of the racks | 67.8 | **150.3** | +82.5 |
+| **EXT sunlit street floor** | 178.5 | **178.5** | **+0.0** |
+| **EXT wall in shadow** | 67.8 | **67.8** | **+0.0** |
+| **EXT roof cap (`sand_brown`)** | 180.7 | **180.7** | **+0.0** |
+
+### 2. The exterior did not move, and this is stronger than a patch
+
+**35 490 of 921 600 pixels differ by more than one level, and every single one of them lies in
+x 523..756, y 362..518** — which is the gate opening and nothing else. 886 110 pixels are
+bit-identical. The containment is not tuning, it is Lambert plus a hard cut-off: the OUTER face of
+every wall of a hall points away from a lamp inside it (`NdotL <= 0`, so no range can reach it),
+and the faces that *could* leak are the ones pointing up. Bevy's
+`(1 - (d/r)^4)^2 / d^2` is zero at `d = r`, so `range_m` is what keeps those out. Checked against
+all 232 placed blocks of ashgate: the nearest exterior surface facing either lamp is the ground
+slab's top directly beneath it, buried under the hall's own 0.3 m floor. Nearest *visible* one is
+the street apron at x = -15 — 14.68 m against range 11.0, and 23.6 m against range 14.0.
+
+### 3. What FIND-078 could not buy at any price: **shape**
+
+Twenty rows down a rack's face, before: **57.4, 57.4, 57.4 … sd 0.8.** One value. That is what
+"flat rectangle" means, measured. After: **106.9 at the top edge falling to 84.4 at the bottom, sd
+6.0**, and the hue turns from a blue-shifted 63.7/55.5/60.0 to a lit 108.6/86.2/80.6. The rack
+against the floor it stands on: **10.2 levels before, 59.7 after.** Against the wall behind it:
+10.2 → 51.1. *Ambient at 5x bought 5.8 levels and no gradient at all (FIND-078 §3).*
+
+### 4. ⭐ The recommendation that follows, and it is not mine to write
+
+`art.ron: lighting.ambient.brightness` was raised 2400 → 4200 by FIND-078 as an **explicit
+mitigation**. With the lamps in, four runs of the same binary, same tick:
+
+| variant | rack | wall | floor | EXT shadow | shadow/sun |
+|---|---|---|---|---|---|
+| 2400, no lamps | 43.2 | 51.5 | 51.5 | 51.5 | **29.1 %** |
+| 4200, no lamps | 57.6 | 67.8 | 67.8 | 67.8 | 38.0 % |
+| 4200, **lamps** | 90.6 | 141.7 | 150.3 | 67.8 | 38.0 % |
+| **2400, lamps** | **83.9** | **137.8** | **147.0** | **51.5** | **29.1 %** |
+
+**Going back to 2400 costs the interior 6.7 levels on the rack and gives the exterior its whole
+contrast back** — 38.0 % → 29.1 % shadow-against-sun, which is the trade FIND-071 fought for and
+FIND-078 had to spend. Recommended: **`brightness: 4200 → 2400`.**
+
+⚠️ **It is a pair, not a single edit.** `tests/render.rs::f019_the_fill_lifts_the_darkest_material_inside_a_roofed_room`
+floors the value at 3830 and would go red — and it *should*, because its premise ("the darkest
+material inside a roofed room lives on the fill alone") is exactly what stopped being true today.
+Whoever lowers the number retires or rewrites that test in the same commit; lowering it alone
+leaves a red suite, and gutting the test alone throws a guard away for nothing.
+
+### 5. The cost, with the control that proves the instrument is not blind
+
+`DBT_FRAMETIME=1`, `--offscreen` (no vsync), ten 2-second windows per run, same script:
+
+| run | frames / 2.001 s | ms/frame |
+|---|---|---|
+| no lamps | **474** | 4.222 |
+| two lamps, `shadows: false` | **474** | 4.222 |
+| the same two lamps, `shadows: true` | 473 | 4.236 |
+
+**The lamps cost 0.000 ms — identical to the third decimal in every window** — and the third row is
+the control: switching the cube shadow maps on *does* move the number (+0.014 ms, +0.3 %), so the
+measurement resolves ~0.014 ms and the shadowless lamps are under it. Windows 4-8 cover the ~11 s
+in which the player is walking around **inside** the hall, and they read 4.222 like the rest.
+`shadows: false` therefore stands in the file with a number behind it
+(`docs/lessons/performance.md` rule 5): a shadow-casting point light is a **cube** map — six depth
+passes per light per frame — for occluders the room does not have.
+
+⚠️ Debug build, one machine, and the frame loop sits at a stable 237 fps that nothing moved by more
+than 0.3 % — so what this shows is that the lamps do not become the bottleneck, not that clustered
+forward lighting is free on a weaker GPU.
+
+### 6. And the honest answer to the question FIND-078 answered "no"
+
+**Can a player now tell what is in that room? — Yes for "boxes stand there and they are furniture",
+still no for "that one is gas and that one is blades".** The two racks are legible objects now: a
+lit top edge, a shaded face, a warm hue, standing against a bright floor and a bright wall, 60
+levels of separation where there were 10. But **they are the same box in the same colour** —
+`(center_m: (-42, 0.75, ±6.5), size_m: (5, 1.2, 9), color: "brick_red")` twice — so telling one
+from the other is a **geometry and signage** problem that no lamp can solve. That is the next
+thing, and it is not a lighting job.
+
+
+---
+
+## FIND-081 — in `--headless` the frame time is the runner's cap, not the work. Measure CPU.
+
+**2026-08-13, W1 (data), machine B.** `docs/NEXT.md` §1B asks for a mean frame time before and
+after `world.half_extent_m` 600 → 900. `DBT_FRAMETIME=1` answers **4.221 ms/frame in both**, and
+that number is worthless: without a window `src/lib.rs::base_plugins` adds
+`ScheduleRunnerPlugin::run_loop(1/240 s)`, so the loop is *paced* at 4.167 ms and the measurement
+reports the sleep. The doc comment on `render::log_frame_time` is right for `--offscreen` (nothing
+paces that loop) and silently wrong for `--headless`.
+
+**What does move is process CPU over a fixed tick count.** `--ticks 900` is 15.10 s of wall clock
+either way (`Time<Virtual>` follows `Time<Real>`), so wall clock is useless too — but user+sys CPU
+is the work actually done.
+
+**The measurement, interleaved A/B/A/B four times each** so that another agent's render job hit
+both sides equally (it did: it moved the *means* by −3.4 %, which is why the means are not the
+number):
+
+| | best of 4 | mean of 4 |
+|---|---|---|
+| `half_extent_m: 600` + `hook_range_m: 200` | 6.174 s CPU | 6.847 s |
+| `half_extent_m: 900` + `hook_range_m: 500` | 6.180 s CPU | 6.612 s |
+| | **+0.09 %** | −3.4 % (background load) |
+
+**Acceptance was ≤ +10 %; it is +0.09 %.** And the reason is worth more than the number:
+`SpatialIndex::new` allocates `columns²` cells **once at startup and never per tick**
+(`src/shared/spatial.rs`), and `maintain_index` touches only bodies that moved. So 2.25× the cells
+(50 625 against 22 500) is ~1.2 MB of empty `Vec` headers at load and **nothing at 60 Hz**.
+`cell_m` is the lever that would not be free — it decides how many cells every ray walks — and it
+stays 8.0, unmeasured (Q-014).
+
+**Rule for the next agent:** headless → `os.wait4` rusage or `bash` `TIMEFORMAT` over a fixed
+`--ticks`; offscreen → `DBT_FRAMETIME`. Never headless + `DBT_FRAMETIME`.
+
+## FIND-082 — `GasConsumer::Steer` cannot land with the data round; it is W4's, and by design
+
+**2026-08-13, W1 (data).** §1B assigns W1 "`gas_priority` gains `Steer`". **It was not done, on
+purpose.** `vector::gas::book` matches `GasConsumer` **exhaustively with no `_` arm**, and its own
+comment says why: *"The day `GasConsumer` gets a third variant … this file has to stop compiling.
+A catch-all would instead silently hand the new consumer nothing."* Adding the variant in
+`src/data/mod.rs` therefore breaks the build until `src/vector/gas.rs` — **W4's file** — decides
+what the consumer spends. W1's own acceptance (`cargo test --test data` green) cannot be met and
+the fan-out would start from a red tree.
+
+**What did land:** `vector.gas_steer_per_s: 16.0` (key frozen, guarded, unused) and
+`tests/data.rs::t005_rope_steering_costs_what_the_boost_costs_per_metre_per_second`, which holds
+16/30 against 18/34 without needing the variant.
+
+**What W4 has to do, and it is three lines that must land together or the game crashes on load:**
+1. `src/data/mod.rs`: `GasConsumer` gains `Steer` — *W1's file, so this needs the supervisor's
+   hand-over, not a quiet edit*;
+2. `src/vector/gas.rs`: the fourth arm, plus `Wants.steer` / `Costs.steer` / `GasGrant.steer`;
+3. `assets/data/game.ron`: `gas_priority: [Boost, ReelIn, Dodge]` → `[Boost, Steer, ReelIn, Dodge]`
+   *(also W1's file)*, and `tests/data.rs::t005_gas_priority_names_every_consumer_exactly_once`
+   from `3` to `4` consumers.
+
+**The ordering question that comes with it, so it is not decided by accident:** `Steer` before or
+after `Boost`? The Dodge argument (`game.ron`) does not transfer — steer and boost are both rates,
+both wanted on the same tick, and on a nearly empty tank the list decides which of the two the
+last drop buys. That is a game-value decision (Q-017's shape) and belongs in `docs/QUESTIONS.md`
+if W4 cannot derive it.
+
+---
+
+## FIND-083 — the fill came back down, the racks stopped being the same box, and the outside never moved
+
+**2026-08-13, render/world.** The pair `FIND-080 §4` asked for, plus the geometry-and-signage job
+`FIND-080 §6` said no lamp could do. Both are **data only** — `art.ron` and `maps.ron`, not one
+line of Rust.
+
+### 1. The fill: 4200 → 2400, and the guard that had to move with it
+
+`art.ron: lighting.ambient.brightness` was raised to 4200 the same morning as an explicit
+mitigation, before the hall had a light of its own. It does not need to be there any more:
+
+| tick 1350, EXT pose, same pinned binary | 4200 | 2400 |
+|---|---|---|
+| exterior wall in shadow | 67.8 | **51.5** |
+| sunlit street floor | 181.2 | 179.6 |
+| **shadow / sun, sRGB** | 37.4 % | **28.7 %** |
+
+`FIND-080 §4` predicted 38.0 % → 29.1 % from its own patches; these are mine, same conclusion.
+`FIND-071`'s contrast is back and the interior gives up 6.7 sRGB levels it no longer needs.
+(The pair `FIND-078` argued the raise from — `docs/images/f019-hq-dark.png` at 2400 against
+`docs/images/f019-hq-lit.png` at 4200, both *without* a lamp in the room — is what this
+supersedes; it is kept because it is the only picture of the state the user walked into.)
+
+⚠️ **`tests/render.rs::f019_the_fill_lifts_the_darkest_material_inside_a_roofed_room` is retired.**
+Its premise — *"the darkest material in a roofed room lives on the fill alone"* — died with
+`FIND-080`. It is replaced in the same change by
+`f019_a_roofed_room_lives_on_its_lamp_and_the_fill_is_the_second_term`, which guards the failure
+that is now the real one: **raising the world's fill instead of lighting the room.** It computes
+Bevy's own point-light falloff at the surface the strongest lamp hangs over, from the map, and
+bounds the fill from both ends — window **[1459, 3528]**, red at 0, at 4200 and at 12000. Rule 5
+walked: red 4.20x at 4200 · red 1.47x at 12000 · red 0.00 % at 0 · red on `lights: []` · green 7.35x
+at 2400.
+
+### 2. The racks: two silhouettes, and the measurement that says the old ones were one object
+
+`docs/images/f019-hq-racks-before.png` and `docs/images/f019-hq-racks-after.png` — **same binary, same script, same tick
+(592), same camera**: mid-aisle inside the hall, looking west, both bays in frame. The binary was
+copied out of `target/` first, because another hand rebuilt it mid-measurement.
+
+| tick 592 | before | after |
+|---|---|---|
+| gas bay (south, screen right) | 92.8 | 93.8 |
+| blade bay (north, screen left) | 92.8 | 102.3 |
+| **separation** | **0.0 levels / 0.0° hue** | **8.5 levels / 37.5° hue** |
+
+**0.0 and 0.0 is not a rounding — the two bays were the same line twice** (`size_m: (5, 1.2, 9),
+color: "brick_red"`), so the renderer produced the same pixels. Now: gas is four `olive_green`
+bottles with `stone_gray` collars on a skid, blades are five pairs of 0.05 × 1.3 × 0.20 m
+`stone_gray` slats on a `sand_brown` bench against a dark panel. **No signal colour was spent** —
+cyan stays gameplay (see §4).
+
+⚠️ Two proportions were measured and thrown away first: `(1.6, 1.9, 1.6)` drums read as *crates*
+until they got a narrower collar, and blades built `(0.16, 1.5, 0.9)` — thin in **x** — came out as
+six locker doors, because from the aisle you see the **(y, z)** face and x is only the thickness.
+
+### 3. The control: the geometry change touches 6 016 pixels and every one is inside the gate
+
+Same fill (4200), old racks vs new, EXT pose: **6 016 of 921 600 pixels differ, bbox x 525..754,
+y 455..494** — inside `FIND-080`'s gate opening (x 523..756, y 362..518) and nowhere else. 915 584
+pixels are identical. The fill change, for contrast, moves **91.8 %** of the frame. The two effects
+are cleanly separable and neither leaks into the other.
+
+### 4. ⛔ What could NOT be done in data, and it is the one thing that was asked for
+
+**The gas station cannot wear `signals.cyan`.** `src/world/map.rs:545` resolves a block's colour
+through `GameData::color`, which reads `maps.palette` and nothing else, and
+`tests/data.rs::t005_every_block_names_a_color_from_the_palette` enforces it. Putting `"cyan"` into
+`palette` would satisfy both and **destroy the invariant the two-block split exists for** — "no map
+block may name a key from `signals`" is only a test while the blocks are disjoint. A legitimate
+cyan gas rack therefore needs either a palette-then-signals fallback in `src/world/map.rs` **plus** a
+rule saying which block kinds may draw on a signal colour, or nothing. Not decided here; shape
+carries the read in the meantime.
+
+### 5. And the honest answer to the question `FIND-080 §6` left open
+
+**"That one is gas" — yes.** Four green bottles with steel collars on a skid is a canister rack and
+a player does not have to be taught it. **"That one is blades" — nearly.** The other bay is
+unmistakably a *different* object (a low bench, a dark back panel, ten thin pale uprights standing
+in five pairs) and nobody will confuse the two — but the slats read as "thin things in a rack"
+rather than specifically as swords, and at 17 m each is 11 px wide. **It is legible by contrast,
+not yet by iconography.** If that is not enough it is a model job (`art.ron: "blade"` is still
+`Primitive`), not a map job.
+
+---
+
+## FIND-084 — `S` off `REEL_IN`: 56.001 m becomes 0.174 m, and the last 0.174 m is not the key
+
+**W2, 2026-08-13 [offlinebot].** `docs/NEXT.md` §1A req 7 — the user: *„aktuell wenn ich seil
+spanne und s drücke werde ich stark zum seil gezogen! das soll nicht sein!"*
+
+### The measurement, in the real app on the real map
+
+`tests/input.rs::r7_s_held_on_a_taut_rope_does_not_close_the_distance`: the market square at
+`(75, 2, -30)`, `look 0 44`, left rope on the wall gallery (92.863 m of rope in this tree), then
+**120 ticks** of one held key. Change in the distance to the anchor:
+
+| held | Δ distance | what it is |
+|---|---|---|
+| `S`, while it was a second binding for `REEL_IN` | **−56.001 m** | `reel_speed_m_s` 28 × 2 s, exactly |
+| nothing (control) | **+0.000 m** | the rope and gravity alone do nothing here |
+| **`S`, now** | **−0.174 m** | see below |
+| `A` | −4.929 m | walking |
+| `W` | −7.031 m | walking |
+
+**`S` is now the movement key that closes the LEAST distance of the three**, which is the whole
+claim: it has no rope power the others do not have.
+
+### The 0.174 m, and why the job's acceptance number was −0.05 m
+
+The acceptance in `docs/NEXT.md` §1B for W2 reads Δ ≥ **−0.05 m**, and the ground case lands at
+**−0.174 m**. It is *not* a residual reel — the idle control is 0.000 m, so nothing moves a player
+who stands still on a taut rope. What moves him is **walking backwards into a rope that points 44°
+upwards**: the constraint answers the overstretch by correcting his position along the rope, and
+that direction has an upward component. He is lifted a few centimetres, and a lift shortens the
+distance to an anchor that is above him.
+
+⚠️ **Measured, not proven.** The mechanism above is the reading that fits the four numbers; nobody
+has instrumented `shared::rope::rope_step` to confirm it. What is proven is that it scales with
+*movement into the rope* and not with the binding: `A` and `W` do 28× and 40× more of it.
+
+**Consequence for whoever tightens this:** −0.05 m is reachable in the air (where the forward axis
+is clamped at 0 and `S` produces no thrust at all) but not on the ground while `S` moves the player
+at `run_speed_m_s`. The test therefore asserts a bound derived from what `S` used to be —
+**1 % of `reel_speed_m_s` × 2 s** — plus the ordering against `A` and `W`. A slow reel cannot pass
+either of them.
+
+### Evidence in the running game
+
+Scratchpad script (ACT 4 leg 1 of `scripts/f003-ashgate.txt` with `S` where it holds `Ctrl`):
+
+```
+S as REEL_IN:  line 41: assert Height < 3   — measured 26.343     ← hauled 26 m up the wall
+               line 44: assert Gas == 300   — measured 287.899    ← and it cost 12 gas
+S as movement: script run finished: 7 asserts held, 526 ticks, exit 0
+```
+
+That second line is a finding of its own: while `S` was `REEL_IN`, **holding a movement key spent
+gas**, which no other movement key does.
+
+## FIND-085 — W4 crossed two file boundaries because the variant cannot land inside one, and the §1B acceptance list contradicts §1B's own formula
+
+**2026-08-13, W4 (the mixing rule).** Two things the supervisor has to see, neither of them a
+defect in the work — one is a scope fact, the other is a spec conflict I had to resolve alone.
+
+### 1. `GasConsumer::Steer` needs **five** files, not the three `FIND-082` lists
+
+`FIND-082` §2 says *"`src/vector/gas.rs`: the fourth arm, plus `Wants.steer` / `Costs.steer` /
+`GasGrant.steer`"* — but **`GasGrant` is declared in `src/shared/gear.rs`**, which the W4
+commission names as W3's. And `tests/vector_boost.rs` constructs `Wants`/`Costs` literally, so
+the two new fields break it on sight. The full set is:
+
+| file | change | owner per the commission |
+|---|---|---|
+| `src/data/mod.rs` | the `Steer` variant | W1, W4 by named exception |
+| `assets/data/game.ron` | `gas_priority` gains it | W1, W4 by named exception |
+| `src/vector/gas.rs` | the fourth arm, `Wants`/`Costs` | **W4** |
+| `src/player/locomotion.rs` | the reader | **W4** |
+| `src/shared/gear.rs` | **`GasGrant.steer`, one field** | **W3** — crossed |
+| `tests/data.rs` | `3` → `4` consumers, `Steer` in the list | **W1** — crossed |
+| `tests/vector_boost.rs` | two fields in one `Wants`/`Costs` literal | nobody — crossed |
+
+I made all three crossings, because each is mechanical, none is a decision, and every one of them
+is *load-bearing for a change the commission explicitly ordered*: leaving any of the three out
+means a tree that does not compile or a test that is knowingly red at the round gate, which is
+worse than a diff that is one line wider than the ownership table. **`src/shared/gear.rs` was
+live under W3 while I did it** (the file changed under me mid-session) — the addition is a single
+field on `GasGrant`, textually nowhere near `HookState`/`ArmAim`, so a merge conflict is unlikely
+but not impossible. **Check that `pub steer: bool` is still in `GasGrant` before the gate.**
+
+**The rule this suggests for the next fan-out:** an enum variant is never a one-file change when
+its `match` is exhaustive by design. Whoever writes the plan should list the *declaration* file,
+not only the file that consumes it — `FIND-082` did the hard part right and still lost `gear.rs`
+because nobody grepped for where the type lives.
+
+### 2. §1B's acceptance bullet and §1B's formula disagree about the fade, and the formula is right
+
+The W4 commission's acceptance list says: *"pull **== 0** while `L ≤ min_rope_m +
+air_pull_fade_m`"*. The formula three lines above it says
+`fᵢ = clamp((Lᵢ − min_rope_m) / air_pull_fade_m, 0, 1)`, which is **0 at `min_rope_m` and 1 at
+`min_rope_m + air_pull_fade_m`** — the exact opposite claim about the top of the band. At the
+shipped numbers the two readings are "zero below 3 m" against "zero below 15 m".
+
+**I implemented the formula**, for three reasons that all point the same way:
+
+1. the commission says *"implement §1B's block verbatim … it was designed three ways and judged
+   nine ways"*, and the block is the formula;
+2. `assets/data/game.ron` — **W1's own comment, written independently** — says it in words:
+   *"full strength at 15 m of rope, zero at 3 m"*;
+3. the literal reading makes the feature useless where it matters most. A swing's whole business
+   is 5–15 m from the anchor; a pull that only switches on beyond 15 m would never fire in the
+   close arc the user asked for.
+
+`tests/player.rs::f006_the_pull_lets_go_before_the_short_rope_cliff` pins **both ends and the
+monotonicity of the band between them**, so whichever way this gets settled the test says which
+one is in the tree. If the acceptance bullet was meant literally, the change is one line in
+`rope_steer` (`(L − min_rope_m − fade_m) / fade_m`) plus that test — and it should be argued
+against `FIND-035`, not against me.
+
+**Not a defect, but worth one line:** `wants_steer` is `n > 0 && (w⁺ > 0 || mx ≠ 0)` **exactly as
+specified**, with no flight-state term. A player standing still on a roof, slow, with a hook in
+the wall and `W` held is `Grounded`, so `air_control` produces nothing — and gas is billed anyway,
+at 16/s. It is the one place where "the cost follows the effect" does not hold. Fixing it needs
+`MovementState` + `Velocity` in `gas_budget` **and** `player::locomotion::in_flight`, which is a
+`vector → player` call and therefore an allow-list edge — so it is a decision, not a repair, and
+I did not take it. Cost of the corner: a rope you are standing next to drains the tank in 18.75 s.
+
+## FIND-086 — `aim_spread_deg` is a half-angle in the file and a full angle in the brief, and W3 followed the file
+
+**2026-08-13, W3 (instant refire + three rays).** One spec conflict, one foreign-file touch,
+one pre-existing red test the round would otherwise have blamed on this work.
+
+### 1. The spread key means two different things in two landed documents
+
+| source | reading | side rays at `28.0` | separation at 100 m |
+|---|---|---|---|
+| `assets/data/game.ron` (W1, landed) + `src/data/mod.rs:286` | **half**-angle, *"in degrees off the look direction"* | ±28° | 2·100·sin 28° = **93.9 m** |
+| `docs/NEXT.md` §1B, the W3 brief | full angle, *"±`aim_spread_deg`/2"* | ±14° | **48.4 m** |
+
+`game.ron` does the 93.9 m arithmetic in its own comment **and** derives its ceiling from it:
+`aim_spread_max_deg: 44.0` is justified as *"1.75° to spare"* against the 45.75° half of the
+91.5° horizontal frustum — true only for a half-angle. At the brief's reading the ceiling would
+be ±22° and that justification is 24° off.
+
+**Resolved for the file** (rule 2: the number *and its meaning* live in the RON). The brief's
+acceptance number holds under both readings — it asks for ≥ 45 m at 28°/100 m and the file's
+reading gives 93.9 — so nothing was traded away. The seam is one function,
+`vector::aim::side_angle_rad`, and `tests/vector_aiming.rs::
+f023_the_two_side_rays_are_a_city_block_apart_at_a_hundred_metres` asserts **both** numbers:
+`>= 45.0` (the brief) and `93.9 ± 0.05` (the file). Return `spread_rad * 0.5` from that function
+and the second assert goes red while the first stays green — verified. **If the supervisor wants
+the brief's reading, that is the one line, and `game.ron`'s two comments have to move with it.**
+This is the second §1B contradiction of the round; `FIND-085` §2 is the other one.
+
+### 2. `tests/vector_rope.rs` was touched, and it belongs to nobody this round
+
+`vector::hook` now fires at `ArmAim`, not at `AimPoint`. Both rope/hook test files inject a
+forced aim through a system of their own (`world::index::maintain_index` history, see their
+module headers), and an injector that writes only `AimPoint` leaves the hook aiming at nothing —
+12 of 13 rope tests went red on the switch. The change is four lines in `force_aim`: write the
+same forced value into both carriers, which is exactly what the real `vector::aim` produces for
+a target the whole spread covers. `tests/vector_hooks.rs` is W3's; **`tests/vector_rope.rs` is
+not, and it was changed anyway** — mechanical, no assertion moved, `--test vector_rope` 13
+passed / 4 ignored.
+
+### 3. `f001_the_tip_starts_in_the_hand_and_flies_towards_the_anchor` was already red before W3
+
+Not caused by this work and not by a defect: the test measured five **full** flight steps
+against a fixed 28 m target, which was 10.5 steps at `hook_speed_m_s: 160` and became 3.4 steps
+when `W1` raised it to 500. The fifth step it measured was the arrival step, which is always
+partial — it stops on the anchor. Repaired by deriving the target distance from the file
+(`per_tick_m * 8.0`) instead of pinning 28 m, so the next speed change cannot do it again.
+**A test with a hard-coded distance and a soft speed is a test that measures the file's mood.**
+
+### 4. What is not covered, and it is the one thing an image would show
+
+`hud::arm_aim` is W5's and still draws off `Hook` + `AimPoint`. Until it reads `ArmAim`, the
+two markers are still one point on screen while the two ropes now fly to two — so the user's
+*„da wo das seil am ende auch landet soll die markierung hin"* is **half** delivered, and the
+visible half is the wrong one. `ArmAim::target_of(side)` is the whole interface it needs.
+
+## FIND-087 — the markers now stand on the two firing points, and the two places the picture still cannot say
+
+**W5, 2026-08-13.** `hud::arm_aim` read `Hook` + the centre `AimPoint`; it now reads `Hook` +
+`ArmAim`, which is the component `vector::hook` fires out of. The acceptance number of
+`docs/NEXT.md` §1B is met exactly: `tests/hud.rs::f026_the_marker_stands_exactly_where_that_arm_fires`
+compares `hud::arm_aim::target_of` against `vector::hook::anchor_target` with `assert_eq!` on the
+`Vec3` over four look angles, and `f026_the_rope_flies_at_the_point_the_marker_stood_on` presses
+both keys and compares `HookState::Flying { target_m }` against the same value. Measured, one
+tick, church stand: both ropes leave for `(42.020996, 11.061524, -1.0)` / `(59.979004, …)` — the
+marker's own numbers, bit for bit.
+
+**Why the equality has to be inside ONE tick, measured while writing the test.** Between two
+consecutive ticks the aim point moved `11.0431185 → 11.061524` (18 mm) because the player was
+still settling onto the ground. A tolerance loose enough to swallow 18 mm is loose enough to
+swallow a real mismatch, so the test takes both values out of the same `sim_step` instead.
+
+### 1. An idle marker is a **bearing**, not a place — and that is not fixable in a projection
+
+`vector::aim::side_dirs` yaws the look direction by ±`aim_spread_deg` **around the camera's up
+axis**, so a side ray is a fixed direction in camera space and its projection is therefore a
+fixed pixel: same x for a wall at 6 m and a roof at 300 m, same y as the crosshair, always.
+Measured through the real camera (`f026_two_idle_arms_preview_two_different_points`):
+
+| `aim_spread_deg` | glyph off centre x | pair gap |
+|---|---|---|
+| 10 (min) | **146 px** (pushed; the true projection is 110) | 292 px |
+| 28 (ships) | **332 px** | 664 px |
+| 44 (max) | **602 px** | 1204 px |
+
+So the wheel is visible in the picture, and W5's "≥ 145 px from centre" holds at every setting.
+What the player cannot read off the marker is **how far away** the anchor is. Nothing in a 2D
+projection can carry that; a depth cue would have to be size or brightness, and that is a design
+decision, not a repair.
+
+### 2. 🔴 The honest hole: an arm that fell back to the centre ray is drawn 146 px off it
+
+`vector::aim` hands an arm the **centre** ray when its own side ray finds nothing anchorable
+(W3, and it is the right call — without it the spread would cost hit rate). That point projects
+onto the crosshair, i.e. inside `F-170`'s keep-out box, and `layout_for` then holds the marker at
+the box edge: **146 px from where the rope will actually go.** Photographed by accident on the
+first evidence attempt (stand `(21, 0, 60)`, `look 0 5`): the left ray found nothing, the Q ring
+sat on the left-hand wall, and the left hook anchored dead ahead at `(21.00, 3.43, 39.03)`.
+
+**Not fixed, and the trade is written down rather than hidden.** The alternatives were weighed:
+
+- *let the marker into the box* — breaks `f170_nothing_covers_the_middle_of_the_screen`, a proven
+  🟧 claim the user has already played with;
+- *push it vertically instead* — keeps the bearing truthful, but the push is then a **jump** of
+  ~80 px the moment the point leaves the box, where the horizontal push is a *clamp*: continuous,
+  monotone, and it never draws a point on the wrong side of the axis. A marker that teleports is
+  worse than one that parks;
+- *fade it near the centre* — takes the state readout away exactly when the key is about to be
+  pressed, and `F-026` is "immer sichtbar".
+
+So the rule stands and the reading is: **a marker at the box edge means "this arm has no point of
+its own and will fire at the crosshair"**. It is a state badge in that one case, and only in that
+case. Whoever wants it better should give the fallback its own glyph — which then has to carry
+`F-026`'s colour-blindness clause too.
+
+### 3. Behind the camera: clamped to the edge on its own side, not hidden
+
+`Camera::world_to_viewport` returns a **usable** pixel for a point beside the viewport (only NDC
+z outside `0..1` is an error, `bevy_camera-0.19.0/src/camera.rs:546-556`) — so only the
+behind-the-near-plane case needed a decision, and it is not rare: half a swing has the anchor
+behind you. `arm_aim::edge_pixel` keeps the point's bearing and the clamp puts the marker on that
+edge. Measured (`f026_an_anchor_behind_you_goes_to_the_edge_on_its_own_side`): anchors at
+`(∓25, 6, +18)` behind a player looking down −Z put Q at x = 28 and E at x = 1252 on a 1280 px
+screen, and the two swap when the anchors swap. **The known cost:** an edge marker does not
+separate "just off the edge, in front" from "behind you". A fifth glyph would, and it would owe
+the colour-blindness clause.
+
+### 4. Evidence, and the script that makes it
+
+`docs/images/f026-aim.png` — two panels of one run, stand `(-21, 0, -21)` `look 45 6`, where
+**both** side rays hit and they hit **two different bodies** (480 at `(-44.51, 3.88, -28.13)`,
+348 at `(-28.58, 4.02, -45.98)`, 23.9 m apart, both 27.9° off the look direction). Left panel
+`--ticks 123`: two `Ready` rings, one on each building. Right panel `--ticks 185`: both fired,
+and each rope **ends in its marker**. The script lives in the scratchpad because `scripts/` was
+not W5's to write; it is nine lines and it is worth keeping:
+
+```
+wait 1.5
+warp -21 0 -21
+look 45 6
+wait 0.5
+mark f026-preview          # shutter A, t=123
+assert rope == 0           # what is on screen is a PREVIEW, not a rope
+wait 0.5
+hook left 3.0
+hook right 3.0
+wait 0.5
+mark f026-anchored         # shutter B, t=185
+assert rope == 2           # both arms caught, each on its own side's point
+wait 2
+```
+
+`--headless … --ticks 400` exits **0**, 2 asserts held, 335 ticks.

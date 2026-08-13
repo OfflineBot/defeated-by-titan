@@ -21,10 +21,19 @@
 //!
 //! ## Four decisions this file makes, and what each of them costs
 //!
-//! 1. **A shot only leaves from `Idle`.** The arm has to have its tip back in the hand before
-//!    it goes out again — that is what makes `Retracting` a state and not a decoration. The
-//!    price is a lockout after a release: `rope_length / vector.hook_retract_speed_m_s`, so
-//!    0.25 s on a 30 m rope at the file's 120 m/s. Both ends of that number are in the RON.
+//! 1. **A shot leaves from `Idle` and from `Retracting`.** ⚠️ It used to leave only from
+//!    `Idle`, and that was wrong: the user, 2026-08-12, *„wenn ich mit seilen festhake (was
+//!    instant sein soll)"*. The old rule opened a lockout of
+//!    `rope_length / vector.hook_retract_speed_m_s` after every release — measured **21.6
+//!    ticks** on a 180 m rope at the file's 500 m/s — and it did something worse than making
+//!    the player wait: it **swallowed the trigger**. A press during the retract found the
+//!    wrong state and was dropped, and by the time the arm reached `Idle` the button was
+//!    already held, so `just_pressed` never came back and the arm never fired at all. The
+//!    player had to let go and press a *second* time.
+//!    **A fresh trigger now cancels the retract** (`tests/vector_hooks.rs::
+//!    f002_a_refire_during_retract_flies_again_within_one_tick`, ≤ 1 tick). `Retracting` is
+//!    still a state — it is what brings a missed tip home and what the rope is drawn from —
+//!    it is just no longer a lockout.
 //! 2. **A shot at nothing anchorable never becomes a flight.**
 //!    [`HookState::Flying`](crate::shared::HookState::Flying) carries a
 //!    [`BodyId`](crate::shared::BodyId) and not an `Option<BodyId>` (`src/shared/gear.rs`), so
@@ -41,6 +50,16 @@
 //! 4. **`tip_m` is not touched while `Idle`.** The type documents it as meaningless there, and
 //!    dragging it along with the hand would mark [`Hook`] changed for every player in every
 //!    tick — change detection for a value nobody may read (§11: nothing changes per frame).
+//! 5. **A refire starts in the hand, not where the retracting tip happens to be.** The tip
+//!    snaps home in the tick the new shot leaves. The price is one frame of visual jump when
+//!    a very long rope is cancelled early; what it buys is decision 3's invariant — the
+//!    flight time is `aim distance / hook_speed_m_s` and nothing else. A flight that started
+//!    at an arbitrary leftover position would take a time nobody can compute from the file.
+//! 6. **The two arms fire at [`ArmAim`], not at [`AimPoint`].** `vector::aim` casts three
+//!    rays and publishes a resolved target per side (`F-023`'s hemisphere split); this file
+//!    re-casts nothing at fire time, so the marker the HUD draws and the point the rope flies
+//!    to are the same number by construction — *„und dann muss das seil auch dahin!!"*.
+//!    [`AimPoint`] is still read by the crosshair, and nowhere here.
 //!
 //! The picture and the run that belong to this file: `scripts/f-001-hooks.txt` and
 //! `docs/images/f-001-hooks.png`; the tests are in `tests/vector_hooks.rs`.
@@ -49,8 +68,8 @@ use bevy::prelude::*;
 
 use crate::data::GameData;
 use crate::shared::{
-    AimPoint, BodyGone, BodyId, Buttons, Hook, HookAnchored, HookReleased, HookState, Intent,
-    PlayerId, PrevButtons, ReleaseReason, RopeLength, Side, SpatialIndex, Tick,
+    AimPoint, ArmAim, BodyGone, BodyId, Buttons, Hook, HookAnchored, HookArm, HookReleased,
+    HookState, Intent, PlayerId, PrevButtons, ReleaseReason, RopeLength, Side, SpatialIndex, Tick,
 };
 
 /// Which button belongs to which arm. One place, so that left and right cannot drift apart.
@@ -80,6 +99,23 @@ pub fn anchor_target(aim: &AimPoint) -> Option<(Vec3, BodyId)> {
     Some((aim.point_m?, aim.body?))
 }
 
+/// Sends an arm out, if the trigger found something that holds. Reports whether it left.
+///
+/// The **one** place a shot starts, called from `Idle` and from `Retracting` — two call sites
+/// with two copies of this is how a refire ends up obeying a different rule than a first shot.
+/// The tip starts in the hand (decision 5) and [`HookState::Flying`] carries the carrier it is
+/// flying at (`B-001`), so a miss can never become a flight.
+fn fire(arm: &mut HookArm, aim: &AimPoint, hand_m: Vec3) -> bool {
+    match anchor_target(aim) {
+        Some((target_m, body)) => {
+            arm.state = HookState::Flying { target_m, body };
+            arm.tip_m = hand_m;
+            true
+        }
+        None => false,
+    }
+}
+
 /// Drives both arms through their states and reports every change.
 pub fn update_hooks(
     tick: Res<Tick>,
@@ -94,7 +130,7 @@ pub fn update_hooks(
         &Intent,
         &PrevButtons,
         &Transform,
-        &AimPoint,
+        &ArmAim,
         &RopeLength,
         &mut Hook,
     )>,
@@ -113,7 +149,7 @@ pub fn update_hooks(
     let flight_per_tick_m = v.hook_speed_m_s * dt;
     let retract_per_tick_m = v.hook_retract_speed_m_s * dt;
 
-    for (id, intent, prev, transform, aim, rope, mut hook) in &mut players {
+    for (id, intent, prev, transform, arm_aim, rope, mut hook) in &mut players {
         // The hand is the eye — see decision 3 in the module header.
         let hand_m = transform.translation + Vec3::Y * data.game.player.eye_height_m;
         let fresh = intent.buttons.just_pressed(prev.0);
@@ -126,30 +162,26 @@ pub fn update_hooks(
             let arm = hook.arms[i];
             let mut next = arm;
 
+            // What THIS arm is aiming at — its own hemisphere's ray (`F-023`), already
+            // resolved by `vector::aim` and never re-cast here (decision 6).
+            let aim = arm_aim.side(side);
+
             match arm.state {
                 HookState::Idle => {
-                    if just_pressed {
-                        match anchor_target(aim) {
-                            Some((target_m, body)) => {
-                                next.state = HookState::Flying { target_m, body };
-                                next.tip_m = hand_m;
-                            }
-                            None => {
-                                // The trigger was pulled and nothing caught. The arm stays
-                                // `Idle` (decision 2), but `hud` and `sound` still learn that
-                                // a shot happened — that is what the reason is for.
-                                released.write(HookReleased {
-                                    player: *id,
-                                    side,
-                                    reason: ReleaseReason::NoAnchor,
-                                    tick: tick.0,
-                                });
-                                info!(
-                                    "hook {side:?} of player {} found nothing anchorable (t={})",
-                                    id.0, tick.0
-                                );
-                            }
-                        }
+                    if just_pressed && !fire(&mut next, aim, hand_m) {
+                        // The trigger was pulled and nothing caught. The arm stays
+                        // `Idle` (decision 2), but `hud` and `sound` still learn that
+                        // a shot happened — that is what the reason is for.
+                        released.write(HookReleased {
+                            player: *id,
+                            side,
+                            reason: ReleaseReason::NoAnchor,
+                            tick: tick.0,
+                        });
+                        info!(
+                            "hook {side:?} of player {} found nothing anchorable (t={})",
+                            id.0, tick.0
+                        );
                     }
                 }
 
@@ -257,13 +289,36 @@ pub fn update_hooks(
                 }
 
                 HookState::Retracting => {
-                    let to_hand = hand_m - arm.tip_m;
-                    let distance_m = to_hand.length();
-                    if distance_m <= retract_per_tick_m {
-                        next.tip_m = hand_m;
-                        next.state = HookState::Idle;
-                    } else {
-                        next.tip_m = arm.tip_m + to_hand / distance_m * retract_per_tick_m;
+                    // **The refire** (decision 1). The trigger is honoured in the tick it
+                    // goes down, whatever the tip is doing — that is what "instant" means,
+                    // and it is why this branch is checked before the retract step below.
+                    if just_pressed {
+                        if fire(&mut next, aim, hand_m) {
+                            info!(
+                                "hook {side:?} of player {} fired again during the retract \
+                                 (t={})",
+                                id.0, tick.0
+                            );
+                        } else {
+                            // A refire at nothing anchorable. Reported like any other miss —
+                            // and the arm keeps coming home instead of stranding halfway.
+                            released.write(HookReleased {
+                                player: *id,
+                                side,
+                                reason: ReleaseReason::NoAnchor,
+                                tick: tick.0,
+                            });
+                        }
+                    }
+                    if next.state == HookState::Retracting {
+                        let to_hand = hand_m - arm.tip_m;
+                        let distance_m = to_hand.length();
+                        if distance_m <= retract_per_tick_m {
+                            next.tip_m = hand_m;
+                            next.state = HookState::Idle;
+                        } else {
+                            next.tip_m = arm.tip_m + to_hand / distance_m * retract_per_tick_m;
+                        }
                     }
                 }
             }

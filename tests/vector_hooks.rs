@@ -39,7 +39,7 @@ use defeated_by_titan::data::GameData;
 use defeated_by_titan::net::Inbox;
 use defeated_by_titan::player::spawn_player;
 use defeated_by_titan::shared::{
-    AimPoint, BodyGone, BodyId, BodyMask, Buttons, Cli, Hook, HookAnchored, HookReleased,
+    AimPoint, ArmAim, BodyGone, BodyId, BodyMask, Buttons, Cli, Hook, HookAnchored, HookReleased,
     HookState, IdCounter, IndexEntry, Intent, LocalPlayer, PlayerId, PrevButtons, ReleaseReason,
     RopeLength, Side, SimulationSystems, SpatialIndex, Tick,
 };
@@ -53,11 +53,19 @@ use defeated_by_titan::vector::aim::aim;
 #[derive(Component, Clone, Copy, Debug, Default)]
 struct ForcedAim(AimPoint);
 
-fn force_aim(mut players: Query<(&ForcedAim, &mut AimPoint)>) {
-    for (forced, mut point) in &mut players {
-        if *point != forced.0 {
-            *point = forced.0;
-        }
+/// Writes the forced point into **both** carriers: the centre ray the crosshair reads
+/// ([`AimPoint`]) and the per-arm ray the hook fires at ([`ArmAim`], `F-023`).
+///
+/// Both, with the same value, because that is exactly what the real `vector::aim` produces
+/// for a target the whole spread covers: a side ray that finds nothing anchorable falls back
+/// to the centre ray. The tests in this file are about the **state machine**, not about the
+/// hemisphere split — that one has its own fixture in `tests/vector_aiming.rs`, in a map with
+/// real geometry. Forcing only one of the two would test which component the hook happens to
+/// read instead of what it does with what it reads.
+fn force_aim(mut players: Query<(&ForcedAim, &mut AimPoint, &mut ArmAim)>) {
+    for (forced, mut point, mut arms) in &mut players {
+        point.set_if_neq(forced.0);
+        arms.set_if_neq(ArmAim { arms: [forced.0; 2] });
     }
 }
 
@@ -402,8 +410,16 @@ fn f001_the_tip_starts_in_the_hand_and_flies_towards_the_anchor() {
     let e = me(&mut app);
     settle(&mut app);
 
-    let target = Vec3::new(0.0, 1.6, -28.0);
-    let body = put_body(&mut app, 90_005, Vec3::new(0.0, 1.6, -32.0), Vec3::splat(4.0));
+    // Far enough out that the five full steps below all fit inside the flight. The **last**
+    // step of any flight is a partial one — the tip stops on the anchor instead of overshooting
+    // it — so a target that is not a whole number of steps away turns this into a measurement
+    // of the arrival. It was: at `hook_speed_m_s: 160` the old fixed 28 m was 10.5 steps, and
+    // `W1`'s 160 -> 500 m/s made it 3.4. Derived from the file now, so the next speed change
+    // cannot do it again.
+    let per_tick_m = data(&app).game.vector.hook_speed_m_s / data(&app).game.simulation_hz as f32;
+    let target = Vec3::new(0.0, 1.6, -per_tick_m * 8.0);
+    let body =
+        put_body(&mut app, 90_005, Vec3::new(0.0, 1.6, -per_tick_m * 8.0 - 4.0), Vec3::splat(4.0));
     aim_at(&mut app, e, target, body, true);
 
     let start = hand(&app, e);
@@ -415,7 +431,6 @@ fn f001_the_tip_starts_in_the_hand_and_flies_towards_the_anchor() {
         tip(&app, e, Side::Left)
     );
 
-    let per_tick_m = data(&app).game.vector.hook_speed_m_s / data(&app).game.simulation_hz as f32;
     let mut last = tip(&app, e, Side::Left);
     for _ in 0..5 {
         app.update();
@@ -627,6 +642,129 @@ fn f001_a_shot_at_nothing_anchorable_reports_no_anchor() {
         app.world().resource::<HookLog>().anchored.is_empty(),
         "something anchored although nothing was anchorable"
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// 4b. §1A requirement 1 — "festhaken … was instant sein soll"
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn f002_a_refire_during_retract_flies_again_within_one_tick() {
+    // The user, 2026-08-12: „wenn ich mit seilen festhake (was instant sein soll)".
+    //
+    // Until this test existed a shot left **only** from `Idle`, so every release opened a
+    // lockout of `rope_length / vector.hook_retract_speed_m_s` in which the trigger did
+    // nothing at all. Worse than the wait: the trigger pull was **swallowed**. Pressing
+    // during the retract consumed the edge, and by the time the arm reached `Idle` the button
+    // was already held — `just_pressed` is an edge, so the arm sat there ready and did not
+    // fire until the player let go and pressed a *second* time.
+    //
+    // What is measured is that number: how many ticks pass between the trigger going down
+    // and a shot leaving. The acceptance is **≤ 1**.
+    let mut app = app();
+    let e = me(&mut app);
+    settle(&mut app);
+
+    // A long rope on purpose. At 500 m/s and 60 Hz the tip travels 8.33 m per tick, so a
+    // short rope would hide the lockout inside the rounding — the bug only shows at the
+    // ranges `game.ron` now allows (`hook_range_m: 500`).
+    let far = Vec3::new(0.0, 1.6, -180.0);
+    let body = put_body(&mut app, 90_020, Vec3::new(0.0, 1.6, -200.0), Vec3::splat(20.0));
+    aim_at(&mut app, e, far, body, true);
+    press(&mut app, Side::Left);
+    ticks_until_anchored(&mut app, e, Side::Left, 600);
+
+    let distance_m = (tip(&app, e, Side::Left) - hand(&app, e)).length();
+    let d = data(&app);
+    let lockout_ticks =
+        distance_m / d.game.vector.hook_retract_speed_m_s * d.game.simulation_hz as f32;
+    assert!(
+        lockout_ticks > 10.0,
+        "this test measures a lockout of {lockout_ticks:.1} ticks — too short to prove \
+         anything. Move the anchor further out."
+    );
+
+    // The release itself: one tick, `Anchored -> Retracting`. That tick is not the lockout,
+    // it is the release, and it is the one tick the acceptance allows.
+    let_go(&mut app, Side::Left);
+    app.update();
+    assert_eq!(arm_state(&app, e, Side::Left), HookState::Retracting);
+    assert!(
+        (tip(&app, e, Side::Left) - hand(&app, e)).length() > 20.0,
+        "the tip is already home — then there is no retract to cancel and the test proves \
+         nothing"
+    );
+
+    // A fresh target for the second shot, so that "it flew again" cannot be confused with
+    // "it never let go".
+    let near = Vec3::new(0.0, 1.6, -40.0);
+    let second = put_body(&mut app, 90_021, Vec3::new(0.0, 1.6, -50.0), Vec3::splat(10.0));
+    aim_at(&mut app, e, near, second, true);
+
+    // The trigger goes down on the very next tick and stays down — the way a player holds it.
+    press(&mut app, Side::Left);
+    let mut blocked = 0u64;
+    let mut flying = None;
+    for _ in 0..(lockout_ticks as u64 + 30) {
+        app.update();
+        if let HookState::Flying { target_m, body } = arm_state(&app, e, Side::Left) {
+            flying = Some((target_m, body));
+            break;
+        }
+        if arm_state(&app, e, Side::Left).is_anchored() {
+            panic!("the arm skipped `Flying` — a shot that never flies is not a shot");
+        }
+        blocked += 1;
+    }
+    let (target_m, on) = flying.unwrap_or_else(|| {
+        panic!(
+            "the trigger was held for {blocked} ticks and no shot left. The lockout is \
+             {lockout_ticks:.1} ticks long and it swallows the edge: the arm reaches `Idle` \
+             with the button already down, and `just_pressed` never comes back"
+        )
+    });
+    assert!(
+        blocked <= 1,
+        "{blocked} ticks passed between the trigger going down and the shot leaving \
+         (lockout: {lockout_ticks:.1} ticks). §1A requirement 1 allows 1"
+    );
+
+    // `B-001` — the state that flies still carries its carrier. A `Flying` without a `BodyId`
+    // is how a miss became a flight and cost this project a day.
+    assert_eq!(on, second, "the second shot flies at the second body");
+    assert!(
+        (target_m - near).length() < 1e-3,
+        "the refire kept the OLD target {target_m:?} instead of {near:?}"
+    );
+    // The retract was cancelled, not queued: the new flight starts in the hand, so its flight
+    // time is `distance / hook_speed_m_s` and nothing else.
+    assert!(
+        (tip(&app, e, Side::Left) - hand(&app, e)).length() <= d.game.vector.hook_speed_m_s
+            / d.game.simulation_hz as f32
+            + 1e-3,
+        "the second shot started at {:?}, which is not the hand {:?}",
+        tip(&app, e, Side::Left),
+        hand(&app, e)
+    );
+
+    // And the other half of the same rule: a refire that finds nothing anchorable must not
+    // strand the arm. It reports `NoAnchor` and keeps coming home.
+    ticks_until_anchored(&mut app, e, Side::Left, 600);
+    let_go(&mut app, Side::Left);
+    app.update();
+    assert_eq!(arm_state(&app, e, Side::Left), HookState::Retracting);
+    let before = app.world().resource::<HookLog>().released.len();
+    aim_at_nothing(&mut app, e);
+    press(&mut app, Side::Left);
+    app.update();
+    assert_eq!(
+        arm_state(&app, e, Side::Left),
+        HookState::Retracting,
+        "a refire at nothing turned the retract into something else"
+    );
+    let released = app.world().resource::<HookLog>().released.clone();
+    assert_eq!(released.len(), before + 1, "{released:?}");
+    assert_eq!(released[before].reason, ReleaseReason::NoAnchor);
 }
 
 // ---------------------------------------------------------------------------------------

@@ -32,7 +32,8 @@ use crate::mission::{KillTally, MissionPhase};
 // than a text line. Read-only, and the derivation stays `player`'s. See `docs/architecture.md`.
 use crate::player::{integrator::ground_top_speed_m_s, locomotion::in_flight};
 use crate::shared::{
-    MovementState, LookOverride, IntentSystems, Gas, Health, Hook, LocalPlayer, Mark, PlayerId,
+    MovementState, LookOverride, IntentSystems, Blades, Gas, Health, Hook, LocalPlayer, Mark,
+    PlayerId,
     StateClock, WarpPlayer, Cli, Velocity, Tick, TitanId, TitanKindName, TitanState, SpawnTitan,
 };
 use script::{Instruction, ScriptCommand, Metric};
@@ -235,6 +236,11 @@ pub struct DriverWorld<'w, 's> {
             // `warp`, `assert speed` and `assert gas` would all stop working at once, for a
             // reason nobody would look for here.
             Option<&'static Health>,
+            // Not an `Option`, for the same reason `Gas` above is not: `player::spawn_player`
+            // equips the harness on every player from tick 1. `shared::Blades` and not
+            // anything out of `blades/` — `debug -> blades` is not an edge the allow list of
+            // `docs/architecture.md` has, and this metric does not need one.
+            &'static Blades,
         ),
         With<LocalPlayer>,
     >,
@@ -400,8 +406,14 @@ fn measure(metric: Metric, world: &DriverWorld, tick: u64) -> Result<f32, &'stat
         // Always measurable: the state is registered in every launch mode, and "no mission" is
         // the honest answer `Briefing` (0), not a missing one.
         Metric::Phase => Ok(world.phase.get().code() as f32),
-        Metric::Speed | Metric::Height | Metric::Gas | Metric::Health | Metric::Rope => {
-            let (_, transform, gas, tempo, hook, health) =
+        Metric::Speed
+        | Metric::Height
+        | Metric::Gas
+        | Metric::Health
+        | Metric::Rope
+        | Metric::Blades
+        | Metric::Sharpness => {
+            let (_, transform, gas, tempo, hook, health, blades) =
                 world.players.iter().next().ok_or(NO_PLAYER)?;
             match metric {
                 Metric::Height => Ok(transform.translation.y),
@@ -416,6 +428,13 @@ fn measure(metric: Metric, world: &DriverWorld, tick: u64) -> Result<f32, &'stat
                 // player at zero health, it is a player nobody has measured — and it is not a
                 // missing player either, which is what this used to say.
                 Metric::Health => health.map(|h| h.current).ok_or(NO_HEALTH),
+                // The harness, straight off `shared::Blades` — the same component `hud` draws
+                // its pips from, and not a second count kept here. Nothing lowers either number
+                // yet (`docs/FINDINGS.md` FIND-075), which is a fact about the game and not
+                // about the metric: what a script writes with it goes red the day the rack
+                // stops working, and that is what an evidence line is for.
+                Metric::Blades => Ok(f32::from(blades.pairs_left)),
+                Metric::Sharpness => Ok(blades.sharpness),
                 Metric::Titans | Metric::Tick | Metric::Kills | Metric::Phase => {
                     unreachable!("handled above")
                 }

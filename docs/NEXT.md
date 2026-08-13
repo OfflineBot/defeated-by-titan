@@ -710,3 +710,174 @@ not just the picture re-shot.
 
 ⚠️ Do this **after** the district rebuild settles (`NEXT.md` §5d — heights and separation are being
 changed right now). Retaking them against a map that is about to change again is wasted work.
+
+## 1A. ⚠️ THE HOOK/BOOST SPEC, 2026-08-12 — verbatim, and it overrules several of my decisions
+
+> *"wenn ich mit seilen festhake (was instant sein soll) und w in die richtung drücke will ich dass
+> man deutlich mehr geboosted wird. also dass man dort richtig hingezogen wird. wenn man aber a oder
+> d drückt wird nach links/rechts geboostet! wenn man zur seite schaut soll die steuerung mitdrehen.
+> also wenn ich 45 grad nach links und w drücke dann etwas eingezogen aber auch boost zur seite.
+> aktuell wenn ich seil spanne und s drücke werde ich stark zum seil gezogen! das soll nicht sein!
+> und das seil muss deutlich deutlich schneller gespannt werden. nicht frame perfekt aber mit ca
+> 500m pro sekunde. mit der range 500 meter! aber man soll sehen wie es aufspannt! und es muss mehr
+> rechts und links spreaden!! (mit mausrad soll man einstellen können wie weit auseinander es gehen
+> darf!) und da wo das seil am ende auch landet soll die markierung hin vom seil, dass man direkt
+> sieht wo man sich connected! das ist wichtig. und dann muss das seil auch dahin!!"*
+
+**Nine requirements, and three of them are corrections of mine:**
+
+| # | requirement | today | note |
+|---|---|---|---|
+| 1 | hooking is **instant** | `hook_speed_m_s: 160`, up to 1.25 s of flight | but see 3 |
+| 2 | **range 500 m** | `hook_range_m: 200` (`Q-035`) | ⚠️ forces `world.half_extent_m` ≥ 400 + 500 = **900** |
+| 3 | rope deploys at **~500 m/s**, *"nicht frame perfekt … aber man soll sehen wie es aufspannt"* | 160 m/s | **1 s at full range — visible, not instant.** 1 and 3 together mean *fast enough to feel instant, slow enough to see* |
+| 4 | **`W` pulls you hard toward the anchor** | `air_accel_m_s2: 10.0`, look-relative | *"dass man dort richtig hingezogen wird"* — much stronger |
+| 5 | **`A`/`D` boost left/right** | lateral air control exists at 10 m/s² | needs to be a *boost*, not a nudge |
+| 6 | **the controls rotate with the look**: 45° left + `W` = partly reel, partly side-boost | W is look-relative already; the *reel* component is not | this is the mixing rule |
+| 7 | 🔴 **`S` must NOT pull you to the rope** | **`S` is a second binding for `REEL_IN` — I added it** | my error: I read *"mit s spannt man nur das seil"* as reel-in. **"Spannen" = keep taut, not haul in.** |
+| 8 | the two ropes **spread further left/right**, **mouse wheel** sets how far | both arms share ONE `AimPoint` (`FIND-039`) | this IS backlog **F-023**'s hemisphere split, confirmed by the user |
+| 9 | 🔴 **the marker shows where the rope will actually land, and the rope goes there** | markers are **fixed screen badges that never move** (`FIND-047`) | *"das ist wichtig"* |
+
+**8 and 9 are one feature**: per-arm aim (`F-021` discrete anchors + `F-023` hemispheres + `F-026`
+the two markers), all ⬜, all in `vector`. The `ArmAim` carrier in `shared` was already designed for
+it (`FIND-039`).
+
+⚠️ **Cost of requirement 2, measure before committing:** `half_extent_m` 600 → 900 makes the index
+grid 1800 × 1800 m at `cell_m: 8.0` = **50 625 cells against 22 500 — 2.25×**. And
+`tests/data.rs`'s flight-time guard is `range / speed ≤ 1.5 s`; 500/500 = 1.0 s passes.
+
+## 1B. THE EXECUTION PLAN for §1A — designed 3 ways, judged 9 ways, 2026-08-13
+
+Produced by a design workflow (4 recon readers → 3 independent designs → 9 adversarial judgements
+→ one plan). **W1 lands first and ALONE** — it freezes the key names; W2–W5 then run in parallel
+with exclusive file ownership.
+
+| # | item | files owned (exclusive) | acceptance number |
+|---|---|---|---|
+| **W1** | data, schema, guards | `game.ron` · `scale.ron` · `src/data/mod.rs` · `tests/data.rs` | `cargo test --test data` 0 failed · headless ashgate 900 ticks, mean frame time regression **≤ +10 %** |
+| **W2** | R7 (`S` never reels) + wheel→spread | `src/net/local.rs` · `src/shared/intent.rs` · `tests/input.rs` · `tests/multiplayer.rs` | `S` held 120 ticks on a taut rope: Δdistance **≥ −0.05 m** (today ≈ **−56 m**) · 17 notches span 10°→44° |
+| **W3** | instant refire + three rays + per-side `AimPoint` | `src/vector/aim.rs` · `src/vector/hook.rs` · `src/shared/gear.rs` · `tests/vector_aiming.rs` · `tests/vector_hooks.rs` | blocked ticks after release **≤ 1** (today up to 100) · at 28°/100 m the two side points are **≥ 45 m** apart · a side ray that finds nothing **falls back to the centre ray** |
+| **W4** | the mixing rule + its gas bill | `src/player/locomotion.rs` · `src/vector/gas.rs` · `tests/player.rs` · `tests/vector_gas.rs` | 0°: **40.0 ± 0.5 m/s²** · 45°: radial **28.3**, tangential **7.1** · 90°: radial **0 ± 0.05** · unhooked: **bit-identical** to today |
+| **W5** | marker = firing point | `src/hud/arm_aim.rs` · `src/hud/crosshair.rs` · `tests/hud.rs` | `|marker target − fired target| == 0` exactly · both glyphs **≥ 145 px** from centre x (keep-out edge 128) |
+
+**New RON keys** (all `⚠️ UNTUNED`, all guarded, none with `serde(default)`):
+`hook_range_m 200→500` · `anchor_range_m 200→500` · `hook_speed_m_s 160→500` ·
+`hook_retract_speed_m_s 120→500` (**new guard** `range/retract ≤ 1.0 s`) · `world.half_extent_m 600→900` ·
+`aim_spread_deg 28.0` (min 10, max 44, step 2) · `player.air_pull_m_s2 30.0` ·
+`player.air_lateral_m_s2 18.0` · `player.air_pull_fade_m 12.0` · `vector.gas_steer_per_s 16.0` ·
+`gas_priority` gains `Steer`. **`cell_m` stays 8.0** — `game.ron` says that lever is measured before
+it is touched, and we have no measurement.
+
+### The mixing rule, explicit
+
+```
+h = translation + Y·eye_height_m ;  per anchored arm i: r̂ᵢ = unit(tipᵢ − h), Lᵢ = |tipᵢ − h|
+w⁺ = max(0, move_y)   mx = move_x   l̂ = look_dir()   ê_right = (cos yaw, 0, −sin yaw)   n = anchored
+cᵢ = max(0, l̂ · r̂ᵢ)                                    // cosine projection, NOT nlerp (FIND-046)
+fᵢ = clamp((Lᵢ − min_rope_m) / air_pull_fade_m, 0, 1)   // W lets go before FIND-035's cliff
+
+look = clamp_len₁( l̂·w⁺ + ê_right·mx ) · air_accel_m_s2 · (gas empty ? air_accel_empty_fraction : 1)
+rope = [ (1/n)·Σᵢ r̂ᵢ·air_pull_m_s2·w⁺·cᵢ·fᵢ + ê_right·air_lateral_m_s2·mx ]  if n>0 && grant.steer
+a    = look + rope                                      // additive; the pull is OUTSIDE clamp_len₁
+```
+
+**Three judge-forced corrections, each a trap this project has already paid for once:**
+1. **cosine projection, not `nlerp`** — `nlerp` is `FIND-046`'s 90°-off-look bug;
+2. **per-arm `r̂ᵢ`, never the mean** — two opposed ropes average to zero and degenerate;
+3. **`A`/`D` on the horizontal `ê_right`, not the rope tangent** — a tangent **flips sign** when the
+   anchor passes beside you, inverting the strafe mid-swing.
+
+**All nine judges named the same biggest flaw: the new thrust was free.** It is now a fourth
+`GasConsumer::Steer` at 16/s, priced so 16/30 ≈ boost's 18/34 — the same gas per m/s the player
+already pays. On an empty tank the look term halves as today and **the rope term is zero**.
+
+⚠️ **The wheel carries an ABSOLUTE angle, not a delta** — a delta desyncs over the network and never
+re-converges (rule 4).
+
+## 1C. Three loose ends from W1–W4 (2026-08-13) — small, and one is a real bill
+
+1. 🔴 **A grounded player is billed for thrust he does not get.** `wants_steer` is
+   `n>0 && (w⁺>0 || mx≠0)` with **no flight-state term**, so standing on the ground with a hook in a
+   wall and holding `W` costs **16 gas/s** while `air_control` produces nothing (it only runs above
+   the ground top speed). Implemented as the spec was written, flagged rather than silently fixed
+   (`FIND-085` §3). **The repair needs `vector → player`** (to read `locomotion::in_flight`) — an
+   allow-list edge, i.e. a decision. The alternative is to move the want into `player`, which
+   already knows the flight state.
+2. **`GasGrant` crossed three ownership lines.** `Steer` needed five files, not the three
+   `FIND-082` predicted: `GasGrant` lives in `src/shared/gear.rs` (W3's, and live at the time),
+   `tests/data.rs` asserted `len() == 3`, `tests/vector_boost.rs` builds `Wants`/`Costs` literally.
+   ⚠️ **Verify at the gate that `pub steer: bool` survived W3's concurrent edits to `gear.rs`.**
+3. **My commission contradicted its own formula and W4 caught it.** The acceptance bullet said
+   "pull == 0 while `L ≤ min_rope_m + air_pull_fade_m`"; the formula
+   `f = clamp((L−min_rope)/fade,0,1)` is 0 **at** `min_rope_m` and **1** at `min_rope_m + fade`.
+   The literal bullet would have killed the pull across the whole 5–15 m arc a swing lives in.
+   The formula won, both ends are pinned by a test, and `game.ron`'s own comment ("full strength at
+   15 m, zero at 3 m") independently agrees. **No action — recorded so nobody "fixes" it back.**
+
+## 1D. ⚠️ THE CITY + SHELL SPEC, 2026-08-13 — verbatim, and item 10 reverses a founding decision
+
+> *"dann implementiere sinnvollere 3d modelle und adde verschiedene höhen vom boden her! lass es wie
+> die echte stadt aussehen! aktuell kann man es noch nicht erkennen! es sind random türme da die
+> nicht so sein sollte. also nicht wie im anime! bitte geh nochmal komplett drüber! zudem fehlen
+> settings. menu (also bei escape) und eine main lobby in der man die mission starten kann und auch
+> ein attack system mit gegnern! und es ist extrem wichtig dass man wirklich überall sein seil
+> festmachen kann. also überall! das ist wichtig! ohne ausnahmen!"*
+
+| # | requirement | today |
+|---|---|---|
+| 1 | **sensible 3D models** | every visible thing is an untextured cuboid; `art.ron` can load glTF but **no `.glb` exists** |
+| 2 | **varied ground heights** | the ground is **one flat slab**, `(0,−0.1,0) 400×0.2×400`. There is no terrain at all |
+| 3 | **"look like the real city — you can't recognise it yet"** | dense blocks, flat roofs, orthogonal grid |
+| 4 | 🔴 **"random towers that should not be there — not like the anime"** | the **58 m swing gantries**. He has now rejected them outright — `Q-036` is answered by deletion, not by a height number |
+| 5 | **go over the whole thing again** | — |
+| 6 | **settings** | do not exist |
+| 7 | **menu on Escape** | Escape pauses with Resume/Quit only |
+| 8 | **main lobby to start the mission** | the hub exists as a place; there is no menu/lobby UI |
+| 9 | **attack system with enemies** | one husk kind, one telegraphed strike, no variety |
+| 10 | 🔴🔴 **"you must be able to hook EVERYWHERE. without exception."** | **the opposite is a founding rule** |
+
+### Item 10 is the one that changes the most, and it must not be done carelessly
+
+`F-003` is *"Getaggte Ankerflaechen"* — **tagged** anchor surfaces — and `anchorable: false` is load
+bearing in at least five places: the ground slab (*"otherwise you hook into the ground slabs"*), the
+canal, the gate columns (`FIND-042`: an anchor over solid ground ends a swing inside the thing you
+hang from), interior faces, and the untagged wall in `tests/vector_aiming.rs` that proves the aim ray
+does not shoot through geometry.
+**The user has now overruled that.** Everything is hookable, no exceptions.
+**What has to be re-decided, not just flipped:**
+- `F-003`'s whole acceptance sentence ("no hook on untagged parts") is void — the row needs rewriting,
+  not a stage change;
+- `tests/vector_aiming.rs::f002_an_untagged_wall_in_front_of_a_roof_is_not_hookable_and_not_transparent`
+  asserts the old rule. **The transparency half must survive** (a ray must still not pass *through*
+  a wall) even though the hookability half dies;
+- the **ground** becomes hookable — measure what that does to a player who fires at the pavement;
+- `maps.ron`'s `anchorable_fraction` and the whole tagging vocabulary stop meaning anything.
+
+**Item 4 answers `Q-036` by deletion.** The gantries came from `FIND-058`/`FIND-041` (`d < H`, an
+anchor must stand over open ground). Removing them without replacing the traversal they carry puts
+the district back to `FIND-026`'s dead rope — **unless item 10 changes the arithmetic**, which is
+exactly what has to be measured before they come out.
+
+### ⚠️ Item 10 CLARIFIED by the user, 2026-08-13, minutes later — the check stays
+
+> *"es soll später auch stark vereinzelt dinge geben die man nicht anchorn kann. aber sehr wenig!
+> also kann der check drin bleiben"*
+
+**So it is a DEFAULT FLIP, not a mechanism removal.** `anchorable` stays as a flag, the aim ray's
+filtered cast stays, `F-003`'s machinery stays — what changes is that **anchorable becomes the
+default and `false` becomes a rare, deliberate exception.**
+
+That is strictly safer than the first reading and it removes three of the four risks §1D listed:
+- the **transparency guarantee** needs no special handling — the filtered cast is untouched, so a ray
+  still cannot pass *through* a wall;
+- `tests/vector_aiming.rs::f002_an_untagged_wall_in_front_of_a_roof_is_not_hookable_and_not_transparent`
+  keeps **both** halves; it just needs a surface that is still deliberately untagged to point at;
+- `F-003`'s acceptance sentence survives — "no hook on untagged parts" is still true, there are simply
+  far fewer untagged parts.
+
+**What actually has to happen:** invert the default in `maps.ron` (and in the generator, which sets
+`anchorable_fraction` — that key's meaning changes from "how much is hookable" to nearly 1.0), then
+go through the current `anchorable: false` blocks one at a time and justify each survivor. The ones
+with a real reason are the **ground slab** (hooking the pavement under your feet) and the **canal
+bed**; the gate columns' reason (`FIND-042`) dies with the gantries if those are deleted.
+**Rare exceptions are a design tool, not an oversight — each survivor gets a comment saying why.**

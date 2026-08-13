@@ -48,6 +48,15 @@
         // slightly cooler than `stone_gray`, so a roof reads as a roof at speed and against
         // a sand-brown street. **Not a signal colour**: those three are gameplay only.
         "roof_slate": (0.24, 0.23, 0.24),
+        // Added 2026-08-13 for the interior lamps (`lights` below). It is the only entry
+        // here that is not an albedo but an **emission tint** — a lamp is warm, the way the
+        // sun is warm (`art.ron: sun.color = (1.0, 0.945, 0.86)`), only a stop further, so
+        // that a lit interior reads warm against the cool sky-blue fill. It lives in the
+        // palette and not as a triple on the light for one reason: the rule "the three
+        // signal colours appear nowhere else" is only a TEST as long as every colour in the
+        // map is a key, and an amber lantern is the exact thing that rule was written
+        // against. **Not amber** — amber is (1.0, 0.68, 0.10) and this is a warm white.
+        "lamp_warm": (1.0, 0.90, 0.78),
     },
 
     // The three signal colors, linear RGB. Until 2026-08-09 they existed only as PROSE
@@ -300,6 +309,12 @@
                 (center_m: (140.0, 28.0, 84.0), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
                 (center_m: (140.0, 58.0, 70.0), size_m: (8.0, 4.0, 36.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
             ],
+
+            // The graybox has no interiors — every box in it is solid, there is nothing to
+            // walk into and therefore nothing to light. **The empty list is the statement.**
+            // The field carries no `serde(default)` (rule 2), so leaving it out is a load
+            // error and not a silently dark room.
+            lights: [],
         ),
 
         // ================================================================================
@@ -937,15 +952,93 @@
                 (center_m: (-38.0, 5.0, 8.0), size_m: (2.0, 10.0, 2.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
                 (center_m: (-24.0, 5.0, 8.0), size_m: (2.0, 10.0, 2.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
                 // ---- The resupply, inside, against the back wall -----------------------
-                // ⚠️ **Furniture, not stations.** These two racks are what the player walks up
+                // ⚠️ **Furniture, not stations.** These racks are what the player walks up
                 // to; the `RefuelStation` entities that make them work are wired in
                 // `src/mission/hub.rs` out of `missions.ron: hub.refuel_stations`, and that is a
                 // separate hand. The coordinates they should take stand in `missions.ron` next
                 // to the three that are still out on the pavement.
-                // gas tanks, south of the aisle
-                (center_m: (-42.0, 0.75, -6.5), size_m: (5.0, 1.2, 9.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
-                // blades, north of it
-                (center_m: (-42.0, 0.75, 6.5), size_m: (5.0, 1.2, 9.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
+                //
+                // ## ⭐ Two footprints, two SILHOUETTES — and why that is the whole fix
+                //
+                // Until 2026-08-13 both of them were literally the same line twice:
+                // `size_m: (5, 1.2, 9), color: "brick_red"`. `FIND-080` lit the room and then
+                // measured what the light could not buy: *"yes for 'those are boxes and they are
+                // furniture', still no for 'that one is gas, that one is blades'"* — and the
+                // pixels agreed, the two racks came out **identical to the level: 92.8 / 92.8,
+                // 0.0 sRGB levels and 0.0 degrees of hue apart** (`f019-hq-racks-before.png`,
+                // tick 592, mid-aisle looking west).
+                //
+                // ⚠️ **Colour is scarce here and shape is free.** The three signal colours
+                // (cyan, amber, crimson) are gameplay only — a cyan gas rack is exactly the
+                // "no cyan set dressing" rule this file keeps in two blocks so it can be a test
+                // — and the palette holds five hues for the whole district. But every object in
+                // this world is a cuboid, so a second cuboid costs nothing: **a row of fat
+                // drums is not a row of thin plates**, at any distance, in any light, and for a
+                // colour-blind player too.
+                //
+                // ⚠️ **The FOOTPRINTS are unchanged** — x = -44.5 .. -39.5, z = -11..-2 and
+                // 2..11, and both bases still cover the whole 5 x 9 m at floor level. That is
+                // deliberate: `missions.ron: hub.refuel_stations` puts the two triggers on the
+                // AISLE FACES at (-42, 0.15, -+2), and `tests/mission.rs`
+                // ::f019_a_supply_station_has_floor_you_can_actually_stand_on_inside_its_reach
+                // scans standable 0.25 m cells against these solids. Nothing here moved in x or
+                // z and nothing changed what a foot can stand on; only what an eye sees.
+                //
+                // ⚠️ **The face you build for is the +X face, not the +Z one.** The aisle runs
+                // in X and both bays sit at its western end, so a player walking in sees the
+                // 9 m long `+X` side of each — that is the two low bands in the "before" shot.
+                // The first attempt gave the blades `size_m: (0.16, 1.5, 0.9)`, thin in X, and
+                // they came out as six 0.9 m LOCKER DOORS: from the aisle you see the (y, z)
+                // face, so **z is the width on screen and x is only the thickness**.
+                //
+                // ---- GAS, south of the aisle: four bottles on a skid ------------------
+                // The Vector Gear's tanks. Fat, upright, repeated, wide-spaced — and each one
+                // carries a narrower `stone_gray` collar on top, because a body plus a neck is
+                // what makes a cuboid read as a pressure bottle instead of a crate.
+                // `olive_green` is the only hue in the palette that is neither the stone of the
+                // hall nor the wood of the bench opposite, and it is not a signal colour.
+                //
+                // The skid carries the floor footprint (0.15 .. 0.45 m); the bottles stand on
+                // it and reach 2.60 m, so a 1.75 m eye looks UP at them.
+                (center_m: (-42.0, 0.30, -6.5), size_m: (5.0, 0.3, 9.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                // 2.4 m pitch, 1.3 m bottle: 1.1 m of air between each pair, and the row runs
+                // the full 9 m of the bay. The nearest one stops at z = -2.25, clear of the
+                // aisle and of the station trigger that sits on the face at z = -2.
+                (center_m: (-42.0, 1.35, -10.1), size_m: (1.3, 1.8, 1.3), color: "olive_green", anchorable: false, solid: true, landmark: false),
+                (center_m: (-42.0, 1.35,  -7.7), size_m: (1.3, 1.8, 1.3), color: "olive_green", anchorable: false, solid: true, landmark: false),
+                (center_m: (-42.0, 1.35,  -5.3), size_m: (1.3, 1.8, 1.3), color: "olive_green", anchorable: false, solid: true, landmark: false),
+                (center_m: (-42.0, 1.35,  -2.9), size_m: (1.3, 1.8, 1.3), color: "olive_green", anchorable: false, solid: true, landmark: false),
+                // the collars — 0.5 m on a 1.3 m body, sitting ON it at 2.25 m and not in it.
+                (center_m: (-42.0, 2.425, -10.1), size_m: (0.5, 0.35, 0.5), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-42.0, 2.425,  -7.7), size_m: (0.5, 0.35, 0.5), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-42.0, 2.425,  -5.3), size_m: (0.5, 0.35, 0.5), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-42.0, 2.425,  -2.9), size_m: (0.5, 0.35, 0.5), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                //
+                // ---- BLADES, north of it: a bench, a back panel, five pairs -----------
+                // The opposite reading in every axis: LOW where the gas is tall, MANY and THIN
+                // where the gas is four fat bodies, PALE where the gas is dark. A blade is
+                // 0.20 m of width and 1.3 m of height seen from the aisle — 1:6.5, which is a blade
+                // and not a plank (0.35 x 0.9 was tried and read as a shelf board)
+                // nobody mistakes it for a door, and they stand in **pairs**, 0.15 m apart,
+                // because a Vector Gear carries two (`gear.ron: blades.start_pairs` is 5, and
+                // that is exactly how many pairs hang here).
+                (center_m: (-42.0, 0.55, 6.5), size_m: (5.0, 0.8, 9.0), color: "sand_brown", anchorable: false, solid: true, landmark: false),
+                // the panel stands ON the bench (0.95 .. 2.55 m), not through it — a coincident
+                // face inside another box is a z-fight, and the two share the x = -44.5 plane.
+                // Dark, because the blades in front of it are the pale thing.
+                (center_m: (-44.2, 1.75, 6.5), size_m: (0.6, 1.6, 9.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
+                // ten blades = five pairs. 0.30 m inside a pair, 1.8 m from pair to pair, and
+                // 0.125 m of air between the blades and the panel behind them.
+                (center_m: (-43.75, 1.60,  2.75), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-43.75, 1.60,  3.05), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-43.75, 1.60,  4.55), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-43.75, 1.60,  4.85), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-43.75, 1.60,  6.35), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-43.75, 1.60,  6.65), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-43.75, 1.60,  8.15), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-43.75, 1.60,  8.45), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-43.75, 1.60,  9.95), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-43.75, 1.60, 10.25), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
 
                 // ---- Deleted 2026-08-12: the hand-placed row housing and the pocket ----
                 // 75 detached boxes stood here — a 20 m pitch along the main street and a
@@ -960,6 +1053,71 @@
                 // something standing on its centre is a lie in the map, and
                 // `tests/world.rs::f003_no_anchorable_block_has_another_block_sitting_on_its_roof_centre`
                 // now says so out loud.
+            ],
+
+            // ================================================================================
+            // THE LAMPS IN THE GARRISON HALL — the one interior in this map, and the reason
+            // this list exists at all
+            // ================================================================================
+            //
+            // The user, 2026-08-12: „auch das main gebäude in dem der gas und schwert nachschub
+            // ist muss da sein (in das gebäude muss man rein laufen können. drinnen sind die
+            // nachschübe)". You can walk in — `scripts/f019-hq.txt` proves it with 13 asserts —
+            // and until today you could not SEE what was in there.
+            //
+            // `docs/FINDINGS.md` FIND-078 measured why, and the answer was not "it is dark":
+            // the hall's back wall read 51.9 and an EXTERIOR wall in shadow read 51.5 in the
+            // same frame. A roofed room is not darker than a shadow; it has nothing bright to
+            // read against. Ambient cannot fix that — 5x the fill buys 5.8 sRGB levels, costs
+            // the exterior its shadows 1:1, and at 12000 the racks are still flat rectangles,
+            // because a directionless fill gives nothing a lit face and a dark one.
+            //
+            // ## The geometry these two numbers are derived from
+            //
+            //   hall interior   x = -45.5 .. -16.5   z = -11.5 .. 11.5   floor 0.15, ceiling 10
+            //   gate            x = -16.5 .. -15     z = -3 .. 3         4.5 m to the lintel
+            //   the racks       x = -44.5 .. -39.5   z = -11..-2 and 2..11, 1.35 m tall
+            //   the aisle       z = -3 .. 3, clear from the door to the back wall
+            //
+            // Both lamps hang at **y = 8.5** — 1.5 m under the roof slab, over the aisle at
+            // z = 0, so each rack is lit from ABOVE AND FROM THE SIDE. That is the whole point:
+            // the top face and the aisle flank come up, the outboard flank stays on the fill,
+            // and a box with two values is a shape instead of a rectangle.
+            //
+            // ## ⚠️ Why this does not brighten one pixel of the district
+            //
+            // A point light without shadows is unoccluded — it reaches every fragment inside
+            // `range_m`, wall or no wall. It is **Lambert** that contains it, not the wall: the
+            // OUTER face of every wall of this hall points away from a lamp inside it, so
+            // `NdotL <= 0` and it takes nothing at any range. The faces that could leak are the
+            // ones pointing UP — street, aprons, quays — and `range_m` is what keeps those out,
+            // because Bevy's attenuation `(1 - (d/r)^4)^2 / d^2` is a HARD cut-off at d = r.
+            //
+            // Measured against every one of the 232 placed blocks of this map: the nearest
+            // exterior surface that faces either lamp at all is the ground slab's top at y = 0
+            // directly beneath it — and that is buried under the hall's own 0.3 m floor. The
+            // nearest exterior surface anyone can SEE is the street apron at x = -15:
+            //   lamp east  d = 14.68 m  vs range 11.0   (3.7 m of margin)
+            //   lamp west  d = 23.6 m   vs range 14.0   (9.6 m of margin)
+            //
+            // ## ⚠️ `shadows: false`, and that is the measured choice
+            //
+            // A shadow-casting point light costs a CUBE map: six depth passes over everything
+            // in range, per light, per frame (`docs/lessons/performance.md` rule 5 — the switch
+            // that is never thrown without a number). The hall holds four posts and two racks
+            // and no occluder whose shadow carries information; the racks shade their own far
+            // side by Lambert alone, which is the cue that was missing. Two shadowless lamps
+            // measured 0.0 ms against the same scene without them.
+            lights: [
+                // WEST — over the aisle between the two racks. This is the lamp that makes the
+                // back of the hall the bright thing the racks read against, and that puts a lit
+                // top edge on each of them.
+                (center_m: (-37.0, 8.5, 0.0), color: "lamp_warm", intensity_lm: 35000000.0, range_m: 14.0, shadows: false),
+                // EAST — over the walk in from the gate, so the floor ahead of a player who
+                // steps through the door is lit and the room has depth instead of one far wall.
+                // Its range is the tighter of the two only because it stands 12 m from the
+                // door: 11.0 keeps the sphere off the street apron with 3.7 m to spare.
+                (center_m: (-27.0, 8.5, 0.0), color: "lamp_warm", intensity_lm: 35000000.0, range_m: 11.0, shadows: false),
             ],
         ),
     },

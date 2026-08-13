@@ -1166,3 +1166,45 @@ yours (`scale.ron` header: *"NOT untuned — it is given by the user"*).
 **What would have to be rolled back if you say no:** nothing. The map works and is 🟧 for geometry.
 The gantries stay, the skyline stays flat, and the district keeps a piece of game furniture down its
 main axis.
+
+## Q-037 — On the last drop of gas: does `Shift` win, or does `W` on the rope? (2026-08-13, W4)
+
+The mixing rule (`docs/NEXT.md` §1B) gave the rope its own thrust, and every one of the nine
+judges of that plan said the same thing independently: **it must not be free.** So there is now a
+fourth `GasConsumer::Steer` at `vector.gas_steer_per_s: 16.0` — the boost's own price per m/s of
+speed bought (16/30 against 18/34, `tests/data.rs` pins the difference at ≤ 0.15).
+
+That creates a question the first three consumers never had. `Boost` and `Steer` are **both
+rates, both wanted on the very same tick** of a swing — `Shift` held while `W` is held on a taut
+rope is the ordinary case, not an edge one. On a nearly empty tank `vector.gas_priority` decides
+which of the two the last drop buys, and the Dodge argument (*"being served last costs a dodge
+0.9 % of its own price"*) does not transfer at all: here the two prices are 0.30 and 0.27 per
+tick, so whoever stands second gets nothing on the tick the tank runs out.
+
+`Q-017` is the same shape and you answered it by leaving `Boost` first. This is that answer's
+next-door neighbour, and it is yours for the same reason: **what runs out first is balancing, not
+mechanism.**
+
+**ASSUMPTION:** `gas_priority: [Boost, Steer, ReelIn, Dodge]` — `Steer` is **inserted second**,
+after `Boost`. The reasoning, so you can disagree with it precisely: `Shift` is a **deliberate
+press** that means *"I need speed NOW"*, while `W`/`A`/`D` on a rope is held almost continuously
+during flight. If `Steer` came first, the ambient input would quietly eat the drop the explicit
+one asked for — and a `Shift` that does nothing reads as a broken game, where a rope pull that
+fades out for one tick reads as an empty tank, which is what it is.
+
+**What has to be rolled back if you decide otherwise:** exactly one line,
+`assets/data/game.ron: vector.gas_priority`. Nothing in the code knows the order —
+`vector::gas::book` walks the list and `src/vector/gas.rs`'s
+`f006_the_file_decides_whether_the_last_drop_boosts_or_steers` drives **both** orders on purpose,
+so moving `Steer` in front of `Boost` changes one array and no test has to be rewritten.
+`tests/data.rs::t005_gas_priority_names_every_consumer_exactly_once` only counts, it does not
+order.
+
+**Why it matters today, and not in a month:** the tank is 300 and there is still no refuel
+station outside the hub. 16/s of steering means 18.75 s of held `W` on a rope — a little longer
+than the boost's 16.67 s — so on a long traversal the two really do meet at the bottom of the
+tank, and the last drop is a decision somebody made. Right now that somebody is me.
+
+**Also still yours, and cheaper:** `gas_steer_per_s: 16.0` itself is ⚠️ UNTUNED. It was solved
+out of a ratio, not felt in a swing. If flying ends up feeling stingy, this key is the first
+place to look — and it moves without touching a line of Rust.

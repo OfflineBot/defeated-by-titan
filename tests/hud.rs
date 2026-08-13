@@ -995,27 +995,31 @@ fn f171_the_two_arm_markers_differ_in_shape_not_only_in_colour() {
 
 #[test]
 fn f171_the_two_markers_come_apart_when_the_two_arms_do() {
-    // ★ **The one with teeth.** Today both hooks fly at the one `AimPoint` the camera ray
-    // produced — `vector::hook::update_hooks` reads it once and gives it to both arms — so a
-    // preview that put them on two different world points would be drawing a mechanic the
-    // simulation does not have (`docs/backlog/gameplay.ron` F-023's hemispheres are ⬜).
+    // ★ **The one with teeth.** ⚠️ Rewritten 2026-08-13: until W3 both hooks flew at the one
+    // centre `AimPoint`, and this test said so in its own header. That is no longer true —
+    // `vector::aim` casts a side ray per arm and `vector::hook` fires at `ArmAim::side(side)`,
+    // so the two arms have their own aim point AND their own state. The stale sentence was
+    // itself the danger `docs/NEXT.md` §1B W5 names: a comment that certifies a mechanic the
+    // code has since grown out of.
     //
-    // What is true is that the two arms have their own STATE. This test is the proof that the
-    // markers are wired to that state per arm and not to one shared value: one arm anchors, the
-    // other stays idle, and the two markers have to say two different things.
+    // What this one still owns is the STATE half: one arm anchors, the other stays idle, and
+    // the two markers have to say two different things. The aim half is
+    // `f026_the_marker_stands_exactly_where_that_arm_fires` below.
     let mut app = app();
     attach_screen(&mut app);
     // The aim answer is pinned, and it has to be: `app()` runs two `app.update()`s, a fixed step
     // can fall inside them depending on how busy the machine is, and then `vector::aim` writes a
-    // real raycast into `AimPoint` underneath the test. Measured on 2026-08-10: this test passes
+    // real raycast into `ArmAim` underneath the test. Measured on 2026-08-10: this test passes
     // alone and fails in a full `--test hud` run without this line. What is under test here is
-    // the arm STATE, so the shared aim answer is held still.
+    // the arm STATE, so the aim answer is held still — **both** components, because the marker
+    // reads the per-arm one and the crosshair next door still reads the centre.
     {
-        use defeated_by_titan::shared::AimPoint;
+        use defeated_by_titan::shared::{AimPoint, ArmAim};
         let player = local_player(&mut app);
         app.world_mut()
             .entity_mut(player)
-            .insert(AimPoint { point_m: None, body: None, anchorable: false });
+            .insert(AimPoint { point_m: None, body: None, anchorable: false })
+            .insert(ArmAim::default());
     }
 
     set_arm(&mut app, Side::Left, HookState::Anchored { body: BodyId(1), local_m: Vec3::ZERO });
@@ -1060,28 +1064,33 @@ fn f171_the_two_markers_come_apart_when_the_two_arms_do() {
 #[test]
 fn f171_the_arm_markers_read_the_aim_point() {
     // The other half of the wiring: with both arms idle the shape is decided by
-    // `AimPoint::anchorable`, which `vector::aim` writes. Goes red when somebody leaves the
-    // system registered and empties its body — the failure this repo has already had once.
-    use defeated_by_titan::shared::AimPoint;
+    // `anchorable` — **per arm**, out of `ArmAim`, since W3. Goes red when somebody leaves the
+    // system registered and empties its body, and red as well if the two arms are ever fed one
+    // shared answer again: the third row asks for `Q` ready and `E` free at the same time,
+    // which the shared `AimPoint` could not express at all.
+    use defeated_by_titan::shared::{AimPoint, ArmAim};
     let mut app = app();
     let player = local_player(&mut app);
 
-    for (anchorable, expected) in
-        [(false, ArmAimState::Free), (true, ArmAimState::Ready), (false, ArmAimState::Free)]
-    {
-        app.world_mut().entity_mut(player).insert(AimPoint {
-            point_m: Some(Vec3::new(0.0, 1.6, -10.0)),
-            body: Some(BodyId(1)),
-            anchorable,
-        });
+    let point = |anchorable: bool| AimPoint {
+        point_m: Some(Vec3::new(0.0, 1.6, -10.0)),
+        body: Some(BodyId(1)),
+        anchorable,
+    };
+    for (left_ok, right_ok) in [(false, false), (true, true), (true, false), (false, true)] {
+        app.world_mut()
+            .entity_mut(player)
+            .insert(ArmAim { arms: [point(left_ok), point(right_ok)] });
         app.world_mut()
             .run_system_once(arm_aim::sense_arm_aim)
             .expect("the one-shot system runs");
-        for side in Side::ALL {
+        for (side, ok) in [(Side::Left, left_ok), (Side::Right, right_ok)] {
+            let expected = if ok { ArmAimState::Ready } else { ArmAimState::Free };
             assert_eq!(
                 arm_state(&mut app, side),
                 expected,
-                "with `anchorable: {anchorable}` the {side:?} marker has to be {expected:?}"
+                "with `anchorable: {ok}` on that arm the {side:?} marker has to be {expected:?} \
+                 (the pair was left={left_ok}, right={right_ok})"
             );
         }
     }
@@ -1531,4 +1540,256 @@ fn f170_an_anchor_dead_ahead_does_not_cover_the_middle() {
     let right = glyph_centre(&mut app, Side::Right);
     println!("f170 dead ahead: {seen} nodes, Q at {left:?}, E at {right:?}");
     assert!(left.x < right.x, "Q was pushed right of E: {left:?} against {right:?}");
+}
+
+// ---------------------------------------------------------------------------------------
+// F-026 — the marker stands where the rope lands
+//
+// > *"und da wo das seil am ende auch landet soll die markierung hin vom seil, dass man direkt
+// > sieht wo man sich connected! **das ist wichtig**. und dann muss das seil auch dahin!!"*
+// > — the user, 2026-08-12 (`docs/NEXT.md` §1A, requirement 9)
+//
+// Two sentences, two tests. The first says the marker reads the arm's own firing point; the
+// second fires the hook and compares what left the hand against what the marker stood on.
+// **`assert_eq!` on the `Vec3` and no tolerance** — a metre of "close enough" is exactly the
+// gap FIND-047 lived in.
+// ---------------------------------------------------------------------------------------
+
+/// Runs **one whole simulation step**: `FixedUpdate`, the six stages of
+/// `src/shared/schedule.rs`, so `vector::aim` casts its three real rays and `vector::hook`
+/// reads the result in the same call.
+///
+/// **`FixedPreUpdate` deliberately stays out.** That is where `net::local::read_input` turns
+/// the keyboard into an `Intent` (`src/net/mod.rs:58`), and it would overwrite the one the test
+/// just set with "no keys are down". Nothing inside `FixedUpdate` writes `Intent`, which is why
+/// a hand-set intent survives the step and the test is still looking at the real systems.
+fn sim_step(app: &mut App) {
+    app.world_mut().run_schedule(FixedUpdate);
+}
+
+/// The local player's `Hook` and `ArmAim` as one snapshot, out of the same tick.
+fn aim_snapshot(app: &mut App) -> (Hook, defeated_by_titan::shared::ArmAim) {
+    use defeated_by_titan::shared::ArmAim;
+    let player = local_player(app);
+    let e = app.world().entity(player);
+    (
+        *e.get::<Hook>().expect("the player carries a `Hook`"),
+        *e.get::<ArmAim>().expect("`AimPoint` requires `ArmAim`, so the player carries one"),
+    )
+}
+
+#[test]
+fn f026_the_marker_stands_exactly_where_that_arm_fires() {
+    // ★ **The acceptance number of `docs/NEXT.md` §1B W5: `|marker target − fired target| == 0`.**
+    //
+    // Not two values that agree, ONE value read twice: `vector::aim` resolves the side ray
+    // (fallback to the centre ray included) into `ArmAim`, `hud::arm_aim::target_of` draws that
+    // and `vector::hook::anchor_target` fires at it. The test runs a real fixed step on the
+    // real map so the points are raycast, not invented, and then compares with `assert_eq!`.
+    use defeated_by_titan::vector::hook::anchor_target;
+    let mut app = app();
+
+    let mut anchorable_seen = 0;
+    for (yaw_deg, pitch_deg) in [(0.0_f32, 0.0_f32), (90.0, 10.0), (180.0, -5.0), (37.0, 20.0)] {
+        stand_and_look(&mut app, Vec3::new(51.0, 0.0, 13.0), yaw_deg, pitch_deg);
+        sim_step(&mut app);
+        let (hook, arm_aim) = aim_snapshot(&mut app);
+
+        for side in Side::ALL {
+            let marker = arm_aim::target_of(&hook, &arm_aim, side);
+            let fired = anchor_target(arm_aim.side(side)).map(|(point_m, _)| point_m);
+            if arm_aim.side(side).anchorable {
+                anchorable_seen += 1;
+                assert_eq!(
+                    marker, fired,
+                    "yaw {yaw_deg} pitch {pitch_deg}, {side:?}: the marker stands on {marker:?} \
+                     and the rope would fly to {fired:?}. That is FIND-047 again — the picture \
+                     promising something the simulation does not do"
+                );
+                println!("f026 same value: yaw {yaw_deg} {side:?} -> {:?}", marker.unwrap());
+            } else {
+                assert_eq!(
+                    fired, None,
+                    "yaw {yaw_deg}, {side:?}: `anchorable` is false and yet a shot has a target"
+                );
+            }
+        }
+    }
+    assert!(
+        anchorable_seen > 0,
+        "not one of the eight (yaw, side) pairs found anchorable geometry — the test compared \
+         two `None`s eight times and proved nothing"
+    );
+}
+
+#[test]
+fn f026_the_rope_flies_at_the_point_the_marker_stood_on() {
+    // ★ *"und dann muss das seil auch dahin!!"* — the second sentence, and the only one that
+    // can be proven by firing. The marker's rule is applied to this tick's `ArmAim`, the hook
+    // key is pressed in the same tick, and `HookState::Flying { target_m }` — the value
+    // `vector::hook` walks the tip along and `render::rope` draws to — has to be that same
+    // `Vec3`, bit for bit.
+    use defeated_by_titan::shared::{Buttons, Intent, PrevButtons};
+    let mut app = app();
+
+    // A stand where at least one arm catches: the market-square church, the same aim
+    // `scripts/f-001-hooks.txt` and `scripts/f171-crosshair.txt` both anchor from.
+    stand_and_look(&mut app, Vec3::new(51.0, 0.0, 13.0), 0.0, 34.0);
+    sim_step(&mut app);
+
+    let player = local_player(&mut app);
+    {
+        let mut e = app.world_mut().entity_mut(player);
+        let mut intent = e.get_mut::<Intent>().expect("the player has an `Intent`");
+        intent.buttons.set(Buttons::HOOK_LEFT, true);
+        intent.buttons.set(Buttons::HOOK_RIGHT, true);
+    }
+    // Both keys have to be *fresh* this tick: `vector::hook` fires on the edge, never on the
+    // held button.
+    app.world_mut().entity_mut(player).insert(PrevButtons(Buttons::NONE));
+
+    // ⚠️ **The preview is taken from the tick the shot happens in, not from the one before it**,
+    // and that is not pedantry: measured while writing this test, the aim point moved
+    // 11.0431 → 11.0615 m between two ticks because the player is still settling onto the
+    // ground. Any test with a tolerance loose enough to swallow those 18 mm is loose enough to
+    // swallow a real mismatch, which is why this one has none.
+    //
+    // Within the step the order is fixed by `SimulationSystems`: `vector::aim` writes `ArmAim`
+    // in `World`, `vector::hook` reads it in `Intent`. So the `ArmAim` standing after the step
+    // **is** the one the shot used, and it is the one `hud::arm_aim` draws in the same frame.
+    // `Hook::default()` is the arm as the marker saw it at the instant the key went down: idle.
+    let before = aim_snapshot(&mut app).1;
+    sim_step(&mut app);
+    let (hook, after) = aim_snapshot(&mut app);
+    let previewed = Side::ALL.map(|side| arm_aim::target_of(&Hook::default(), &after, side));
+    println!("f026 aim drift between two ticks: {before:?} -> {after:?}");
+
+    let mut fired = 0;
+    for side in Side::ALL {
+        if let HookState::Flying { target_m, .. } = hook.arm(side).state {
+            fired += 1;
+            assert_eq!(
+                Some(target_m),
+                previewed[side.index()],
+                "{side:?}: the marker stood on {:?} and the rope left for {target_m:?}",
+                previewed[side.index()]
+            );
+            println!("f026 rope: {side:?} flies at {target_m:?}, the marker's own point");
+        }
+    }
+    assert!(fired > 0, "neither arm left the hand — the test proved nothing about the rope");
+}
+
+#[test]
+fn f026_two_idle_arms_preview_two_different_points() {
+    // ★ *"und es muss mehr rechts und links spreaden!!"* — and the W5 acceptance
+    // "both glyphs ≥ 145 px from centre x". Until W3 this test could not exist: two idle arms
+    // shared one point, so the pair had nothing but its side slots to say
+    // (`docs/FINDINGS.md` FIND-039/047).
+    //
+    // The two points are not invented — they are cast down `vector::aim::side_dirs`, the same
+    // two directions the hook uses, at the spread `game.ron` ships.
+    use defeated_by_titan::shared::{AimPoint, ArmAim, Intent};
+    use defeated_by_titan::vector::aim::side_dirs;
+    let mut app = app();
+    attach_screen(&mut app);
+    stand_and_look(&mut app, Vec3::ZERO, 0.0, 0.0);
+
+    let (spread_min, spread_max, eye_height_m) = {
+        let data = app.world().resource::<GameData>();
+        (
+            data.game.vector.aim_spread_min_deg,
+            data.game.vector.aim_spread_max_deg,
+            data.game.player.eye_height_m,
+        )
+    };
+    let (w, _h) = screen(&mut app);
+    let centre_x = w * 0.5;
+
+    let mut gaps = Vec::new();
+    for spread_deg in [spread_min, 28.0_f32, spread_max] {
+        let player = local_player(&mut app);
+        let intent = {
+            let mut e = app.world_mut().entity_mut(player);
+            let mut intent = e.get_mut::<Intent>().expect("the player has an `Intent`");
+            intent.aim_spread_deg = spread_deg;
+            *intent
+        };
+        let eye = Vec3::ZERO + Vec3::Y * eye_height_m;
+        let dirs = side_dirs(&intent, intent.aim_spread_rad(spread_min, spread_max));
+        // 40 m down each side ray: a distance the projection cannot see anyway — what a marker
+        // shows is the bearing, and the bearing is what the rope takes.
+        let arms = Side::ALL.map(|side| AimPoint {
+            point_m: Some(eye + dirs[side.index()] * 40.0),
+            body: Some(BodyId(1)),
+            anchorable: true,
+        });
+        app.world_mut().entity_mut(player).insert(ArmAim { arms });
+        run_hud(&mut app);
+
+        let left = glyph_centre(&mut app, Side::Left);
+        let right = glyph_centre(&mut app, Side::Right);
+        let gap = right.x - left.x;
+        println!(
+            "f026 spread {spread_deg} deg -> Q at {left:?}, E at {right:?}, gap {gap:.1} px, \
+             {:.1} / {:.1} px off centre",
+            (centre_x - left.x).abs(),
+            (right.x - centre_x).abs()
+        );
+        assert!(left.x < centre_x && right.x > centre_x, "the pair is swapped or collapsed");
+        for (side, at) in [(Side::Left, left), (Side::Right, right)] {
+            let off = (at.x - centre_x).abs();
+            assert!(
+                off >= 145.0,
+                "the {side:?} glyph stands {off:.1} px off the centre at {spread_deg} deg — \
+                 W5's acceptance is 145 px, and the keep-out box alone is 128"
+            );
+        }
+        gaps.push(gap);
+    }
+    // And the wheel is visible in the picture: a wider spread is a wider pair.
+    for pair in gaps.windows(2) {
+        assert!(
+            pair[1] > pair[0] + 20.0,
+            "the spread was widened and the two markers moved {:.1} -> {:.1} px apart — the \
+             mouse wheel does not reach the screen",
+            pair[0],
+            pair[1]
+        );
+    }
+}
+
+#[test]
+fn f026_an_anchor_behind_you_goes_to_the_edge_on_its_own_side() {
+    // ★ **The hard case, decided rather than dodged.** `Camera::world_to_viewport` refuses a
+    // point behind the near plane, and half of every swing is spent with the anchor behind the
+    // player. The choice (module header of `src/hud/arm_aim.rs`): clamp to the screen edge on
+    // the side the anchor really is, do not hide. This test is what makes "the right side" a
+    // fact — a marker that answered (0, 0) or jumped to its own slot would pass a test that
+    // only asked whether it was on screen.
+    let mut app = app();
+    attach_screen(&mut app);
+    stand_and_look(&mut app, Vec3::ZERO, 0.0, 0.0);
+    let (w, _h) = screen(&mut app);
+
+    // yaw 0 looks towards −Z, so +Z is behind. One anchor behind-and-left, one behind-and-right.
+    anchor_arm_at(&mut app, Side::Left, Vec3::new(-25.0, 6.0, 18.0));
+    anchor_arm_at(&mut app, Side::Right, Vec3::new(25.0, 6.0, 18.0));
+    run_hud(&mut app);
+    let left = glyph_centre(&mut app, Side::Left);
+    let right = glyph_centre(&mut app, Side::Right);
+    println!("f026 behind: Q at {left:?}, E at {right:?} on a {w:.0} px screen");
+    assert!(left.x < w * 0.15, "the anchor behind-LEFT drew the Q marker at {left:?}");
+    assert!(right.x > w * 0.85, "the anchor behind-RIGHT drew the E marker at {right:?}");
+
+    // Now swap the two anchors over: the markers have to swap with them, which a pair parked
+    // in fixed side slots would never do.
+    anchor_arm_at(&mut app, Side::Left, Vec3::new(25.0, 6.0, 18.0));
+    anchor_arm_at(&mut app, Side::Right, Vec3::new(-25.0, 6.0, 18.0));
+    run_hud(&mut app);
+    let left = glyph_centre(&mut app, Side::Left);
+    let right = glyph_centre(&mut app, Side::Right);
+    println!("f026 behind, swapped: Q at {left:?}, E at {right:?}");
+    assert!(left.x > w * 0.85, "Q's anchor moved behind-RIGHT and the marker stayed at {left:?}");
+    assert!(right.x < w * 0.15, "E's anchor moved behind-LEFT and the marker stayed at {right:?}");
 }

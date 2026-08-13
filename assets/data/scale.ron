@@ -282,7 +282,21 @@
         // every anchor in the world is always in reach and the map stops existing. 200 m also
         // reaches the church (35 m) from more than half the city, which is what FIND-026 says
         // is missing. ⚠️ UNTUNED, and it is the user's number to move.
-        anchor_range_m: 200.0,
+        //
+        // **200 -> 500 on 2026-08-12, and he moved it himself**: *"und das seil muss deutlich
+        // deutlich schneller gespannt werden. nicht frame perfekt aber mit ca 500m pro sekunde.
+        // mit der range 500 meter!"* (docs/NEXT.md §1A). Third time the same precedence rule
+        // decides it and third time in the same direction — a direct figure in metres from the
+        // user beats every derivation, including the two figures he gave before.
+        //
+        // What the 200 m argument above cost, stated so nobody re-derives it: it was written
+        // against a **400 m graybox**, and that map no longer ships. Ashgate is 700 m across,
+        // so 500 m is 71 % of the district's edge, not 125 % of it — "where you stand" is
+        // still a decision, but a much looser one, and that IS what he asked for. The map is
+        // the lever that keeps it honest from here on: a district under ~1000 m across cannot
+        // make a 500 m rope a positional choice again.
+        // ⚠️ UNTUNED, and still the user's number to move.
+        anchor_range_m: 500.0,
         // "Vector Gear speed x1.5 vs. standard" — the factor is given, but the REFERENCE
         // is missing: x1.5 of what? Running (6 m/s) would be 9 m/s and thus absurdly slow
         // for a Vector Gear; the speed limit (75 m/s) would be 112.5 m/s. The number stands

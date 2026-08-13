@@ -118,6 +118,30 @@ pub enum Metric {
     /// A count and not a yes/no, because `F-001`'s two hooks are independent: `== 2` is a
     /// sentence a script has to be able to write.
     Rope,
+    /// Spare blade pairs in the local player's harness
+    /// ([`Blades::pairs_left`](crate::shared::Blades)).
+    ///
+    /// ⚠️ **Today this number can only ever go up.** The resupply half of `F-033` is built and
+    /// wired (`blades::resupply`, `mission::hub::restock_at_stations`) **and so is wear**, since
+    /// 2026-08-13: `blades::cut` books `gear.ron: blades.wear_per_hit` on every `TitanHit`, a
+    /// non-cortex zone costs `× wear_torso_factor`, `swap_pair` draws a spare at zero and
+    /// `is_broken()` makes `cut` cast nothing at all (`docs/FINDINGS.md` FIND-079).
+    ///
+    /// ⚠️ **`blades` is still the wrong metric for a resupply claim, and that has been measured.**
+    /// It counts *pairs left*, and a whole sortie spends about **0.24** sharpness — a fought kill
+    /// costs 0.12 for the cortex plus half that for the shoulder the blade meets on the way in,
+    /// an arranged fall-cut only the 0.12 — so `pairs_left` never leaves 5 and
+    /// `assert blades == 5` stays true whatever happens. **Use [`Metric::Sharpness`]**: that is
+    /// the number that moves. `scripts/f070-hub.txt` was rewritten around it and now goes red two
+    /// ways (skip the rack: `Sharpness > 0.99 — measured 0.760`; remove the cuts:
+    /// `Sharpness < 0.8 — measured 1.000`).
+    Blades,
+    /// Condition of the pair in the local player's hands, `0.0`..`1.0`
+    /// ([`Blades::sharpness`](crate::shared::Blades)).
+    ///
+    /// **This is the metric a resupply claim should use** — see the note on [`Metric::Blades`]
+    /// for why `blades` cannot go red and this can.
+    Sharpness,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -265,10 +289,16 @@ fn parse_line(line: &str) -> Result<ScriptCommand, String> {
                 // so unlike `phase` this one never had to be refused. What it replaces is a
                 // proxy, not a hole: see [`Metric::Rope`].
                 "rope" => Metric::Rope,
+                // The harness. Both read `shared::Blades`, which `hud` already draws, so no
+                // domain edge was bought for them — `debug -> blades` is not on the allow list
+                // of `docs/architecture.md` and none was needed.
+                "blades" => Metric::Blades,
+                "sharpness" => Metric::Sharpness,
                 other => {
                     return Err(format!(
                         "metric {other:?} is not measurable — known: \
-                         speed, height, gas, titans, tick, health, kills, phase, rope"
+                         speed, height, gas, titans, tick, health, kills, phase, rope, \
+                         blades, sharpness"
                     ));
                 }
             };
