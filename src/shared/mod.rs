@@ -26,6 +26,8 @@ pub mod rng;
 pub mod state;
 pub mod layers;
 pub mod anchors;
+pub mod terrain;
+pub mod settings;
 
 pub use schedule::{IntentSystems, SimulationSystems, Tick};
 pub use geometry::{player_aabb, AnchorSurface, Block, Ground, Body, BodyMask};
@@ -38,7 +40,9 @@ pub use intent::{LookOverride, Intent, Buttons};
 pub use message::{
     Impact, HookReleased, HookAnchored, BodyGone, HitZone, ReleaseReason, Mark,
     BladeRestockRequest, RefuelRequest, WarpPlayer, TitanHit, SpawnTitan,
+    AbandonSortie, DeployRequest,
 };
+pub use settings::PlayerSettings;
 pub use spatial::{IndexEntry, SpatialIndex, RayResult, RayHit};
 pub use rope::{rope_reel_in, rope_step, RopeConstraint, ConstraintResult};
 pub use cli::Cli;
@@ -48,3 +52,4 @@ pub use layers::{
     GameLayer, LAYER_WORLD, LAYER_PLAYER, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
 };
 pub use anchors::{ModelAnchors, ANCHOR_NAMES, CORTEX_ANCHOR};
+pub use terrain::TerrainField;

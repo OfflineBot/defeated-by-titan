@@ -5,6 +5,19 @@
 //! reading: if tanking a blow costs nothing, `recover_s` is not a punish window, it is
 //! decoration.
 //!
+//! ## The blow has a front (`Q-031`, 2026-08-13)
+//!
+//! It did not until this date. `reaches` was a ground distance, a ceiling and a floor — **a
+//! cylinder around the titan's axis** — so a player standing in a husk's back took the same 34
+//! as one standing in his face (`docs/FINDINGS.md` FIND-012). That made `turn_deg_per_s`
+//! decoration and the nape design meaningless: coming from behind was never *safer*, only
+//! equally good. `titan.ron: <kind>.strike_half_angle_deg` closes it, and
+//! `tests/combat.rs::a_strike_from_behind_books_no_damage` is the pair of numbers that says so
+//! — the same husk, the same distance, the same height, 34 from the front and 0 from behind.
+//!
+//! The other half of the fix is not in this file: a titan who cannot turn inside his own reach
+//! can never bring the cone to bear, so `titan::brain::walk` now turns in `Windup` as well.
+//!
 //! ## The two numbers, and where they come from
 //!
 //! `titan.ron: <kind>.damage` and `<kind>.attack_range_m`, out of [`GameData`], never a
@@ -75,6 +88,11 @@ pub struct StrikeTuning {
     pub reach_m: f32,
     /// How high over the titan's own origin the blow still carries: the shoulder.
     pub top_m: f32,
+    /// `titan.ron: <kind>.strike_half_angle_deg`, **in radians** — degrees in the file, radians
+    /// in the code, converted once at the boundary (`docs/conventions.md`).
+    ///
+    /// Half the arc of the blow, off the titan's forward vector, on the ground plane.
+    pub half_angle_rad: f32,
 }
 
 impl StrikeTuning {
@@ -88,18 +106,61 @@ impl StrikeTuning {
             damage: kind.damage,
             reach_m: kind.attack_range_m,
             top_m: data.scale.titan.shoulder_height_fraction * height_m,
+            half_angle_rad: kind.strike_half_angle_deg.to_radians(),
         })
     }
 
-    /// Whether a blow from a titan standing at `titan_m` reaches a player at `player_m`.
+    /// Whether a blow from a titan standing at `titan_m` and looking along `facing` reaches a
+    /// player at `player_m`.
     ///
     /// Ground distance against [`reach_m`](Self::reach_m), height against
     /// [`top_m`](Self::top_m). Downwards the reach is `reach_m` as well: a player in a hole at
     /// the titan's feet is inside the arm's swing, a player on a roof over his head is not.
-    pub fn reaches(&self, titan_m: Vec3, player_m: Vec3) -> bool {
+    /// And **the angle**, against [`half_angle_rad`](Self::half_angle_rad) — see
+    /// [`faces`](Self::faces) for why that is the whole point.
+    pub fn reaches(&self, titan_m: Vec3, facing: Dir3, player_m: Vec3) -> bool {
         let to = player_m - titan_m;
-        let ground_m = Vec3::new(to.x, 0.0, to.z).length();
-        ground_m <= self.reach_m && to.y <= self.top_m && to.y >= -self.reach_m
+        let ground = Vec3::new(to.x, 0.0, to.z);
+        if ground.length() > self.reach_m || to.y > self.top_m || to.y < -self.reach_m {
+            return false;
+        }
+        self.faces(ground, facing)
+    }
+
+    /// Whether `ground` — the vector from the titan to the player, flattened onto the ground
+    /// plane — lies inside the strike cone around `facing`.
+    ///
+    /// ## Why this exists at all
+    ///
+    /// Because without it the strike volume is a **cylinder** around the titan's axis, and that
+    /// is not a detail: `docs/FINDINGS.md` FIND-012 measured that a player standing in a husk's
+    /// back took the identical 34 damage as one standing in his face. Then `turn_deg_per_s`
+    /// governs nothing anybody can feel, the approach angle is decoration, and the whole
+    /// cortex-on-the-**nape** design has no mechanical consequence — coming from behind is
+    /// merely *equally good*, never safer. `docs/QUESTIONS.md` Q-031 put both options to the
+    /// user; he asked for "ein attack system mit gegnern", which is this one.
+    ///
+    /// ## Flat, on purpose
+    ///
+    /// The cone is horizontal — the titan's forward is flattened before the comparison, and so
+    /// is the vector to the player. A titan's pitch is not his aim (`titan::brain::walk` writes
+    /// yaw and nothing else), and the up/down question is already answered by
+    /// [`top_m`](Self::top_m) and the floor at `−reach_m`. Two answers to the same question is
+    /// how one of them ends up wrong.
+    ///
+    /// ## The degenerate case is inside, not outside
+    ///
+    /// A player standing exactly on the titan's own axis has no angle to the forward vector,
+    /// and neither has a titan whose forward is straight up. Both return `true`: a hole in the
+    /// middle of the strike volume that a player could stand in would be a bug nobody could
+    /// see, and "on top of his feet" is the last place a blow should miss.
+    pub fn faces(&self, ground: Vec3, facing: Dir3) -> bool {
+        let forward = Vec3::new(facing.x, 0.0, facing.z);
+        let (Some(forward), Some(ground)) = (forward.try_normalize(), ground.try_normalize())
+        else {
+            return true;
+        };
+        forward.dot(ground) >= self.half_angle_rad.cos()
     }
 }
 
@@ -150,7 +211,7 @@ pub fn resolve_tuning(
                      (src/combat/strike.rs).",
                     name.as_str()
                 );
-                StrikeTuning { damage: 0.0, reach_m: 0.0, top_m: 0.0 }
+                StrikeTuning { damage: 0.0, reach_m: 0.0, top_m: 0.0, half_angle_rad: 0.0 }
             });
         commands.entity(entity).insert(tuning);
     }
@@ -191,7 +252,7 @@ pub fn land(
             continue;
         }
         for (id, player_at, mut health) in &mut players {
-            if !tuning.reaches(at.translation, player_at.translation) {
+            if !tuning.reaches(at.translation, at.forward(), player_at.translation) {
                 continue;
             }
             let left = health.damage(tuning.damage);
@@ -220,22 +281,70 @@ mod tests {
     use super::*;
 
     fn tuning() -> StrikeTuning {
-        // A husk: 34 damage, 6 m of reach, 10 m tall with the shoulder at 0.82 of that.
-        StrikeTuning { damage: 34.0, reach_m: 6.0, top_m: 8.2 }
+        // A husk: 34 damage, 6 m of reach, 10 m tall with the shoulder at 0.82 of that, and the
+        // 55° half-angle of `titan.ron`.
+        StrikeTuning {
+            damage: 34.0,
+            reach_m: 6.0,
+            top_m: 8.2,
+            half_angle_rad: 55.0_f32.to_radians(),
+        }
+    }
+
+    /// Looking down −X, so that the geometry below reads as "in front" and "behind" without a
+    /// sign puzzle in every line.
+    fn west() -> Dir3 {
+        Dir3::NEG_X
     }
 
     #[test]
     fn the_reach_is_a_ground_distance_with_a_ceiling() {
         let t = tuning();
         let titan = Vec3::new(10.0, 0.0, -20.0);
-        assert!(t.reaches(titan, titan + Vec3::new(5.9, 1.0, 0.0)), "inside the arm");
-        assert!(!t.reaches(titan, titan + Vec3::new(6.1, 1.0, 0.0)), "outside attack_range_m");
+        // Facing −X, so every offset in −X is straight down the middle of the cone.
+        let f = west();
+        assert!(t.reaches(titan, f, titan + Vec3::new(-5.9, 1.0, 0.0)), "inside the arm");
+        assert!(!t.reaches(titan, f, titan + Vec3::new(-6.1, 1.0, 0.0)), "outside attack_range_m");
         // The one the ground plane alone gets wrong: 60 m straight up is 0 m away on the
         // ground, and a titan must not hit a player who is flying over him.
-        assert!(!t.reaches(titan, titan + Vec3::new(0.0, 60.0, 0.0)), "over the shoulder");
-        assert!(t.reaches(titan, titan + Vec3::new(0.0, 8.0, 0.0)), "at shoulder height");
+        assert!(!t.reaches(titan, f, titan + Vec3::new(0.0, 60.0, 0.0)), "over the shoulder");
+        assert!(t.reaches(titan, f, titan + Vec3::new(0.0, 8.0, 0.0)), "on his own axis");
         // Height is measured from the titan's own origin, not from the world's.
-        assert!(t.reaches(titan + Vec3::Y * 30.0, titan + Vec3::new(1.0, 31.0, 0.0)));
+        assert!(t.reaches(titan + Vec3::Y * 30.0, f, titan + Vec3::new(-1.0, 31.0, 0.0)));
+    }
+
+    /// The half of the strike volume `docs/FINDINGS.md` FIND-012 found missing.
+    #[test]
+    fn the_reach_is_a_cone_and_not_a_cylinder() {
+        let t = tuning();
+        let titan = Vec3::new(10.0, 0.0, -20.0);
+        let f = west();
+        let at = |deg: f32, m: f32| {
+            let r = deg.to_radians();
+            // 0° is −X (the facing), positive turns towards +Z.
+            titan + Vec3::new(-m * r.cos(), 1.0, m * r.sin())
+        };
+        assert!(t.reaches(titan, f, at(0.0, 4.0)), "straight in front");
+        assert!(t.reaches(titan, f, at(54.0, 4.0)), "just inside the 55° half-angle");
+        assert!(!t.reaches(titan, f, at(56.0, 4.0)), "just outside it");
+        assert!(!t.reaches(titan, f, at(-56.0, 4.0)), "and outside on the other shoulder too");
+        assert!(!t.reaches(titan, f, at(180.0, 4.0)), "straight behind — the whole point");
+        // A player standing on the titan's own axis has no angle. He is hit, not skipped.
+        assert!(t.reaches(titan, f, titan + Vec3::Y), "on the axis");
+        // The cone is flat: a titan whose forward is straight up still swings a full circle
+        // rather than nothing at all.
+        assert!(t.reaches(titan, Dir3::Y, at(180.0, 4.0)), "a degenerate facing hits everything");
+    }
+
+    /// The knob is read, not hard-coded: a narrower cone lets the same player go.
+    #[test]
+    fn the_half_angle_comes_out_of_the_file() {
+        let titan = Vec3::new(10.0, 0.0, -20.0);
+        let shoulder = titan + Vec3::new(-4.0 * 40.0_f32.to_radians().cos(), 1.0, 4.0 * 40.0_f32.to_radians().sin());
+        let mut t = tuning();
+        assert!(t.reaches(titan, west(), shoulder), "40° is inside a 55° cone");
+        t.half_angle_rad = 30.0_f32.to_radians();
+        assert!(!t.reaches(titan, west(), shoulder), "40° is outside a 30° cone");
     }
 
     #[test]

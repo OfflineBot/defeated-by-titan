@@ -203,3 +203,41 @@ pub struct BodyGone {
     pub body: BodyId,
     pub tick: u64,
 }
+
+/// **Fly this sortie** — the lobby screen asking, never the lobby screen deciding.
+///
+/// `mission` is the one writer of the mission phase and of `mission::Sortie`
+/// (`docs/architecture.md`, authority table). `menu` may **read** the phase — it has to know
+/// whether to offer *Abandon* or *Deploy*, and a UI has to be right in the frame it is drawn in
+/// — but a menu that set `NextState<MissionPhase>` itself would be a second writer of the one
+/// field the whole run hangs on, next to `mission::hub::deploy_on_contact`. So the front door
+/// asks and the domain that owns the phase opens it, exactly as a refuel station asks for gas
+/// ([`RefuelRequest`]).
+///
+/// `difficulty` is `None` for a template that has none — the tutorial — and that is the same
+/// meaning `mission::SortieOrder::difficulty` gives it: fly the template's own numbers.
+///
+/// ⚠️ **Read in `Update`, not in `FixedUpdate`.** A menu screen stops `Time<Virtual>`
+/// (`menu::apply_screen`), and a stopped virtual clock means `FixedUpdate` never runs
+/// (`bevy_time-0.19.0/src/fixed.rs:244-247`) — a reader in the simulation would therefore never
+/// see the one message the player pressed a button to send.
+#[derive(Message, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeployRequest {
+    /// A key in `missions.ron: templates`.
+    pub template: String,
+    /// A key in that template's `difficulties`, or `None` for the direct-entry numbers.
+    pub difficulty: Option<String>,
+}
+
+/// **Give this sortie up** — the pause screen's *Abandon*, and the first half of its *Quit to
+/// lobby*.
+///
+/// Same seam and same reason as [`DeployRequest`]: `mission` owns the phase, `menu` owns the
+/// button. It carries nothing, because there is exactly one sortie (`mission::hub::Sortie`) and
+/// giving it up is not a thing one player does for himself.
+///
+/// **It is not a loss.** `MissionPhase::Lost` is a verdict the mission speaks, with a debrief
+/// and a `KillTally` behind it; abandoning skips straight back to the hub and writes no verdict
+/// at all — nobody died, nobody won, the run simply did not happen.
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AbandonSortie;

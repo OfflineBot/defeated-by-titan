@@ -202,6 +202,22 @@ fn spawn_husk(app: &mut App, at_m: Vec3) -> Entity {
         .expect("the husk of titan.ron has to be in the world after two ticks")
 }
 
+/// A standing spot `m` metres **in front of** a husk spawned at `husk_at`, at chest height.
+///
+/// `SpawnTitan` carries no facing (`docs/FINDINGS.md` FIND-012) and `titan::rig` builds the body
+/// with an identity rotation, so a fresh husk looks down **−Z**. Every P5 test below used to
+/// stand the player at `husk_at.z + 5`, which is his *back* — and that was fine while
+/// `combat::strike::reaches` was a cylinder, because the back and the front booked the same 34.
+/// Since `Q-031` they do not, so the fixtures say which side they mean.
+///
+/// The tests that had to move are the ones whose claim is *not* about facing —
+/// "three strikes down a player", "one strike subtracts once", "the damage is in the file",
+/// "every player down loses the mission". `a_strike_from_behind_books_no_damage` is the one that
+/// stands on the other side on purpose.
+fn in_his_face(husk_at: Vec3, m: f32) -> Vec3 {
+    Vec3::new(husk_at.x, 0.5, husk_at.z - m)
+}
+
 fn titans(app: &mut App) -> Vec<Entity> {
     let mut q = app.world_mut().query_filtered::<Entity, With<TitanId>>();
     q.iter(app.world()).collect()
@@ -1199,7 +1215,7 @@ fn p5_a_husk_needs_exactly_three_strikes() {
     // (2.5 m wide) so avian never touches the player and the distance stays what it was set to.
     let husk_at = Vec3::new(0.0, 0.0, -10.0);
     spawn_husk(&mut app, husk_at);
-    place(&mut app, Vec3::new(0.0, 0.5, -5.0), Vec3::ZERO);
+    place(&mut app, in_his_face(husk_at, 5.0), Vec3::ZERO);
 
     // 90 ticks per attack (`attack_cooldown_s` 1.5 s, longer than wind-up + strike + recover),
     // so three of them fit inside 400 with room to spare.
@@ -1284,8 +1300,9 @@ fn p5_one_strike_subtracts_once_and_not_once_per_tick() {
         husk.strike_s, d.game.simulation_hz
     );
 
-    spawn_husk(&mut app, Vec3::new(0.0, 0.0, -10.0));
-    place(&mut app, Vec3::new(0.0, 0.5, -5.0), Vec3::ZERO);
+    let husk_at = Vec3::new(0.0, 0.0, -10.0);
+    spawn_husk(&mut app, husk_at);
+    place(&mut app, in_his_face(husk_at, 5.0), Vec3::ZERO);
 
     // Only as far as the first blow plus its own length: a second attack is 90 ticks away, so
     // anything counted inside this window belongs to strike number one.
@@ -1333,8 +1350,9 @@ fn p5_the_damage_comes_out_of_the_file_and_not_out_of_rust() {
         d.titans.kinds.get_mut("husk").expect("titan.ron has a husk").damage = retuned;
     }
 
-    spawn_husk(&mut app, Vec3::new(0.0, 0.0, -10.0));
-    place(&mut app, Vec3::new(0.0, 0.5, -5.0), Vec3::ZERO);
+    let husk_at = Vec3::new(0.0, 0.0, -10.0);
+    spawn_husk(&mut app, husk_at);
+    place(&mut app, in_his_face(husk_at, 5.0), Vec3::ZERO);
     let w = watch(&mut app, 300);
 
     assert_eq!(
@@ -1378,7 +1396,9 @@ fn p5_a_strike_out_of_range_takes_nothing() {
         let mut app = app();
         let start = data(&app).game.player.health;
         let body = spawn_husk(&mut app, husk_at);
-        place(&mut app, Vec3::new(0.0, 0.5, -5.0), Vec3::ZERO);
+        // In his FACE, not his back — since `Q-031` a blow into the back books nothing anyway,
+        // and a test that would pass with `reach_m: 0.0` measures nothing (`in_his_face`).
+        place(&mut app, in_his_face(husk_at, 5.0), Vec3::ZERO);
         // Run until he is committed: `Windup` is the point of no return (`titan::brain::decide`
         // has no edge out of it except through `Strike`).
         let mut committed = false;
@@ -1391,7 +1411,9 @@ fn p5_a_strike_out_of_range_takes_nothing() {
         }
         assert!(committed, "the husk never wound up — nothing is being measured");
         // He does not walk during `Windup` or `Strike` (`titan::brain::walk` moves nothing that
-        // is not in `Pursue`), so the player stays where he is put.
+        // is not in `Pursue`), so the player stays where he is put. He does now *turn* during
+        // `Windup` (`Q-031`), but the escape below is straight down his forward vector, so the
+        // yaw he wants is the yaw he already has and the turn is 0°.
         place(&mut app, escape_to, Vec3::ZERO);
         let w = watch(&mut app, 60);
         let me = player(&mut app);
@@ -1402,7 +1424,7 @@ fn p5_a_strike_out_of_range_takes_nothing() {
     }
 
     // ---- horizontal: two metres past `attack_range_m`, still well inside `aggro_radius_m`
-    let (w, _) = swing_at(husk_at, Vec3::new(0.0, 0.5, husk_at.z + reach + 2.0));
+    let (w, _) = swing_at(husk_at, in_his_face(husk_at, reach + 2.0));
     assert!(
         w.drops.is_empty(),
         "a strike with a reach of {reach} m took health off a player standing at {} m: {:?}",
@@ -1442,8 +1464,9 @@ fn p5_the_mission_is_lost_when_every_player_is_down() {
         "`--mission tutorial` has to be running, or `decide` never gets to run at all"
     );
 
-    spawn_husk(&mut app, Vec3::new(0.0, 0.0, -10.0));
-    place(&mut app, Vec3::new(0.0, 0.5, -5.0), Vec3::ZERO);
+    let husk_at = Vec3::new(0.0, 0.0, -10.0);
+    spawn_husk(&mut app, husk_at);
+    place(&mut app, in_his_face(husk_at, 5.0), Vec3::ZERO);
     let w = watch(&mut app, 400);
 
     let downed = w.downed_at.expect("the player never went down — there is no loss to check");
@@ -1830,3 +1853,119 @@ fn rig_part(app: &App, root: Entity, part: TitanPart) -> Option<Entity> {
 }
 
 
+
+// ---------------------------------------------------------------------------
+// Q-031 — the strike is a cone, not a cylinder
+// ---------------------------------------------------------------------------
+
+/// ★ **The approach angle, as a number: 34 from the front, 0 from behind.**
+///
+/// Before `Q-031` was answered, `StrikeTuning::reaches` was
+/// `ground_m <= reach_m && to.y <= top_m && to.y >= -reach_m` — a cylinder around the titan's
+/// axis with no dot product in it (`docs/FINDINGS.md` FIND-012). A player standing in the
+/// husk's back took the identical 34 as one standing in his face, `turn_deg_per_s` governed
+/// nothing, and the cortex-on-the-nape design had no mechanical meaning at all.
+///
+/// Both halves of this test use the **same** distance, the **same** height and the **same**
+/// husk out of `titan.ron`. The only thing that differs between them is which side of him the
+/// player stands on, so the difference in the number is the facing and nothing else.
+///
+/// Goes red when the cone comes out of `reaches`, and it goes red the *other* way — with the
+/// front booking nothing — when the half-angle in `titan.ron` is turned down far enough to miss
+/// a player standing directly in front.
+#[test]
+fn a_strike_from_behind_books_no_damage() {
+    /// One husk at the origin looking down −Z, one player at `stand_m`, run until his **first**
+    /// blow is over. Returns what the player lost and how many blows were begun.
+    fn one_blow(stand_m: Vec3) -> (f32, u32) {
+        let mut app = app();
+        let start = data(&app).game.player.health;
+        // The player first, then the husk: a titan that spends his two spawn ticks aiming at
+        // the player's default position is a titan who has already turned before the
+        // measurement starts.
+        place(&mut app, stand_m, Vec3::ZERO);
+        let body = spawn_husk(&mut app, Vec3::ZERO);
+        place(&mut app, stand_m, Vec3::ZERO);
+
+        let mut begun = 0u32;
+        let mut was_striking = false;
+        for _ in 0..400 {
+            app.update();
+            let striking = app.world().get::<TitanState>(body) == Some(&TitanState::Strike);
+            if striking && !was_striking {
+                begun += 1;
+            }
+            was_striking = striking;
+            // Stop the moment the first blow is over, or the husk lands his second and third
+            // and the measurement becomes "how many strikes fit in 400 ticks".
+            if begun >= 1 && !striking {
+                break;
+            }
+        }
+        let me = player(&mut app);
+        let left = health(&app, me).expect("the player has health");
+        (start - left, begun)
+    }
+
+    let reach = {
+        let app = app();
+        data(&app).titan("husk").expect("titan.ron has a husk").attack_range_m
+    };
+    let damage = {
+        let app = app();
+        data(&app).titan("husk").expect("titan.ron has a husk").damage
+    };
+    // Inside `attack_range_m` on both sides, so the husk commits to the blow either way and the
+    // cylinder of FIND-012 would book `damage` twice.
+    let stand_m = reach - 1.0;
+
+    let (front, front_blows) = one_blow(Vec3::new(0.0, 0.5, -stand_m));
+    let (rear, rear_blows) = one_blow(Vec3::new(0.0, 0.5, stand_m));
+
+    assert_eq!(front_blows, 1, "the husk never struck at the player in front of him");
+    assert_eq!(rear_blows, 1, "the husk never struck at the player behind him");
+    assert_eq!(
+        front, damage,
+        "a blow into the husk's own face took {front} instead of {damage} — the cone is too \
+         narrow to hit a player standing directly in front (titan.ron: husk.strike_half_angle_deg)"
+    );
+    assert_eq!(
+        rear, 0.0,
+        "a blow booked {rear} against a player standing {stand_m} m behind the husk. The strike \
+         is a cone around the titan's forward vector, not a cylinder around his axis \
+         (src/combat/strike.rs::reaches, docs/FINDINGS.md FIND-012)"
+    );
+    println!(
+        "Q-031 husk at {stand_m} m: front {front} · rear {rear} (damage {damage}, reach {reach})"
+    );
+}
+
+/// The range guard on the new key. **Not `serde(default)`-able** — a kind without a
+/// `strike_half_angle_deg` fails to load, which is rule 2; this is the other half, the value
+/// being a sane one.
+///
+/// Under 30° a titan whiffs at a player standing straight in front of him and the attack system
+/// reads as broken; at 90° the cone is a half-space, everything in front lands, and the
+/// approach angle is back to meaning nothing — which is exactly the hole Q-031 closed.
+#[test]
+fn every_kind_carries_a_strike_half_angle_in_range() {
+    let app = app();
+    let d = data(&app);
+    assert!(!d.titans.kinds.is_empty(), "titan.ron has no kinds — the loop below is vacuous");
+    for (key, kind) in &d.titans.kinds {
+        let deg = kind.strike_half_angle_deg;
+        assert!(
+            (30.0..=90.0).contains(&deg),
+            "titan.ron: {key}.strike_half_angle_deg is {deg}, outside [30, 90]"
+        );
+    }
+    println!(
+        "Q-031 half-angles: {}",
+        d.titans
+            .kinds
+            .iter()
+            .map(|(k, v)| format!("{k} {}", v.strike_half_angle_deg))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    );
+}

@@ -1,62 +1,99 @@
-//! menu — pause screen, the pointer, and the way back out
+//! menu — the screens, the pointer, and the way back out.
 //!
-//! For somebody who cannot click, a main menu is a wall without a door — which is why
-//! `--sandbox`, `--mission` and `--script` exist and walk straight past it
-//! (`prompts/init.md` §12a).
+//! > *„zudem fehlen settings. menu (also bei escape) und eine main lobby in der man die mission
+//! > starten kann"* — the user, 2026-08-13 (`docs/NEXT.md` §1D, reqs 6–8).
 //!
-//! Rebindable keys, color-blind modes, a screenshake slider and reduced motion are
-//! requirements, not decoration (Bible 3.5). **None of them is here.**
+//! Three screens since then, and one key that walks between them:
+//!
+//! ```text
+//!   Playing ──Esc──► Paused ──Settings──► Settings ──Back/Esc──┐
+//!      ▲               │  │                                    │
+//!      └──Esc/Resume────┘  └──Mission select──► Lobby ──Deploy──┴──► Playing
+//! ```
 //!
 //! ## What this domain owns: the pointer
 //!
 //! A mouse-look game that leaves the system cursor free lets you turn until the screen edge
 //! and then stop. So the pointer is **locked and hidden** the moment there is a window, and
-//! `Esc` gives it back (`docs/PLAN-GAME.md` §8, `P4`).
+//! every screen that is not [`Screen::Playing`] gives it back (`docs/PLAN-GAME.md` §8, `P4`).
 //!
 //! **The release was built before the capture.** A locked pointer with no release key is a
 //! game you have to `pkill` — and on a machine where nobody has ever seen this game in a
 //! window, that failure would have been found by somebody else, later, without a terminal
-//! open.
+//! open. `tests/menu.rs` holds that guarantee across all three screens.
 //!
 //! ## What decides: the window entity, not the flag
 //!
 //! Every system here is gated on `With<PrimaryWindow>`. `src/lib.rs` builds
 //! `primary_window: None` whenever `Cli::wants_window()` is false, so `--headless` and
-//! `--offscreen` have **no window entity** and therefore grab nothing — without this file
-//! having to ask `Cli` at all. One condition instead of two that can drift apart, and it is
-//! the *true* one: whether there is a pointer to take.
+//! `--offscreen` have **no window entity** and therefore grab nothing — and draw no menu —
+//! without this file having to ask `Cli` at all. One condition instead of two that can drift
+//! apart, and it is the *true* one: whether there is a pointer to take.
 //!
-//! ## `F-175` is **not** claimed here
+//! ⚠️ **The consequence for evidence:** a `--headless` run can never exercise a screen in this
+//! domain, because there is no window and therefore no menu. The tests in `tests/menu.rs` spawn
+//! a window **entity** by hand (winit is disabled in that mode, so nothing opens) — that is the
+//! only way anything here is checkable on this machine, and it is checked that way deliberately
+//! rather than claimed.
 //!
-//! F-175 is "every screen in at most two clicks". This is **one** screen — pause, with Resume
-//! and Quit. Main menu, options, loadout and the debrief do not exist. The row stays 🟨
-//! (`docs/PLAN-GAME.md` §6, R3-A).
+//! ## The hub is still a **place**, and the lobby is a **screen**
+//!
+//! `tests/menu.rs::f072_the_hub_is_a_place_and_not_a_screen` holds the older half of this: in
+//! the hub you walk, the pointer stays locked and time runs, so the hub is `Screen::Playing`
+//! and a phase of `mission::MissionPhase`. [`Screen::Lobby`] does **not** change that. It is the
+//! front door to the same deployment the pads already do — a screen you open, pick a mission on
+//! and leave again — and the walk-in pads keep working with no knowledge of it
+//! (`scripts/f070-hub.txt`, 35 asserts, untouched).
 
+pub mod lobby;
 pub mod pause;
+pub mod plate;
+pub mod settings;
 
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
+
+use crate::data::GameData;
+use crate::mission::MissionPhase;
+use crate::shared::PlayerSettings;
 
 pub struct MenuPlugin;
 
 impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Screen>().add_systems(
-            Update,
-            (
-                // The order is the answer to "what does one `Esc` do": it flips the screen,
-                // and everything downstream follows the screen. A button that ran after the
-                // pointer had already been applied would leave the mouse one frame behind
-                // the state it belongs to — and one frame of a free pointer over a running
-                // game is one frame in which a click lands outside the window.
-                (toggle_pause, pause::pause_buttons),
-                apply_screen,
-                pause::spawn_pause_screen.run_if(paused),
-                pause::despawn_pause_screen.run_if(not(paused)),
-            )
-                .chain()
-                .run_if(there_is_a_window),
-        );
+        app.init_resource::<Screen>()
+            // **Seeded here, and this is the one place it happens.** `PlayerSettings` has no
+            // `Default` — it is built by `FromWorld` out of `GameData`, which `DataPlugin` has
+            // already put down (`src/lib.rs` adds it before every other plugin). Registered
+            // outside the `there_is_a_window` gate on purpose: `net::local::read_input` reads
+            // the mouse sensitivity in **every** run, window or not.
+            .init_resource::<PlayerSettings>()
+            .init_resource::<lobby::LobbyChoice>()
+            .add_systems(
+                Update,
+                (
+                    // The order is the answer to "what does one `Esc` do": it flips the
+                    // screen, and everything downstream follows the screen. A button that ran
+                    // after the pointer had already been applied would leave the mouse one
+                    // frame behind the state it belongs to — and one frame of a free pointer
+                    // over a running game is one frame in which a click lands outside the
+                    // window.
+                    (
+                        toggle_screen,
+                        pause::pause_buttons,
+                        settings::settings_buttons,
+                        lobby::lobby_buttons,
+                    ),
+                    apply_screen,
+                    // Clear first, build second, and `.chain()` between them: a screen that
+                    // changed has to lose its old plate in the same frame it gains the new
+                    // one, or the two overlap for a frame and the player clicks the wrong one.
+                    despawn_menu,
+                    spawn_menu,
+                )
+                    .chain()
+                    .run_if(there_is_a_window),
+            );
     }
 }
 
@@ -70,10 +107,6 @@ fn there_is_a_window(windows: Query<(), With<PrimaryWindow>>) -> bool {
     !windows.is_empty()
 }
 
-fn paused(screen: Res<Screen>) -> bool {
-    *screen == Screen::Paused
-}
-
 /// `Esc` — the one key this domain knows.
 ///
 /// ⚠️ `src/net/local.rs` calls itself *"the only place in the game that knows what a key
@@ -81,13 +114,20 @@ fn paused(screen: Res<Screen>) -> bool {
 /// never reaches the simulation, and it does not travel over a wire. Pausing is a thing this
 /// screen does to this machine. Once `F-172` moves the bindings into a file, this one goes
 /// with them.
-fn toggle_pause(keys: Res<ButtonInput<KeyCode>>, mut screen: ResMut<Screen>) {
+///
+/// **It walks back one step, not all the way out.** From the settings screen `Esc` returns to
+/// the pause screen you opened it from, because that is where the eye expects to land; from the
+/// lobby it returns to the game, because the lobby's "back" is the hub floor you are standing
+/// on either way.
+fn toggle_screen(keys: Res<ButtonInput<KeyCode>>, mut screen: ResMut<Screen>) {
     if !keys.just_pressed(KeyCode::Escape) {
         return;
     }
     *screen = match *screen {
         Screen::Playing => Screen::Paused,
         Screen::Paused => Screen::Playing,
+        Screen::Settings => Screen::Paused,
+        Screen::Lobby => Screen::Playing,
     };
 }
 
@@ -97,6 +137,9 @@ fn toggle_pause(keys: Res<ButtonInput<KeyCode>>, mut screen: ResMut<Screen>) {
 /// `bevy_winit` reacts to `Changed<CursorOptions>`
 /// (`bevy_winit-0.19.0/src/system.rs:609-612`) and would otherwise re-issue a grab to the
 /// compositor **every frame** for a value that never changed (§6 rule 6).
+///
+/// **Every screen that is not [`Screen::Playing`] frees the pointer**, and that is one line
+/// rather than a list — a fourth screen added tomorrow cannot forget to hand the mouse back.
 fn apply_screen(
     screen: Res<Screen>,
     mut cursors: Query<&mut CursorOptions, With<PrimaryWindow>>,
@@ -126,6 +169,9 @@ fn apply_screen(
     // systems: `run_fixed_main_schedule` feeds on `Time<Virtual>::delta()`
     // (`bevy_time-0.19.0/src/fixed.rs:244-247`), so a paused virtual clock means no fixed
     // step happens — and nothing that anybody writes later can forget to honour it.
+    //
+    // ⚠️ It is also the reason `mission` reads `DeployRequest` in `Update`: a message a menu
+    // sends can never be answered inside a simulation that the menu itself has stopped.
     if captured == time.is_paused() {
         if captured {
             time.unpause();
@@ -135,7 +181,79 @@ fn apply_screen(
     }
 }
 
-/// Playing, or looking at the pause screen. There is no third state today.
+/// Takes the plate down when it no longer shows the truth.
+///
+/// Three ways it stops being true, and all three are one query away:
+///
+/// - the **screen** changed — Paused → Settings, Settings → Playing, anything;
+/// - a **setting** changed while the settings screen is up, so a number on it is stale;
+/// - the **choice** changed while the lobby is up, so the highlighted mission is the old one.
+///
+/// Rebuilding the whole plate instead of patching one `Text` is deliberate: it happens on a
+/// click and never per frame (§6 rule 6), and it means every screen has exactly one place where
+/// what it shows is decided — its `spawn`. A patch path would be a second one, and the two go
+/// out of step the first time somebody adds a row.
+fn despawn_menu(
+    mut commands: Commands,
+    screen: Res<Screen>,
+    settings: Res<PlayerSettings>,
+    choice: Res<lobby::LobbyChoice>,
+    roots: Query<&MenuRoot>,
+    elements: Query<Entity, With<PauseElement>>,
+) {
+    if roots.is_empty() {
+        return;
+    }
+    let stale = roots.iter().any(|root| root.0 != *screen)
+        || (*screen == Screen::Settings && settings.is_changed())
+        || (*screen == Screen::Lobby && choice.is_changed());
+    if !stale {
+        return;
+    }
+    for e in &elements {
+        // The children carry `PauseElement` too, so `despawn` is called on entities that a
+        // parent may already have taken with it. `try_despawn` is the difference between
+        // "the screen is gone" and a panic in a menu.
+        commands.entity(e).try_despawn();
+    }
+}
+
+/// Builds the overlay the current [`Screen`] wants, when there is none.
+///
+/// Self-healing rather than message-driven: the condition is *"this screen wants a plate and
+/// there is none"*, so a menu can never be missing and can never be there twice — no matter in
+/// which order the toggle and the spawn happen to run.
+fn spawn_menu(
+    mut commands: Commands,
+    screen: Res<Screen>,
+    data: Res<GameData>,
+    settings: Res<PlayerSettings>,
+    choice: Res<lobby::LobbyChoice>,
+    phase: Res<State<MissionPhase>>,
+    roots: Query<&MenuRoot>,
+) {
+    if roots.iter().any(|root| root.0 == *screen) {
+        return;
+    }
+    match *screen {
+        Screen::Playing => {}
+        Screen::Paused => pause::spawn_pause_screen(&mut commands, in_a_sortie(&phase)),
+        Screen::Settings => settings::spawn_settings_screen(&mut commands, &data, &settings),
+        Screen::Lobby => lobby::spawn_lobby_screen(&mut commands, &data, &choice),
+    }
+}
+
+/// Whether there is a sortie to abandon: everything except the hub and a run that never
+/// started one.
+///
+/// **`menu` reads the phase and never writes it** (`docs/architecture.md`, allow list). The
+/// button that acts on it sends `shared::AbandonSortie`; `mission` stays the one writer.
+pub fn in_a_sortie(phase: &State<MissionPhase>) -> bool {
+    let phase = *phase.get();
+    phase.is_running() || phase.is_decided()
+}
+
+/// Playing, or looking at one of the three screens.
 ///
 /// A `Resource` and not a component: this is the state of *this session's screen*, not of a
 /// player. §6 rule 3 forbids putting **player** state in a resource — and it forbids it for a
@@ -151,16 +269,46 @@ pub enum Screen {
     /// there becomes an overlay that does not stop anything. Written down here rather than
     /// discovered later.
     Paused,
+    /// The options. Reached from the pause screen and from nowhere else, so there is exactly
+    /// one route in and `Esc` always knows where "back" is.
+    Settings,
+    /// **The main lobby** — pick a mission, pick a difficulty, deploy. The screen the walk-in
+    /// deployment pads never had, and it starts the same sortie they do.
+    Lobby,
 }
 
 /// On **every** node this domain spawns, containers included — the whole overlay is despawned
-/// by this marker.
+/// by this marker, whichever screen built it.
+///
+/// The name is older than the second and third screens and is kept on purpose: `tests/menu.rs`
+/// is the guard over the pointer and renaming a marker in it would have meant touching tests
+/// that must be able to say they did not move.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct PauseElement;
 
-/// What a button on the pause screen does. Two of them, and that is the whole screen.
+/// On the **root** node only: which screen this plate was built for.
+///
+/// It is what makes [`spawn_menu`] and [`despawn_menu`] a pair instead of six systems — "is
+/// what is on screen still the screen we are on" is one comparison, and a screen added later
+/// answers it without touching either of them.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MenuRoot(pub Screen);
+
+/// What a button on the pause screen does.
+///
+/// `Quit` is quit **to desktop** and keeps its old name: it is the one action that was here
+/// before the other four and `tests/menu.rs::f175_the_quit_button_ends_the_run` names it.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PauseAction {
     Resume,
+    /// Open [`Screen::Settings`].
+    Settings,
+    /// **Give the sortie up** and stand in the hub again. Only on screen inside a sortie —
+    /// there is nothing to abandon in the hub.
+    Abandon,
+    /// Open [`Screen::Lobby`]. Inside a sortie that means giving it up first — the label says
+    /// so ("Quit to lobby"), and the sortie is ended by the same message *Abandon* sends.
+    Lobby,
+    /// To desktop.
     Quit,
 }

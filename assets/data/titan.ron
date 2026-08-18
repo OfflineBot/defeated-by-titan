@@ -24,6 +24,17 @@
 // docs/QUESTIONS.md Q-019 with an assumption and a place to take it back. Corrected below
 // are only the two GEOMETRICALLY impossible cases (cortex larger than the whole head) —
 // not the ratio as a whole.
+//
+// ⚠️ `strike_half_angle_deg` is NEW (2026-08-13, Q-031 option 2) and it is UNTUNED — 55.0 on
+// every kind, which is a guess nobody has played. It is half the arc a blow can land in,
+// off the titan's own forward vector, on the ground plane: with `attack_range_m` it makes the
+// strike a CONE. Until it existed the strike was a cylinder and a player in the titan's back
+// took exactly what a player in his face took (docs/FINDINGS.md FIND-012), which is why
+// `turn_deg_per_s` above governed nothing. Range [30, 90], guarded by
+// tests/combat.rs::every_kind_carries_a_strike_half_angle_in_range.
+// The per-kind spread is the obvious next tuning pass: a bellower who swings a tree should
+// probably cover more arc than a scuttler, and the warden's shielding hand argues the other
+// way. Nothing here is measured, so nothing here is differentiated.
 (
     kinds: {
         // Basis: learning the approach angle. The standard titan on which the player
@@ -33,7 +44,7 @@
                      regen_per_s: 0.8, windup_s: 0.60, 
                      turn_deg_per_s: 50.0, accel_m_s2: 3.0,
                      strike_s: 0.2, recover_s: 0.4,
-                     attack_range_m: 6.0, attack_cooldown_s: 1.5,
+                     attack_range_m: 6.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 1.5,
                      aggro_radius_m: 45.0, death_s: 1.0, health: 100.0, damage: 34.0,
                      model: "titan_husk"),
         // Unpredictable changes of direction -> leading your shots. Stays husk-sized:
@@ -43,7 +54,7 @@
                      regen_per_s: 0.8, windup_s: 0.45, 
                      turn_deg_per_s: 100.0, accel_m_s2: 6.0,
                      strike_s: 0.18, recover_s: 0.37,
-                     attack_range_m: 6.0, attack_cooldown_s: 1.2,
+                     attack_range_m: 6.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 1.2,
                      aggro_radius_m: 50.0, death_s: 1.0, health: 100.0, damage: 30.0,
                      model: "titan_husk"),
         // Very fast, jump attack -> vertical evasion. **The fast small one.**
@@ -60,7 +71,7 @@
                      regen_per_s: 1.1, windup_s: 0.40, 
                      turn_deg_per_s: 150.0, accel_m_s2: 12.0,
                      strike_s: 0.2, recover_s: 0.4,
-                     attack_range_m: 2.5, attack_cooldown_s: 0.9,
+                     attack_range_m: 2.5, strike_half_angle_deg: 55.0, attack_cooldown_s: 0.9,
                      aggro_radius_m: 60.0, death_s: 0.8, health: 60.0, damage: 18.0,
                      model: "titan_husk"),
         // Evasive roll with i-frames -> timing instead of spam. A roll needs a short
@@ -74,7 +85,7 @@
                      regen_per_s: 1.0, windup_s: 0.50, 
                      turn_deg_per_s: 120.0, accel_m_s2: 8.0,
                      strike_s: 0.18, recover_s: 0.37,
-                     attack_range_m: 2.5, attack_cooldown_s: 1.1,
+                     attack_range_m: 2.5, strike_half_angle_deg: 55.0, attack_cooldown_s: 1.1,
                      aggro_radius_m: 50.0, death_s: 0.8, health: 70.0, damage: 22.0,
                      model: "titan_husk"),
         // Shields the cortex with his hand -> arms first, then cortex. The cover only works
@@ -84,7 +95,7 @@
                      regen_per_s: 0.6, windup_s: 0.70, 
                      turn_deg_per_s: 40.0, accel_m_s2: 3.0,
                      strike_s: 0.22, recover_s: 0.48,
-                     attack_range_m: 8.0, attack_cooldown_s: 2.0,
+                     attack_range_m: 8.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 2.0,
                      aggro_radius_m: 40.0, death_s: 1.4, health: 220.0, damage: 55.0,
                      model: "titan_large"),
         // Motionless ambush, grab out of the air -> changes of height, attention.
@@ -95,7 +106,7 @@
                      regen_per_s: 0.7, windup_s: 0.40, 
                      turn_deg_per_s: 45.0, accel_m_s2: 2.0,
                      strike_s: 0.2, recover_s: 0.45,
-                     attack_range_m: 8.0, attack_cooldown_s: 1.8,
+                     attack_range_m: 8.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 1.8,
                      aggro_radius_m: 25.0, death_s: 1.4, health: 200.0, damage: 48.0,
                      model: "titan_large"),
         // Reacts to the sound of gas, calls in reinforcements -> resource discipline.
@@ -106,7 +117,7 @@
                      regen_per_s: 0.5, windup_s: 0.80, 
                      turn_deg_per_s: 30.0, accel_m_s2: 2.0,
                      strike_s: 0.25, recover_s: 0.55,
-                     attack_range_m: 12.0, attack_cooldown_s: 2.5,
+                     attack_range_m: 12.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 2.5,
                      aggro_radius_m: 70.0, death_s: 1.6, health: 320.0, damage: 70.0,
                      model: "titan_large"),
         // Pairs cover each other -> target prioritization, separation. Two equally large
@@ -116,7 +127,7 @@
                      regen_per_s: 0.9, windup_s: 0.55, 
                      turn_deg_per_s: 55.0, accel_m_s2: 4.0,
                      strike_s: 0.2, recover_s: 0.4,
-                     attack_range_m: 6.0, attack_cooldown_s: 1.4,
+                     attack_range_m: 6.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 1.4,
                      aggro_radius_m: 45.0, death_s: 1.0, health: 100.0, damage: 30.0,
                      model: "titan_husk"),
 

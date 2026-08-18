@@ -344,7 +344,13 @@ fn nearest_player(
     best
 }
 
-/// Turn, accelerate, move — **and only in `Pursue`.**
+/// Turn, accelerate, move — **the step only in `Pursue`, the turn also in `Windup`.**
+///
+/// The split is `Q-031`'s answer and it is the load-bearing half of it: a strike cone
+/// (`combat::strike::StrikeTuning::faces`) is worth nothing on a body that cannot bring it to
+/// bear, and until 2026-08-13 the turn hung off the *walk's* gate — `distance_m >
+/// attack_range_m` — so no titan ever turned inside 6 m. See the comment on the two gates
+/// below for why `Strike` and `Recover` stay locked.
 ///
 /// The one writer of a titan's `Transform`. avian is not the second one: the body is
 /// `RigidBody::Kinematic` **and** carries `CustomPositionIntegration`, so `integrate_positions`
@@ -395,16 +401,37 @@ pub(super) fn walk(
             continue;
         }
 
-        let pursuing = *state == TitanState::Pursue
-            && target.player.is_some()
-            && target.distance_m > tuning.attack_range_m;
+        let seen = target.player.is_some();
+
+        // **Turning and walking are two gates, not one.** Until `Q-031` was answered they were
+        // the same line, and `distance_m > attack_range_m` therefore stopped the turn as well
+        // as the step — so a titan did not turn inside his own reach, which is where every
+        // fight happens (`docs/FINDINGS.md` FIND-012, and `turn_deg_per_s` governed nothing).
+        //
+        // `Windup` is the tracking window and `Strike`/`Recover` are not, on purpose:
+        //
+        // - **`Windup`** is where the number the user asked about lives. He telegraphs, the
+        //   player circles, and the husk's 50 °/s decides whether the circle beats the arm.
+        // - **`Strike`** is committed. A titan who tracks through his own blow lands it
+        //   wherever the player went, and `combat::strike`'s cone would be a cylinder again in
+        //   everything but name.
+        // - **`Recover`** is the punish window (`recover_s`). A titan who spends it turning to
+        //   face you has no punish window.
+        // - **`Idle`** has no target to turn to, and **`Death`** never reaches this line.
+        let turning = seen && matches!(*state, TitanState::Pursue | TitanState::Windup);
+        let pursuing =
+            *state == TitanState::Pursue && seen && target.distance_m > tuning.attack_range_m;
 
         if !pursuing {
             // Planted. A titan that keeps sliding through its own wind-up is the "FSM as
-            // decoration" failure, in one line.
+            // decoration" failure, in one line. He may still turn on the spot — that is a
+            // facing, not a gait, and `gait.speed_m_s` stays 0 through all of it.
             gait.speed_m_s = 0.0;
             linear.0 = Vec3::ZERO;
             velocity.0 = Vec3::ZERO;
+        }
+
+        if !turning {
             continue;
         }
 
@@ -426,6 +453,11 @@ pub(super) fn walk(
             }
             let step = (tuning.turn_rad_per_s * dt).min(delta.abs()) * delta.signum();
             transform.rotation = Quat::from_rotation_y(current + step);
+        }
+
+        if !pursuing {
+            // He turned on the spot and that is all he is allowed this tick.
+            continue;
         }
 
         // ---- accelerate and move ----------------------------------------------------

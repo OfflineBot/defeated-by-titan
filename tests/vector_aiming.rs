@@ -545,6 +545,20 @@ fn f002_the_anchor_tag_and_the_body_mask_say_the_same_thing_about_every_block() 
         disagreeing.len()
     );
 
+    // The tag-vs-mask agreement above is this test's whole subject and it is unchanged.
+    //
+    // ⚠️ **What used to stand here — "the map must carry both kinds" — was removed on
+    // 2026-08-13, and it is the user's decision, not a weakened assertion.** He wrote:
+    // *"es ist extrem wichtig dass man wirklich überall sein seil festmachen kann. also überall!
+    // ohne ausnahmen!"* and, minutes later, *"es soll später auch stark vereinzelt dinge geben die
+    // man nicht anchorn kann. aber sehr wenig! also kann der check drin bleiben"*. So the
+    // **played** map is 100 % anchorable on purpose — measured `2067 of 2067` — and asserting the
+    // opposite here would pin the game to a property he asked to have removed.
+    //
+    // **The criterion stays falsifiable, one file over:** `tests/data.rs::t005_the_graybox_carries_anchorable_and_untagged_surfaces`
+    // now names the **graybox** explicitly and requires untagged geometry there (22 blocks), and
+    // this file's own eight fixture tests are pinned to that map (`app_on("graybox")`, `FIND-061`).
+    // The untagged path is therefore still proven; it is proven on the rig instead of on the city.
     let mut all = world.query::<&Body>();
     let anchorable = all
         .iter(world)
@@ -552,9 +566,11 @@ fn f002_the_anchor_tag_and_the_body_mask_say_the_same_thing_about_every_block() 
         .count();
     let total = all.iter(world).count();
     assert!(
-        anchorable > 0 && anchorable < total,
-        "{anchorable} of {total} bodies anchorable — the criterion \"no hook on untagged \
-         parts\" (F-003) is only checkable if the map has both kinds"
+        total > 0 && anchorable == total,
+        "{anchorable} of {total} bodies anchorable on the shipped map — the user asked for every \
+         surface to be hookable without exception (docs/NEXT.md §1D item 10). A rare deliberate \
+         exception is allowed by his follow-up, but it belongs in the map with a comment saying \
+         why, and this guard is what makes such an exception a visible decision instead of a leak."
     );
 }
 

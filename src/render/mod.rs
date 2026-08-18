@@ -35,7 +35,7 @@ pub mod rope;
 use bevy::prelude::*;
 
 use crate::data::GameData;
-use crate::shared::{Block, LocalPlayer};
+use crate::shared::{Block, LocalPlayer, PlayerSettings};
 
 pub struct RenderPlugin;
 
@@ -56,6 +56,7 @@ impl Plugin for RenderPlugin {
                 Update,
                 (
                     attach_camera,
+                    apply_field_of_view,
                     build_block_meshes,
                     camera::rotate_camera,
                     light::follow_the_eye,
@@ -172,6 +173,7 @@ fn log_frame_time(
 fn attach_camera(
     mut commands: Commands,
     data: Res<GameData>,
+    settings: Res<PlayerSettings>,
     new_players: Query<Entity, (With<LocalPlayer>, Without<Children>)>,
     existing: Query<(), With<Camera3d>>,
 ) {
@@ -181,13 +183,17 @@ fn attach_camera(
     let Some(player) = new_players.iter().next() else {
         return;
     };
-    let k = &data.game.camera;
     let camera = commands
         .spawn((
             Name::new("camera"),
             Camera3d::default(),
             Projection::Perspective(PerspectiveProjection {
-                fov: k.fov_deg.to_radians(),
+                // `PlayerSettings` and not `k.fov_deg` since 2026-08-13 — and it is the **same
+                // number** on a fresh run: `shared::settings` seeds the resource out of
+                // `game.ron: camera.fov_deg`. What it buys is that a camera built after the
+                // player changed his FOV is built with the FOV he chose, instead of snapping
+                // to it one frame later in [`apply_field_of_view`].
+                fov: settings.fov_deg.to_radians(),
                 ..default()
             }),
             // Ambient fill, distance fog and exposure — all three are per-view in Bevy 0.19,
@@ -208,6 +214,40 @@ fn attach_camera(
 ///
 /// `render` does not know `world` for that: it asks for a component, not for a function
 /// (`docs/architecture.md`).
+/// The field of view the player set — **`render` stays the one writer of `Projection`.**
+///
+/// `menu` owns the settings screen and writes `shared::PlayerSettings`; it does not touch the
+/// camera. That keeps the authority table true (`docs/architecture.md`: the camera is
+/// `render`'s) and it is the seam `F-017` will need — speed-driven FOV interpolates between
+/// this base and `game.ron: camera.fov_max_speed_deg`, and it has to interpolate from the
+/// player's number, not from the file's.
+///
+/// Runs on a changed resource and compares before it writes: `Projection` is read by the render
+/// world every frame, and re-marking it as changed for a value that did not move is exactly what
+/// §6 rule 6 is about.
+fn apply_field_of_view(
+    settings: Res<PlayerSettings>,
+    mut cameras: Query<&mut Projection, With<Camera3d>>,
+) {
+    if !settings.is_changed() {
+        return;
+    }
+    let want = settings.fov_deg.to_radians();
+    for mut projection in &mut cameras {
+        // Read through `&*` first: a `DerefMut` on a `Mut<Projection>` marks it changed even
+        // when nothing is written, and the change would travel into the render world.
+        let Projection::Perspective(current) = &*projection else {
+            continue;
+        };
+        if (current.fov - want).abs() <= 1e-6 {
+            continue;
+        }
+        if let Projection::Perspective(perspective) = &mut *projection {
+            perspective.fov = want;
+        }
+    }
+}
+
 fn build_block_meshes(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,

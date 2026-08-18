@@ -1208,3 +1208,52 @@ tank, and the last drop is a decision somebody made. Right now that somebody is 
 **Also still yours, and cheaper:** `gas_steer_per_s: 16.0` itself is ⚠️ UNTUNED. It was solved
 out of a ratio, not felt in a swing. If flying ends up feeling stingy, this key is the first
 place to look — and it moves without touching a line of Rust.
+
+---
+
+## Q-031 — RESOLVED as option (2) on 2026-08-13, on your instruction, indirectly
+
+**Whose authority:** yours, but not as an answer to this entry — you never replied to it. You
+asked for **„ein attack system mit gegnern"**, and an attack system in which the enemy's facing
+does not exist is option (1) with extra steps. **`ASSUMPTION:` that instruction outranks the
+silence on this question**, because option (2) is also what the design bible implies everywhere
+it talks about the nape. Say the word and it comes back out; the rollback is below.
+
+**What was built** (`docs/FINDINGS.md` FIND-012 is the hole, FIND-089 is the price):
+
+1. **`titan.ron: <kind>.strike_half_angle_deg: 55.0`**, on all eight kinds, no `serde(default)`.
+   Half the arc a blow lands in, off the titan's forward vector, on the ground plane. With
+   `attack_range_m` the strike volume is now a **cone**, not a cylinder.
+   ⚠️ **UNTUNED and uniform** — 55° is a guess nobody has played, and the per-kind spread is the
+   obvious next pass (a bellower swinging a tree against a warden shielding his own neck).
+2. **A titan turns while winding up.** The turn in `titan::brain::walk` no longer hangs off the
+   *walk's* gate (`distance_m > attack_range_m`), so a titan inside his own reach rotates at his
+   `turn_deg_per_s`. `Strike` and `Recover` stay locked — the blow is committed, and `recover_s`
+   is the punish window.
+
+**The numbers, which is the whole point of the change:**
+
+- rear-arc damage **34 → 0**, frontal **34** — same husk, same 5 m, same height, only the side
+  differs (`tests/combat.rs::a_strike_from_behind_books_no_damage`).
+- a husk in `Windup` inside `attack_range_m` turns **29.167° over 35 ticks = exactly 50 °/s**,
+  where he turned **0.000°** yesterday (`tests/titan.rs::q031_a_titan_turns_while_winding_up`).
+  **That is `Q-029`'s knob becoming a knob.**
+
+**What this costs, measured, not assumed:** the warden's nape pass tightens from 0.20 m to
+0.15 m of air; the husk's is unchanged; `scripts/game-full.txt` still wins 23/23 but at tick
+**899** instead of 898. Full table in FIND-089.
+
+**What has to be rolled back if you pick (1) after all:** two places and one file.
+`src/combat/strike.rs::faces` (delete it and the call in `reaches`), the `turning` gate in
+`src/titan/brain.rs::walk` (back to the one `pursuing` line), and the eight
+`strike_half_angle_deg` keys — and then, per this entry's own original wording, **delete
+`turn_deg_per_s` and `attack_range_m` rather than leaving them as decoration.** The tests that
+would have to go with it are named above plus
+`tests/titan.rs::q031_the_nape_survives_a_titan_who_tracks_you`; the four Q-030 geometry passes
+would drop their `Tracking::Off` switch.
+
+**Still yours, and now worth asking:** `strike_half_angle_deg` is the second untuned number in
+this fight after `turn_deg_per_s`, and the two are read together — a wide cone forgives a slow
+turn. **55° and 50 °/s means a husk covers 30° of a 90° error during his wind-up**, so circling
+him works and standing still does not. If that reads as too easy, the cone narrows before the
+turn speeds up.

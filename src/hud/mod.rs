@@ -105,6 +105,7 @@ pub mod objective;
 use bevy::prelude::*;
 
 use crate::data::GameData;
+use crate::menu::Screen;
 
 pub struct HudPlugin;
 
@@ -157,7 +158,53 @@ impl Plugin for HudPlugin {
                 .after(bevy::transform::TransformSystems::Propagate)
                 .after(bevy::camera::CameraUpdateSystems)
                 .before(bevy::ui::UiSystems::Layout),
+        )
+        // **`PostUpdate`, and that is not a detail.** `menu::toggle_screen` writes `Screen` in
+        // `Update`, and two systems in one schedule have no order between them: placed in
+        // `Update` this would see the old screen roughly half the time and hide the HUD one
+        // frame late — a visible flash of a crosshair across the menu on every `Esc`. Here it
+        // runs after every writer of `Screen` and before the frame's visibility is propagated,
+        // so the menu and the HUD change in the same image.
+        .add_systems(
+            PostUpdate,
+            hide_while_a_menu_is_up
+                .run_if(resource_changed::<Screen>)
+                .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
         );
+    }
+}
+
+/// **The HUD is the game's overlay, and a menu is not the game.**
+///
+/// It was measured drawing over all three screens on 2026-08-13 — the crosshair straight down
+/// the middle of the pause column, the objective counter, the gas bar, the blade pips and the
+/// two arm markers at button height (FIND-092 §4, `docs/images/f175-pause.png`). Freezing
+/// `Time<Virtual>` stops the *simulation*; nothing stopped the drawing.
+///
+/// ## Two rules this obeys, and they are the reason it is four lines
+///
+/// **It writes `Visibility` and never `Node.display`.** Every element in this domain owns its
+/// own `display` — that is how `health_bar`, `blade_pips`, `objective`, `crosshair` and
+/// `arm_aim` hide themselves when their producer is missing — and a second writer of that
+/// field would be exactly the breach §6 rule 3 forbids. `Visibility` on the **roots** is a
+/// field nothing else in this domain touches, it propagates to every child by itself, and it
+/// leaves the pixel-exact `F-170`/`F-171` claims about what is drawn *while playing*
+/// untouched. `tests/menu.rs::f175_the_hud_is_hidden_while_a_menu_is_up` asserts both halves.
+///
+/// **It runs on a change and not per frame** (§6 rule 6): `Screen` changes when somebody
+/// presses a key or a button, which is a handful of times per session.
+fn hide_while_a_menu_is_up(
+    screen: Res<Screen>,
+    mut roots: Query<&mut Visibility, (With<HudElement>, Without<ChildOf>)>,
+) {
+    let want =
+        if *screen == Screen::Playing { Visibility::Inherited } else { Visibility::Hidden };
+    for mut visibility in &mut roots {
+        // Compared before it is written: `Visibility` is change-detected and a blind write
+        // would re-run the propagation over the whole HUD for a value that did not move.
+        if *visibility != want {
+            *visibility = want;
+        }
     }
 }
 

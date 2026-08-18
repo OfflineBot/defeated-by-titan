@@ -26,11 +26,15 @@ pub struct Cli {
     /// **Start in the hub** — the main building you walk around in and start missions from
     /// (user, 2026-08-12). Wins over [`Cli::mission`]: the hub is where a sortie is *chosen*.
     ///
-    /// A flag and not the default, deliberately: making a plain `cargo run` land in the hub
-    /// would put live trigger volumes into every one of the thirty scripts in `scripts/` that
-    /// name no mission — and none of them could be re-run in this session to find out what
-    /// that does to them.
+    /// ⚠️ **Since 2026-08-13 this is what a plain `cargo run` does**, and the flag is only the
+    /// explicit way to say it. It was opt-in for one day, recorded as an assumption with a
+    /// rollback point (`docs/FINDINGS.md` FIND-057 §5), and the user closed it: *„eine main
+    /// lobby in der man die mission starten kann"* — a front door you have to ask for is not a
+    /// front door. [`hub_by_default`] is the whole rule and [`Cli::no_hub`] is the way back.
     pub hub: bool,
+    /// `--no-hub`: **the old behaviour** — start in `Briefing`, an empty session with no hub
+    /// furniture and no live trigger volumes. What every `--script` run gets anyway.
+    pub no_hub: bool,
     /// One run from a text file (§12b). With `assert` it becomes a test.
     pub script: Option<PathBuf>,
     /// For measuring. Under vsync every frame time is 16.6 ms — so "what does this cost?"
@@ -86,6 +90,7 @@ impl Cli {
                 "--offscreen" => s.offscreen = true,
                 "--sandbox" => s.sandbox = true,
                 "--hub" => s.hub = true,
+                "--no-hub" => s.no_hub = true,
                 "--novsync" => s.novsync = true,
                 "--reexport" => s.reexport = true,
                 "--no-export" => s.no_export = true,
@@ -120,6 +125,10 @@ impl Cli {
         if script_forces_headless(s.script.is_some(), s.offscreen, has_display()) {
             s.headless = true;
         }
+        // **The front door.** A run that names no other door starts in the hub.
+        if hub_by_default(s.no_hub, s.mission.is_some(), s.sandbox, s.script.is_some()) {
+            s.hub = true;
+        }
         s
     }
 
@@ -136,6 +145,29 @@ impl Cli {
     pub fn has_gpu(&self) -> bool {
         !self.headless
     }
+}
+
+/// Whether a run with no door named on the command line starts **in the hub**.
+///
+/// > *„und eine main lobby in der man die mission starten kann"* — the user, 2026-08-13.
+///
+/// A function of its own so the rule is one readable line and so it is checkable without
+/// building an app. Three doors turn it off, and each for its own reason:
+///
+/// - `--mission <name>` names a sortie, so it is not asking for a place to choose one;
+/// - `--sandbox` is the empty field for looking around, which a hub full of trigger volumes is
+///   not;
+/// - 🔴 **`--script <file>`, and this is the load-bearing one.** Twenty-eight of the thirty-five
+///   scripts in `scripts/` name no mission, two of them assert `phase == 0` (`p1-overlay.txt`,
+///   `p1-no-overlay.txt`), and every one of them would suddenly run inside a hub with live
+///   deployment pads and supply stations in it — `f-018-gas.txt` measures a tank in a world that
+///   would now have somewhere to refill it. None of them could be re-run in the session that
+///   made this change. **A script run therefore keeps the old behaviour**, and a script that
+///   wants the hub says `--hub`, which `scripts/f070-hub.txt` already does.
+///
+/// [`Cli::no_hub`] turns it off explicitly for the case none of the three covers.
+fn hub_by_default(no_hub: bool, has_mission: bool, sandbox: bool, has_script: bool) -> bool {
+    !no_hub && !has_mission && !sandbox && !has_script
 }
 
 /// Whether a script run is quietly switched over to `--headless`.
@@ -184,7 +216,39 @@ mod tests {
         assert!(s.hub);
         assert!(s.mission.is_none(), "--hub names no mission");
         assert!(s.unknown.is_empty(), "unexpected: {:?}", s.unknown);
-        assert!(!parse(&["--headless"]).hub, "no flag, no hub");
+    }
+
+    /// ★ **The front door, 2026-08-13.** A plain `cargo run` starts where the missions are
+    /// chosen — *„eine main lobby in der man die mission starten kann"*.
+    #[test]
+    fn a_run_that_names_no_door_starts_in_the_hub() {
+        assert!(parse(&[]).hub, "a plain `cargo run` has to land in the hub");
+        assert!(parse(&["--headless", "--ticks", "240"]).hub, "so does a plain headless run");
+        assert!(!parse(&["--no-hub"]).hub, "--no-hub is the way back to the old behaviour");
+        assert!(parse(&["--no-hub"]).unknown.is_empty(), "and it is a known flag");
+        assert!(!parse(&["--mission", "tutorial"]).hub, "a named mission is its own door");
+        assert!(!parse(&["--sandbox"]).hub, "the sandbox is not a hub");
+    }
+
+    /// 🔴 **A script run keeps the old behaviour, and this test is the reason it does.**
+    ///
+    /// Twenty-eight of the thirty-five scripts name no mission and two of them assert
+    /// `phase == 0`. Starting them in a hub would put live deployment pads and refuel stations
+    /// into runs that measure gas and count phases — and not one of them could be re-run on
+    /// the day the default changed.
+    #[test]
+    fn a_script_run_does_not_get_the_hub_by_surprise() {
+        let s = parse(&["--headless", "--script", "scripts/p1-overlay.txt", "--ticks", "400"]);
+        assert!(!s.hub, "a script run must stay in Briefing unless it asked for the hub");
+        let asked = parse(&["--headless", "--hub", "--script", "scripts/f070-hub.txt"]);
+        assert!(asked.hub, "…and a script that asks for it still gets it");
+
+        // Order: (--no-hub, has mission, sandbox, has script)
+        assert!(hub_by_default(false, false, false, false), "nothing named: the hub");
+        assert!(!hub_by_default(true, false, false, false), "--no-hub wins");
+        assert!(!hub_by_default(false, true, false, false), "--mission wins");
+        assert!(!hub_by_default(false, false, true, false), "--sandbox wins");
+        assert!(!hub_by_default(false, false, false, true), "--script wins");
     }
 
     #[test]
@@ -212,9 +276,17 @@ mod tests {
         assert!(s.unknown.iter().any(|u| u.contains("not a number")));
     }
 
+    /// ⚠️ **`Cli::default()` and "no arguments" stopped being the same thing on 2026-08-13.**
+    ///
+    /// `hub` is now derived from what was *not* said, so a flagless command line differs from
+    /// the struct default in exactly one field — and that difference is the front door. The
+    /// struct default stays as it was on purpose: every test in this repository builds its
+    /// `Cli` with `..default()`, and a default that started a hub would have moved several
+    /// hundred of them into a world with live trigger volumes in it.
     #[test]
-    fn empty_args_yield_the_defaults() {
-        assert_eq!(parse(&[]), Cli::default());
+    fn empty_args_yield_the_defaults_except_the_front_door() {
+        assert_eq!(parse(&[]), Cli { hub: true, ..Cli::default() });
+        assert!(!Cli::default().hub, "the struct default stays Briefing — the tests live on it");
     }
 
     #[test]

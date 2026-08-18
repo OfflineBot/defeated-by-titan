@@ -43,12 +43,37 @@ debug -> player    # the F3 overlay prints whether the player is FLYING, and fli
                    #  current state, not an event — and mirroring the answer into shared/
                    #  would give the player's state a second writer for the sake of one text
                    #  line. Read-only, and the derivation stays `player`'s alone.
+menu -> mission    # the Escape menu offers *Abandon sortie* inside a sortie and *Mission
+                   #  select* outside one, and that is the same argument the `hud` line below
+                   #  makes: a screen has to be right in the frame it is drawn in, so it needs
+                   #  the STATE (`State<MissionPhase>`) and not an event that fired three ticks
+                   #  ago. **Read-only, one predicate** (`menu::in_a_sortie`) — the buttons that
+                   #  act write `shared::DeployRequest` and `shared::AbandonSortie`, and
+                   #  `mission::take_orders_from_the_menu` is what sets the phase. `mission`
+                   #  stays the one writer of mission state, exactly as `vector` stayed the one
+                   #  writer of `Gas` when a refuel station started asking instead of writing
+                   #  (FIND-063). A message will not do for the READ half — "is a sortie
+                   #  running" is state, and mirroring it into shared/ would give it a second
+                   #  writer for the sake of one button's label.
 hud -> mission     # the objective line draws the kill counter and the verdict, and
                    #  `docs/PLAN-GAME.md` §1 makes both part of "playable": `0/3 -> 1/3`
                    #  and the word WON/LOST. Same reason as the line above and no other:
                    #  a HUD has to be right in the frame it is drawn in, so it needs the
                    #  STATE (`KillTally`, `State<MissionPhase>`), not a TitanHit that
                    #  fired three ticks ago. Read-only — `mission` stays the one writer.
+hud -> menu        # the HUD is the GAME's overlay and a menu is not the game: the crosshair
+                   #  ran straight down the middle of the pause column, and the objective
+                   #  counter, the gas bar, the blade pips and the Q/E markers drew over all
+                   #  three screens (FIND-092 §4, `docs/images/f175-pause.png`). Same argument
+                   #  as the two lines above and no other: what is on screen has to be right in
+                   #  the frame it is drawn in, so `hud::hide_while_a_menu_is_up` needs the
+                   #  STATE (`menu::Screen`) and not an event that fired three ticks ago.
+                   #  **Read-only, one comparison** — `menu` stays the one writer of `Screen`,
+                   #  and this system writes only the HUD's own `Visibility`, never a
+                   #  `Node.display`, which is what keeps the pixel-exact F-170/F-171 claims
+                   #  true while playing. A message will not do: "is a menu up" is state, and
+                   #  mirroring it into shared/ would give it a second writer for the sake of
+                   #  one overlay.
 titan -> mission   # a titan's LIFETIME is his sortie: `titan::spawn_titan` hangs
                    #  `DespawnOnExit(MissionPhase::Active)` on the rig root, so the bodies of a
                    #  finished sortie stop existing in the same transition as its pending waves
@@ -120,7 +145,7 @@ toss at 60 Hz — and over the network a divergence nobody can reproduce (§5 ru
 | `Gas` — **one writer again since 2026-08-12** (the second writer stood for one day) | **`vector::gas` and nothing else.** It debits in `gas_budget` (`Intent`) and it is the only thing that ever raises a tank, in `apply_refuel_requests` (`Intent`, one tick after the request). A refuel station is `mission` furniture and **asks**: `mission::hub::refuel_at_stations` writes `shared::RefuelRequest` in `PostStep` and holds no `&mut Gas` anywhere | `hud`, `sound`. The message lives in `shared`, so no domain edge was bought for it. Red test: `tests/mission.rs::f072_a_station_asks_for_gas_and_never_writes_the_tank_itself` runs the station with **no `vector` in the app** — the shape a whole-app test cannot see. History and the one-tick cost: `FINDINGS.md` FIND-063, the violation it replaced FIND-057 §2 |
 | titan body (limbs, cortex) | `titan` | `combat` reads, sends messages |
 | `shared::ModelAnchors` (the empties a swapped glTF brings: `cortex`, `hook.l/r`, `hand.l/r`, `eye`, `hit.min/max`) | **`render::model`** — it is the only thing that reads a loaded scene's node tree | `titan::rig` (the `cortex` anchor overrides the position computed from `scale.ron`; **no anchor ⇒ no write at all**, so the computed value stands unchanged) |
-| mission state | `mission` | `hud`, `squad` |
+| mission state | `mission` | `hud`, `squad`, and since 2026-08-13 `menu` — **read-only**: the Escape menu offers *Abandon sortie* only inside one. The two buttons that act write `shared::DeployRequest` / `shared::AbandonSortie` and `mission::take_orders_from_the_menu` is what sets the phase, so the lobby is a front door to `hub::deploy_on_contact`'s mechanism and not a second one |
 | save game | `save` | `progress` |
 
 ## The three separations that do not get blurred

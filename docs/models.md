@@ -217,6 +217,7 @@ the user has said nothing about.
 | Small house (1 story) | 4.5 m | eaves 3 m |
 | Town house (2 stories) | 8 m | eaves 6 m |
 | Large house (3 stories) | 11.5 m | upper limit of the residential stock |
+| Tall house (5 stories) | 18 m | **rare** — `maps.ron: layout.tall_fraction`, and the answer to [Q-036](QUESTIONS.md) |
 | Tree | 12 m | foreground layering |
 | Watchtower on the wall | 12 m | |
 | Church / bell tower | 35 m | landmark, not a grid house |

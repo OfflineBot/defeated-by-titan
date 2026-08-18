@@ -57,7 +57,8 @@ use bevy::prelude::*;
 
 use super::Inbox;
 use crate::data::GameData;
-use crate::shared::{LookOverride, Intent, LocalPlayer, PlayerId, Buttons, Tick};
+use crate::shared::settings::step_spread;
+use crate::shared::{LookOverride, Intent, LocalPlayer, PlayerId, PlayerSettings, Buttons, Tick};
 
 /// Reads the real input and posts an [`Intent`] built from it into the inbox.
 ///
@@ -75,8 +76,8 @@ pub fn read_input(
     data: Res<GameData>,
     mut inbox: ResMut<Inbox>,
     mut look_override: ResMut<LookOverride>,
+    mut settings: ResMut<PlayerSettings>,
     mut look: Local<Look>,
-    mut spread: Local<Spread>,
     mut space: Local<DodgeTap>,
     local: Query<&PlayerId, With<LocalPlayer>>,
 ) {
@@ -86,7 +87,13 @@ pub fn read_input(
         return;
     };
 
-    let k = &data.game.camera;
+    // ⚠️ **The mouse reads `PlayerSettings`, not `game.ron` — since 2026-08-13.** The two
+    // start out as the same number (`shared::settings` seeds the resource out of
+    // `game.ron: camera`); what changed is that the person at the keyboard may move it
+    // afterwards, which is the whole of *„zudem fehlen settings"*. `game.ron` stays the source
+    // of the **starting** value and of everything the simulation is balanced with; a
+    // sensitivity is neither.
+    let degrees_per_px = settings.mouse_deg_per_px.to_radians();
     // Taken **unconditionally**, before the branch: an absolute `look` must not be dragged
     // off its angle one tick later by motion that was buffered before it. `tests/input.rs::
     // p3_a_script_look_still_overrides_the_mouse` is that sentence as a test.
@@ -97,9 +104,13 @@ pub fn read_input(
         look.yaw = yaw;
         look.pitch = pitch;
     } else {
-        look.yaw -= d.x * k.mouse_deg_per_px.to_radians();
-        look.pitch = (look.pitch - d.y * k.mouse_deg_per_px.to_radians())
-            .clamp(-k.pitch_limit_deg.to_radians(), k.pitch_limit_deg.to_radians());
+        look.yaw -= d.x * degrees_per_px;
+        // **Invert Y is a factor, not a branch.** `pitch_sign()` is `+1` or `-1`, so the line
+        // below is the same line it was before the setting existed — and there is no second
+        // path through it that only inverted players ever take.
+        let limit = settings.pitch_limit_deg.to_radians();
+        look.pitch = (look.pitch - settings.pitch_sign() * d.y * degrees_per_px)
+            .clamp(-limit, limit);
     }
 
     let jump = keys.pressed(KeyCode::Space);
@@ -161,14 +172,25 @@ pub fn read_input(
     // once, on one tick, whatever the frame rate is doing (`B-002`, and [`gather_mouse_motion`]
     // is where it is summed). What travels is the resulting **absolute** angle — see
     // [`Spread`] and `Intent::aim_spread_deg` for why a delta on the wire is not an option.
+    //
+    // ⚠️ **The accumulator moved into `PlayerSettings` on 2026-08-13**, and that is not a
+    // refactor: the settings screen has a row for this angle, and while the live value sat in a
+    // `Local` here the screen could neither show it nor change it. One field, two devices — the
+    // wheel and the slider — and no second copy anywhere (`src/shared/settings.rs`).
     let v = &data.game.vector;
-    let aim_spread_deg = spread.turn(
+    let aim_spread_deg = step_spread(
+        settings.aim_spread_deg,
         std::mem::take(&mut mouse_motion.scroll_notches),
-        v.aim_spread_deg,
         v.aim_spread_step_deg,
         v.aim_spread_min_deg,
         v.aim_spread_max_deg,
     );
+    // Written only when it really moved: a `DerefMut` on a resource marks it changed for every
+    // reader, this runs every tick, and `menu::despawn_menu` rebuilds a screen on a changed
+    // setting (§6 rule 6).
+    if aim_spread_deg != settings.aim_spread_deg {
+        settings.aim_spread_deg = aim_spread_deg;
+    }
 
     inbox.push(
         me,
@@ -266,9 +288,18 @@ pub struct Look {
 /// `docs/multiplayer.md`). That is also why this is the same `Local` shape as [`Look`], which
 /// accumulates the mouse for exactly the same reason.
 ///
-/// `None` until the first tick: a `Local` cannot be initialised out of a resource, so the
-/// starting value is fetched from `game.ron` (`vector.aim_spread_deg`) the first time
-/// [`Spread::turn`] is called. **No copy of that number lives in this file** (§6 rule 2).
+/// `None` until the first turn: the starting value is fetched from `game.ron`
+/// (`vector.aim_spread_deg`) the first time [`Spread::turn`] is called. **No copy of that number
+/// lives in this file** (§6 rule 2).
+///
+/// ⚠️ **[`read_input`] no longer holds one of these.** Since 2026-08-13 the live angle is
+/// `shared::PlayerSettings::aim_spread_deg`, because the settings screen has a row for it and a
+/// value hidden in a `Local` is a value no screen can show (`src/menu/settings.rs`). The type
+/// stays, and it stays exact: it is the **accumulator over a sequence of notches**, which is
+/// what `tests/input.rs::f023_two_different_starting_points_converge_on_the_same_angle` and
+/// `tests/multiplayer.rs::f023_a_dropped_packet_does_not_desync_the_aim_spread` drive directly,
+/// and both go through the same [`step_spread`] the live path does — so the property they prove
+/// is a property of the shipping code and not of a museum piece.
 #[derive(Default)]
 pub struct Spread(Option<f32>);
 
@@ -290,7 +321,7 @@ impl Spread {
         max_deg: f32,
     ) -> f32 {
         let current = self.0.unwrap_or(start_deg);
-        let next = (current + notches * step_deg).clamp(min_deg, max_deg);
+        let next = step_spread(current, notches, step_deg, min_deg, max_deg);
         self.0 = Some(next);
         next
     }

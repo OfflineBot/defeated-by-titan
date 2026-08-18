@@ -453,6 +453,13 @@ pub struct Map {
     /// Seed for `shared::Rng`. Part of the state, **never** `rand::random()`.
     pub seed: u64,
     pub layout: Layout,
+    /// How the ground under the layout is stepped.
+    ///
+    /// **Explicit, never defaulted** (§4): a map that forgets the key fails to load. A map
+    /// that wants no terrain writes `levels: 1, step_m: 0.0` and says so — which is exactly
+    /// what `graybox` does, and it has to, because eight tests in `tests/vector_aiming.rs`
+    /// and four in `tests/player.rs` reason about `y = 0` on that fixture.
+    pub terrain: Terrain,
     /// Explicitly placed boxes. They beat the generated layout.
     pub blocks: Vec<MapBlock>,
     /// The lamps that hang **inside** this map's buildings.
@@ -468,6 +475,61 @@ pub struct Map {
     /// and costs the exterior its shadows 1:1, and the boxes in the room stay flat
     /// rectangles because nothing gives them a lit face and a dark one.
     pub lights: Vec<MapLight>,
+}
+
+/// The stepped ground under the district — every number the plateaus and their stairs need.
+///
+/// The user, 2026-08-13: *„adde verschiedene höhen vom boden her! lass es wie die echte stadt
+/// aussehen! aktuell kann man es noch nicht erkennen!"*. Until that day the ground was one
+/// 700 x 700 m slab at `y = -0.1` and every house in the district stood on `y = 0`.
+///
+/// The generator is [`shared::TerrainField`](crate::shared::TerrainField); what stands here is
+/// only the shape of the result. **Everything is a length or a count** — the code holds the
+/// mechanics and not one of these figures (`docs/conventions.md` §4).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Terrain {
+    /// Edge of one terrain cell. **An exact multiple of `Layout::lot_m + Layout::street_m`**,
+    /// and `world::map` asserts it: the cell boundary then always falls in the middle of a
+    /// street and never through a house, which is the only reason the terraces can have a
+    /// cliff at all.
+    pub cell_m: f32,
+    /// How much one level is worth. `0.0` together with `levels: 1` means "no terrain".
+    pub step_m: f32,
+    /// How many levels there are, the flat ground counted. `1` = flat.
+    pub levels: u32,
+    /// The radius around the origin that stays at level 0. The player spawns there, and a
+    /// terrace under a spawn point is a player standing inside the ground.
+    /// `>= Layout::clear_radius_m`, or the pads reach into the space the layout keeps free.
+    pub flat_radius_m: f32,
+    /// One riser of the stairs that lead up a terrace. `step_m` has to be a whole multiple of
+    /// it, or the last step of a flight does not land on the plateau.
+    pub stair_rise_m: f32,
+    /// One tread. Bounded from above by `street_m / 2 - cell_jitter_m`, because the flight is
+    /// cut into the terrace's own edge and must not undercut the house standing on it —
+    /// `world::map` asserts that arithmetic rather than clamping it.
+    pub stair_tread_m: f32,
+    /// Anything hand-placed in `Map::blocks` whose top is **at or below** this is ground —
+    /// paving, the slab itself — and a terrace may cover it. Anything **above** it is a
+    /// structure, and its cell is pinned flat: a terrace cannot bury a door, a market stall or
+    /// a quay wall. It is also where a pad's underside sits, so the pad touches the paving
+    /// instead of intersecting it.
+    pub paving_top_m: f32,
+    /// How far a terrace stops short of a **pillar** it is cut around.
+    ///
+    /// A hand-placed block that stands on the ground and reaches a door's height above the
+    /// terrain's ceiling — a tree, a bell tower, a gantry leg, the church — does not pin its
+    /// cell flat: the terrace is cut around its footprint and the pillar itself plugs the hole,
+    /// because it is solid from the ground up. Without a gap the cut edge would sit exactly on
+    /// the pillar's face, and `world::map::overlaps` — two different float sums of the same
+    /// algebra — would decide `tests/world.rs::f003_no_grid_house_stands_inside_a_placed_block`
+    /// by one ULP. One centimetre is invisible and a 0.35 m capsule cannot fall into it.
+    pub pillar_gap_m: f32,
+    /// The colour key of the terrace top, out of [`Maps::palette`].
+    pub color: String,
+    /// The colour key of the stairs. Its own key, and not the terrace's: a flight you cannot
+    /// tell from the plateau is a step the player walks into.
+    pub stair_color: String,
 }
 
 /// The rule `world` deterministically generates buildings from.
@@ -502,6 +564,26 @@ pub struct Layout {
     pub perimeter: Option<Perimeter>,
     /// Allowed color keys out of [`Maps::palette`].
     pub colors: Vec<String>,
+    /// Into how many stacked, progressively pulled-in caps the roof rise is cut.
+    ///
+    /// `1` is the flat cap the district had until 2026-08-13. Above that the roof reads as a
+    /// **stepped pitch** from the air, which is the half of *„aktuell kann man es noch nicht
+    /// erkennen"* the ground cannot answer: a roofscape of equal flat lids is a mosaic
+    /// whatever the ridge heights do. `2 * Roof::inset_fraction * roof_steps < 1`, or the top
+    /// step has no extent left — `world::map` asserts it.
+    pub roof_steps: u32,
+    /// The fraction of generated houses that are built to [`Self::tall_height_key`] instead of
+    /// out of `min_height_m..max_height_m`, 0..1.
+    ///
+    /// **The answer to `Q-036`**, which named the gap: `scale.ron: architecture.heights_m`
+    /// stopped at 11.5 m for a house and the next entry was the 35 m church, so a district
+    /// built only out of the residential band has 5 m of spread over 700 m of town and reads
+    /// flat from anywhere. A few per cent of a taller class is what gives the block means
+    /// something to differ by.
+    pub tall_fraction: f32,
+    /// Which key of `scale.ron: architecture.heights_m` a tall house is built to. A name and
+    /// not a number, so the height itself stays where every other height of this world lives.
+    pub tall_height_key: String,
 }
 
 /// The closed block: how one grid cell is turned into a ring of houses.
@@ -769,6 +851,21 @@ pub struct TitanKind {
     /// How close the target has to be before `Pursue → Windup` fires. Roughly arm reach:
     /// `arm_fraction × height + width/2`.
     pub attack_range_m: f32,
+    /// **Half the width of the arc a blow can be landed in**, in degrees off the titan's own
+    /// forward vector, measured on the ground plane. Together with `attack_range_m` it is the
+    /// strike volume: a cone, not a cylinder.
+    ///
+    /// **This is what makes `turn_deg_per_s` a number and the nape a design.** Until `Q-031`
+    /// was answered on 2026-08-13 the strike had no angle at all
+    /// (`docs/FINDINGS.md` FIND-012) — a player in the titan's back took exactly what a player
+    /// in his face took, and coming from behind bought nothing.
+    ///
+    /// ⚠️ **UNTUNED**, and uniform across all kinds on purpose: 55° is a guess that has never
+    /// been played. Range `[30, 90]`, guarded by
+    /// `tests/combat.rs::every_kind_carries_a_strike_half_angle_in_range` — under 30° a titan
+    /// whiffs at a player standing straight in front of him, at 90° the cone is a half-space
+    /// and the approach angle stops meaning anything again.
+    pub strike_half_angle_deg: f32,
     pub attack_cooldown_s: f32,
     /// How close the target has to be before `Idle → Pursue` fires. Stands in for the whole
     /// perception model `F-051`, which is not built.
@@ -1086,6 +1183,185 @@ pub struct Fog {
 }
 
 // ---------------------------------------------------------------------------
+// A map that does not reorder the file
+// ---------------------------------------------------------------------------
+
+/// A RON map read **in the order it was written**.
+///
+/// ## Why this exists instead of a `BTreeMap`
+///
+/// `missions.ron` lists the difficulty levels `recruit → veteran → elite` and the templates
+/// `tutorial → skirmish`. That order is a design decision — easiest first, tutorial first — and
+/// a `BTreeMap` throws it away, because a `BTreeMap` sorts by the *key* and the key is a
+/// spelling. The lobby therefore offered `Elite | Recruit | Veteran`: the hardest level first
+/// and the easiest one in the middle, with the tutorial behind the real mission
+/// (FIND-092 §4, `docs/images/f175-lobby.png`).
+///
+/// **The fix belongs here and not in the UI.** A screen that re-sorts what it was handed is one
+/// screen doing it; the next consumer — a save file, a log line, a mission-select on a
+/// controller — gets the alphabet again. The file is the authority on order for the same reason
+/// it is the authority on the numbers (§6 rule 2), so the container the file lands in has to be
+/// able to *hold* an order.
+///
+/// The alternative was an explicit `order: u8` per entry in the RON. It was not taken: it adds
+/// a number that can disagree with the thing it orders (two entries with `order: 2`, an entry
+/// whose order was never updated after a move), it has to be typed correctly by hand on every
+/// future entry, and it answers a question the file already answers by being a list of lines.
+/// This container needs **no RON change at all** — `missions.ron` is byte-identical across this
+/// fix, which is also what makes the red test above it trustworthy.
+///
+/// ## What it is not
+///
+/// Not a general-purpose map: lookup is a linear scan over a handful of entries read once at
+/// startup, and it is deliberately not indexed. A **duplicate key is a load error**, not a
+/// silent overwrite — the same choice as the missing-value rule (§6 rule 2): a file that says a
+/// thing twice is a file somebody edited wrong.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderedMap<K, V> {
+    entries: Vec<(K, V)>,
+}
+
+impl<K, V> Default for OrderedMap<K, V> {
+    fn default() -> Self {
+        Self { entries: Vec::new() }
+    }
+}
+
+impl<K: Eq, V> OrderedMap<K, V> {
+    /// The value under `key`, or `None`. Linear — see the type's note.
+    pub fn get<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: std::borrow::Borrow<Q>,
+        Q: Eq + ?Sized,
+    {
+        self.entries.iter().find(|(k, _)| k.borrow() == key).map(|(_, v)| v)
+    }
+
+    /// The value under `key`, to be changed. Only tests do this — they bend one number of a
+    /// loaded file rather than shipping a second copy of it.
+    pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: std::borrow::Borrow<Q>,
+        Q: Eq + ?Sized,
+    {
+        self.entries.iter_mut().find(|(k, _)| k.borrow() == key).map(|(_, v)| v)
+    }
+
+    /// Whether `key` is in the file.
+    pub fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        K: std::borrow::Borrow<Q>,
+        Q: Eq + ?Sized,
+    {
+        self.get(key).is_some()
+    }
+
+    /// The keys, **in file order**.
+    pub fn keys(&self) -> impl DoubleEndedIterator<Item = &K> + ExactSizeIterator {
+        self.entries.iter().map(|(k, _)| k)
+    }
+
+    /// The values, **in file order**.
+    pub fn values(&self) -> impl DoubleEndedIterator<Item = &V> + ExactSizeIterator {
+        self.entries.iter().map(|(_, v)| v)
+    }
+
+    /// Pairs, **in file order**.
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (&K, &V)> + ExactSizeIterator {
+        self.entries.iter().map(|(k, v)| (k, v))
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+impl<'a, K: Eq, V> IntoIterator for &'a OrderedMap<K, V> {
+    type Item = (&'a K, &'a V);
+    type IntoIter = std::iter::Map<
+        std::slice::Iter<'a, (K, V)>,
+        fn(&'a (K, V)) -> (&'a K, &'a V),
+    >;
+
+    fn into_iter(self) -> Self::IntoIter {
+        fn split<K, V>(pair: &(K, V)) -> (&K, &V) {
+            (&pair.0, &pair.1)
+        }
+        self.entries.iter().map(split as fn(&'a (K, V)) -> (&'a K, &'a V))
+    }
+}
+
+impl<K, Q, V> std::ops::Index<&Q> for OrderedMap<K, V>
+where
+    K: Eq + std::borrow::Borrow<Q>,
+    Q: Eq + ?Sized + std::fmt::Debug,
+{
+    type Output = V;
+
+    fn index(&self, key: &Q) -> &V {
+        self.get(key).unwrap_or_else(|| panic!("no entry {key:?} in this map"))
+    }
+}
+
+impl<K: Eq, V> FromIterator<(K, V)> for OrderedMap<K, V> {
+    fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
+        let mut entries: Vec<(K, V)> = Vec::new();
+        for (k, v) in iter {
+            match entries.iter_mut().find(|(existing, _)| *existing == k) {
+                Some(slot) => slot.1 = v,
+                None => entries.push((k, v)),
+            }
+        }
+        Self { entries }
+    }
+}
+
+impl<'de, K, V> Deserialize<'de> for OrderedMap<K, V>
+where
+    K: Deserialize<'de> + Eq + std::fmt::Debug,
+    V: Deserialize<'de>,
+{
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct InOrder<K, V>(std::marker::PhantomData<(K, V)>);
+
+        impl<'de, K, V> serde::de::Visitor<'de> for InOrder<K, V>
+        where
+            K: Deserialize<'de> + Eq + std::fmt::Debug,
+            V: Deserialize<'de>,
+        {
+            type Value = OrderedMap<K, V>;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a map whose order is meant to survive")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut entries: Vec<(K, V)> = Vec::with_capacity(map.size_hint().unwrap_or(0));
+                while let Some((k, v)) = map.next_entry::<K, V>()? {
+                    if entries.iter().any(|(existing, _)| *existing == k) {
+                        return Err(serde::de::Error::custom(format!(
+                            "the key {k:?} is in this map twice — one of the two is a typo, \
+                             and a silent overwrite would hide it"
+                        )));
+                    }
+                    entries.push((k, v));
+                }
+                Ok(OrderedMap { entries })
+            }
+        }
+
+        deserializer.deserialize_map(InOrder(std::marker::PhantomData))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // missions.ron / traits.ron — still nearly empty, but present and loaded
 // ---------------------------------------------------------------------------
 
@@ -1094,7 +1370,9 @@ pub struct Fog {
 pub struct Missions {
     /// The place the game is played **out of** — the main building (user, 2026-08-12).
     pub hub: HubLayout,
-    pub templates: BTreeMap<String, MissionTemplate>,
+    /// **Ordered, and that is load-bearing**: the lobby's mission row is this list, left to
+    /// right, and `missions.ron` puts the tutorial first on purpose.
+    pub templates: OrderedMap<String, MissionTemplate>,
 }
 
 /// Where the hub's furniture stands. **Layout, not tuning** — every number here is a place in
@@ -1156,7 +1434,10 @@ pub struct MissionTemplate {
     ///
     /// May be empty — the tutorial has no levels, it is the tutorial. A hub door that names a
     /// difficulty which is not in here refuses to deploy, loudly.
-    pub difficulties: BTreeMap<String, Difficulty>,
+    ///
+    /// **Ordered, and that is load-bearing**: this list *is* the lobby's difficulty row, and
+    /// the file runs easiest → hardest. See [`OrderedMap`].
+    pub difficulties: OrderedMap<String, Difficulty>,
 }
 
 /// One difficulty level of one mission. **A set of numbers, never an `if`** (§4).

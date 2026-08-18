@@ -135,6 +135,38 @@
                 // arm in world/map.rs is byte-for-byte the generator these tests grew up on.
                 perimeter: None,
                 colors: ["stone_gray", "brick_red", "sand_brown"],
+                // A flat lid, and no tall class. The fixture stays the world the eight aiming
+                // tests grew up on — every new shape is Ashgate's.
+                roof_steps: 1,
+                tall_fraction: 0.0,
+                tall_height_key: "house_tall",
+            ),
+
+            // ⚠️ **PROVABLY FLAT, and that is not laziness.** `levels: 1` and `step_m: 0.0`
+            // make `shared::TerrainField` return 0 for every cell, so `world::map` emits not
+            // one terrace and every generated house stands on `y = 0` exactly as it did
+            // before 2026-08-13.
+            //
+            // It has to: eight tests in `tests/vector_aiming.rs` and four in `tests/player.rs`
+            // are pinned to this fixture (`docs/FINDINGS.md` FIND-061) and every one of them
+            // reasons about `y = 0` — a roof height, a fall, a ray that starts at eye level.
+            // Terracing the graybox would leave all twelve green while measuring a world they
+            // were never written against, which is the most expensive kind of green there is.
+            //
+            // The remaining fields are not defaults either (§4, no `serde(default)`): they say
+            // what the terrain WOULD be, so that turning it on here is one number and not a
+            // re-derivation.
+            terrain: (
+                cell_m: 35.0,
+                step_m: 0.0,
+                levels: 1,
+                flat_radius_m: 30.0,
+                stair_rise_m: 0.30,
+                stair_tread_m: 0.60,
+                paving_top_m: 0.06,
+                pillar_gap_m: 0.01,
+                color: "olive_green",
+                stair_color: "stone_gray",
             ),
 
             // Explicitly placed. Until 2026-08-09 the blocks were 1:1 the ones out of
@@ -566,6 +598,98 @@
                     )),
                 )),
                 colors: ["stone_gray", "brick_red", "sand_brown"],
+                // ## The roof, in three steps instead of one lid — 2026-08-13
+                //
+                // The user: *„lass es wie die echte stadt aussehen! aktuell kann man es noch
+                // nicht erkennen!"*. Half of that is the ground (see `terrain` below) and half
+                // of it is what you see from the air, which in this game is nothing but roofs.
+                // One flat cap per house gives every house the same silhouette; three stacked
+                // caps, each pulled in one notch further, give it a ridge line.
+                // 3 and not 4: at `inset_fraction` 0.12 the top step of four keeps
+                // 1 - 2*0.12*4 = 4 % of the footprint, which on a 12 m house is a 0.5 m sliver
+                // that reads as a chimney. Three keeps 28 %.
+                roof_steps: 3,
+                // ## The tall class — `Q-036`, answered by a number instead of by a gantry
+                //
+                // 8 % of the houses are built to `scale.ron: architecture.heights_m
+                // house_tall` (18 m) instead of out of the 6.5..11.5 band. On a ring of ~10
+                // houses that is not quite one, so a quarter has a handful and a street front
+                // has one or none — which is what a real town looks like and what a band
+                // cannot produce however wide it is made.
+                // Not higher: 8 % over 2000 houses is ~160 buildings at 18 m, and every one of
+                // them is also an anchor 6.5 m above its neighbours. Above ~12 % the district
+                // stops being flat and starts being a skyline, which the design bible
+                // deliberately does not want (`scale.ron: architecture`).
+                tall_fraction: 0.08,
+                tall_height_key: "house_tall",
+            ),
+
+            // ================================================================================
+            // THE GROUND — until 2026-08-13 there was none. The user, that day:
+            //   *„adde verschiedene höhen vom boden her! lass es wie die echte stadt aussehen!
+            //    aktuell kann man es noch nicht erkennen!"*
+            // ================================================================================
+            //
+            // ## cell_m 42, and it is the number that was argued longest
+            //
+            // It has to be a whole multiple of `lot_m + street_m` = 42 (asserted in
+            // `world::map`), so the terrace edge falls in the middle of a street and never
+            // through a house. 84 was the first design and it is worse **here**, for a reason
+            // that is a property of this map and not of terrain in general: every cell that
+            // carries something hand-placed is pinned flat, and this district's hand-placed
+            // things run in long lines — the canal (x -85..-55), the gantry spine (x ±10..18),
+            // the wall (z <= -98). At 84 m each of those pins an 84 m column or row and three
+            // of eight columns die; at 42 the same geometry pins 42 m and the district keeps
+            // about twice as much terraced ground. Small cells also mean the ground changes
+            // every block instead of every second one, which is what "you can see it" means on
+            // foot.
+            //
+            // ## step_m 0.9 over 5 levels = 3.6 m of relief
+            //
+            // 0.9 m is one deep doorstep — visible from across a street, and three risers of
+            // 0.30 m walk it. The ceiling is 4 * 0.9 = 3.6 m, about a third of a house: enough
+            // that a quarter reads as higher ground and not so much that the roofscape's own
+            // proportions (`d < H`, FIND-041) change.
+            //
+            // ## The two stair numbers are bounded, not chosen
+            //
+            //   stair_rise_m 0.30 — `step_m` must be a whole multiple of it (3 risers), and
+            //     0.30 is below the player capsule's 0.35 m radius, which is what lets a
+            //     dynamic capsule ride up a box step at all instead of stopping at it.
+            //   stair_tread_m 0.60 — a flight runs (3-1) * tread into the terrace's own edge,
+            //     and a house stands `street_m / 2 - cell_jitter_m` = 3.0 - 1.5 = 1.5 m back
+            //     from the boundary. 2 * 0.60 = 1.20 m fits with 0.30 m to spare; 0.90 m of
+            //     tread would run 1.80 m and cut the stairs out from under the facade.
+            //     `world::map` asserts exactly this instead of clamping it.
+            //
+            // ## paving_top_m 0.06, and the last digit is deliberate
+            //
+            // Everything hand-placed whose top is at or below this counts as ground and may be
+            // covered by a terrace; everything above it pins its cell flat. The paving of this
+            // map has its top edge at exactly 0.05 m, and 0.06 is also where a pad's underside
+            // sits — a pad flush at 0.05 would decide `world::map::overlaps` by one ULP, and
+            // `tests/world.rs::f003_no_grid_house_stands_inside_a_placed_block` would go red or
+            // green depending on the rounding of two different sums.
+            terrain: (
+                cell_m: 42.0,
+                step_m: 1.5,
+                levels: 6,
+                // >= layout.clear_radius_m 24.0. The player spawns at (0, 2, 0) and the hub
+                // pads stand around him at y = 0 (`missions.ron`); a terrace under any of them
+                // is a pad inside the ground.
+                flat_radius_m: 30.0,
+                stair_rise_m: 0.30,
+                stair_tread_m: 0.60,
+                paving_top_m: 0.06,
+                // One centimetre of air between a terrace and the tree, bell tower or gantry
+                // leg it is cut around — see `data::Terrain::pillar_gap_m` for the ULP this
+                // buys off. Invisible, and a 0.35 m capsule cannot fall into it.
+                pillar_gap_m: 0.01,
+                // The terrace top is the same sand as the ground slabs it rises out of — it IS
+                // the ground, one storey up. The stairs are stone, so a flight reads as a
+                // flight from the street and not as a shadow.
+                color: "sand_brown",
+                stair_color: "stone_gray",
             ),
 
             blocks: [
@@ -632,79 +756,79 @@
 
                 // ---- The wall: 120 m, battered 45 m -> 28 m, one course per 15 m band --
                 // main wall
-                (center_m: (-218.0, 7.5, -120.0), size_m: (264.0, 15.0, 43.94), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (-34.0, 7.5, -120.0), size_m: (40.0, 15.0, 43.94), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (182.0, 7.5, -120.0), size_m: (336.0, 15.0, 43.94), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (-70.0, 13.5, -120.0), size_m: (32.0, 3.0, 43.09), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (-182.0, 22.5, -120.0), size_m: (336.0, 15.0, 41.81), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (182.0, 22.5, -120.0), size_m: (336.0, 15.0, 41.81), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (0.0, 25.0, -120.0), size_m: (28.0, 10.0, 41.46), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (0.0, 37.5, -120.0), size_m: (700.0, 15.0, 39.69), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (0.0, 52.5, -120.0), size_m: (700.0, 15.0, 37.56), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (0.0, 67.5, -120.0), size_m: (700.0, 15.0, 35.44), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (0.0, 82.5, -120.0), size_m: (700.0, 15.0, 33.31), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (0.0, 97.5, -120.0), size_m: (700.0, 15.0, 31.19), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (0.0, 112.5, -120.0), size_m: (700.0, 15.0, 29.06), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-218.0, 7.5, -120.0), size_m: (264.0, 15.0, 43.94), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-34.0, 7.5, -120.0), size_m: (40.0, 15.0, 43.94), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (182.0, 7.5, -120.0), size_m: (336.0, 15.0, 43.94), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-70.0, 13.5, -120.0), size_m: (32.0, 3.0, 43.09), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-182.0, 22.5, -120.0), size_m: (336.0, 15.0, 41.81), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (182.0, 22.5, -120.0), size_m: (336.0, 15.0, 41.81), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (0.0, 25.0, -120.0), size_m: (28.0, 10.0, 41.46), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (0.0, 37.5, -120.0), size_m: (700.0, 15.0, 39.69), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (0.0, 52.5, -120.0), size_m: (700.0, 15.0, 37.56), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (0.0, 67.5, -120.0), size_m: (700.0, 15.0, 35.44), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (0.0, 82.5, -120.0), size_m: (700.0, 15.0, 33.31), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (0.0, 97.5, -120.0), size_m: (700.0, 15.0, 31.19), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (0.0, 112.5, -120.0), size_m: (700.0, 15.0, 29.06), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 // plinth: base_thickness_m 45.0 exactly
-                (center_m: (-218.0, 1.0, -120.0), size_m: (264.0, 2.0, 45.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (-34.0, 1.0, -120.0), size_m: (40.0, 2.0, 45.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (182.0, 1.0, -120.0), size_m: (336.0, 2.0, 45.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-218.0, 1.0, -120.0), size_m: (264.0, 2.0, 45.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-34.0, 1.0, -120.0), size_m: (40.0, 2.0, 45.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (182.0, 1.0, -120.0), size_m: (336.0, 2.0, 45.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 // coping: top_thickness_m 28.0 exactly
-                (center_m: (0.0, 119.0, -120.0), size_m: (700.0, 2.0, 28.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 119.0, -120.0), size_m: (700.0, 2.0, 28.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 // outer wall of the protrusion
-                (center_m: (-114.25, 7.5, -300.0), size_m: (56.5, 15.0, 43.94), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (-34.0, 7.5, -300.0), size_m: (40.0, 15.0, 43.94), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (78.25, 7.5, -300.0), size_m: (128.5, 15.0, 43.94), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (-70.0, 13.5, -300.0), size_m: (32.0, 3.0, 43.09), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (-78.25, 22.5, -300.0), size_m: (128.5, 15.0, 41.81), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (78.25, 22.5, -300.0), size_m: (128.5, 15.0, 41.81), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (0.0, 25.0, -300.0), size_m: (28.0, 10.0, 41.46), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (0.0, 37.5, -300.0), size_m: (285.0, 15.0, 39.69), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (0.0, 52.5, -300.0), size_m: (285.0, 15.0, 37.56), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (0.0, 67.5, -300.0), size_m: (285.0, 15.0, 35.44), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (0.0, 82.5, -300.0), size_m: (285.0, 15.0, 33.31), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (0.0, 97.5, -300.0), size_m: (285.0, 15.0, 31.19), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (0.0, 112.5, -300.0), size_m: (285.0, 15.0, 29.06), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-114.25, 7.5, -300.0), size_m: (56.5, 15.0, 43.94), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-34.0, 7.5, -300.0), size_m: (40.0, 15.0, 43.94), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (78.25, 7.5, -300.0), size_m: (128.5, 15.0, 43.94), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-70.0, 13.5, -300.0), size_m: (32.0, 3.0, 43.09), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-78.25, 22.5, -300.0), size_m: (128.5, 15.0, 41.81), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (78.25, 22.5, -300.0), size_m: (128.5, 15.0, 41.81), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (0.0, 25.0, -300.0), size_m: (28.0, 10.0, 41.46), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (0.0, 37.5, -300.0), size_m: (285.0, 15.0, 39.69), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (0.0, 52.5, -300.0), size_m: (285.0, 15.0, 37.56), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (0.0, 67.5, -300.0), size_m: (285.0, 15.0, 35.44), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (0.0, 82.5, -300.0), size_m: (285.0, 15.0, 33.31), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (0.0, 97.5, -300.0), size_m: (285.0, 15.0, 31.19), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (0.0, 112.5, -300.0), size_m: (285.0, 15.0, 29.06), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 // plinth: base_thickness_m 45.0 exactly
-                (center_m: (-114.25, 1.0, -300.0), size_m: (56.5, 2.0, 45.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (-34.0, 1.0, -300.0), size_m: (40.0, 2.0, 45.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (78.25, 1.0, -300.0), size_m: (128.5, 2.0, 45.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-114.25, 1.0, -300.0), size_m: (56.5, 2.0, 45.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-34.0, 1.0, -300.0), size_m: (40.0, 2.0, 45.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (78.25, 1.0, -300.0), size_m: (128.5, 2.0, 45.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 // coping: top_thickness_m 28.0 exactly
-                (center_m: (0.0, 119.0, -300.0), size_m: (285.0, 2.0, 28.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (0.0, 119.0, -300.0), size_m: (285.0, 2.0, 28.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 // west flank
-                (center_m: (-120.0, 7.5, -210.0), size_m: (43.94, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (-120.0, 22.5, -210.0), size_m: (41.81, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (-120.0, 37.5, -210.0), size_m: (39.69, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (-120.0, 52.5, -210.0), size_m: (37.56, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (-120.0, 67.5, -210.0), size_m: (35.44, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (-120.0, 82.5, -210.0), size_m: (33.31, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (-120.0, 97.5, -210.0), size_m: (31.19, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (-120.0, 112.5, -210.0), size_m: (29.06, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-120.0, 7.5, -210.0), size_m: (43.94, 15.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-120.0, 22.5, -210.0), size_m: (41.81, 15.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-120.0, 37.5, -210.0), size_m: (39.69, 15.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-120.0, 52.5, -210.0), size_m: (37.56, 15.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-120.0, 67.5, -210.0), size_m: (35.44, 15.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-120.0, 82.5, -210.0), size_m: (33.31, 15.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-120.0, 97.5, -210.0), size_m: (31.19, 15.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-120.0, 112.5, -210.0), size_m: (29.06, 15.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 // plinth: base_thickness_m 45.0 exactly
-                (center_m: (-120.0, 1.0, -210.0), size_m: (45.0, 2.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-120.0, 1.0, -210.0), size_m: (45.0, 2.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 // coping: top_thickness_m 28.0 exactly
-                (center_m: (-120.0, 119.0, -210.0), size_m: (28.0, 2.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-120.0, 119.0, -210.0), size_m: (28.0, 2.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 // east flank
-                (center_m: (120.0, 7.5, -210.0), size_m: (43.94, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (120.0, 22.5, -210.0), size_m: (41.81, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (120.0, 37.5, -210.0), size_m: (39.69, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (120.0, 52.5, -210.0), size_m: (37.56, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (120.0, 67.5, -210.0), size_m: (35.44, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (120.0, 82.5, -210.0), size_m: (33.31, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (120.0, 97.5, -210.0), size_m: (31.19, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (120.0, 112.5, -210.0), size_m: (29.06, 15.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (120.0, 7.5, -210.0), size_m: (43.94, 15.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (120.0, 22.5, -210.0), size_m: (41.81, 15.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (120.0, 37.5, -210.0), size_m: (39.69, 15.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (120.0, 52.5, -210.0), size_m: (37.56, 15.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (120.0, 67.5, -210.0), size_m: (35.44, 15.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (120.0, 82.5, -210.0), size_m: (33.31, 15.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (120.0, 97.5, -210.0), size_m: (31.19, 15.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (120.0, 112.5, -210.0), size_m: (29.06, 15.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 // plinth: base_thickness_m 45.0 exactly
-                (center_m: (120.0, 1.0, -210.0), size_m: (45.0, 2.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (120.0, 1.0, -210.0), size_m: (45.0, 2.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 // coping: top_thickness_m 28.0 exactly
-                (center_m: (120.0, 119.0, -210.0), size_m: (28.0, 2.0, 225.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (120.0, 119.0, -210.0), size_m: (28.0, 2.0, 225.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
 
                 // ---- Gatehouses — the towers that flank the two gates ------------------
                 // inner gatehouse
-                (center_m: (-24.0, 60.0, -120.0), size_m: (20.0, 120.0, 55.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (24.0, 60.0, -120.0), size_m: (20.0, 120.0, 55.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-24.0, 60.0, -120.0), size_m: (20.0, 120.0, 55.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (24.0, 60.0, -120.0), size_m: (20.0, 120.0, 55.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 // outer gatehouse
-                (center_m: (-24.0, 60.0, -300.0), size_m: (20.0, 120.0, 55.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (24.0, 60.0, -300.0), size_m: (20.0, 120.0, 55.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-24.0, 60.0, -300.0), size_m: (20.0, 120.0, 55.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (24.0, 60.0, -300.0), size_m: (20.0, 120.0, 55.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
 
                 // ---- The platform at 60 m — a gallery that projects 14 m over open ground 
                 // main wall, district side. 700 m of anchorable rail at H = 60: every gap under 60 m
@@ -739,63 +863,63 @@
                 (center_m: (-120.0, 126.0, -260.0), size_m: (8.0, 12.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (120.0, 126.0, -260.0), size_m: (8.0, 12.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 // cannon emplacements: the plinth is not anchorable, the barrel over the void is
-                (center_m: (-210.0, 121.5, -134.0), size_m: (6.0, 3.0, 6.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-210.0, 121.5, -134.0), size_m: (6.0, 3.0, 6.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (-210.0, 123.75, -140.0), size_m: (2.0, 1.5, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
-                (center_m: (-70.0, 121.5, -134.0), size_m: (6.0, 3.0, 6.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-70.0, 121.5, -134.0), size_m: (6.0, 3.0, 6.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (-70.0, 123.75, -140.0), size_m: (2.0, 1.5, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
-                (center_m: (70.0, 121.5, -134.0), size_m: (6.0, 3.0, 6.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (70.0, 121.5, -134.0), size_m: (6.0, 3.0, 6.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (70.0, 123.75, -140.0), size_m: (2.0, 1.5, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
-                (center_m: (210.0, 121.5, -134.0), size_m: (6.0, 3.0, 6.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (210.0, 121.5, -134.0), size_m: (6.0, 3.0, 6.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (210.0, 123.75, -140.0), size_m: (2.0, 1.5, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
-                (center_m: (-40.0, 121.5, -314.0), size_m: (6.0, 3.0, 6.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-40.0, 121.5, -314.0), size_m: (6.0, 3.0, 6.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (-40.0, 123.75, -320.0), size_m: (2.0, 1.5, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
-                (center_m: (40.0, 121.5, -314.0), size_m: (6.0, 3.0, 6.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (40.0, 121.5, -314.0), size_m: (6.0, 3.0, 6.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (40.0, 123.75, -320.0), size_m: (2.0, 1.5, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
 
                 // ---- The gantry line over the main street — the swing spine, pitch 35 m, beam at 60 m 
                 // ten stations from z = 227.5 to -87.5 = 315 m of lane, then the wall; four more in the
-                (center_m: (-14.0, 28.0, 227.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (14.0, 28.0, 227.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, 227.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, 227.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (0.0, 58.0, 227.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
-                (center_m: (-14.0, 28.0, 192.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (14.0, 28.0, 192.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, 192.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, 192.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (0.0, 58.0, 192.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
-                (center_m: (-14.0, 28.0, 157.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (14.0, 28.0, 157.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, 157.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, 157.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (0.0, 58.0, 157.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
-                (center_m: (-14.0, 28.0, 122.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (14.0, 28.0, 122.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, 122.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, 122.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (0.0, 58.0, 122.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
-                (center_m: (-14.0, 28.0, 87.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (14.0, 28.0, 87.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, 87.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, 87.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (0.0, 58.0, 87.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
-                (center_m: (-14.0, 28.0, 52.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (14.0, 28.0, 52.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, 52.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, 52.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (0.0, 58.0, 52.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
-                (center_m: (-14.0, 28.0, 17.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (14.0, 28.0, 17.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, 17.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, 17.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (0.0, 58.0, 17.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
-                (center_m: (-14.0, 28.0, -17.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (14.0, 28.0, -17.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, -17.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, -17.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (0.0, 58.0, -17.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
-                (center_m: (-14.0, 28.0, -52.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (14.0, 28.0, -52.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, -52.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, -52.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (0.0, 58.0, -52.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
-                (center_m: (-14.0, 28.0, -87.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (14.0, 28.0, -87.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, -87.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, -87.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (0.0, 58.0, -87.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
                 // pocket outside the inner gate. Columns NOT anchorable (FIND-042), beam is.
-                (center_m: (-14.0, 28.0, -157.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (14.0, 28.0, -157.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, -157.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, -157.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (0.0, 58.0, -157.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
-                (center_m: (-14.0, 28.0, -192.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (14.0, 28.0, -192.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, -192.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, -192.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (0.0, 58.0, -192.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
-                (center_m: (-14.0, 28.0, -227.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (14.0, 28.0, -227.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, -227.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, -227.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (0.0, 58.0, -227.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
-                (center_m: (-14.0, 28.0, -262.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
-                (center_m: (14.0, 28.0, -262.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: false, solid: true, landmark: true),
+                (center_m: (-14.0, 28.0, -262.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (14.0, 28.0, -262.5), size_m: (8.0, 56.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (0.0, 58.0, -262.5), size_m: (44.0, 4.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
 
                 // ---- The church (35 m), trees (12 m), bridges, market stalls -----------
@@ -855,14 +979,14 @@
                 (center_m: (-110.0, 17.5, 280.0), size_m: (8.0, 35.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 (center_m: (280.0, 17.5, 200.0), size_m: (8.0, 35.0, 8.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
                 // market stalls
-                (center_m: (32.0, 1.25, -50.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
-                (center_m: (40.0, 1.25, -50.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
-                (center_m: (48.0, 1.25, -50.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
-                (center_m: (32.0, 1.25, 4.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
-                (center_m: (40.0, 1.25, 4.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
-                (center_m: (48.0, 1.25, 4.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
-                (center_m: (88.0, 1.25, -30.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
-                (center_m: (88.0, 1.25, -6.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
+                (center_m: (32.0, 1.25, -50.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: true, solid: true, landmark: false),
+                (center_m: (40.0, 1.25, -50.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: true, solid: true, landmark: false),
+                (center_m: (48.0, 1.25, -50.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: true, solid: true, landmark: false),
+                (center_m: (32.0, 1.25, 4.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: true, solid: true, landmark: false),
+                (center_m: (40.0, 1.25, 4.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: true, solid: true, landmark: false),
+                (center_m: (48.0, 1.25, 4.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: true, solid: true, landmark: false),
+                (center_m: (88.0, 1.25, -30.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: true, solid: true, landmark: false),
+                (center_m: (88.0, 1.25, -6.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: true, solid: true, landmark: false),
 
                 // ---- The garrison headquarters — the main building, and you walk INTO it
                 // The user, 2026-08-12: „auch das main gebäude in dem der gas und schwert
@@ -911,7 +1035,7 @@
                 //    in `scripts/f019-hq.txt` is a position bracket that only the interior
                 //    satisfies. The step at the door is 0.10 m against a 0.35 m capsule radius —
                 //    below the radius, so the capsule rides over it instead of catching on it.
-                (center_m: (-31.0, 0.0, 0.0), size_m: (32.0, 0.3, 26.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-31.0, 0.0, 0.0), size_m: (32.0, 0.3, 26.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
                 // the four walls. 10 m to the eaves, so the hall is 10 m in the clear — the
                 // roof is the 1.5 m slab on top and the ridge lands on 11.5 m exactly, which is
                 // `scale.ron: architecture.heights_m house_large`. **No invented height**: the
@@ -920,26 +1044,35 @@
                 // for me. `landmark: false` therefore holds and the guard in tests/data.rs
                 // still applies to it.
                 //
-                // ⚠️ All of them `anchorable: false`, and that is not laziness. The roof stands
+                // ⚠️ All of them `anchorable: true`, and that is not laziness. The roof stands
                 // over the centre of every one of them, and a tagged surface with something on
                 // its roof centre is a lie in the map —
                 // `tests/world.rs::f003_no_anchorable_block_has_another_block_sitting_on_its_roof_centre`.
-                // **The roof is the anchor.** The interior is not tagged either, for the same
-                // reason plus the aiming invariant: nothing outside can reach an interior wall.
+                // **The roof is the anchor.**
+                //
+                // ⚠️ **This used to say "the interior is not tagged either … nothing outside can
+                // reach an interior wall". Both halves are false since 2026-08-13.** All 31
+                // interior blocks are anchorable now — the user: *"es ist extrem wichtig dass man
+                // wirklich überall sein seil festmachen kann. also überall! ohne ausnahmen!"* —
+                // and the reachability claim was simply wrong: `tests/world.rs::f019_the_tagged_interior_is_reachable_through_the_door`
+                // measures a rope going straight in through the doorway from the street and
+                // landing on `block_183` at x = −45.55, i.e. the back wall of the hall.
+                // A tagged surface nothing can hook would still be a lie in the map (`FIND-059`);
+                // that guard is what now proves this one is not.
                 // west (back) wall — the canal side
-                (center_m: (-46.25, 5.0, 0.0), size_m: (1.5, 10.0, 26.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-46.25, 5.0, 0.0), size_m: (1.5, 10.0, 26.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
                 // east facade, south of the door
-                (center_m: (-15.75, 5.0, -8.0), size_m: (1.5, 10.0, 10.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-15.75, 5.0, -8.0), size_m: (1.5, 10.0, 10.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
                 // east facade, north of the door
-                (center_m: (-15.75, 5.0, 8.0), size_m: (1.5, 10.0, 10.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-15.75, 5.0, 8.0), size_m: (1.5, 10.0, 10.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
                 // the lintel over the gate. It starts at y = 4.5, so the opening is **6 m wide
                 // and 4.5 m high**: a 1.8 m player with a 0.35 m capsule walks through it
                 // without aiming, and so does the cart the depot exists for.
-                (center_m: (-15.75, 7.25, 0.0), size_m: (1.5, 5.5, 6.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-15.75, 7.25, 0.0), size_m: (1.5, 5.5, 6.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
                 // north and south walls, spanning only BETWEEN the two side walls: a corner
                 // built twice is a z-fight and a doubled collider.
-                (center_m: (-31.0, 5.0, 12.25), size_m: (29.0, 10.0, 1.5), color: "stone_gray", anchorable: false, solid: true, landmark: false),
-                (center_m: (-31.0, 5.0, -12.25), size_m: (29.0, 10.0, 1.5), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-31.0, 5.0, 12.25), size_m: (29.0, 10.0, 1.5), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                (center_m: (-31.0, 5.0, -12.25), size_m: (29.0, 10.0, 1.5), color: "stone_gray", anchorable: true, solid: true, landmark: false),
                 // ⭐ the roof, and it is the one tagged surface of the building: 32 x 26 m of
                 // sand_brown at 11.5 m, the colour every anchorable slab in this map wears.
                 // Arriving by air is the natural way in — from the gantry beam at 60 m over the
@@ -947,10 +1080,10 @@
                 (center_m: (-31.0, 10.75, 0.0), size_m: (32.0, 1.5, 26.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
                 // four posts carrying the roof of a 29 x 23 m hall. They stand at z = +-8, so
                 // the aisle from the door to the back wall (z = -3..3) is 29 m of clear floor.
-                (center_m: (-38.0, 5.0, -8.0), size_m: (2.0, 10.0, 2.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
-                (center_m: (-24.0, 5.0, -8.0), size_m: (2.0, 10.0, 2.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
-                (center_m: (-38.0, 5.0, 8.0), size_m: (2.0, 10.0, 2.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
-                (center_m: (-24.0, 5.0, 8.0), size_m: (2.0, 10.0, 2.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-38.0, 5.0, -8.0), size_m: (2.0, 10.0, 2.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                (center_m: (-24.0, 5.0, -8.0), size_m: (2.0, 10.0, 2.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                (center_m: (-38.0, 5.0, 8.0), size_m: (2.0, 10.0, 2.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                (center_m: (-24.0, 5.0, 8.0), size_m: (2.0, 10.0, 2.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
                 // ---- The resupply, inside, against the back wall -----------------------
                 // ⚠️ **Furniture, not stations.** These racks are what the player walks up
                 // to; the `RefuelStation` entities that make them work are wired in
@@ -1000,19 +1133,19 @@
                 //
                 // The skid carries the floor footprint (0.15 .. 0.45 m); the bottles stand on
                 // it and reach 2.60 m, so a 1.75 m eye looks UP at them.
-                (center_m: (-42.0, 0.30, -6.5), size_m: (5.0, 0.3, 9.0), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-42.0, 0.30, -6.5), size_m: (5.0, 0.3, 9.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
                 // 2.4 m pitch, 1.3 m bottle: 1.1 m of air between each pair, and the row runs
                 // the full 9 m of the bay. The nearest one stops at z = -2.25, clear of the
                 // aisle and of the station trigger that sits on the face at z = -2.
-                (center_m: (-42.0, 1.35, -10.1), size_m: (1.3, 1.8, 1.3), color: "olive_green", anchorable: false, solid: true, landmark: false),
-                (center_m: (-42.0, 1.35,  -7.7), size_m: (1.3, 1.8, 1.3), color: "olive_green", anchorable: false, solid: true, landmark: false),
-                (center_m: (-42.0, 1.35,  -5.3), size_m: (1.3, 1.8, 1.3), color: "olive_green", anchorable: false, solid: true, landmark: false),
-                (center_m: (-42.0, 1.35,  -2.9), size_m: (1.3, 1.8, 1.3), color: "olive_green", anchorable: false, solid: true, landmark: false),
+                (center_m: (-42.0, 1.35, -10.1), size_m: (1.3, 1.8, 1.3), color: "olive_green", anchorable: true, solid: true, landmark: false),
+                (center_m: (-42.0, 1.35,  -7.7), size_m: (1.3, 1.8, 1.3), color: "olive_green", anchorable: true, solid: true, landmark: false),
+                (center_m: (-42.0, 1.35,  -5.3), size_m: (1.3, 1.8, 1.3), color: "olive_green", anchorable: true, solid: true, landmark: false),
+                (center_m: (-42.0, 1.35,  -2.9), size_m: (1.3, 1.8, 1.3), color: "olive_green", anchorable: true, solid: true, landmark: false),
                 // the collars — 0.5 m on a 1.3 m body, sitting ON it at 2.25 m and not in it.
-                (center_m: (-42.0, 2.425, -10.1), size_m: (0.5, 0.35, 0.5), color: "stone_gray", anchorable: false, solid: true, landmark: false),
-                (center_m: (-42.0, 2.425,  -7.7), size_m: (0.5, 0.35, 0.5), color: "stone_gray", anchorable: false, solid: true, landmark: false),
-                (center_m: (-42.0, 2.425,  -5.3), size_m: (0.5, 0.35, 0.5), color: "stone_gray", anchorable: false, solid: true, landmark: false),
-                (center_m: (-42.0, 2.425,  -2.9), size_m: (0.5, 0.35, 0.5), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-42.0, 2.425, -10.1), size_m: (0.5, 0.35, 0.5), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                (center_m: (-42.0, 2.425,  -7.7), size_m: (0.5, 0.35, 0.5), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                (center_m: (-42.0, 2.425,  -5.3), size_m: (0.5, 0.35, 0.5), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                (center_m: (-42.0, 2.425,  -2.9), size_m: (0.5, 0.35, 0.5), color: "stone_gray", anchorable: true, solid: true, landmark: false),
                 //
                 // ---- BLADES, north of it: a bench, a back panel, five pairs -----------
                 // The opposite reading in every axis: LOW where the gas is tall, MANY and THIN
@@ -1022,23 +1155,23 @@
                 // nobody mistakes it for a door, and they stand in **pairs**, 0.15 m apart,
                 // because a Vector Gear carries two (`gear.ron: blades.start_pairs` is 5, and
                 // that is exactly how many pairs hang here).
-                (center_m: (-42.0, 0.55, 6.5), size_m: (5.0, 0.8, 9.0), color: "sand_brown", anchorable: false, solid: true, landmark: false),
+                (center_m: (-42.0, 0.55, 6.5), size_m: (5.0, 0.8, 9.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
                 // the panel stands ON the bench (0.95 .. 2.55 m), not through it — a coincident
                 // face inside another box is a z-fight, and the two share the x = -44.5 plane.
                 // Dark, because the blades in front of it are the pale thing.
-                (center_m: (-44.2, 1.75, 6.5), size_m: (0.6, 1.6, 9.0), color: "brick_red", anchorable: false, solid: true, landmark: false),
+                (center_m: (-44.2, 1.75, 6.5), size_m: (0.6, 1.6, 9.0), color: "brick_red", anchorable: true, solid: true, landmark: false),
                 // ten blades = five pairs. 0.30 m inside a pair, 1.8 m from pair to pair, and
                 // 0.125 m of air between the blades and the panel behind them.
-                (center_m: (-43.75, 1.60,  2.75), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
-                (center_m: (-43.75, 1.60,  3.05), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
-                (center_m: (-43.75, 1.60,  4.55), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
-                (center_m: (-43.75, 1.60,  4.85), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
-                (center_m: (-43.75, 1.60,  6.35), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
-                (center_m: (-43.75, 1.60,  6.65), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
-                (center_m: (-43.75, 1.60,  8.15), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
-                (center_m: (-43.75, 1.60,  8.45), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
-                (center_m: (-43.75, 1.60,  9.95), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
-                (center_m: (-43.75, 1.60, 10.25), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: false, solid: true, landmark: false),
+                (center_m: (-43.75, 1.60,  2.75), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                (center_m: (-43.75, 1.60,  3.05), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                (center_m: (-43.75, 1.60,  4.55), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                (center_m: (-43.75, 1.60,  4.85), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                (center_m: (-43.75, 1.60,  6.35), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                (center_m: (-43.75, 1.60,  6.65), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                (center_m: (-43.75, 1.60,  8.15), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                (center_m: (-43.75, 1.60,  8.45), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                (center_m: (-43.75, 1.60,  9.95), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                (center_m: (-43.75, 1.60, 10.25), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: true, solid: true, landmark: false),
 
                 // ---- Deleted 2026-08-12: the hand-placed row housing and the pocket ----
                 // 75 detached boxes stood here — a 20 m pitch along the main street and a

@@ -650,14 +650,30 @@ fn t005_every_map_can_be_built() {
 fn t005_the_graybox_carries_anchorable_and_untagged_surfaces() {
     // Only this makes "no hook possible on untagged parts" (F-003) runnable at all: a map on
     // which everything is anchorable cannot falsify the criterion.
+    // ⚠️ **It names `graybox` and no longer follows `current`, since 2026-08-13.** The user:
+    // *"es ist extrem wichtig dass man wirklich überall sein seil festmachen kann. also überall!
+    // ohne ausnahmen!"* — so the **played** map (`ashgate`) is deliberately 100 % anchorable:
+    // 2067 of 2067 blocks. Reading `current_map()` here asked the shipped district to keep a
+    // property the user removed on purpose.
+    //
+    // What this guard is FOR survives untouched: the **fixture** must keep untagged geometry, or
+    // the untagged path stops being falsifiable anywhere in the project. `graybox` keeps 22
+    // untagged blocks and is what `tests/vector_aiming.rs` is pinned to — the same repair as
+    // `FIND-061` (*a test that follows a mutable global has a level designer as a co-author*),
+    // one file later.
     let d = data();
-    let map = d.current_map().expect("current map");
+    let map = d
+        .maps
+        .maps
+        .get("graybox")
+        .expect("the graybox fixture must exist — it keeps the untagged path falsifiable");
     let anchorable = map.blocks.iter().filter(|k| k.anchorable).count();
     let untagged = map.blocks.iter().filter(|k| !k.anchorable).count();
-    assert!(anchorable > 0, "not a single anchorable surface on the start map");
+    assert!(anchorable > 0, "not a single anchorable surface on the graybox fixture");
     assert!(
         untagged > 0,
-        "everything is anchorable — then F-003 checks nothing (docs/FRAGEN.md Q-010)"
+        "every graybox surface is anchorable — then F-003 checks nothing anywhere, because the \
+         played map is 100 % anchorable on purpose (docs/NEXT.md §1D item 10)"
     );
 }
 
@@ -1457,4 +1473,38 @@ fn t005_the_class_cap_names_a_class_that_exists_and_leaves_something_out() {
             map.layout.street_m
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// The file's order is the game's order (FIND-092 §4)
+// ---------------------------------------------------------------------------
+
+/// ★ **A list a player reads is the list the file wrote.**
+///
+/// `missions.ron` puts the difficulties in `recruit → veteran → elite` — easiest first, and
+/// that ordering is a design decision, not an accident of spelling. A `BTreeMap` sorts by key
+/// and hands the lobby `elite | recruit | veteran`: the hardest level first and the easiest one
+/// in the middle (FIND-092 §4, measured on `docs/images/f175-lobby.png`). Same for the
+/// templates, where the tutorial `First Ride` came second behind `Ashgate Skirmish`.
+///
+/// This test is the reason [`OrderedMap`](defeated_by_titan::data::OrderedMap) exists. It goes
+/// red against any container that decides the order itself.
+#[test]
+fn t005_the_missions_keep_the_order_the_file_wrote_them_in() {
+    let d = data();
+
+    let templates: Vec<&str> = d.missions.templates.keys().map(String::as_str).collect();
+    assert_eq!(
+        templates,
+        ["tutorial", "skirmish"],
+        "missions.ron lists the tutorial first and the lobby has to offer it first"
+    );
+
+    let levels: Vec<&str> =
+        d.missions.templates["skirmish"].difficulties.keys().map(String::as_str).collect();
+    assert_eq!(
+        levels,
+        ["recruit", "veteran", "elite"],
+        "the difficulty row runs easiest → hardest, because that is how the file runs"
+    );
 }

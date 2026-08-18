@@ -1,0 +1,44 @@
+# w2-terrain-walk — can you WALK up the district, or is the terrain a wall?
+#
+#   cargo run -- --headless --script scripts/w2-terrain-walk.txt --ticks 2000
+#
+# The user, 2026-08-13: „adde verschiedene höhen vom boden her! lass es wie die echte stadt
+# aussehen! aktuell kann man es noch nicht erkennen!". Before that day the ground of this game
+# was one 700 x 700 m slab and every generated house stood on y = 0.
+#
+# ⚠️ **This is the acceptance run, and it is the only one that can fail for the right reason.**
+# `tests/world.rs` measures that the ground is stepped, that no cell stands more than one level
+# over the one beside it and that every falling edge carries its flight of stairs. None of that
+# proves a body can get up them: a 0.30 m riser is climbable only because the player capsule has
+# a 0.35 m radius and rides over a box step of less than that (`src/player/mod.rs`). Terraces
+# you cannot walk up are a wall, not terrain.
+#
+# ## The route, and every number in it comes out of the map
+#
+# x = 168 is the middle of the street between lot column 11 (x 129..165) and 12 (x 171..207) —
+# and, because `terrain.cell_m` 42 is exactly one block pitch, it is also the boundary between
+# terrain cell 11 and 12. Walking -Z along it crosses one terrace edge per block:
+#
+#   z 252..294  (cell row 14)  level 2 = 3.0 m
+#   z 210..252  (cell row 13)  level 3 = 4.5 m
+#   z 168..210  (cell row 12)  level 4 = 6.0 m
+#
+# So the run climbs 3.0 m in two flights of five 0.30 m risers each, on foot, with no gear.
+
+look 0 0                       # along -Z, the axis contract (docs/conventions.md)
+warp 168 4.2 292               # in the street, 1.2 m over the level-2 terrace
+wait 1.0
+
+mark start
+assert height > 2.5            # landed ON the terrace and not through it
+assert height < 4.0            # and not on the one above it
+
+key W 20.0                     # walk. No Space, no hook, no boost — legs only.
+wait 20.5
+
+mark climbed
+assert height > 5.2            # two terraces higher: 3.0 -> 6.0 m
+assert height < 9.0            # ...and still on the ground, not flying over it
+assert speed < 12.0            # on foot the whole way
+
+mark end

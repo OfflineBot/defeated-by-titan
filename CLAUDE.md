@@ -165,6 +165,25 @@ Both files carry an explicit append marker at the bottom for this. Same rule for
 ~20 kB: **`grep -n` for the anchor, `sed -n 'a,bp'` for the slice.** Never `Read` a 100 kB file to
 change three lines.
 
+### A measurement round pins its own binary — twice on 2026-08-13 one was rebuilt mid-run
+
+Two agents measuring before/after had `target/debug/defeated_by_titan` **rebuilt underneath them**
+by another agent's landing commit: one saw a new `PlayerTuning` field appear between two runs and
+the old binary stop loading, another saw the map grow **2048 → 2059 blocks** between its A and its B.
+A serial before/after would have reported both as a regression.
+
+**So, for any A/B measurement:**
+
+```bash
+cp target/debug/defeated_by_titan "$SCRATCH/dbt-pinned"   # both halves run against THIS
+```
+
+and where the thing being measured is noisy or the machine is shared, **interleave A/B/A/B** rather
+than running all the As then all the Bs — that is what let W1 report `+0.09 %` honestly while a
+render job was running beside it.
+
+**"Same binary" is a claim, and it is false by default while other agents are live.**
+
 ### The standing rule: **audit the round's spend before starting the next one**
 
 The user asked for this on 2026-08-12 and it is now part of closing a round, next to the gate:

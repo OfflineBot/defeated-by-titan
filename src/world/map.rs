@@ -60,13 +60,24 @@
 //! visibly catches in mid-air. That is a deliberately deferred limitation
 //! (`docs/ROADMAP.md`), not a forgotten one.
 //!
+//! ## And since 2026-08-13 the ground has a height, and the roof has a ridge
+//!
+//! The user: *„adde verschiedene höhen vom boden her! lass es wie die echte stadt aussehen!
+//! aktuell kann man es noch nicht erkennen!"*. Two answers, both data:
+//! [`plan_terrain`] steps the ground into terraces with a flight of stairs on every falling
+//! edge, and `layout.roof_steps` / `layout.tall_fraction` turn a roofscape of equal flat lids
+//! into stepped gables with a handful of 18 m houses among them.
+//!
 //! Seen: `docs/images/f003-city.png`, driven with `scripts/f003-city.txt`.
+//! The terrain: `docs/images/f003-terrain.png` (from the street) and
+//! `docs/images/f003-roofscape.png` (from the air), driven with
+//! `scripts/w2-terrain-walk.txt`.
 
 use avian3d::prelude::{Collider, RigidBody};
 use bevy::prelude::*;
 
 use crate::data::{GameData, Map, Perimeter};
-use crate::shared::{AnchorSurface, Block, Body, Rng};
+use crate::shared::{AnchorSurface, Block, Body, Rng, TerrainField};
 
 use super::index::mask_from;
 
@@ -95,6 +106,10 @@ const STREAM_GAP: u64 = 0xF003_0009;
 const STREAM_SETBACK: u64 = 0xF003_000A;
 const STREAM_DEPTH: u64 = 0xF003_000B;
 const STREAM_RISE: u64 = 0xF003_000C;
+/// Per **house**: is this one built to the tall class instead of out of the band?
+const STREAM_TALL: u64 = 0xF003_000D;
+/// Per **terrain cell**: the notch [`TerrainField`] starts that cell at.
+const STREAM_TERRAIN: u64 = 0xF003_000E;
 
 /// How many rng ticks one grid cell owns.
 ///
@@ -186,30 +201,37 @@ pub fn build_map(mut commands: Commands, data: Res<GameData>) {
 /// ordered and neither is a `HashMap` — a city that looks different depending on iteration
 /// order is a desync over the network.
 pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
-    let mut plan: Vec<BlockPlan> = Vec::new();
-
-    for (i, k) in map.blocks.iter().enumerate() {
-        plan.push(BlockPlan {
-            name: format!("block_{i}"),
-            center_m: Vec3::new(k.center_m.0, k.center_m.1, k.center_m.2),
-            size_m: Vec3::new(k.size_m.0, k.size_m.1, k.size_m.2),
-            color: color_of(data, &k.color),
-            anchorable: k.anchorable,
-            solid: k.solid,
-        });
-    }
+    let mut plan: Vec<BlockPlan> = placed_blocks(data, map);
     let placed = plan.len();
 
     let r = &map.layout;
     let rng = Rng::new(map.seed);
-    let period_m = r.lot_m + r.street_m;
-    let nx = lot_count(map.size_m.0, period_m);
-    let nz = lot_count(map.size_m.1, period_m);
-    // The built-up area is centered on its own extent, not on `nx * period`: no street
-    // follows behind the last block, and without this correction the whole city would sit
-    // half a street width off center.
-    let start_x = -(nx as f32 * period_m - r.street_m) * 0.5;
-    let start_z = -(nz as f32 * period_m - r.street_m) * 0.5;
+    let g = LayoutGrid::of(map);
+    let (period_m, nx, nz, start_x, start_z) = (g.period_m, g.nx, g.nz, g.start_x, g.start_z);
+
+    // The ground the district stands on, and the stairs that lead up it. It has to be planned
+    // **before** the houses: every house is raised onto the terrace of its own cell, and the
+    // veto against the placed blocks is taken over the raised box.
+    let ground = plan_terrain(data, map, &plan[..placed], &rng, &g);
+    let cells = g.cells;
+    plan.extend(ground.pads);
+    let field = ground.field;
+
+    // The tall class — the answer to `Q-036`, and the one height in this generator that does
+    // not come out of `layout`'s own band. It is looked up **once**, and loudly: a key that is
+    // not in `scale.ron` is a district that silently loses its skyline.
+    let tall_height_m = *data
+        .scale
+        .architecture
+        .heights_m
+        .get(&r.tall_height_key)
+        .unwrap_or_else(|| {
+            panic!(
+                "maps.ron: layout.tall_height_key = {:?} is not in scale.ron: \
+                 architecture.heights_m",
+                r.tall_height_key
+            )
+        });
 
     for iz in 0..nz {
         for ix in 0..nx {
@@ -290,13 +312,25 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                 // The **ridge** — the whole house, the number the height window is about. The
                 // roof is then cut out of it downward, so a district that grows roofs does
                 // not thereby grow taller than `scale.ron` allows it to be.
-                let ridge_m = level_m + rng.range(tick, STREAM_HEIGHT, 0.0, spread_m);
+                //
+                // ⚠️ Unless the house is drawn into the **tall class**, in which case the
+                // ridge is one figure out of `scale.ron` and the band does not apply. That is
+                // `Q-036`'s gap, filled: without it the whole district lives in 5 m of spread
+                // and reads as one flat top from anywhere (`maps.ron: layout.tall_fraction`).
+                let ridge_m = if rng.chance(tick, STREAM_TALL, r.tall_fraction) {
+                    tall_height_m
+                } else {
+                    level_m + rng.range(tick, STREAM_HEIGHT, 0.0, spread_m)
+                };
                 let rise_m = roof.map_or(0.0, |k| {
                     ridge_m * rng.range(tick, STREAM_RISE, k.min_rise_fraction, k.max_rise_fraction)
                 });
                 let height_m = ridge_m - rise_m;
-                // A house stands ON the ground: bottom edge y = 0, center at half its height.
-                let center_m = Vec3::new(f.center_x, height_m * 0.5, f.center_z);
+                // A house stands ON the ground — and since 2026-08-13 the ground has a height:
+                // the terrace of the cell this lot belongs to. `base_m` is the only line in
+                // this loop the terrain touches; everything below it is measured from there.
+                let base_m = field.height_at((ix / cells) as i32, (iz / cells) as i32);
+                let center_m = Vec3::new(f.center_x, base_m + height_m * 0.5, f.center_z);
                 let size_m = Vec3::new(f.size_x, height_m, f.size_z);
 
                 // What is explicitly placed wins (`maps.ron`). Only the placed blocks are
@@ -313,8 +347,17 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                 // exist because a 14 m gallery hangs over the ground, and a roof cap that
                 // slipped under one would be a tagged surface with stone over it
                 // (`tests/world.rs::f003_no_anchorable_block_has_another_block_sitting_on_its_roof_centre`).
-                let ridge_center = Vec3::new(f.center_x, ridge_m * 0.5, f.center_z);
-                let ridge_half = Vec3::new(f.size_x * 0.5, ridge_m * 0.5, f.size_z * 0.5);
+                //
+                // ⚠️ And it is taken over the box from **y = 0 to the raised ridge**, not over
+                // the raised box. Both halves are load bearing: the aprons are 0.3 m of paving
+                // whose top edge sticks 0.05 m out of the ground, and a house lifted onto a
+                // terrace would fly straight over them — the galleries would get their roofs
+                // back. Reaching up to the raised ridge is the other direction, and it costs
+                // nothing today because everything a house could grow into up there (the 56 m
+                // gantry beams, the 60 m gallery) starts far above 11.5 + 3.6 m.
+                let veto_m = base_m + ridge_m;
+                let ridge_center = Vec3::new(f.center_x, veto_m * 0.5, f.center_z);
+                let ridge_half = Vec3::new(f.size_x * 0.5, veto_m * 0.5, f.size_z * 0.5);
                 let blocked = plan[..placed]
                     .iter()
                     .any(|g| overlaps(ridge_center, ridge_half, g.center_m, g.half_size_m()));
@@ -347,27 +390,467 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                 if let Some(k) = roof {
                     // The cap is pulled in on all four sides; what is left over is the ledge
                     // the roof reads by and the strip you can still stand on.
-                    let keep = 1.0 - 2.0 * k.inset_fraction;
+                    //
+                    // Since 2026-08-13 it is `roof_steps` caps and not one, each pulled in one
+                    // notch further than the one below it. A flat lid on every house is a
+                    // roofscape of equal rectangles, and *„aktuell kann man es noch nicht
+                    // erkennen"* is as much about that as about the ground: from the air a
+                    // stepped pitch has a ridge line and a lid has none. The rise is still cut
+                    // **out of** the house — the steps divide it, they do not add to it.
+                    let steps = r.roof_steps.max(1);
+                    let keep_top = 1.0 - 2.0 * k.inset_fraction * steps as f32;
                     assert!(
-                        keep > 0.0,
-                        "maps.ron: layout.perimeter.roof.inset_fraction = {} leaves the cap \
-                         no extent — a roof with a negative edge is an invisible collider",
+                        keep_top > 0.0,
+                        "maps.ron: layout.perimeter.roof.inset_fraction = {} over \
+                         layout.roof_steps = {steps} leaves the top cap no extent — a roof \
+                         with a negative edge is an invisible collider",
                         k.inset_fraction
                     );
-                    plan.push(BlockPlan {
-                        name: format!("roof_{lot}_{i}"),
-                        center_m: Vec3::new(f.center_x, height_m + rise_m * 0.5, f.center_z),
-                        size_m: Vec3::new(f.size_x * keep, rise_m, f.size_z * keep),
-                        color: color_of(data, &k.color),
-                        anchorable,
-                        solid: true,
-                    });
+                    let each_m = rise_m / steps as f32;
+                    // ⚠️ **The steps are pulled in across the SHORT axis only, and that is what
+                    // makes them a roof.** Pulled in on all four sides they are a stepped
+                    // pyramid — measured on `docs/images/f003-roofscape.png` on 2026-08-13:
+                    // 900 square ziggurats, which is further from *„wie die echte stadt"* than
+                    // the flat lid they replaced. A real roof is a **ridge**: flush with the
+                    // gable walls at its ends, stepping in over the eaves. So the long side of
+                    // the footprint keeps its full extent and the ridge runs along it, which on
+                    // a row house is along the street front — exactly where a gable belongs.
+                    let ridge_along_x = f.size_x >= f.size_z;
+                    for s in 0..steps {
+                        let keep = 1.0 - 2.0 * k.inset_fraction * (s + 1) as f32;
+                        let (keep_x, keep_z) =
+                            if ridge_along_x { (1.0, keep) } else { (keep, 1.0) };
+                        plan.push(BlockPlan {
+                            // The bottom step keeps the old name, so that every reader of
+                            // `roof_<lot>_<i>` — and every image caption — still finds the
+                            // same block; the steps above it are suffixed.
+                            name: if s == 0 {
+                                format!("roof_{lot}_{i}")
+                            } else {
+                                format!("roof_{lot}_{i}_{s}")
+                            },
+                            center_m: Vec3::new(
+                                f.center_x,
+                                base_m + height_m + each_m * (s as f32 + 0.5),
+                                f.center_z,
+                            ),
+                            size_m: Vec3::new(f.size_x * keep_x, each_m, f.size_z * keep_z),
+                            color: color_of(data, &k.color),
+                            anchorable,
+                            solid: true,
+                        });
+                    }
                 }
             }
         }
     }
 
     plan
+}
+
+/// The cuboids `maps.ron` places by hand, 1:1 and in file order.
+fn placed_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
+    map.blocks
+        .iter()
+        .enumerate()
+        .map(|(i, k)| BlockPlan {
+            name: format!("block_{i}"),
+            center_m: Vec3::new(k.center_m.0, k.center_m.1, k.center_m.2),
+            size_m: Vec3::new(k.size_m.0, k.size_m.1, k.size_m.2),
+            color: color_of(data, &k.color),
+            anchorable: k.anchorable,
+            solid: k.solid,
+        })
+        .collect()
+}
+
+/// The ground of a map, planned on its own — the same call [`plan_blocks`] makes, without the
+/// city on top of it. `tests/world.rs` measures the relief on this.
+pub fn terrain_of(data: &GameData, map: &Map) -> (LayoutGrid, PlannedGround) {
+    let g = LayoutGrid::of(map);
+    let placed = placed_blocks(data, map);
+    let ground = plan_terrain(data, map, &placed, &Rng::new(map.seed), &g);
+    (g, ground)
+}
+
+/// The grid every generated thing is placed on — lots, and the terrain cells over them.
+///
+/// One struct rather than five loose locals, because `tests/world.rs` has to be able to ask
+/// **which cell a house belongs to** without re-deriving the arithmetic. A test that
+/// re-derives it is a test that agrees with itself.
+#[derive(Clone, Copy, Debug)]
+pub struct LayoutGrid {
+    /// Block pitch: `lot_m + street_m`.
+    pub period_m: f32,
+    pub nx: u32,
+    pub nz: u32,
+    /// World coordinate of the near edge of lot 0.
+    pub start_x: f32,
+    pub start_z: f32,
+    /// How many lots make up one terrain cell along an axis.
+    pub cells: u32,
+}
+
+impl LayoutGrid {
+    pub fn of(map: &Map) -> Self {
+        let r = &map.layout;
+        let period_m = r.lot_m + r.street_m;
+        let nx = lot_count(map.size_m.0, period_m);
+        let nz = lot_count(map.size_m.1, period_m);
+        Self {
+            period_m,
+            nx,
+            nz,
+            // The built-up area is centered on its own extent, not on `nx * period`: no
+            // street follows behind the last block, and without this correction the whole
+            // city would sit half a street width off center.
+            start_x: -(nx as f32 * period_m - r.street_m) * 0.5,
+            start_z: -(nz as f32 * period_m - r.street_m) * 0.5,
+            cells: terrain_cells_per(map.terrain.cell_m, period_m),
+        }
+    }
+
+    /// Which terrain cell the lot with index `lot` (`iz * nx + ix`) stands on.
+    pub fn cell_of_lot(&self, lot: u64) -> (i32, i32) {
+        let ix = (lot % self.nx.max(1) as u64) as u32;
+        let iz = (lot / self.nx.max(1) as u64) as u32;
+        ((ix / self.cells) as i32, (iz / self.cells) as i32)
+    }
+}
+
+/// The stepped ground and the field it was cut from.
+pub struct PlannedGround {
+    /// The levels, so that the houses can be raised onto the terrace of their own cell.
+    pub field: TerrainField,
+    /// The terrace tops and their flights of stairs, in cell order.
+    pub pads: Vec<BlockPlan>,
+}
+
+/// How many layout cells make up one terrain cell. `cell_m` has to be a whole multiple of the
+/// block pitch, or the terrace edge falls through a house instead of into a street.
+fn terrain_cells_per(cell_m: f32, period_m: f32) -> u32 {
+    if !(cell_m.is_finite() && period_m.is_finite()) || period_m <= 0.0 || cell_m <= 0.0 {
+        return 1;
+    }
+    ((cell_m / period_m).round() as i64).max(1) as u32
+}
+
+/// A footprint, looking down. The terrain question is always a footprint question.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Rect {
+    x0: f32,
+    x1: f32,
+    z0: f32,
+    z1: f32,
+}
+
+impl Rect {
+    fn of(center: Vec3, half: Vec3) -> Self {
+        Self {
+            x0: center.x - half.x,
+            x1: center.x + half.x,
+            z0: center.z - half.z,
+            z1: center.z + half.z,
+        }
+    }
+
+    fn grown(self, by_m: f32) -> Self {
+        Self {
+            x0: self.x0 - by_m,
+            x1: self.x1 + by_m,
+            z0: self.z0 - by_m,
+            z1: self.z1 + by_m,
+        }
+    }
+
+    fn hits(&self, other: &Rect) -> bool {
+        self.x0 < other.x1 && other.x0 < self.x1 && self.z0 < other.z1 && other.z0 < self.z1
+    }
+
+    /// A slab thinner than a centimetre is a z-fighting sliver, not a terrace.
+    fn real(&self) -> bool {
+        self.x1 - self.x0 > 0.01 && self.z1 - self.z0 > 0.01
+    }
+}
+
+/// `a` without `b`, as up to four rectangles.
+///
+/// **This world has no subtraction** (`docs/FINDINGS.md` FIND-056) — what it has is leaving
+/// pieces out, and that is exactly what this does. It is the reason a bell tower or a tree does
+/// not have to flatten the whole 42 m cell it happens to stand in: the terrace is cut around
+/// its foot, and the pillar itself fills the hole, because it is solid from the ground up.
+fn without(a: Rect, b: Rect) -> Vec<Rect> {
+    if !a.hits(&b) {
+        return vec![a];
+    }
+    let (z0, z1) = (b.z0.max(a.z0), b.z1.min(a.z1));
+    [
+        Rect { z1: b.z0.min(a.z1), ..a },
+        Rect { z0: b.z1.max(a.z0), ..a },
+        Rect { x1: b.x0.min(a.x1), z0, z1, ..a },
+        Rect { x0: b.x1.max(a.x0), z0, z1, ..a },
+    ]
+    .into_iter()
+    .filter(Rect::real)
+    .collect()
+}
+
+/// What is left of one slab once every pillar has been cut out of it.
+fn cut(rect: Rect, pillars: &[Rect]) -> Vec<Rect> {
+    let mut out = vec![rect];
+    for p in pillars {
+        out = out.into_iter().flat_map(|r| without(r, *p)).collect();
+    }
+    out
+}
+
+/// The terraces the district stands on — **the whole of the ground work, in one place.**
+///
+/// The user, 2026-08-13: *„adde verschiedene höhen vom boden her! lass es wie die echte stadt
+/// aussehen!"*. Until that day this function did not exist and the ground was one slab.
+///
+/// ## Three decisions, and each of them is the reason a whole class of bug cannot happen
+///
+/// 1. **A terrain cell is a whole number of layout cells** (`cell_m` is asserted to be a
+///    multiple of `lot_m + street_m`). So a terrace boundary always falls on the **middle of a
+///    street** and never through a house. Without it every cliff would need a special case for
+///    the house it cuts in half.
+/// 2. **A cell that carries something hand-placed is pinned flat.** Not "the terrace dodges
+///    it" — pinned, via the `flat` predicate of [`TerrainField`]. The canal is a hole in the
+///    ground, the market stalls are 2.5 m tall, the headquarters has a door at `y = 0..4.5`,
+///    and a 3.6 m terrace over any of them is a hole filled, a stall buried and a door walled
+///    up. What comes out of it is not a compromise but the shape a real town has: the ground
+///    is flat along the water, the gate axis and the wall, and it climbs into the quarters.
+/// 3. **The stairs are cut into the terrace's own edge, never into the neighbour's.** The pad
+///    is pulled in by the run of one flight on every side that falls, and the flight fills
+///    what was pulled in. Nothing this function emits ever crosses a cell boundary, so a
+///    flight can never grow into the pinned cell next door — which is exactly where the quay
+///    walls and the gate columns are.
+///
+/// The flight itself: `step_m / stair_rise_m` risers, of which the last one is the boundary
+/// itself and is not built (the neighbour's plateau already is that height). Three risers of
+/// 0.30 m at a 0.60 m tread run 1.20 m into a 3.00 m half-street — and the house behind it
+/// stands at least `street_m / 2 - cell_jitter_m` = 1.50 m back, which is what the assertion
+/// below holds on to.
+pub fn plan_terrain(
+    data: &GameData,
+    map: &Map,
+    placed: &[BlockPlan],
+    rng: &Rng,
+    g: &LayoutGrid,
+) -> PlannedGround {
+    let t = &map.terrain;
+    let r = &map.layout;
+    let (cells, period_m, start_x, start_z) = (g.cells, g.period_m, g.start_x, g.start_z);
+    let span_m = cells as f32 * period_m;
+    let flat_map = t.levels <= 1 || t.step_m <= 0.0 || g.nx == 0 || g.nz == 0;
+    let (ncx, ncz) =
+        if flat_map { (0, 0) } else { (g.nx.div_ceil(cells), g.nz.div_ceil(cells)) };
+
+    // The footprint of one terrain cell, boundary to boundary. Half a street on each side of
+    // the lots it covers, so two neighbouring cells meet in the middle of the street.
+    let rect = |cx: u32, cz: u32| {
+        let x0 = start_x + cx as f32 * span_m - r.street_m * 0.5;
+        let z0 = start_z + cz as f32 * span_m - r.street_m * 0.5;
+        Rect { x0, x1: x0 + span_m, z0, z1: z0 + span_m }
+    };
+
+    // ## Every hand-placed block is one of three things to the terrain, and the third one is
+    // ## what makes a district out of a chessboard
+    //
+    // The ceiling plus a door is the line: below it a terrace can bury something, above it
+    // nothing it does is visible. `door_height_m` is the user's own figure out of `scale.ron`
+    // and not a margin invented here.
+    //
+    // * **sky** — its underside is already above that line (the 56 m gantry beams, the 60 m
+    //   gallery, the crown at 120 m). The terrain never meets it. Ignored.
+    // * **ground** — its top is at or below `paving_top_m`: the slabs, the paving, the canal
+    //   floor. A terrace covers it, which is what a terrace is.
+    // * **pillar** — it stands on the ground and reaches above the line: a tree, a bell tower,
+    //   a gantry leg, the church, a wall course. The terrace is **cut around its foot** and the
+    //   pillar plugs the hole itself. Measured 2026-08-13: pinning these instead cost six of
+    //   sixteen columns and held the whole district to 1.80 m of relief.
+    // * **pin** — everything else, and that is the interesting half: the quay walls (top
+    //   0.4 m — a terrace over them fills the canal), the bridges, the market stalls (2.5 m),
+    //   the headquarters' interior racks and its 4.5 m doorway. Its cell stays at level 0.
+    //   What comes out of it is the shape a real town has: flat along the water, along the gate
+    //   axis and under the wall, climbing into the quarters.
+    let sky_m = t.step_m * t.levels.saturating_sub(1) as f32 + data.scale.reference.door_height_m;
+    let mut pillars: Vec<Rect> = Vec::new();
+    let mut pins: Vec<Rect> = Vec::new();
+    for g in placed {
+        let half = g.half_size_m();
+        let (bottom, top) = (g.center_m.y - half.y, g.center_m.y + half.y);
+        if bottom >= sky_m || top <= t.paving_top_m {
+            continue;
+        }
+        let foot = Rect::of(g.center_m, half);
+        if bottom <= t.paving_top_m && top >= sky_m {
+            pillars.push(foot.grown(t.pillar_gap_m));
+        } else {
+            pins.push(foot);
+        }
+    }
+
+    let field = TerrainField::new(ncx, ncz, t.levels, t.step_m, rng, STREAM_TERRAIN, |cx, cz| {
+        let cell = rect(cx, cz);
+        // The spawn. Measured to the **edge** of the cell, like `clear_radius_m`, and for the
+        // same reason: otherwise the clear space would depend on the cell size.
+        let dx = cell.x0.max(-cell.x1).max(0.0);
+        let dz = cell.z0.max(-cell.z1).max(0.0);
+        if dx * dx + dz * dz < t.flat_radius_m * t.flat_radius_m {
+            return true;
+        }
+        pins.iter().any(|p| cell.hits(p))
+    });
+
+    let mut pads: Vec<BlockPlan> = Vec::new();
+    if flat_map {
+        return PlannedGround { field, pads };
+    }
+
+    assert!(
+        (cells as f32 * period_m - t.cell_m).abs() < 1e-3,
+        "maps.ron: terrain.cell_m = {} is not a whole multiple of lot_m + street_m = \
+         {period_m} — then a terrace edge falls through a house instead of into a street",
+        t.cell_m
+    );
+    assert!(
+        t.flat_radius_m >= r.clear_radius_m,
+        "maps.ron: terrain.flat_radius_m = {} is below layout.clear_radius_m = {} — then a \
+         terrace stands in the space the layout keeps free around the spawn",
+        t.flat_radius_m,
+        r.clear_radius_m
+    );
+    let flight = (t.step_m / t.stair_rise_m).round();
+    assert!(
+        flight >= 1.0 && (flight * t.stair_rise_m - t.step_m).abs() < 1e-4,
+        "maps.ron: terrain.step_m = {} is not a whole multiple of stair_rise_m = {} — then \
+         the last step of a flight does not land on the plateau",
+        t.step_m,
+        t.stair_rise_m
+    );
+    let flight = flight as u32;
+    // ## The flight is **centred on the cell boundary**, and that doubles what fits
+    //
+    // A house stands `street_m / 2 - cell_jitter_m` = 1.50 m back from the boundary on **both**
+    // sides — its own ring may never leave its lot (`perimeter_houses` asserts it). So a flight
+    // that runs half into this terrace and half into the half-street beyond it has 3.00 m to
+    // work with instead of 1.50, and the plateau only gives up half the run.
+    //
+    // ⚠️ Measured 2026-08-13, and it is the reason this is not the obvious "keep everything
+    // inside your own cell": with the run capped at 1.50 m, a 1.5 m terrace needs 0.36 m
+    // treads, and `scripts/w2-terrain-walk.txt` came back with the player **stuck at 3.90 m** —
+    // wedged three risers up a flight whose treads are shorter than the 0.35 m capsule radius,
+    // so the capsule bridges two step edges and never settles on one. A tread has to be
+    // comfortably wider than that radius, and this is what buys the room for it.
+    //
+    // What crosses the boundary is cut against the hand-placed blocks like everything else, so
+    // a flight that would grow into a quay wall is simply not built there.
+    let run_m = (flight - 1) as f32 * t.stair_tread_m;
+    let inside_m = run_m * 0.5;
+    let jitter_m = r.perimeter.as_ref().map_or(0.0, |p| p.cell_jitter_m);
+    assert!(
+        t.stair_tread_m > 0.4,
+        "maps.ron: terrain.stair_tread_m = {} is not wider than the player capsule's radius — \
+         the capsule bridges two step edges instead of standing on one, and the flight is a \
+         wall with a texture (measured 2026-08-13, scripts/w2-terrain-walk.txt)",
+        t.stair_tread_m
+    );
+    assert!(
+        inside_m <= r.street_m * 0.5 - jitter_m + 1e-4,
+        "maps.ron: a flight of {} treads at {} m runs {inside_m} m into the terrace on each \
+         side of the boundary, but a house stands only {} m back from it \
+         (street_m / 2 - cell_jitter_m) — the stairs would be cut out from under its facade",
+        flight - 1,
+        t.stair_tread_m,
+        r.street_m * 0.5 - jitter_m
+    );
+
+    let top = color_of(data, &t.color);
+    let tread = color_of(data, &t.stair_color);
+    // Everything a terrace has to leave room for. The pillars are cut out of the plateau
+    // itself; the pins matter only for the half of a flight that reaches over the boundary,
+    // because a cell with a pin in it never rises above level 0 in the first place.
+    let obstacles: Vec<Rect> =
+        pillars.iter().chain(pins.iter()).copied().collect();
+    for cz in 0..ncz {
+        for cx in 0..ncx {
+            let h = field.height_at(cx as i32, cz as i32);
+            if h <= 0.0 {
+                continue;
+            }
+            let cell = rect(cx, cz);
+            let falls = |dx, dz| field.drop_to(cx as i32, cz as i32, dx, dz) > 0;
+            let (west, east, north, south) =
+                (falls(-1, 0), falls(1, 0), falls(0, -1), falls(0, 1));
+            // The plateau, pulled in wherever the ground falls away.
+            let plateau = Rect {
+                x0: if west { cell.x0 + inside_m } else { cell.x0 },
+                x1: if east { cell.x1 - inside_m } else { cell.x1 },
+                z0: if north { cell.z0 + inside_m } else { cell.z0 },
+                z1: if south { cell.z1 - inside_m } else { cell.z1 },
+            };
+            // One slab, cut around every pillar it meets, and named per piece: `_p1`, `_p2`.
+            // The first piece keeps the bare name, so that a reader who greps for
+            // `terrace_3_9` finds the terrace and not a suffix.
+            let mut emit = |name: String, color: [f32; 3], rect: Rect, top_m: f32| {
+                for (j, piece) in cut(rect, &obstacles).into_iter().enumerate() {
+                    pads.push(BlockPlan {
+                        name: if j == 0 { name.clone() } else { format!("{name}_p{j}") },
+                        center_m: Vec3::new(
+                            (piece.x0 + piece.x1) * 0.5,
+                            (t.paving_top_m + top_m) * 0.5,
+                            (piece.z0 + piece.z1) * 0.5,
+                        ),
+                        size_m: Vec3::new(
+                            piece.x1 - piece.x0,
+                            top_m - t.paving_top_m,
+                            piece.z1 - piece.z0,
+                        ),
+                        color,
+                        // Ground, and since 2026-08-12 the ground of this district holds a
+                        // hook — *„man soll überall seinen haken inmachen können! auch an den
+                        // boden"*. Anything else here would be an unlisted exception and
+                        // `tests/world.rs::f003_an_unanchorable_block_is_a_listed_exception...`
+                        // would say so.
+                        anchorable: true,
+                        solid: true,
+                    });
+                }
+            };
+            emit(format!("terrace_{cx}_{cz}"), top, plateau, h);
+
+            // The flights. `k` counts **down** from the plateau: step `k` has its top
+            // `k * stair_rise_m` below it and lies `k` treads out from the pad edge. The last
+            // riser of the level is the boundary itself and is not built — the neighbour's
+            // plateau already stands at that height.
+            for k in 1..flight {
+                let top_m = h - k as f32 * t.stair_rise_m;
+                let out = k as f32 * t.stair_tread_m;
+                let back = (k - 1) as f32 * t.stair_tread_m;
+                let p = plateau;
+                if west {
+                    let r = Rect { x0: p.x0 - out, x1: p.x0 - back, ..p };
+                    emit(format!("terrace_{cx}_{cz}_w{k}"), tread, r, top_m);
+                }
+                if east {
+                    let r = Rect { x0: p.x1 + back, x1: p.x1 + out, ..p };
+                    emit(format!("terrace_{cx}_{cz}_e{k}"), tread, r, top_m);
+                }
+                if north {
+                    let r = Rect { z0: p.z0 - out, z1: p.z0 - back, ..p };
+                    emit(format!("terrace_{cx}_{cz}_n{k}"), tread, r, top_m);
+                }
+                if south {
+                    let r = Rect { z0: p.z1 + back, z1: p.z1 + out, ..p };
+                    emit(format!("terrace_{cx}_{cz}_s{k}"), tread, r, top_m);
+                }
+            }
+        }
+    }
+
+    PlannedGround { field, pads }
 }
 
 /// One house's ground plan inside a cell — everything but its height.

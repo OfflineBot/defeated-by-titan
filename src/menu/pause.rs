@@ -1,103 +1,84 @@
-//! The pause screen — one screen, two ways out.
+//! The pause screen — **the menu the user asked for**, and the hub of the other two.
 //!
-//! `F-175` wants *every* screen in at most two clicks. This is **one** of them; main menu,
-//! options, loadout and debrief do not exist. Reported as 🟨 for exactly that reason
-//! (`docs/PLAN-GAME.md` §6, R3-A).
+//! > *„menu (also bei escape)"* — the user, 2026-08-13. Until that morning `Esc` offered
+//! *Resume* and *Quit* and nothing else; `F-175` ("every screen in at most two clicks") was
+//! 🟨 for exactly that reason (`docs/PLAN-GAME.md` §6, R3-A).
 //!
-//! Both buttons are also reachable **without a mouse**: `Esc` is Resume. In this environment
-//! that is not a nicety, it is the only way anybody here can operate this screen at all
-//! (`prompts/init.md` §12a).
+//! Five ways out now, and one of them is conditional:
+//!
+//! | button | what it does | when |
+//! |---|---|---|
+//! | Resume | back into the game | always — and `Esc` is the same thing |
+//! | Settings | [`Screen::Settings`](super::Screen::Settings) | always |
+//! | Abandon sortie | `shared::AbandonSortie` → back to the hub, **no verdict** | only in a sortie |
+//! | Quit to lobby / Mission select | [`Screen::Lobby`](super::Screen::Lobby), giving up a running sortie on the way | always |
+//! | Quit to desktop | `AppExit` | always |
+//!
+//! Every one of them is also reachable **without a mouse** at least as far as `Esc` goes: `Esc`
+//! is Resume. In this environment that is not a nicety, it is the only way anybody here can
+//! operate this screen at all — nobody has ever run this game in a window on machine A.
+//!
+//! ⚠️ **This screen writes no mission state.** *Abandon* and *Quit to lobby* send
+//! `shared::AbandonSortie` and `mission` decides what that means; the phase keeps exactly one
+//! writer (`docs/architecture.md`, authority table). The edge `menu -> mission` in the allow
+//! list is **read-only** and buys one thing: knowing whether there is a sortie to abandon.
 
 use bevy::prelude::*;
-use bevy::text::FontSize;
 
-use super::{PauseAction, PauseElement, Screen};
+use super::{plate, PauseAction, Screen};
+use crate::shared::AbandonSortie;
 
-/// Backdrop of the pause screen. Dark, not black: the game behind it stays readable, so a
-/// screenshot of a paused frame still shows what was paused.
-const BACKDROP: Color = Color::srgba(0.02, 0.03, 0.05, 0.72);
-const PLATE: Color = Color::srgb(0.10, 0.12, 0.15);
-const INK: Color = Color::srgb(0.90, 0.93, 0.96);
-
-/// Builds the overlay when the screen turns to [`Screen::Paused`] and there is none yet.
+/// Builds the plate. Called by `menu::spawn_menu`, which owns the "is one already there"
+/// question for all three screens.
 ///
-/// Self-healing rather than message-driven: the condition is *"paused and nothing on
-/// screen"*, so a pause screen can never be missing and can never be there twice — no matter
-/// in which order the toggle and the spawn happen to run.
-pub fn spawn_pause_screen(mut commands: Commands, present: Query<Entity, With<PauseElement>>) {
-    if !present.is_empty() {
-        return;
-    }
-    commands
-        .spawn((
-            Name::new("pause_backdrop"),
-            PauseElement,
-            BackgroundColor(BACKDROP),
-            Node {
-                position_type: PositionType::Absolute,
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                row_gap: Val::Px(14.0),
-                ..default()
-            },
-        ))
-        .with_children(|screen| {
-            screen.spawn((
-                Name::new("pause_title"),
-                PauseElement,
-                Text::new("Paused"),
-                TextFont { font_size: FontSize::Px(34.0), ..default() },
-                TextColor(INK),
-            ));
-            for (action, label) in [
-                (PauseAction::Resume, "Resume  (Esc)"),
-                (PauseAction::Quit, "Quit"),
-            ] {
-                screen
-                    .spawn((
-                        Name::new(format!("pause_{action:?}")),
-                        PauseElement,
-                        action,
-                        Button,
-                        BackgroundColor(PLATE),
-                        Node {
-                            width: Val::Px(240.0),
-                            height: Val::Px(44.0),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            ..default()
-                        },
-                    ))
-                    .with_child((
-                        PauseElement,
-                        Text::new(label),
-                        TextFont { font_size: FontSize::Px(18.0), ..default() },
-                        TextColor(INK),
-                    ));
-            }
-        });
+/// `in_a_sortie` decides one button and one label, and it is passed in rather than read here so
+/// that this function stays a pure builder — the phase is read in exactly one place
+/// (`menu::in_a_sortie`).
+pub fn spawn_pause_screen(commands: &mut Commands, in_a_sortie: bool) {
+    commands.spawn(plate::root(Screen::Paused, "pause")).with_children(|screen| {
+        screen.spawn(plate::title("Paused"));
+
+        // A `Vec` and not an array: the sortie-only button is the whole reason this screen
+        // needed to know the phase.
+        let mut buttons = vec![
+            (PauseAction::Resume, "Resume  (Esc)".to_string()),
+            (PauseAction::Settings, "Settings".to_string()),
+        ];
+        if in_a_sortie {
+            buttons.push((PauseAction::Abandon, "Abandon sortie".to_string()));
+            buttons.push((PauseAction::Lobby, "Quit to lobby".to_string()));
+        } else {
+            // In the hub there is nothing to quit *from* — the same door is simply the way to
+            // the mission list.
+            buttons.push((PauseAction::Lobby, "Mission select".to_string()));
+        }
+        buttons.push((PauseAction::Quit, "Quit to desktop".to_string()));
+
+        for (action, label) in buttons {
+            screen
+                .spawn((
+                    Name::new(format!("pause_{action:?}")),
+                    action,
+                    plate::button(plate::BUTTON_W, false),
+                ))
+                .with_child(plate::label(label));
+        }
+    });
 }
 
-/// Clears the overlay again. A pause screen that survives Resume covers the game.
-pub fn despawn_pause_screen(mut commands: Commands, present: Query<Entity, With<PauseElement>>) {
-    for e in &present {
-        // The children carry `PauseElement` too, so `despawn` is called on entities that a
-        // parent may already have taken with it. `try_despawn` is the difference between
-        // "the screen is gone" and a panic in a menu.
-        commands.entity(e).try_despawn();
-    }
-}
-
-/// What the two buttons do.
+/// What the buttons do.
 ///
 /// Quit writes `AppExit` and does **not** despawn anything: ending the run belongs to the app,
 /// and a menu that tears its own world down first leaves nothing to shut down cleanly.
+///
+/// *Abandon* and *Quit to lobby* both write [`AbandonSortie`] unconditionally. That is not
+/// sloppiness — `mission` checks the phase before it acts on the message, and putting the same
+/// check here as well would give the answer two owners for the sake of one message that is
+/// already ignored when it means nothing.
 pub fn pause_buttons(
     buttons: Query<(&Interaction, &PauseAction)>,
     mut screen: ResMut<Screen>,
+    mut abandon: MessageWriter<AbandonSortie>,
     mut exit: MessageWriter<AppExit>,
 ) {
     for (interaction, action) in &buttons {
@@ -106,6 +87,16 @@ pub fn pause_buttons(
         }
         match action {
             PauseAction::Resume => *screen = Screen::Playing,
+            PauseAction::Settings => *screen = Screen::Settings,
+            PauseAction::Abandon => {
+                abandon.write(AbandonSortie);
+                // Straight back to the game: what he wanted was the hub floor, not a menu.
+                *screen = Screen::Playing;
+            }
+            PauseAction::Lobby => {
+                abandon.write(AbandonSortie);
+                *screen = Screen::Lobby;
+            }
             PauseAction::Quit => {
                 exit.write(AppExit::Success);
             }

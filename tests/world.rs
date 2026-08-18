@@ -8,7 +8,21 @@
 //!    day there is.
 //! 3. The collision shape is off by a factor of 2 against the render shape — the hook catches
 //!    in mid-air, and the image still shows a house.
-//! 4. Everything is anchorable — then "no hook on untagged surfaces" (`F-003`) checks nothing.
+//! 4. A block silently loses the tag the file gives it, or keeps one the file took away — the
+//!    cyan gizmo then outlines a different city than the one the hook catches on, and no
+//!    screenshot shows it.
+//!
+//! ⚠️ Point 4 used to read *"everything is anchorable — then `F-003` checks nothing"*, and it
+//! was a census: **not** every surface may be tagged, or the criterion is unfalsifiable. The
+//! user overruled that on 2026-08-13 — *„es ist extrem wichtig dass man wirklich überall sein
+//! seil festmachen kann. also überall! ohne ausnahmen!"* — and minutes later left the mechanism
+//! standing: *„es soll später auch stark vereinzelt dinge geben die man nicht anchorn kann.
+//! aber sehr wenig! also kann der check drin bleiben"* (`docs/NEXT.md` §1D item 10 and its
+//! clarification). So it is a **default flip**, not a removal, and the census did not die, it
+//! moved: on the shipped map an untagged block is now a *listed* exception
+//! (`f003_an_unanchorable_block_is_a_listed_exception_and_the_fixture_keeps_both_kinds`), and
+//! the untagged path stays falsifiable on the `graybox` fixture, which keeps its untagged
+//! blocks for the eight aiming tests pinned to it (`docs/FINDINGS.md` FIND-061).
 //!
 //! So this test measures **against `assets/data/maps.ron`**, not against itself.
 //!
@@ -112,15 +126,43 @@ fn walls(plan: &[BlockPlan]) -> Vec<&BlockPlan> {
     plan.iter().filter(|k| k.name.starts_with("house_")).collect()
 }
 
-/// The roof cap of a wall, if the layout builds roofs at all.
-fn roof_of<'a>(plan: &'a [BlockPlan], wall: &BlockPlan) -> Option<&'a BlockPlan> {
+/// Every roof cap of a wall, lowest first — `roof_<lot>_<i>` and, since `layout.roof_steps`,
+/// `roof_<lot>_<i>_<s>` above it.
+///
+/// ⚠️ The prefix is matched with its separator (`roof_1_2_`) and never bare, or `roof_1_20`
+/// would count as a cap of `house_1_2` and every ridge in the district would come out wrong by
+/// a whole house.
+fn caps_of<'a>(plan: &'a [BlockPlan], wall: &BlockPlan) -> Vec<&'a BlockPlan> {
     let want = wall.name.replacen("house_", "roof_", 1);
-    plan.iter().find(|k| k.name == want)
+    let stepped = format!("{want}_");
+    plan.iter().filter(|k| k.name == want || k.name.starts_with(&stepped)).collect()
+}
+
+/// Which wall a cap belongs to — `roof_<lot>_<i>[_<s>]` -> `house_<lot>_<i>`.
+fn wall_name_of_cap(cap: &BlockPlan) -> String {
+    let mut parts = cap.name.split('_');
+    parts.next(); // "roof"
+    let lot = parts.next().unwrap_or_default();
+    let i = parts.next().unwrap_or_default();
+    format!("house_{lot}_{i}")
+}
+
+/// Where a generated house stands — the top of the terrace under it, `0` on flat ground.
+fn base_m(wall: &BlockPlan) -> f32 {
+    wall.center_m.y - wall.size_m.y * 0.5
 }
 
 /// Total height of a generated house, cap included — the number the hook hangs from.
+///
+/// ⚠️ Measured **from its own base and not from `y = 0`** since 2026-08-13: a house on a 3.6 m
+/// terrace is not a 15 m house, and every proportion in this file (`d < H`, street : ridge, the
+/// residential band) is about the building and not about where the ground happens to be.
 fn ridge_m(plan: &[BlockPlan], wall: &BlockPlan) -> f32 {
-    roof_of(plan, wall).map_or(wall.size_m.y, |r| r.center_m.y + r.size_m.y * 0.5)
+    let top = caps_of(plan, wall)
+        .iter()
+        .map(|r| r.center_m.y + r.size_m.y * 0.5)
+        .fold(wall.center_m.y + wall.size_m.y * 0.5, f32::max);
+    top - base_m(wall)
 }
 
 /// Which block a generated house belongs to — the `<lot>` of `house_<lot>_<i>`.
@@ -289,19 +331,67 @@ fn f003_the_colliders_carry_the_half_edge_from_the_file() {
     }
 }
 
+/// The blocks of the **shipped** map that are deliberately *not* anchorable — name, and the
+/// reason a rope may not hold there.
+///
+/// **Empty on 2026-08-13, and that is a decision rather than an accident.** The whole ashgate
+/// section of `maps.ron` was flipped that day: 133 `anchorable: false` became `true`, and the
+/// district ships 100 % hookable because the user asked for exactly that. The five reasons the
+/// old default was built on — the ground slab, the canal, the gate columns, interior faces and
+/// the untagged wall the aim ray was proved against (`docs/NEXT.md` §1D) — all lost to one
+/// sentence, and the last of them survives on the `graybox` fixture instead.
+///
+/// ⚠️ **The list is the mechanism, not a decoration.** He allowed the exception back —
+/// *„stark vereinzelt … aber sehr wenig"* — so this must not forbid it; it must make it
+/// *visible*. An untagged block that is not on this list fails the test, and putting it on the
+/// list means writing down why. That turns a leak into a decision somebody signed.
+const SHIPPED_UNANCHORABLE: &[(&str, &str)] = &[];
+
+/// „sehr wenig" as a number, and it is small on purpose.
+///
+/// An exception is a hand-placed judgement about **one** surface. Eight of them is already a
+/// policy wearing a list, and a policy about what may be hooked is the user's call
+/// (`docs/QUESTIONS.md`), not a constant somebody bumps on the way past. Whoever needs the
+/// ninth has stopped making exceptions and started re-introducing the old default.
+const MAX_SHIPPED_UNANCHORABLE: usize = 8;
+
 #[test]
-fn f003_not_every_surface_is_anchorable() {
-    // K4. Red the moment somebody tags everything wholesale — then "no hook on untagged
-    // surfaces" (F-003) can no longer be falsified, and the criterion checks nothing.
+fn f003_every_anchor_tag_in_the_world_comes_from_the_file_and_the_mask_agrees() {
+    // This was `f003_not_every_surface_is_anchorable` (K4) until 2026-08-13, and its **name was
+    // the premise the user removed** — see the ⚠️ at the top of this file. The census moved to
+    // `f003_an_unanchorable_block_is_a_listed_exception_and_the_fixture_keeps_both_kinds`.
+    //
+    // What is left is the half that never depended on the mix, and it is the half that catches
+    // the expensive bug: **the world carries exactly the tags the file hands it, and the marker
+    // and the mask are the same state.** A block that quietly loses `AnchorSurface` on the way
+    // out of `maps.ron` is invisible — it looks like a house, it collides like a house, and the
+    // rope goes through it. Red for that, red for the converse (a tag the file never gave), and
+    // red when `AnchorSurface` and `BodyMask::ANCHORABLE` drift apart, which is a cyan gizmo
+    // drawn around blocks the hook does not catch.
     let mut app = built_world();
     let built = built_blocks(&mut app);
-    let anchorable = built.iter().filter(|(_, _, _, a)| *a).count();
-    let untagged = built.len() - anchorable;
-    assert!(anchorable > 0, "not a single anchor surface in the built city");
+    let plan = plan();
+    let from_file: std::collections::BTreeMap<&str, bool> =
+        plan.iter().map(|p| (p.name.as_str(), p.anchorable)).collect();
+
     assert!(
-        untagged > 0,
-        "all {} blocks carry an anchor surface — then F-003 checks nothing",
-        built.len()
+        built.iter().any(|(_, _, _, a)| *a),
+        "not a single anchor surface in the built city — nothing in this district can be hooked"
+    );
+
+    let mut drifted: Vec<String> = Vec::new();
+    for (name, _, _, marker) in &built {
+        let want = *from_file
+            .get(name.as_str())
+            .unwrap_or_else(|| panic!("{name} stands in the world but not in the plan"));
+        if *marker != want {
+            drifted.push(format!("{name}: AnchorSurface {marker}, `maps.ron` says {want}"));
+        }
+    }
+    assert!(
+        drifted.is_empty(),
+        "{} block(s) carry a different tag in the world than in the file: {drifted:#?}",
+        drifted.len()
     );
 
     // The marker and the mask are the same state, written in two places by one writer. If
@@ -316,6 +406,100 @@ fn f003_not_every_surface_is_anchorable() {
             anchors.is_some()
         );
     }
+}
+
+#[test]
+fn f003_an_unanchorable_block_is_a_listed_exception_and_the_fixture_keeps_both_kinds() {
+    // ★ The guard the map flip needs and did not have. 100 % anchorable is now a **decision**,
+    // and a decision that nothing measures decays into a habit: the next hand that writes
+    // `anchorable: false` for a reason it does not write down has silently taken a surface away
+    // from the player, and the only place that surfaces is a rope that does not catch.
+    //
+    // Two halves, and neither is a census of the old kind:
+    //
+    // 1. **On the shipped map an exception has to be named.** Not forbidden — the user allows
+    //    it — but listed in `SHIPPED_UNANCHORABLE` with a reason, and capped at
+    //    `MAX_SHIPPED_UNANCHORABLE`. That makes a rare exception cheap and a policy expensive,
+    //    which is exactly the shape of what he asked for.
+    // 2. **The fixture keeps both kinds.** The old K4 worry — "everything tagged, so the
+    //    untagged path can no longer be falsified" — is still true, it just does not apply to
+    //    the played map any more. It applies to `graybox`, where the eight aiming tests of
+    //    `tests/vector_aiming.rs` are pinned (`docs/FINDINGS.md` FIND-061) and where
+    //    `f002_an_untagged_wall_in_front_of_a_roof_is_not_hookable_and_not_transparent` needs a
+    //    surface that is deliberately untagged to point at. Flatten the fixture too and eight
+    //    tests stay green while proving nothing.
+    let d = data();
+    let plan = plan();
+
+    // ---- 1. the shipped map --------------------------------------------------------------
+    let untagged: Vec<&str> =
+        plan.iter().filter(|p| !p.anchorable).map(|p| p.name.as_str()).collect();
+    let listed: std::collections::BTreeSet<&str> =
+        SHIPPED_UNANCHORABLE.iter().map(|(name, _)| *name).collect();
+
+    let unlisted: Vec<&&str> = untagged.iter().filter(|n| !listed.contains(**n)).collect();
+    assert!(
+        unlisted.is_empty(),
+        "{} block(s) of the shipped map {:?} are not anchorable and stand on no list: {unlisted:#?}\n\
+         The user, 2026-08-13: „es ist extrem wichtig dass man wirklich überall sein seil \
+         festmachen kann. also überall!\" — and „stark vereinzelt … aber sehr wenig! also kann \
+         der check drin bleiben\". An exception is allowed; an unexplained one is not. Add it to \
+         `SHIPPED_UNANCHORABLE` with the reason a rope may not hold there.",
+        unlisted.len(),
+        d.maps.current
+    );
+
+    // The converse, which is what stops the list from rotting into folklore: an entry that
+    // names nothing, or names something that is anchorable again, is a reason nobody has read
+    // since it stopped being true.
+    let present: std::collections::BTreeSet<&str> =
+        plan.iter().map(|p| p.name.as_str()).collect();
+    for (name, why) in SHIPPED_UNANCHORABLE {
+        assert!(
+            present.contains(name),
+            "`SHIPPED_UNANCHORABLE` lists {name:?}, which is not in the shipped map at all"
+        );
+        assert!(
+            untagged.contains(name),
+            "`SHIPPED_UNANCHORABLE` lists {name:?} as an exception, but it is anchorable — \
+             stale entry, and the next reader will believe the reason"
+        );
+        assert!(!why.trim().is_empty(), "the exception {name:?} carries no reason");
+    }
+
+    // And few. A generator-wide regression — `layout.anchorable_fraction` slipping off 1.0 —
+    // arrives here as hundreds of unlisted `house_*`, which the check above catches first; this
+    // one catches the slower way of losing the same argument, one signed entry at a time.
+    assert!(
+        untagged.len() <= MAX_SHIPPED_UNANCHORABLE,
+        "{} of {} blocks in the shipped map are not anchorable — „sehr wenig\" was the word, \
+         and {MAX_SHIPPED_UNANCHORABLE} is where a list stops being a set of exceptions. \
+         Raising the cap is a question for the user, not an edit.",
+        untagged.len(),
+        plan.len()
+    );
+
+    // ---- 2. the fixture ------------------------------------------------------------------
+    const FIXTURE: &str = "graybox";
+    assert_ne!(
+        d.maps.current, FIXTURE,
+        "the fixture is the shipped map — then half 1 and half 2 of this test contradict each \
+         other, and the aiming tests measure the district instead of their fixture"
+    );
+    let fixture = d
+        .maps
+        .maps
+        .get(FIXTURE)
+        .unwrap_or_else(|| panic!("`maps.ron` has no {FIXTURE:?} — the aiming fixture is gone"));
+    let tagged = fixture.blocks.iter().filter(|b| b.anchorable).count();
+    let bare = fixture.blocks.len() - tagged;
+    assert!(
+        tagged > 0 && bare > 0,
+        "{FIXTURE} carries {tagged} anchorable and {bare} untagged blocks — both kinds have to \
+         exist there or `F-003`'s \"no hook on untagged parts\" is unfalsifiable everywhere in \
+         this repository, and the eight fixture tests in `tests/vector_aiming.rs` go green \
+         without deciding anything"
+    );
 }
 
 #[test]
@@ -383,38 +567,88 @@ fn f003_the_grid_houses_stay_in_the_height_window_from_the_file() {
     let houses = walls(&plan);
     assert!(!houses.is_empty(), "no generated house at all");
 
+    // The one height that is deliberately outside the band, and it is a figure of the user's:
+    // `scale.ron: architecture.heights_m[layout.tall_height_key]`. `layout.tall_fraction` of
+    // the houses are built to it — `Q-036`, answered.
+    let tall_m = d.scale.architecture.heights_m[&r.tall_height_key];
+    let ceiling_m = map.terrain.step_m * (map.terrain.levels.saturating_sub(1)) as f32;
+    let mut tall = 0usize;
+
     for house in &houses {
         let ridge = ridge_m(&plan, house);
+        let in_band = (r.min_height_m..=r.max_height_m).contains(&ridge);
+        if (ridge - tall_m).abs() < 1e-3 {
+            tall += 1;
+        }
         assert!(
-            (r.min_height_m..=r.max_height_m).contains(&ridge),
-            "{}: a ridge of {ridge} m is not in {}..={} (maps.ron: layout)",
+            in_band || (ridge - tall_m).abs() < 1e-3,
+            "{}: a ridge of {ridge} m is neither in {}..={} nor the tall class ({tall_m} m) \
+             (maps.ron: layout)",
             house.name,
             r.min_height_m,
             r.max_height_m
         );
         assert!(house.size_m.y > 0.0, "{}: the roof ate the whole wall", house.name);
-        assert!(house.center_m.y > 0.0, "{}: center below the ground", house.name);
-        assert!(
-            (house.center_m.y - house.size_m.y * 0.5).abs() < 1e-4,
-            "{}: does not stand on y = 0, but at {}",
-            house.name,
-            house.center_m.y - house.size_m.y * 0.5
-        );
-        // And the cap really sits ON the wall, not floating over it or sunk into it.
-        if let Some(cap) = roof_of(&plan, house) {
-            let eaves = house.center_m.y + house.size_m.y * 0.5;
+        // ⚠️ Until 2026-08-13 this line read "stands on y = 0" — and it had to, there was no
+        // terrain. What it means now is **stands on a terrace**: the base is a whole number of
+        // `terrain.step_m` and never above the ceiling the file allows. That is stricter, not
+        // weaker: a house half a step off its plateau floats or sinks, and neither shows up in
+        // the picture.
+        let base = base_m(house);
+        assert!(base >= 0.0 && base <= ceiling_m + 1e-4, "{}: stands at {base} m", house.name);
+        if map.terrain.step_m > 0.0 {
+            let levels = base / map.terrain.step_m;
             assert!(
-                (cap.center_m.y - cap.size_m.y * 0.5 - eaves).abs() < 1e-3,
-                "{}: the cap starts at {} m, the eaves are at {eaves} m",
+                (levels - levels.round()).abs() < 1e-3,
+                "{}: stands at {base} m, which is {levels} steps of {} m — not on a terrace",
+                house.name,
+                map.terrain.step_m
+            );
+        } else {
+            assert!(base.abs() < 1e-4, "{}: a flat map, and the house stands at {base}", house.name);
+        }
+        // And the caps really sit ON the wall, each one on the one below it.
+        let mut under = house.center_m.y + house.size_m.y * 0.5;
+        for cap in caps_of(&plan, house) {
+            assert!(
+                (cap.center_m.y - cap.size_m.y * 0.5 - under).abs() < 1e-3,
+                "{}: the cap starts at {} m, the one below it ends at {under} m",
                 cap.name,
                 cap.center_m.y - cap.size_m.y * 0.5
             );
+            // A **gable**: pulled in across the short side, flush with the gable walls at
+            // the ends. Both axes pulled in is a stepped pyramid, and 900 of those are
+            // further from a town than the flat lid they replaced (`world::map`, and
+            // `docs/images/f003-roofscape.png` is what made the case).
+            let short_in = if house.size_m.x >= house.size_m.z {
+                cap.size_m.z < house.size_m.z && (cap.size_m.x - house.size_m.x).abs() < 1e-4
+            } else {
+                cap.size_m.x < house.size_m.x && (cap.size_m.z - house.size_m.z).abs() < 1e-4
+            };
             assert!(
-                cap.size_m.x < house.size_m.x && cap.size_m.z < house.size_m.z,
-                "{}: the cap is not pulled in — a roof flush with the wall is a flat top",
-                cap.name
+                short_in,
+                "{}: {:?} on a {:?} house is not a stepped gable — a roof flush with the wall \
+                 on both axes is a flat top, and one pulled in on both is a ziggurat",
+                cap.name,
+                cap.size_m,
+                house.size_m
             );
+            under = cap.center_m.y + cap.size_m.y * 0.5;
         }
+    }
+
+    // The converse: the tall class is really built, and it stays rare. Without this the
+    // `||` above would be a licence rather than a measurement — `tall_fraction: 0.0` would
+    // pass it, and so would a district where every house is 18 m.
+    if r.tall_fraction > 0.0 {
+        let want = r.tall_fraction * houses.len() as f32;
+        assert!(
+            tall as f32 > want * 0.5 && (tall as f32) < want * 2.0,
+            "{tall} of {} houses are of the tall class, and the file asks for about {want:.0} \
+             (maps.ron: layout.tall_fraction = {})",
+            houses.len(),
+            r.tall_fraction
+        );
     }
 }
 
@@ -464,8 +698,15 @@ fn f003_the_district_has_a_skyline_and_not_one_flat_top() {
         means.len(),
         p90 - p10
     );
+    // ⚠️ 1.5 -> 3.0 m on 2026-08-13, and the raise is the acceptance criterion of the round.
+    // The user, having looked at the district built to the old number: *„lass es wie die echte
+    // stadt aussehen! aktuell kann man es noch nicht erkennen!"*. 1.5 m of relief between the
+    // tenth-highest and the tenth-lowest block is half a storey — measurable, and invisible.
+    // The band alone cannot reach 3.0 (it is 5.0 m wide and two thirds of it are spent inside
+    // one block); what reaches it is `layout.tall_fraction`, and that is the point of the
+    // lever.
     assert!(
-        p90 - p10 > 1.5,
+        p90 - p10 > 3.0,
         "the tenth-highest and the tenth-lowest block of the district differ by \
          {:.2} m — at that relief the town is one flat top from any distance, whatever the \
          individual houses do",
@@ -491,6 +732,173 @@ fn f003_the_district_has_a_skyline_and_not_one_flat_top() {
         "only {inner} of {} blocks have houses that differ by more than half a metre",
         per_block.len()
     );
+}
+
+#[test]
+fn f003_the_ground_is_stepped_and_not_one_flat_slab() {
+    // ★ The user, 2026-08-13: *„adde verschiedene höhen vom boden her! lass es wie die echte
+    // stadt aussehen! aktuell kann man es noch nicht erkennen!"*. Until that day this game had
+    // no terrain at all — `maps.ron` placed one 700 x 700 m slab and every generated house in
+    // the district stood on `y = 0`, so the number below was **0.00 m**.
+    //
+    // Measured on the **base of every generated house**, and that is the honest sample: it is
+    // area-weighted over the built district (every house is one vote where houses are), it
+    // needs nothing but the plan, and it is exactly the ground the player runs on between the
+    // facades. The field's own cell heights are reported next to it and include the pinned
+    // rows along the wall and the canal, which nobody walks a district on.
+    let d = data();
+    let map = d.current_map().expect("current map");
+    let plan = plan();
+    let houses = walls(&plan);
+    assert!(houses.len() > 100, "only {} generated houses — is this the district?", houses.len());
+
+    let mut bases: Vec<f32> = houses.iter().map(|h| base_m(h)).collect();
+    bases.sort_by(f32::total_cmp);
+    let p10 = bases[bases.len() / 10];
+    let p90 = bases[bases.len() * 9 / 10];
+
+    let mut distinct: Vec<i64> = bases.iter().map(|b| (b * 1000.0).round() as i64).collect();
+    distinct.sort_unstable();
+    distinct.dedup();
+
+    let (_, ground) = defeated_by_titan::world::map::terrain_of(&d, map);
+    let cells = ground.field.heights_m();
+
+    // The whole field, one digit per cell. It costs sixteen lines and it is the only way to
+    // see **why** a number came out the way it did: every 0 is something hand-placed pinning
+    // its cell, and the slope away from it is the distance transform (`docs/FINDINGS.md`
+    // FIND-090). Reading the histogram instead sent this round down a wrong path twice.
+    for iz in 0..ground.field.nz() as i32 {
+        let row: String = (0..ground.field.nx() as i32)
+            .map(|ix| char::from_digit(ground.field.level_at(ix, iz), 10).unwrap_or('?'))
+            .collect();
+        eprintln!("terrain row {iz:2}  {row}");
+    }
+    eprintln!(
+        "ground under {} houses: p10 {p10:.2} m, p90 {p90:.2} m, relief {:.2} m · \
+         {} distinct levels {distinct:?} · {} terrain cells, levels used {:?} · \
+         {} terrace blocks",
+        houses.len(),
+        p90 - p10,
+        distinct.len(),
+        cells.len(),
+        ground.field.levels_used(),
+        ground.pads.len()
+    );
+
+    assert!(
+        p90 - p10 >= 2.7,
+        "the ground under the tenth-highest and the tenth-lowest house of the district \
+         differs by {:.2} m — below 2.7 m the terracing is a rounding error and the district \
+         is the flat slab it was before 2026-08-13",
+        p90 - p10
+    );
+    assert!(
+        distinct.len() >= 4,
+        "the whole district stands on {} different ground heights ({distinct:?}) — two or \
+         three terraces are a mistake in the map, not a landscape",
+        distinct.len()
+    );
+
+    // And the invariant the stairs hang from, on the **real** field and not on a fixture:
+    // no cell may be more than one level above the one next to it, or the flight that leads
+    // up it is short by a riser and the terrace edge is a wall.
+    let f = &ground.field;
+    for iz in 0..f.nz() as i32 {
+        for ix in 0..f.nx() as i32 {
+            for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                assert!(
+                    f.drop_to(ix, iz, dx, dz) <= 1,
+                    "cell ({ix},{iz}) at level {} stands {} levels over ({},{}) — the flight \
+                     built for it is one riser deep and the rest is a cliff",
+                    f.level_at(ix, iz),
+                    f.drop_to(ix, iz, dx, dz),
+                    ix + dx,
+                    iz + dz
+                );
+            }
+        }
+    }
+
+    // Every terrace really carries its stairs: a plateau with a falling neighbour and no
+    // flight beside it is the wall this whole design exists to avoid.
+    let flight = (map.terrain.step_m / map.terrain.stair_rise_m).round() as u32;
+    let mut naked = 0usize;
+    for iz in 0..f.nz() as i32 {
+        for ix in 0..f.nx() as i32 {
+            if f.level_at(ix, iz) == 0 {
+                continue;
+            }
+            for (dx, dz, side) in [(-1, 0, 'w'), (1, 0, 'e'), (0, -1, 'n'), (0, 1, 's')] {
+                if f.drop_to(ix, iz, dx, dz) == 0 {
+                    continue;
+                }
+                for k in 1..flight {
+                    let want = format!("terrace_{ix}_{iz}_{side}{k}");
+                    if !ground.pads.iter().any(|p| p.name == want) {
+                        naked += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(naked, 0, "{naked} terrace edges fall away without a step built into them");
+
+    // The risers themselves: nothing the player has to climb is taller than one step of the
+    // stairs. Measured against the file, so widening `stair_rise_m` past what a 0.35 m capsule
+    // can ride up shows here and not only in the run.
+    for pad in &ground.pads {
+        let top = pad.center_m.y + pad.size_m.y * 0.5;
+        let level = top / map.terrain.stair_rise_m;
+        assert!(
+            (level - level.round()).abs() < 1e-3,
+            "{}: its top is at {top} m, which is not a whole number of {} m risers",
+            pad.name,
+            map.terrain.stair_rise_m
+        );
+    }
+}
+
+#[test]
+fn f003_the_terrain_did_not_cost_the_district_its_houses() {
+    // ★ The other half of the acceptance, and the one that is easy to lose without noticing:
+    // a terrace is a block, `plan_blocks` vetoes a generated house against every hand-placed
+    // block, and a house lifted 3.6 m would fly straight over the 0.3 m aprons that exist to
+    // delete it. Either mistake shows up as **fewer houses**, and a district that quietly lost
+    // a tenth of itself still looks like a district in a screenshot.
+    //
+    // So the same map is planned twice — once as it ships, once with its terrain switched off
+    // by the one number that switches it off — and the two counts are compared.
+    let d = data();
+    let map = d.current_map().expect("current map");
+    let with = plan();
+
+    let mut flat_map = map.clone();
+    flat_map.terrain.levels = 1;
+    flat_map.terrain.step_m = 0.0;
+    let flat = plan_blocks(&d, &flat_map);
+
+    let count = |p: &[BlockPlan]| p.iter().filter(|k| k.name.starts_with("house_")).count();
+    let (a, b) = (count(&with), count(&flat));
+    eprintln!("{a} houses with terrain, {b} without — {:.4}x", a as f32 / b as f32);
+    // ⚠️ **A band and not a floor**, and the upper half is the one that caught something.
+    // Tried on 2026-08-13: lift the veto box onto the terrace instead of standing it on
+    // `y = 0`, and the count goes **up** — the 0.30 m aprons under the 60 m galleries stick
+    // 0.05 m out of the ground, and a house raised onto a terrace flies clean over them. Every
+    // roof they exist to delete comes back, and a one-sided `>= 0.98 * b` calls that a success.
+    let ratio = a as f32 / b as f32;
+    assert!(
+        (0.98..=1.02).contains(&ratio),
+        "{a} houses stand on the terraced district against {b} on the flat one ({ratio:.4}x) — \
+         the ground either ate part of the city or lifted it over the aprons that are supposed \
+         to keep it off the galleries"
+    );
+
+    // And the terrain really is what is being compared: the flat plan has no terrace in it,
+    // the shipped one has many.
+    let terraces = |p: &[BlockPlan]| p.iter().filter(|k| k.name.starts_with("terrace_")).count();
+    assert_eq!(terraces(&flat), 0, "`levels: 1` still built terraces");
+    assert!(terraces(&with) > 50, "only {} terraces in the district", terraces(&with));
 }
 
 #[test]
@@ -719,9 +1127,10 @@ fn f003_no_anchorable_block_has_another_block_sitting_on_its_roof_centre() {
     if map.layout.perimeter.as_ref().and_then(|p| p.roof.as_ref()).is_some() {
         assert!(roofs.len() > 100, "only {} roof caps in the district", roofs.len());
         for cap in &roofs {
+            let want = wall_name_of_cap(cap);
             let wall = plan
                 .iter()
-                .find(|k| k.name == cap.name.replacen("roof_", "house_", 1))
+                .find(|k| k.name == want)
                 .unwrap_or_else(|| panic!("{}: a roof cap with no house under it", cap.name));
             assert_eq!(
                 cap.anchorable, wall.anchorable,
@@ -828,17 +1237,31 @@ fn f019_the_headquarters_doorway_is_a_gap_a_player_really_fits_through() {
 }
 
 #[test]
-fn f019_the_headquarters_roof_is_the_anchor_and_the_interior_is_not_a_tagged_lie() {
-    // Two claims, and the second is the one that costs something to keep.
+fn f019_the_headquarters_roof_is_the_anchor_and_the_tagged_interior_is_reachable_through_the_door() {
+    // Two claims, and the second one changed shape on 2026-08-13 without getting weaker.
     //
-    // 1. **The roof is hookable**, so arriving by air is the natural way in. It is the only
-    //    tagged surface of the building, it is `sand_brown` like every other anchorable slab
-    //    in this map, and it sits at 11.5 m.
-    // 2. **Nothing inside is tagged.** `tests/vector_aiming.rs::
-    //    f002_every_tagged_surface_in_the_map_is_reachable_by_free_aiming` walks every
-    //    anchorable block with a real ray; a tagged wall inside a closed hall is a surface
-    //    nothing outside can reach, and that is a lie in the map whichever test happens to be
-    //    pinned where. The rule is cheap to hold and expensive to discover.
+    // 1. **The roof is hookable**, so arriving by air is the natural way in: 32 x 26 m of
+    //    `sand_brown` at 11.5 m. Unchanged.
+    // 2. This half used to be *"nothing inside is tagged"*, and it was there for `FIND-059`:
+    //    a tagged surface nothing can hook is a **lie in the map**, and an interior wall is
+    //    unreachable by construction. The user then made the whole district anchorable
+    //    (`docs/NEXT.md` §1D item 10), so the interior is tagged now — all 31 blocks of it —
+    //    and the premise "tagged inside ⇒ unreachable" is what died, not the concern.
+    //
+    //    **The concern is sharper than before.** While most of the map was untagged, an
+    //    unreachable tag was one mistake among many; now that everything is tagged it is the
+    //    *only* remaining way for the tag to lie, and this hall is the one place in the
+    //    district that has an inside at all. So the honest question is no longer "is anything
+    //    tagged in here" — it is **"can a rope get to it"**, and that is measurable: the hall
+    //    has a 6 x 4.5 m door (`f019_the_headquarters_doorway_is_a_gap_a_player_really_fits_
+    //    through` proves the gap is real), so a shot fired from the street through that door
+    //    has to land on a tagged surface inside.
+    //
+    //    Red for both ways of breaking it: seal the door (the first thing every ray meets is
+    //    then the facade at x = -15.75, outside the hall), or un-tag what stands at the end of
+    //    the aisle (the ray reaches it and it is not anchorable). Which blocks of the hall may
+    //    be untagged at all is `f003_an_unanchorable_block_is_a_listed_exception_...`'s
+    //    business; this test is about the ones a rope actually meets.
     let plan = plan();
 
     let roof = plan
@@ -852,23 +1275,53 @@ fn f019_the_headquarters_roof_is_the_anchor_and_the_interior_is_not_a_tagged_lie
     assert!(roof.anchorable, "the headquarters roof is not anchorable — you cannot land on it");
     assert!(roof.solid, "the roof is not solid — you would fall through it");
 
-    // Everything else standing in the hall's footprint, above the floor: untagged.
-    let tagged: Vec<&str> = plan
-        .iter()
-        .filter(|k| {
-            !std::ptr::eq(*k, roof)
-                && k.anchorable
-                && k.center_m.x > -47.0
-                && k.center_m.x < -15.0
-                && k.center_m.z.abs() < 13.0
-                && k.center_m.y > HQ_FLOOR_TOP_M
-        })
-        .map(|k| k.name.as_str())
-        .collect();
+    // Six shots down the aisle: three lines across the 6 m opening, two heights under the
+    // 4.5 m lintel. Marched in 5 cm steps, which is finer than the thinnest thing in the hall
+    // (the 0.3 m skid), so nothing is stepped over.
+    let mut landed: Vec<&str> = Vec::new();
+    for z in [-2.5f32, 0.0, 2.5] {
+        for y in [1.0f32, 3.5] {
+            let mut hit: Option<(f32, &BlockPlan)> = None;
+            let mut x = -5.0f32; // on the pavement outside, east of the facade
+            while x > -60.0 {
+                if let Some(b) = solid_at(&plan, Vec3::new(x, y, z)) {
+                    hit = Some((x, b));
+                    break;
+                }
+                x -= 0.05;
+            }
+            let (at_x, block) = hit.unwrap_or_else(|| {
+                panic!(
+                    "a shot at (y {y}, z {z}) crosses the whole hall and meets nothing — the \
+                     headquarters has no back wall, and a rope fired down the aisle flies out \
+                     of the district"
+                )
+            });
+            assert!(
+                at_x < -16.5,
+                "the shot at (y {y}, z {z}) stops on {} at x = {at_x:.2} — that is the facade, \
+                 not the interior. The door is shut, and everything tagged behind it is exactly \
+                 the lie FIND-059 is about",
+                block.name
+            );
+            assert!(
+                block.anchorable,
+                "the shot at (y {y}, z {z}) reaches {} at x = {at_x:.2}, inside the hall, and it \
+                 is not anchorable — the interior of the one building in this district you can \
+                 walk into refuses the rope",
+                block.name
+            );
+            if !landed.contains(&block.name.as_str()) {
+                landed.push(block.name.as_str());
+            }
+        }
+    }
+
+    // And the six shots do not all end on the same slab, or "the interior is reachable" would
+    // be one wall's story.
     assert!(
-        tagged.is_empty(),
-        "{tagged:?} are tagged inside the headquarters — a rope fired from outside can never \
-         reach them, and `f002_every_tagged_surface_...` would be measuring a lie"
+        landed.len() >= 2,
+        "all six shots land on {landed:?} — one surface is not an interior"
     );
 }
 
@@ -975,16 +1428,11 @@ fn t036a_the_index_carries_the_anchorable_bit_from_the_file() {
     }
     assert!(wrong.is_empty(), "{} block(s) with the wrong mask: {wrong:#?}", wrong.len());
 
-    // Both kinds, and the numbers come out of the plan. In the graybox that is 63 of 79 —
-    // written nowhere here, because a map change must not turn into a test change.
+    // The number comes out of the plan and is written nowhere here, because a map change must
+    // not turn into a test change.
     let expected_anchorable = plan.iter().filter(|p| p.anchorable).count();
     assert_eq!(anchorable, expected_anchorable, "anchorable bodies in the index vs. in the file");
     assert!(anchorable > 0, "not a single anchorable body in the index");
-    assert!(
-        anchorable < all.len(),
-        "all {} bodies are anchorable — then the mask decides nothing",
-        all.len()
-    );
 
     // The hull the index carries is the hull of the body, and it comes from the file's half
     // edge. A factor of 2 here is a hook that catches in mid-air.
@@ -994,6 +1442,45 @@ fn t036a_the_index_carries_the_anchorable_bit_from_the_file() {
         assert_eq!(entry.half_size_m, want.size_m * 0.5, "{name}: half size in the index");
         assert_eq!(entry.center_m, want.center_m, "{name}: center in the index");
     }
+
+    // ⚠️ **The negative case, and it has to be produced now instead of found.**
+    //
+    // This test used to end on a census — "and not all of them are anchorable, or the mask
+    // decides nothing". That was load bearing: every assertion above compares the index against
+    // the file, and on a map where the file says `true` everywhere, an index that simply
+    // hardcoded `mask_from(true, true)` would satisfy all of them. The census was what made the
+    // *derivation* falsifiable, and the map flip of 2026-08-13 took it away — the district is
+    // anchorable throughout, on purpose.
+    //
+    // So the missing half of the map is spawned instead: one body carrying the mask a
+    // `anchorable: false` block would get. If the bit is carried through it comes back out of
+    // the index unset; if it is invented anywhere between `Body` and `SpatialIndex`, this is
+    // the only thing in the file that notices.
+    let control = app
+        .world_mut()
+        .spawn((
+            Name::new("t036a_unanchorable_control"),
+            Body { half_size_m: Vec3::splat(2.0), mask: mask_from(true, false) },
+            Transform::from_translation(Vec3::new(-150.0, 40.0, -150.0)),
+        ))
+        .id();
+    app.update();
+    let control_id = *app.world().get::<BodyId>(control).expect("the control body gets an id");
+    let entry = app
+        .world()
+        .resource::<SpatialIndex>()
+        .body(control_id)
+        .expect("the control body is in the index");
+    assert!(
+        !entry.mask.contains(BodyMask::ANCHORABLE),
+        "a body built from `anchorable: false` comes out of the index ANCHORABLE — the bit is \
+         not carried, it is invented, and on a map that is tagged throughout nothing else in \
+         this file would ever see it"
+    );
+    assert!(
+        entry.mask.contains(BodyMask::SOLID),
+        "and it lost the solid bit on the way, so the index is not carrying the mask at all"
+    );
 }
 
 #[test]

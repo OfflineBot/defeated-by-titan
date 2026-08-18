@@ -74,7 +74,8 @@ use bevy::prelude::*;
 
 use crate::data::GameData;
 use crate::shared::{
-    Cli, Health, HitZone, PlayerId, SimulationSystems, SpawnTitan, Tick, TitanHit,
+    AbandonSortie, Cli, DeployRequest, Health, HitZone, PlayerId, SimulationSystems, SpawnTitan,
+    Tick, TitanHit,
 };
 
 pub use hub::{BladeRack, DeploymentPoint, RefuelStation, ReturnToHub, Sortie, SortieOrder};
@@ -95,6 +96,16 @@ impl Plugin for MissionPlugin {
         // it, and a resource that only exists under one launch mode is a system that panics
         // under the others.
         app.init_resource::<Sortie>();
+
+        // The lobby's two orders. Registered here, next to the only reader, exactly as
+        // `vector` registers `RefuelRequest` and `blades` registers `BladeRestockRequest`.
+        app.add_message::<DeployRequest>().add_message::<AbandonSortie>();
+        // ⚠️ **`Update`, not `FixedUpdate`, and it is not a style choice.** Both messages come
+        // from a menu screen, and a menu screen has `Time<Virtual>` stopped
+        // (`menu::apply_screen`) — so `FixedUpdate` does not run at all while one is open
+        // (`bevy_time-0.19.0/src/fixed.rs:244-247`) and a reader in the simulation would never
+        // see the button the player pressed.
+        app.add_systems(Update, take_orders_from_the_menu);
 
         app.add_systems(Startup, begin_mission)
             .add_systems(OnEnter(MissionPhase::Deploying), deploy)
@@ -229,6 +240,96 @@ fn begin_mission(world: &mut World) {
         world.resource_mut::<NextState<MissionPhase>>().set(next);
         world.run_schedule(StateTransition);
     }
+}
+
+/// What the **lobby** and the **pause screen** asked for — `shared::DeployRequest` and
+/// `shared::AbandonSortie`, the front door to the same sortie the deployment pads start.
+///
+/// `menu` may read the phase (`docs/architecture.md`, allow list) and may not write it. So the
+/// screens ask and this system decides — the same seam a refuel station uses for `Gas`.
+///
+/// ## Two things it holds back, and both of them are bugs it would otherwise be
+///
+/// - **Nothing happens while the clock is stopped.** A menu screen pauses `Time<Virtual>`
+///   (`menu::apply_screen`), and `OnEnter(Hub)` sends a `WarpPlayer` that only
+///   `player::apply_warps` may act on — in `FixedUpdate`, which does not run on a stopped
+///   clock. Acting on a paused frame would put the session in the hub **phase** and leave the
+///   player's body standing in the city, with the message dropped two frames later and nobody
+///   the wiser. So the order is remembered and executed the moment the game runs again, which
+///   is the same frame the player pressed Deploy in, one frame later.
+/// - **A sortie is left through the hub, never over the top of it.** Deploying straight out of
+///   `Won` would leave the finished `Mission` entity standing — `hub::open_hub` is the only
+///   thing that despawns it — and the next sortie would count kills on two `KillTally`s. So a
+///   deploy that arrives during a running or decided sortie first sets `Hub` and **keeps** the
+///   order; the hub clears the old run and the next frame flies the new one.
+fn take_orders_from_the_menu(
+    mut deploys: MessageReader<DeployRequest>,
+    mut abandons: MessageReader<AbandonSortie>,
+    mut pending: Local<PendingOrder>,
+    time: Res<Time<Virtual>>,
+    data: Res<GameData>,
+    phase: Res<State<MissionPhase>>,
+    mut sortie: ResMut<Sortie>,
+    mut next: ResMut<NextState<MissionPhase>>,
+) {
+    if abandons.read().count() > 0 {
+        pending.abandon = true;
+    }
+    // The **last** one wins: two deploy requests in one frame can only mean the player clicked
+    // twice, and what he wants is the second one.
+    if let Some(order) = deploys.read().last() {
+        pending.deploy = Some(order.clone());
+    }
+    if !pending.abandon && pending.deploy.is_none() {
+        return;
+    }
+    if time.is_paused() {
+        return;
+    }
+
+    if phase.get().is_running() || phase.get().is_decided() {
+        pending.abandon = false;
+        info!("the menu ends the sortie — back to the hub, no verdict");
+        next.set(MissionPhase::Hub);
+        return;
+    }
+    pending.abandon = false;
+
+    let Some(order) = pending.deploy.take() else {
+        return;
+    };
+    // Checked here and not in `deploy`, for the same reason `hub::deploy_on_contact` checks it
+    // there: here there is still somewhere to refuse *to* — the player keeps standing in the
+    // hub instead of walking into a phase that has no numbers.
+    let known = data.missions.templates.get(&order.template).is_some_and(|template| {
+        order.difficulty.as_ref().is_none_or(|d| template.difficulties.contains_key(d))
+    });
+    if !known {
+        error!(
+            "the lobby asked for mission {:?} at difficulty {:?}, which is not in \
+             assets/data/missions.ron — no sortie is started",
+            order.template, order.difficulty
+        );
+        return;
+    }
+
+    info!("lobby deployment: {:?} at {:?}", order.template, order.difficulty);
+    sortie.0 = Some(SortieOrder {
+        template: order.template,
+        difficulty: order.difficulty,
+        // It came out of the hub's front door, so it goes back through it — `hub::ReturnToHub`
+        // is hung on the mission by `deploy`, exactly as it is for a walk-in pad.
+        from_hub: true,
+    });
+    next.set(MissionPhase::Deploying);
+}
+
+/// What [`take_orders_from_the_menu`] is still holding. A `Local`, because it belongs to that
+/// system and to nobody else — and per **session**, like the sortie it orders.
+#[derive(Default)]
+struct PendingOrder {
+    abandon: bool,
+    deploy: Option<DeployRequest>,
 }
 
 /// Whether the sortie has been decided — the condition [`hub::return_to_hub`] hangs on.

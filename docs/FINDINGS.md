@@ -1662,7 +1662,7 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 ---
 
 ## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
-**NEXT FREE ID: FIND-088.** Claim it by bumping this line in the same `cat >>` that
+**NEXT FREE ID: FIND-094.** Claim it by bumping this line in the same `cat >>` that
 appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
 file separately and both read the same maximum. One line beats a 108 kB grep.
  — and append with `>>`, never with an edit tool
@@ -4545,3 +4545,330 @@ wait 2
 ```
 
 `--headless … --ticks 400` exits **0**, 2 asserts held, 335 ticks.
+
+---
+
+## FIND-088 — a menu stops the clock, and three things downstream of that stop with it
+
+**2026-08-13, while building the Escape menu, the settings screen and the lobby (`docs/NEXT.md`
+§1D reqs 6–8).** Not a bug that was hit — a bug that was *designed around* after reading the
+schedules, and the reasoning is worth keeping because every future screen walks into it.
+
+`menu::apply_screen` pauses `Time<Virtual>` for every screen that is not `Screen::Playing`. That
+is the right mechanism (`bevy_time-0.19.0/src/fixed.rs:244-247` — one switch, and no domain can
+forget to honour it), and it has three consequences that are invisible until something is
+already broken:
+
+1. **`FixedUpdate` does not run at all while a screen is open.** So a message a menu sends can
+   only be read in `Update`. `mission::take_orders_from_the_menu` reads `shared::DeployRequest`
+   and `shared::AbandonSortie` there for exactly this reason; a reader in
+   `SimulationSystems::PostStep` would never see the button the player pressed.
+2. **A state transition *does* still happen** — `StateTransition` is a main-schedule thing and
+   runs paused or not. So `OnEnter(MissionPhase::Hub)` → `hub::open_hub` → `WarpPlayer` fires
+   while the clock is stopped, and `player::apply_warps` is in `FixedUpdate` and never reads it.
+   `Messages` are dropped after two `First`s, so the warp is **silently lost**: the session is in
+   the hub phase and the player's body is still in the city. This is why
+   `take_orders_from_the_menu` refuses to act on a paused clock and holds the order in a `Local`
+   until the game runs again — one frame later, in practice the same click.
+3. **Leaving a sortie has to go through the hub, not over the top of it.** `hub::open_hub` is the
+   only thing that despawns the finished `Mission` entity; deploying straight out of `Won` would
+   leave it standing and the next sortie would count kills on two `KillTally`s. The held order in
+   (2) is what makes that one code path instead of two.
+
+**The second half of the same session, and it belongs next to this:** `menu`'s systems are gated
+on `With<PrimaryWindow>` (`there_is_a_window`), and `src/lib.rs` builds `primary_window: None`
+for `--headless`/`--offscreen`. **A headless run can therefore never be evidence for anything in
+`menu/`** — there is no window entity, so no screen is ever built. The only checkable form on
+this machine is `tests/menu.rs`, which spawns a `Window` **entity** by hand (winit is disabled,
+nothing opens). Whoever is asked for "a headless run proving the menu does X" should say this
+sentence instead of producing a run that proves nothing.
+
+**And the CLI rule that came out of it:** `Cli::from_args` now sets `hub: true` when the command
+line names no other door, so a plain `cargo run` starts in the hub (`shared::cli::hub_by_default`,
+`--no-hub` is the way back). **`--script` is exempt, and that exemption is load-bearing:** 28 of
+the 35 files in `scripts/` name no mission, two of them assert `phase == 0`
+(`p1-overlay.txt`, `p1-no-overlay.txt`), and `f-018-gas.txt` measures a tank in a world that
+would suddenly have refuel stations in it. None of them could be re-run on the day the default
+changed. `Cli::default()` is deliberately **unchanged** (`hub: false`) — several hundred tests
+build their `Cli` with `..default()`.
+
+## FIND-089 — The strike cone costs the warden 5 cm of nape, the husk nothing, and `game-full` one tick
+
+**Symptom:** none — this is the measured *price* of closing FIND-012 (`Q-031` option 2, built
+2026-08-13: `titan.ron: <kind>.strike_half_angle_deg` on the blow, and a titan who turns in
+`Windup` inside his own `attack_range_m`). A titan who tracks you is a titan whose nape moves
+while you fly at it, and `F-030` is a 🟧 row that may not be traded away for it. So it was
+measured rather than assumed.
+
+**Measured [offlinebot], real bodies, real blade, `tests/titan.rs::fly_past_a_titan`:**
+
+| kind | widest air between the capsules that still lands the nape cut |
+|---|---|
+| husk (10 m, `turn_deg_per_s: 50`) | **0.20 m — unchanged.** Blade 0.131 m *inside* the cortex |
+| warden (14 m, `turn_deg_per_s: 40`) | **0.15 m, down from 0.20 m.** At 0.20 it misses by 0.020 m |
+
+The warden covers 10.7° of yaw during the 16 ticks of the pass, and his margin at 0.20 m of air
+was 0.020 m to begin with. At 0.15 m the cut lands at 30, 45 **and** 60 m/s, so what moved is a
+*width*, not a timing. **The nape stays reachable on both kinds** — `F-030` is not traded away,
+it is 5 cm tighter on one kind.
+
+**`scripts/game-full.txt`: 23/23 asserts, exit 0, `MISSION WON at tick 899`** — one tick later
+than the 898 it won at before. Attributed exactly, without a rebuild, by setting
+`titan.ron: husk.turn_deg_per_s` to 0 and running the same binary: **0 °/s → 898, 50 °/s → 899.**
+All three cuts still land (Cortex at ticks 657 · 778 · 899). The three husks turn perhaps 20°
+each while the player drops on them and it is not enough to save any of them.
+
+**Why it counts:** the four Q-030 geometry passes were written against a titan who *could not*
+turn inside 6 m, and their own doc comment says so ("the player is parked 300 m away … so that
+the titan is still `Idle` when the pass is placed"). After Q-031 that parking no longer holds him
+still, so those four now zero `turn_deg_per_s` **in the resource** (`Tracking::Off`) to keep
+measuring the four lengths against each other, and the tracked case is its own test,
+`q031_the_nape_survives_a_titan_who_tracks_you`, carrying the table above. **No assertion and no
+`AIR_M` was weakened.**
+
+**What to watch:** the warden's 0.15 m is the tightest number in this table and it is one
+`turn_deg_per_s` bump away from being a miss at every air. Raising a `large` or `huge` kind's
+turn rate is now a change to `F-030`, not only to the feel of an approach.
+
+**Confidence:** measured, both directions, with the fix taken back out — 🟧 for the numbers,
+🟨 for what any of it feels like, which nobody has played.
+
+## FIND-090 — the terrain's shape is decided by what the map has BY HAND, not by the noise, and pinning a whole cell for a tree cost two thirds of the relief
+
+2026-08-13, `src/world/map.rs::plan_terrain`, `src/shared/terrain.rs`, `tests/world.rs::f003_the_ground_is_stepped_and_not_one_flat_slab`.
+
+The stepped ground is a level per 42 m cell, relaxed until no two neighbours differ by more than
+one level. The relaxation turns whatever is pinned to level 0 into a **distance transform** — so
+the pinned set, not the rng, is the terrain's shape, and it is measured, not argued:
+
+| what pins a cell | relief p90−p10 under the 926 houses | levels used |
+|---|---|---|
+| every hand-placed block whose top is over the paving | **1.80 m** | 0..3 |
+| ...except **pillars** (bottom on the ground, top above ceiling + a door), which the terrace is cut *around* | **3.00 m** | 0..5 |
+
+The first rule pinned six of sixteen columns: the canal (x −85..−55), the gantry spine (x ±10..18)
+and the wall (z ≤ −98) each ran the full length of the district, and eight bell towers and ten
+trees pinned a 42 m cell apiece for a 2.5 m trunk. A pillar does not need its cell flattened —
+it is **solid from the ground up, so it plugs the hole it makes** in the terrace. What still pins,
+and rightly: the quay walls (top 0.4 m — a terrace over them fills the canal), the bridges, the
+market stalls, the headquarters' 4.5 m doorway. What comes out is the shape a real town has: flat
+along the water, the gate axis and under the wall, climbing into the quarters.
+
+**The line is `ceiling + scale.ron: reference.door_height_m`, and it is the user's own figure.**
+Below it a terrace can bury something; above it nothing the terrain does is visible.
+
+## FIND-091 — a 0.36 m stair tread is a wall with a texture, and only the run found it
+
+2026-08-13, `scripts/w2-terrain-walk.txt`, first run.
+
+`tests/world.rs` measured the ground stepped, no cell more than one level over its neighbour, and
+a flight of stairs built into every falling edge — **all green**, and the player still could not
+get up them. The walk came back `assert Height > 5.2 — measured 3.900`: wedged three risers into a
+flight, at a height that is not a plateau.
+
+The cause is the tread, not the riser. The player capsule has a **0.35 m radius**
+(`game.ron: player.radius_m`), and a 0.30 m box step is climbable *because* it is under that
+radius — the hemisphere rides over it. But at a 0.36 m tread the capsule spans two step edges at
+once and never settles on one, so it climbs until the geometry pinches and then stops.
+
+The tread was 0.36 m because the flight was cut **inside** the cell, where only
+`street_m / 2 − cell_jitter_m` = 1.50 m of run fits. **Centring the flight on the cell boundary
+doubles that to 3.00 m** — a house stands 1.50 m back on *both* sides — and 0.60 m treads fit.
+`plan_terrain` now asserts `stair_tread_m > 0.4` with this measurement as the reason.
+
+**The transferable half: a geometric invariant is not a walkability proof.** Three green
+assertions about the shape of the stairs said nothing about whether a body gets up them, and the
+one run that could tell the difference cost ninety seconds.
+
+---
+
+## FIND-092 — the three new screens exist and are legible, the x11 binary runs under XWayland so no wayland build is needed, and the HUD is still drawn on top of every menu
+
+**2026-08-13, machine B (offlinebot/niri), DP-2 at 2560x1440 scale 1.** First time anybody has
+seen `menu::pause`, `menu::settings` and `menu::lobby`. Evidence:
+`docs/images/f175-pause.png`, `-settings.png`, `-lobby.png`.
+
+### 1. No rebuild was needed — the default x11 binary works through XWayland
+
+`docs/PLAN-GAME.md` P4 and the standing instructions say a windowed run on this machine needs
+`cargo build --features wayland,audio`. **It does not.** `xwayland-satellite` is running here and
+`systemctl --user show-environment` carries `DISPLAY=:0`; the already-built default binary
+(`target/debug/defeated_by_titan`, x11 feature, `ldd` shows no `libwayland-client`) opens a real
+window with `DISPLAY=:0 ./target/debug/defeated_by_titan`. Pointer grab, `Esc`, mouse clicks and
+`grim` capture all work. **That saves a full bevy re-link (~17 min) on every future look-at-it
+round.** ⚠️ Under XWayland the window's `App ID` is `defeated_by_titan`, **not** `(unset)` as
+FIND-019 recorded for the wayland build — match on either.
+A flagless run starts in the hub, so no `--script` host run is needed either.
+
+### 2. Driving the pointer from outside: ydotool motion is scaled by exactly 0.30 here
+
+Measured, not guessed: `ydotool mousemove -x 200 -y 100` moves the pointer **60 x 30** px, twice
+in a row, with no acceleration; `--absolute` is scaled by the same 0.30 and is therefore useless
+for targeting. The reliable method is **closed-loop relative motion**: find the pointer by
+capturing the same static frame with `grim -c` and with plain `grim` and diffing (works on any
+screen, needs no stored reference), then move by `delta / 0.30` and re-measure. Converges in one
+step. `ydotoold` must be started by hand; `/dev/uinput` is ACL-granted, no sudo.
+
+### 3. The geometry matches `src/menu/plate.rs` exactly — measured, not eyeballed
+
+Every number below is from the pixels, and every one of them is what the source says it should be.
+
+| | measured | source |
+|---|---|---|
+| full-width button | **280 x 44 px**, centred on x=1280 | `plate::BUTTON_W` 280, height 44 |
+| vertical pitch | **58 px** | 44 + `row_gap` 14 |
+| pause in a sortie | 6 text lines = title + **5** buttons, column y 554-885 | `Resume/Settings/Abandon sortie/Quit to lobby/Quit to desktop` |
+| pause in the hub | 5 text lines = title + **4** buttons (`Mission select`, no `Abandon`) | `in_a_sortie == false` branch |
+| settings | 10 children, column y 490-949; rows 452 px wide, arrows 44 px, value box 150 px | `settings::row` |
+| lobby mission row | 2 x **200** px + 8 gap = **408** px | `plate::button(200.0, ..)`, `column_gap` 8 |
+| lobby difficulty row | 3 x **150** px + 2 x 8 = **466** px | `plate::button(150.0, ..)` |
+| backdrop | world behind darkens **166 -> 92** | `BACKDROP` a=0.72 composited in linear space |
+| label ink vs plate | **10.78:1** | WCAG AAA, comfortable |
+
+All four settings rows show the RON defaults with no drift: `0.08 deg/px` (`game.ron:418`),
+`Invert Y off`, `60 deg` (`game.ron:408`), `28.0 deg` (`game.ron:193`), and the three hint lines
+carry the real windows (`0.01 - 0.60`, `55 - 110, vertical`, `10 - 44, the mouse wheel sets it
+too`). The lobby is built from `missions.ron`: title `The Rookery` (`hub.name`),
+**Ashgate Skirmish** chosen (`hub.deployments[0].mission`), **Recruit** chosen
+(`.difficulty`), and the line `2 cortex kills - 7:00 on the clock` — which the deploy log then
+confirms verbatim: `mission "skirmish" (Ashgate Skirmish - Recruit) deployed - 2 kills in 25200
+ticks (420 s)`.
+
+**The screens are live, not static plates.** Clicking `+` on Field of view changed only the FOV
+value box (92 px) and nothing else in the menu, and `Esc` from Settings returned to the pause
+screen with byte-identical geometry — the documented `Settings -> Paused` step, exercised.
+Navigation `hub -> Esc -> Mission select -> Lobby -> Deploy -> sortie -> Esc -> Settings` was
+walked with real clicks; every step worked on the first try.
+
+### 4. What is actually wrong with them
+
+- 🔴 **The whole in-game HUD keeps drawing on top of all three menus.** Measured on every
+  image: ~8 600-9 200 cyan HUD px, the amber objective counter `0/2` at x=1265-1293 y=45-59, the
+  gas bar, the blade pips, the Q/E aim-spread markers at the same height as the buttons — and the
+  **crosshair runs straight down the middle of the menu column** (cyan on rows 540-899 in the
+  centre column x=1274-1286, i.e. through the title and through the last button). In the settings
+  screen it pokes through the hint line `10 - 44, the mouse| wheel sets it too`. Nothing here
+  hides the HUD when `Screen != Playing`, and `menu` freezing `Time<Virtual>` does not stop `hud`
+  from drawing. It is noise, not a blocker.
+- 🔴 **The difficulty row is in alphabetical order: `Elite | Recruit | Veteran`.** Same cause on
+  the mission row (`Ashgate Skirmish | First Ride`). `Missions::templates` and
+  `MissionTemplate::difficulties` are `BTreeMap<String, _>` (`src/data/mod.rs:1194,1256`), so the
+  **key** decides the order and `missions.ron`'s deliberate recruit-veteran-elite ordering is
+  thrown away. A player is offered the hardest level first and the tutorial second. This wants an
+  explicit order field or an ordered sequence in the file, not a `BTreeMap`.
+- 🟠 **The `Invert Y` row does not line up with the other three.** Its row is 406 px wide against
+  452, and because every row is centred independently the label starts **24 px further right**
+  (x=1077 vs 1053/1055) and its 208 px toggle (x=1285-1493) matches neither the `-` column
+  (1252-1296) nor the `+` column (1462-1506). Four rows, no shared grid.
+- 🟠 **The hint under `Invert Y` is misleading.** It is the static string `mouse forward looks
+  down` (`settings.rs:167`) shown regardless of state, so the screen reads `Invert Y: off /
+  mouse forward looks down` — describing the behaviour the setting is **not** currently doing.
+- 🟡 **Plate-vs-background contrast is below WCAG AA for a UI component (3:1).** In the hub
+  (daylight) it is **2.44:1**; inside the sortie (night Ashgate) it is **1.10:1** — plate
+  (26,31,38) against a background of (15,21,34). In the shipped images the long straight edges
+  are still perceptible and the labels are unaffected, so this is a "will bite on a bright or
+  busy frame", not a "cannot use it today".
+- The `-` and `+` glyphs are **7 px wide** on a 2560-wide screen. The 44 x 44 hit target is fine;
+  the mark on it is very small.
+
+### 5. Verdict — could a player use these screens?
+
+**Yes, all three.** Every label is legible at 1:1, nothing is clipped, nothing is off-screen,
+every column is centred on x=1280, and the pointer is present and sits inside the intended plate
+on all three images (cursor body 439 px, light outline 205,214,244 — a dark arrow with a bright
+rim, visible against the plates). `Abandon sortie` is on the pause image, the four settings rows
+are readable with their values and windows, and the lobby shows a mission and a difficulty out of
+`missions.ron` with the chosen ones highlighted. The defects above are ordering, alignment,
+wording and layering — none of them stops a player from operating the screen.
+
+## FIND-093 — a plate over a game frame cannot hold 3:1 with a plate colour, and the four FIND-092 defects are fixed
+
+**2026-08-13.** The four defects FIND-092 §4 measured on the three new screens are fixed, each
+with a test that was seen red first, green after, and red again with the fix broken in one line.
+One of the four turned out not to have the fix its own report proposed.
+
+### 1. Ordering: the container, not the screen
+
+`Missions::templates` and `MissionTemplate::difficulties` were `BTreeMap<String, _>`, so the
+**key** decided the order and the lobby offered `Elite | Recruit | Veteran` with the tutorial
+second. They are now `data::OrderedMap`, a `Vec`-backed map that keeps the order serde read the
+file in. `assets/data/missions.ron` is **byte-identical** across the fix — which is what makes
+the red test trustworthy, since nothing about the file changed between red and green.
+
+The alternative was an explicit `order:` field per entry. It was rejected: it is a number that
+can disagree with the thing it orders, it has to be typed correctly on every future entry, and it
+answers a question the file already answers by being a list of lines. A duplicate key is now a
+**load error** rather than a silent overwrite, on the same argument as the no-`serde(default)`
+rule. Cost: lookup is a linear scan over a handful of entries read once at startup.
+
+Red: `tests/data.rs::t005_the_missions_keep_the_order_the_file_wrote_them_in`
+(`left: ["skirmish", "tutorial"]`) and
+`tests/menu.rs::f175_the_lobby_offers_the_difficulties_in_the_order_the_file_lists_them`, which
+asserts the **rendered** order by walking `Children` and not the map's own — a query's iteration
+order is the archetype's, and "which button is leftmost" is exactly what was measured wrong.
+
+### 2. The HUD over the menu: `Visibility` on the roots, never `display`
+
+`hud::hide_while_a_menu_is_up` sets `Visibility::Hidden` on every parentless `HudElement` when
+`Screen != Playing`. It writes **`Visibility` and never `Node.display`**, because `display` is
+the field each HUD element already owns to hide itself when its producer is missing — a second
+writer of it would be the rule-3 breach, and it would put the pixel-exact `F-170`/`F-171`
+evidence at risk. The test snapshots the `Node.display` of all 28 HUD nodes while playing and
+compares it again after a full pause → lobby → resume: unchanged.
+
+New allow-list edge `hud -> menu` in `docs/architecture.md`, read-only, same argument as the
+`hud -> mission` line above it. It runs in **`PostUpdate`** on `resource_changed::<Screen>`:
+`menu::toggle_screen` writes `Screen` in `Update` and two systems in one schedule have no order
+between them, so in `Update` this would hide the HUD one frame late about half the time — a
+visible flash of crosshair across the menu on every `Esc`.
+
+### 3. The settings grid and the hint
+
+The `Invert Y` toggle was 208 px in a row of 190 + 8 + 208 = 406 against the others' 452; it is
+now `plate::SPAN_W` = 254, so the row is 452 and the toggle's two edges land on the `-` and `+`
+columns. The grid is five constants in `plate.rs` instead of six literals spread over two
+functions. The static hint *"mouse forward looks down"* described the state the setting was
+**not** in — a forward push is `d.y < 0` and `read_input` pitches by `-pitch_sign() * d.y`, so
+with `invert_y` off it looks **up** — and now follows the value.
+
+### 4. Contrast — and this is the one whose reported fix does not work
+
+FIND-092 §4 proposed *"deepening the backdrop or lightening the plate, both work"*. **Neither
+works, and the arithmetic says so before any pixel is looked at.** The requirement pulls both
+ways at once: against a dark frame the plate has to be *lighter* than the background, against a
+bright frame *darker*, and the near-white label needs 4.5:1 of its own, which caps the plate at a
+luminance of 0.148. Solve the three together and the backdrop needs `alpha >= 0.989` before any
+single plate colour satisfies them on every frame — i.e. opaque, which throws away the one
+property the backdrop was built for.
+
+So the component is identified by its **edge**, which is what WCAG 1.4.11 actually asks for
+(3:1 on *the visual information that identifies the control*, against its adjacent colours), and
+the backdrop is deepened to 0.90 so that edge clears 3:1 against **any** world rather than the
+two frames we happen to own. `plate::button` gains a 2 px `PLATE_EDGE` border;
+`box_sizing: BorderBox` is Bevy's default, so the 280 x 44 geometry FIND-092 §3 measured does
+not move.
+
+The model was validated against FIND-092's own pixels before it was trusted: composited in
+linear light it reproduces `166 -> 92 at alpha 0.72` to the integer and the sortie's `1.10:1` to
+two decimals. Measured (`tests/menu.rs::f175_the_menu_plate_is_legible_on_any_frame`, printed):
+
+| | before (a=0.72) | after (a=0.90) |
+|---|---|---|
+| plate vs background, sortie | 1.10:1 | 1.17:1 |
+| plate vs background, hub | 2.51:1 | 1.43:1 |
+| **edge** vs background, sortie | 1.10:1 | **9.94:1** |
+| **edge** vs background, hub | 2.51:1 | **5.97:1** |
+| **edge** vs a black frame | 1.22:1 | **10.34:1** |
+| **edge** vs a white frame | 5.25:1 | **3.54:1** |
+| edge vs plate / vs chosen plate | 1.00 / 1.64:1 | **8.52 / 5.19:1** |
+| ink vs plate | 14.09:1 | 14.09:1 (untouched) |
+
+**Plate-against-background gets no better and in the hub gets worse** — it is no longer the
+mechanism, and reporting it as the number to watch would be reporting the wrong one. The
+backdrop now turns a grey of 166 into 56 rather than 92; the paused world still reads.
+
+⚠️ **Unseen: none of this has been photographed.** Everything above is asserted in-process, and
+the four screens have not been looked at since the change. The next windowed run should re-shoot
+`f175-pause/-settings/-lobby` — the edge, the 452 px `Invert Y` row, the `recruit | veteran |
+elite` order and an empty middle of the screen are all visible in one frame each. Stage stays 🟨
+for the changed pixels; the behaviour they carry is 🟧 by test.

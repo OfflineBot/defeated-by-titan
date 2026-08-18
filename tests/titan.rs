@@ -824,6 +824,17 @@ const LANE_Y: f32 = 60.0;
 /// it is not the last centimetre of the clearance: 20 cm.
 const AIR_M: f32 = 0.20;
 
+/// Whether the titan is allowed to turn towards the player during the pass.
+///
+/// `Off` zeroes every kind's `turn_deg_per_s` **in the resource**, which is how the four
+/// geometry passes below keep measuring geometry after `Q-031` gave a titan the ability to turn
+/// inside his own reach. `On` is the game.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Tracking {
+    On,
+    Off,
+}
+
 /// What one pass did.
 struct Pass {
     /// The tick a `Cortex` hit was written on, if one was.
@@ -849,8 +860,31 @@ struct Pass {
 /// The player is parked 300 m away while the swing state machine runs up, so that the titan is
 /// still `Idle` when the pass is placed; a titan that has been walking for half a second has
 /// moved the target the test is trying to measure.
-fn fly_past_a_titan(kind: &str, dir: Vec3, air_m: f32, speed_m_s: f32, widen: Option<f32>) -> Pass {
+fn fly_past_a_titan(
+    kind: &str,
+    dir: Vec3,
+    air_m: f32,
+    speed_m_s: f32,
+    widen: Option<f32>,
+    tracking: Tracking,
+) -> Pass {
     let mut app = app_with_hits();
+    if tracking == Tracking::Off {
+        // **The brain, turned off in the resource and not in the file** — the same license the
+        // `widen` knob below uses, and for the same reason: these four passes measure the four
+        // LENGTHS against each other, and a body that is turning while they are measured is a
+        // fifth variable in an equation that already has enough.
+        //
+        // It became necessary on 2026-08-13. Until `Q-031` a titan did not turn inside
+        // `attack_range_m` at all, so parking the player 300 m away until the pass was placed
+        // was enough to hold him still — which is exactly what the doc comment above this
+        // function promises and what it can no longer deliver on its own.
+        // [`q031_the_nape_survives_a_titan_who_tracks_you`] is the tracked case, measured with
+        // the real number.
+        for kind in app.world_mut().resource_mut::<GameData>().titans.kinds.values_mut() {
+            kind.turn_deg_per_s = 0.0;
+        }
+    }
     if let Some(fraction) = widen {
         // The one knob Q-030 proposes to turn, turned **in the resource and not in the file**:
         // `assets/data/scale.ron` holds decisions of the user's and no test may edit it, but a
@@ -981,7 +1015,7 @@ fn q030_a_flying_player_reaches_the_nape_of_a_solid_husk() {
         "a husk plus a player needs {clearance_m:.3} m of clearance, Q-030 is written against 1.60"
     );
 
-    let p = fly_past_a_titan("husk", Vec3::NEG_Z, AIR_M, 30.0, None);
+    let p = fly_past_a_titan("husk", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off);
     assert!(
         p.cortex_tick.is_some(),
         "a pass at 30 m/s with {AIR_M:.2} m of air landed NO cortex hit. Closest approach \
@@ -1032,7 +1066,7 @@ fn q030_the_nape_is_reachable_on_a_large_titan_too() {
         (clearance_m - 2.10).abs() < 0.01,
         "a `large` titan plus a player needs {clearance_m:.3} m, Q-030 is written against 2.10"
     );
-    let p = fly_past_a_titan("warden", Vec3::NEG_Z, AIR_M, 30.0, None);
+    let p = fly_past_a_titan("warden", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off);
     assert!(
         p.cortex_tick.is_some(),
         "warden (14 m): no cortex hit. Clearance {clearance_m:.3} m, closest approach {:.3} m, \
@@ -1097,7 +1131,7 @@ fn q030_the_nape_is_reachable_on_a_large_titan_too() {
     let (tightest, _, tightest_margin) = margins[0].clone();
     let mut flyable_air_m = 0.0f32;
     for air_m in [0.30f32, 0.25, 0.20, 0.15, 0.10, 0.05] {
-        if fly_past_a_titan(&tightest, Vec3::NEG_Z, air_m, 30.0, None).cortex_tick.is_some() {
+        if fly_past_a_titan(&tightest, Vec3::NEG_Z, air_m, 30.0, None, Tracking::Off).cortex_tick.is_some() {
             flyable_air_m = air_m;
             break;
         }
@@ -1123,10 +1157,10 @@ fn q030_the_nape_is_cut_from_behind_and_not_from_the_front() {
     for kind in ["husk", "warden"] {
         // Flying along −Z the player comes over the titan's back (a fresh titan faces −Z), and
         // the blade meets the cortex before it meets anything else.
-        let behind = fly_past_a_titan(kind, Vec3::NEG_Z, AIR_M, 30.0, None);
+        let behind = fly_past_a_titan(kind, Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off);
         // Flying along +X the player is in **front** of the titan and the blade swings towards
         // his back, through the whole depth of the body.
-        let front = fly_past_a_titan(kind, Vec3::X, AIR_M, 30.0, None);
+        let front = fly_past_a_titan(kind, Vec3::X, AIR_M, 30.0, None, Tracking::Off);
         assert!(behind.cortex_tick.is_some(), "{kind}: the pass from behind did not land");
         assert!(
             front.cortex_tick.is_none(),
@@ -1155,7 +1189,7 @@ fn q030_the_nape_is_cut_from_behind_and_not_from_the_front() {
 fn q030_a_titan_wide_enough_really_does_put_the_nape_out_of_reach() {
     let mut reachable = Vec::new();
     for fraction in [0.25f32, 0.29, 0.33, 0.37, 0.45] {
-        let p = fly_past_a_titan("husk", Vec3::NEG_Z, AIR_M, 30.0, Some(fraction));
+        let p = fly_past_a_titan("husk", Vec3::NEG_Z, AIR_M, 30.0, Some(fraction), Tracking::Off);
         reachable.push((fraction, p.cortex_tick.is_some(), p.blade_gap_m));
     }
     let at_file_value = reachable[0];
@@ -1732,5 +1766,175 @@ fn f072_a_second_sortie_starts_on_an_empty_field() {
         0,
         "sortie 2 opens on a field that still holds sortie 1 — the ring is full before the \
          first wave is released"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Q-031 — a titan turns inside his own reach
+// ---------------------------------------------------------------------------
+
+/// Parks the local player at `at_m` with no gravity and no velocity, so that the titan's target
+/// stands still for the length of a measurement.
+fn park_player(app: &mut App, at_m: Vec3) {
+    let p = the_player(app);
+    app.world_mut().entity_mut(p).insert((
+        Transform::from_translation(at_m),
+        GravityScale(0.0),
+        LinearVelocity(Vec3::ZERO),
+    ));
+}
+
+/// The body's yaw in degrees. `brain::walk` is the only writer of it.
+fn yaw_deg(app: &App, root: Entity) -> f32 {
+    app.world()
+        .get::<Transform>(root)
+        .expect("a titan root has a Transform")
+        .rotation
+        .to_euler(EulerRot::YXZ)
+        .0
+        .to_degrees()
+}
+
+/// ★ **The test that finally makes `turn_deg_per_s` a number.**
+///
+/// Until `Q-031` was answered the turn in [`brain::walk`] ran under
+/// `state == Pursue && distance_m > attack_range_m` — so a titan **did not turn inside his own
+/// attack range**, in any state (`docs/FINDINGS.md` FIND-012). The husk's `turn_deg_per_s: 50`
+/// was the number the user singled out as "the one that decides everything", and it decided
+/// nothing: every fight happens inside 6 m.
+///
+/// The player stands 5 m to the +X of a husk who looks down −Z: **90° off**, and inside
+/// `attack_range_m`, so `Pursue → Windup` fires on the second tick and the old guard would never
+/// once let him turn. What is asserted is not "he turned" but **how fast** — `turn_deg_per_s`
+/// out of the file, times the ticks of the wind-up — and that he gets nowhere near the 90° he
+/// wants, because a snap would pass a "he turned" assertion.
+#[test]
+fn q031_a_titan_turns_while_winding_up() {
+    let mut app = app();
+    let d = data(&app);
+    let husk = d.titan("husk").expect("titan.ron has a husk");
+    let hz = d.game.simulation_hz as f32;
+
+    park_player(&mut app, Vec3::new(5.0, 0.5, 0.0));
+    assert!(
+        5.0 < husk.attack_range_m,
+        "the player has to stand INSIDE attack_range_m ({} m) or this measures the old \
+         Pursue-only turn",
+        husk.attack_range_m
+    );
+    spawn(&mut app, "husk", Vec3::ZERO);
+    let root = the_titan(&mut app);
+
+    // Sample the yaw on the first tick of `Windup` and on the last one, and count the ticks
+    // between the two samples — that is exactly how many times `walk` got to turn him.
+    let mut first: Option<f32> = None;
+    let mut last = 0.0f32;
+    let mut steps = 0u32;
+    for _ in 0..600 {
+        app.update();
+        if app.world().get::<TitanState>(root) != Some(&TitanState::Windup) {
+            if first.is_some() {
+                break; // the wind-up is over
+            }
+            continue;
+        }
+        let yaw = yaw_deg(&app, root);
+        if first.is_none() {
+            first = Some(yaw);
+        } else {
+            steps += 1;
+        }
+        last = yaw;
+    }
+    let first = first.expect("the husk never wound up — nothing is being measured");
+    assert!(steps > 0, "the wind-up was one tick long — there is no rate to measure");
+
+    let turned = (last - first).abs();
+    let wanted = husk.turn_deg_per_s * steps as f32 / hz;
+    assert!(
+        turned > 0.1,
+        "the husk turned {turned:.3}° over {steps} ticks of his own wind-up while the player \
+         stood 90° off his shoulder. `turn_deg_per_s` is {} and it governs nothing \
+         (src/titan/brain.rs::walk, docs/FINDINGS.md FIND-012)",
+        husk.turn_deg_per_s
+    );
+    assert!(
+        (turned - wanted).abs() < 0.5,
+        "the husk turned {turned:.3}° over {steps} ticks; {} °/s out of titan.ron over {steps} \
+         ticks at {hz} Hz is {wanted:.3}°",
+        husk.turn_deg_per_s
+    );
+    // He wants 90° and he may not have them: the wind-up is a tracking window, not a snap.
+    assert!(
+        turned < 89.0,
+        "the husk covered {turned:.3}° of the 90° he wanted inside one wind-up — that is a snap, \
+         and an approach angle you cannot keep is not an approach angle"
+    );
+    println!(
+        "Q-031 husk wind-up turn: {turned:.3}° over {steps} ticks at {} °/s (wants 90°)",
+        husk.turn_deg_per_s
+    );
+}
+
+
+/// ★ **What `Q-031` cost the nape, as a number — and it is not the nape.**
+///
+/// Since 2026-08-13 a titan turns towards his target inside his own `attack_range_m`
+/// (`src/titan/brain.rs::walk`), so the ideal pass of [`fly_past_a_titan`] is no longer flown at
+/// a statue: the body rotates under the blade while the player crosses. That is the mechanic
+/// working — but it eats margin off a cut that had very little to begin with, and `F-030` is a
+/// 🟧 row that may not be traded away for it.
+///
+/// **Measured, both kinds, tracking on:**
+///
+/// | kind | air the pass still lands with |
+/// |---|---|
+/// | husk (10 m) | 0.20 m — unchanged, blade 0.131 m *inside* the cortex |
+/// | warden (14 m) | **0.15 m**, down from 0.20 m |
+///
+/// So the nape stays reachable on both. What moved is the widest gap between the two capsules a
+/// player can leave himself on a `large` titan: 20 cm before, 15 cm now, because the warden
+/// covers 10.7° of yaw during the 16 ticks of the pass (`turn_deg_per_s: 40`). At 45 and 60 m/s
+/// the same 0.15 m lands as well, so it is a width and not a timing.
+///
+/// Goes red if a titan is ever given enough `turn_deg_per_s` to swing his nape out of a pass
+/// entirely — which is the failure this test exists to catch, and it is a `titan.ron` failure,
+/// not a code one.
+#[test]
+fn q031_the_nape_survives_a_titan_who_tracks_you() {
+    // The husk keeps the full 20 cm.
+    let husk = fly_past_a_titan("husk", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::On);
+    assert!(
+        husk.cortex_tick.is_some(),
+        "husk: a tracking titan swung his own nape out of the ideal pass at {AIR_M} m of air \
+         (blade {:+.3} m). turn_deg_per_s has been raised past what the cut can follow",
+        husk.blade_gap_m
+    );
+
+    // The warden does not, and this is the number: 0.15 m, at every speed the pass is flown at.
+    let tight_m = 0.15;
+    let wide = fly_past_a_titan("warden", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::On);
+    assert!(
+        wide.cortex_tick.is_none(),
+        "warden: the pass at {AIR_M} m of air lands again (blade {:+.3} m). Either \
+         turn_deg_per_s fell or a length moved — re-measure the table in this test's comment \
+         instead of deleting the line",
+        wide.blade_gap_m
+    );
+    for speed in [30.0_f32, 45.0, 60.0] {
+        let p = fly_past_a_titan("warden", Vec3::NEG_Z, tight_m, speed, None, Tracking::On);
+        assert!(
+            p.cortex_tick.is_some(),
+            "warden at {speed} m/s: no cut with {tight_m} m of air (blade {:+.3} m). The nape of \
+             a `large` titan has stopped being reachable at all, which is F-030 traded away for \
+             Q-031 and is not an acceptable price",
+            p.blade_gap_m
+        );
+        assert!(p.closest_m > 0.0, "warden at {speed} m/s: the capsules touched");
+    }
+    println!(
+        "Q-031 tracked nape: husk lands at {AIR_M} m of air (blade {:+.3} m) · warden needs \
+         {tight_m} m, misses at {AIR_M} (blade {:+.3} m)",
+        husk.blade_gap_m, wide.blade_gap_m
     );
 }

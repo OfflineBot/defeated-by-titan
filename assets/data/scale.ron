@@ -78,6 +78,16 @@
             "house_small":  4.5,   // 1 story
             "house_town":  8.0,   // 2 stories
             "house_large": 11.5,   // 3 stories — the upper limit of normal building
+            // 18.0 — the class that did not exist, and Q-036 is the question that named the
+            // hole: between the 11.5 m house and the 35 m church there was nothing at all, so
+            // a district built out of the residential band alone has 5 m of spread over 700 m
+            // of town and reads flat from any distance. The user, 2026-08-13: *"lass es wie
+            // die echte stadt aussehen! aktuell kann man es noch nicht erkennen!"*.
+            // 18 m is 1.6x the large house — a merchant's house, a granary, a guild hall: the
+            // building a real walled town has a handful of and never a street full of, which
+            // is why maps.ron spends it through `layout.tall_fraction` and not through the
+            // band. It stays well under the church (35 m) that carries the skyline.
+            "house_tall":  18.0,   // 5 stories — rare, and the reason the roofscape has relief
             "tree":       12.0,   // foreground layering: gives depth a ladder
             "watchtower":   12.0,   // standing on the wall
             "church":     35.0,   // bell tower. LANDMARK, not a grid house
