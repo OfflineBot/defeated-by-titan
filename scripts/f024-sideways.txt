@@ -1,0 +1,159 @@
+# f024-sideways — the snap searches SIDEWAYS ONLY.
+#
+# The user, 2026-08-19: *„ok von snapping. die seile sollen immer auf der horzontalen fest
+# sein. also wenn das fadenkreuz 0, 0 ist sollen die seile nur auf der x achse snappen
+# (objekte finden) also seitlich! dann ist es auch besser einzuschätzen."*
+#
+# ## What this file proves, and what it hands to the tests
+#
+# It stands where BOTH exist inside the catch half-width: an anchorable point **above** the
+# crosshair and an anchorable point **beside** it. Then it turns the snap on and fires. Every
+# `anchored on body ... at x y z` line below has to come back at **the eye's own height**,
+# because a candidate on the crosshair's row is at the eye's height whenever the crosshair
+# itself is level. A leg that anchors 3 m or 13 m up is the snap searching vertically again.
+#
+# ⚠️ **A script cannot see the camera**, and "horizontal" here is a *screen* axis at every pitch
+# (`docs/QUESTIONS.md` Q-040). The steep-pitch half is
+# `tests/hud.rs::f024_a_snap_moves_the_marker_sideways_on_the_screen_and_never_up_or_down`
+# (0.041 px of vertical movement over 136 free-vs-snapped pairs) and
+# `tests/vector_hooks.rs::f024_a_published_snap_point_never_sits_above_or_below_the_crosshair_in_the_running_game`
+# (0.000006 deg over 313 published points). **Neither half is evidence on its own**
+# (`docs/FINDINGS.md` FIND-133).
+#
+# ⚠️ **The coordinates in the comments are the map as of 2026-08-19 evening** and they moved
+# once while this file was being written: the §3B round's building fix put geometry onto the
+# street at `(168.19, 0, -50.12)` and a leg that used to reach 7 m started hitting a wall 0.09 m
+# away. **The `assert` lines below do not depend on any of them** — they assert that the shot
+# left and reached something — but if a comment stops matching a run, re-probe before believing
+# either.
+#
+# ## Running it
+#
+#   cargo build
+#   ./target/debug/defeated_by_titan --headless --script scripts/f024-sideways.txt --ticks 1200 \
+#       2>&1 | grep -E 'MARK|assert|anchored on body|script run finished' | tail -25
+#   # the exit code needs its OWN run — a pipeline's $? is the last command's:
+#   ./target/debug/defeated_by_titan --headless --script scripts/f024-sideways.txt \
+#       --ticks 1200 >/dev/null 2>&1; echo $?
+#
+# ⚠️ Every leg ends with a `wait` longer than its own hold: `hook right <s>` starts a hold and
+# does NOT consume script time, and `update_hooks` fires on the EDGE. Two overlapping holds
+# means the second press is no edge and the leg silently never fires (FIND-129).
+
+wait 1.5                       # world, camera, meshes and the render pipelines come up
+
+# ── leg 1 · THE POINT ABOVE EXISTS, and it is anchorable and in reach ────────────────────
+#
+# The market square, `scripts/f-001-hooks.txt`'s own stand, facing the church wall at z = −1.
+# Crosshair pitched **+18 deg** — inside the 20 deg the catch half-width opens at 100 %. Free
+# aim reaches `body 950 at 53.49 6.20 −1.00`: **4.55 m over the eye**, on a facade that is
+# anchorable all the way up. Everything the snap needs to be tempted by is there.
+settings assist_catch 0
+settings assist_strength 0
+warp 51 0 13
+look 0 18
+wait 0.6
+assert height > -0.5           # standing on the square, not sunk and not floating
+assert height < 0.5
+assert speed < 0.5
+mark f024-sideways-the-point-above
+hook right 0.8
+wait 0.5
+assert rope >= 1
+wait 0.9
+
+# ── leg 2 · free aim, level — the incumbent ──────────────────────────────────────────────
+#
+# `body 950 at 53.37 1.65 −1.00` — the eye's own height, because a level crosshair is a level
+# ray. This is the point the snap has to beat.
+warp 51 0 13
+look 0 0
+wait 0.6
+mark f024-sideways-free-level
+hook right 0.8
+wait 0.5
+assert rope >= 1
+wait 0.9
+
+# ── leg 3 · SNAP, level — it moves, and it moves SIDEWAYS ────────────────────────────────
+#
+# `body 950 at 51.61 1.65 −1.00`: **1.76 m along x** off the free-aim point and **y unchanged
+# at 1.65**. Under the 2D cone this same wall offered the whole disc — leg 1 shows 4.55 m of it
+# — and the snap took a point off the crosshair's row often enough to be worth 9.23 deg / 3.41 m
+# at the worst (FIND-133). It cannot any more: there is nothing above the line to take.
+settings assist_catch 100
+settings assist_strength 100
+warp 51 0 13
+look 0 0
+wait 0.6
+mark f024-sideways-snap-level
+hook right 0.8
+wait 0.5
+assert rope >= 1
+wait 0.9
+
+# ── leg 4 · a DIFFERENT body, 12.84 m up, and it is still refused ────────────────────────
+#
+# Down the long street the temptation is not a higher point on the same wall but a whole other
+# building: free aim at pitch +15 reaches `body 817 at 168.16 14.44 −98.03`, **12.84 m over the
+# eye** and 15 deg off a level crosshair.
+settings assist_catch 0
+settings assist_strength 0
+warp 168.19 0 -50.12
+look 0 15
+wait 0.6
+mark f024-sideways-the-building-above
+hook right 0.8
+wait 0.5
+assert rope >= 1
+wait 0.9
+
+# ── leg 5 · SNAP at the same stand, level ────────────────────────────────────────────────
+#
+# `body 830 at 168.19 1.60 −97.50`: the eye's own height, 47 m down the street. The building
+# 12.84 m up was inside the catch and was not taken.
+settings assist_catch 100
+settings assist_strength 100
+warp 168.19 0 -50.12
+look 0 0
+wait 0.6
+mark f024-sideways-snap-down-the-street
+hook right 0.8
+wait 0.5
+assert rope >= 1
+wait 0.9
+
+# ── leg 6 · both arms at once, still at 100 % ────────────────────────────────────────────
+#
+# `F-023`'s two arms are a *screen*-horizontal fan and the sweep is a *screen*-horizontal line,
+# so the pair and the search share one axis: left `166.12 1.60 −97.50`, right
+# `168.19 1.60 −97.50` — **two places, one row**.
+warp 168.19 0 -50.12
+look 0 0
+wait 0.6
+mark f024-sideways-both-arms
+hook left 0.9
+hook right 0.9
+wait 0.6
+assert rope >= 1
+wait 1.0
+
+# ── leg 7 · steep, where screen-horizontal stops being world-horizontal ──────────────────
+#
+# 30 m over the street looking 60 deg down — `B-008`'s neighbourhood, and `Q-039`'s. The player
+# is FALLING, so the eye is not at 31.60 m by the time the shot leaves and this leg cannot be
+# read off the log by hand; the `height` window below is what bounds it. What it is here for is
+# that the shot still lands at all with the sweep collapsed: a 1D search must not cost the
+# steep case its anchor.
+warp 168.19 30 -50.12
+look 0 -60
+wait 0.5
+assert height > 25.0
+assert height < 30.1
+mark f024-sideways-steep-down
+hook right 0.9
+wait 0.5
+assert rope >= 1
+wait 1.0
+
+end

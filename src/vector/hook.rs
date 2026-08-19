@@ -79,7 +79,7 @@ use crate::data::GameData;
 use crate::shared::{
     AimPoint, ArmAim, Body, BodyGone, BodyId, BodyMask, Buttons, Hook, HookAnchored, HookArm,
     HookReleased, HookState, Intent, MissReason, PlayerId, PrevButtons, ReleaseReason, RopeLength,
-    Side, SpatialIndex, Tick,
+    Side, SpatialIndex, Tick, AIM_RAY_SEES,
 };
 
 /// Which button belongs to which arm. One place, so that left and right cannot drift apart.
@@ -173,7 +173,10 @@ fn anchorable_beyond_reach(
     let Ok(direction) = Dir3::new(look) else {
         return false;
     };
-    let filter = SpatialQueryFilter::from_excluded_entities([player]);
+    // Same mask as `vector::aim::cast`, and for the same reason: a team mate standing in the
+    // line would answer this ray, carry no `Body`, and turn "there is something out there,
+    // just too far" into "there is nothing out there" (`shared::AIM_RAY_SEES`).
+    let filter = SpatialQueryFilter::from_excluded_entities([player]).with_mask(AIM_RAY_SEES);
     let Some(hit) = space.cast_ray(from_m, direction, reach_m, true, &filter) else {
         return false;
     };

@@ -899,3 +899,53 @@ and the script verb `warp` is the cheapest place to make it loud.
 
 **Evidence:** `docs/FINDINGS.md` FIND-126 §2 · `scripts/f004-towers.txt` ACT 0, which now warps
 in from `y = 6` and asserts the floor at `2.0 .. 2.9` as a terrain fact of its own.
+
+---
+
+## B-010 — a team mate blocks your rope, and it reads as a miss — 🟧 FIXED 2026-08-19
+
+**Found by the round gate on 2026-08-19, two red tests in `tests/vector_aiming.rs`:**
+
+```
+f002_a_side_ray_that_finds_nothing_falls_back_to_the_centre_ray
+f002_q_and_e_can_target_two_different_points
+   "the centre ray landed at Vec3(0.0, 1.5999687, 0.0)"   ← the other player's eye, distance ~0
+```
+
+**The cause is a ground rule doing its job.** `docs/multiplayer.md` F-163a says *no collision
+between players*, and since `player::spawn_player` wears
+`CollisionLayers::new(LAYER_PLAYER, PLAYER_COLLIDES_WITH)` two players **stay overlapping**
+instead of shoving each other apart. `vector::aim::cast` excluded only **its own** player and
+cast on mask `ALL`, so the ray now started *inside* the team mate's capsule and `solid: true`
+answered it at distance 0 — the aim point was the caster's own eye height, and the rope had
+nowhere to go.
+
+**Controlled, both directions, same binary otherwise:**
+
+| change | `--test vector_aiming` |
+|---|---|
+| working tree | **2 failed** — aim point `(0.0, 1.5999687, 0.0)` |
+| `CollisionLayers` line commented out, rebuilt | 22 passed — the players shove apart again |
+| line restored, `AIM_RAY_SEES` added | 22 passed |
+| `AIM_RAY_SEES` removed again, line kept | **2 failed**, identical message |
+
+⚠️ **This was never only a test's problem, and the shove was never the fix.** Two players who
+stand apart still block each other's rope the moment one crosses the other's line — and a
+player carries no `shared::Body`, so `vector::aim` resolves him to `anchorable: false`: the
+rope does not anchor on him, it *dies* on him and hides the wall behind. That is `B-007`'s
+shape exactly, where a titan ate the hook. `docs/multiplayer.md` had it written down as the
+next thing that would be wrong, untested, on the same day.
+
+**The decision: a player's body is AIR to a hook ray.** Not a surface, not an obstacle, not a
+line-of-sight blocker. `shared::AIM_RAY_SEES` is `ALL & !LAYER_PLAYER`, and both unfiltered
+casts in the game now carry it — `vector::aim::cast` (the crosshair and both side rays) and
+`vector::hook::anchorable_beyond_reach` (the "out of reach" probe behind `F-028`'s miss
+reason). Untagged geometry is avian's bit 0 and stays in the mask, so **nothing but a player
+answers differently**; `blades::cut` and `hud::crosshair` already cast on titan masks and were
+never affected, and F-162a (no damage between players) is untouched.
+
+**What it does NOT decide:** whether a player should block a *blade*, a *bullet* or the
+camera. Only the hook ray was asked and only the hook ray was answered.
+
+**Evidence:** `tests/vector_aiming.rs` 22/22 · `src/shared/layers.rs::
+a_hook_ray_sees_the_world_and_a_titan_but_never_a_player` · `docs/FINDINGS.md` FIND-131

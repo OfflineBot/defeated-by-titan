@@ -25,11 +25,13 @@
 //! SpatialQueryFilter::from_mask(LAYER_TITAN_CORTEX)
 //! ```
 //!
-//! ⚠️ **Today nothing in the repo wears a `CollisionLayers` component** — the city
-//! (`src/world/map.rs`) and the player body spawn untagged, i.e. on avian's default bit. A
-//! cortex-filtered cast is correct anyway (untagged geometry does not match), but
-//! [`LAYER_WORLD`] and [`LAYER_PLAYER`] are **labels without wearers** until somebody attaches
-//! them. They stand here so that whoever does attach them does not invent a fifth name.
+//! ⚠️ **Since 2026-08-19 exactly one thing wears a `CollisionLayers` component: the player**
+//! ([`PLAYER_COLLIDES_WITH`], attached in `player::spawn_player`, so that two players cannot
+//! shove each other — F-163a). Everything else still spawns untagged, i.e. on avian's default
+//! bit: the city (`src/world/map.rs`) and every titan collider. A cortex-filtered cast is
+//! correct anyway (untagged geometry does not match), but [`LAYER_WORLD`] is still a **label
+//! without a wearer**. It stands here so that whoever does attach it does not invent a fifth
+//! name.
 
 use avian3d::prelude::{LayerMask, PhysicsLayer};
 
@@ -73,6 +75,43 @@ pub const LAYER_TITAN_BODY: LayerMask = LayerMask(1 << 3);
 /// The cortex — the only place a titan dies. See [`GameLayer::TitanCortex`].
 pub const LAYER_TITAN_CORTEX: LayerMask = LayerMask(1 << 4);
 
+/// **What a player's collider collides with: everything except another player.**
+///
+/// The bible's ground rule F-163a (`docs/multiplayer.md`, `src/squad/mod.rs`): *no collision
+/// between players* — *"at this speed the single biggest source of frustration there is"*.
+/// Two players have to be able to pass through each other at full speed.
+///
+/// Measured before it existed: two bodies standing 0.1 m apart shoved each other **0.194 m
+/// each in one second** of simulation, with nobody pressing a key
+/// (`tests/multiplayer.rs::f163a_two_players_in_the_same_spot_do_not_push_each_other`).
+///
+/// ⚠️ It changes the **contact** filter, and that alone changed what a ray sees — the
+/// opposite of what this paragraph claimed until 2026-08-19. Two players who no longer push
+/// each other **stay overlapping**, so a ray from one player's eye now starts *inside* the
+/// other's capsule and `solid: true` answers it at distance 0. The fix is not to give the
+/// shove back; it is [`AIM_RAY_SEES`] (`docs/BUGS.md` B-010).
+pub const PLAYER_COLLIDES_WITH: LayerMask = LayerMask(LayerMask::ALL.0 & !LAYER_PLAYER.0);
+
+/// **What a hook ray is allowed to find: everything except another player.**
+///
+/// A team mate is **not** a surface. He is not anchorable (a player carries no
+/// `shared::Body`, so `vector::aim` resolves him to `anchorable: false`), which means an
+/// unfiltered ray that lands on him does not produce an anchor — it produces a *dead* aim
+/// point that hides the wall behind him. That is the shape of `B-007`, where a titan hid a
+/// wall the same way, and the bible's ground rule F-163a is the reason it now happens
+/// constantly: since players stopped colliding they stand *inside* each other
+/// (`docs/multiplayer.md`, `PLAYER_COLLIDES_WITH`).
+///
+/// So the rope ray treats a player like air: it passes through him and anchors on what is
+/// really out there. Bit 0 (avian's default, worn by every untagged wall and every titan
+/// collider) stays in the mask, so nothing but a player answers differently.
+///
+/// Used by `vector::aim::cast` and by `vector::hook::anchorable_beyond_reach` — the two
+/// unfiltered casts in the game. Measured: `tests/vector_aiming.rs::
+/// f002_a_side_ray_that_finds_nothing_falls_back_to_the_centre_ray` reported the aim point at
+/// `Vec3(0.0, 1.5999687, 0.0)` — the caster's own eye height, distance ~0 — before this mask.
+pub const AIM_RAY_SEES: LayerMask = LayerMask(LayerMask::ALL.0 & !LAYER_PLAYER.0);
+
 // ⚠️ **There is deliberately no `LAYER_TITAN_LIMB`, and that was measured** (`F-032`,
 // 2026-08-19). A titan's arm and leg hit zones are `shared::HitZoneOf` boxes with **no collider
 // at all**: `vector::aim` casts its hook ray **unfiltered** on purpose (`src/vector/aim.rs:31`,
@@ -97,6 +136,22 @@ mod tests {
         ("titan_body", LAYER_TITAN_BODY),
         ("titan_cortex", LAYER_TITAN_CORTEX),
     ];
+
+    #[test]
+    fn a_hook_ray_sees_the_world_and_a_titan_but_never_a_player() {
+        // The mask is what `vector::aim` hands avian; avian keeps an entity when
+        // `memberships & mask != NONE` (`query_filter.rs:97-101`). So this is the whole
+        // behaviour of the fix, spelled as four bit tests.
+        assert_eq!(AIM_RAY_SEES.0 & LAYER_PLAYER.0, 0, "a team mate still blocks the rope");
+        assert_ne!(
+            AIM_RAY_SEES.0 & LayerMask::DEFAULT.0,
+            0,
+            "bit 0 is every untagged wall in the city and every titan collider — dropping it \
+             would make the hook find nothing at all"
+        );
+        assert_ne!(AIM_RAY_SEES.0 & LAYER_TITAN_BODY.0, 0, "a titan is anchorable (F-029)");
+        assert_ne!(AIM_RAY_SEES.0 & LAYER_WORLD.0, 0, "the label's wearer, when it gets one");
+    }
 
     #[test]
     fn the_four_layers_are_four_distinct_non_zero_bits() {

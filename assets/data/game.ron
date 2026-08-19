@@ -365,15 +365,27 @@
         // (docs/backlog/gameplay.ron, F-025) and not a taste of the implementation:
         // 45 + 25 + 15 + 10 = 100 % of reward, and a 5 % penalty on top.
         // -------------------------------------------------------------------------------
-        // Resolution of the candidate sweep, PER HEMISPHERE. 2 rings x 4 probes = 8 rays a
-        // side, 16 extra rays for a player at 0.21 us each = 3.4 us a tick against a
-        // 16 666 us budget — and only while the assist is switched on at all.
-        // 2 rings so that a near ring can catch a roof edge just off the crosshair while the
-        // outer ring reaches the far side of the catch cone; 4 probes so that a hemisphere is
-        // sampled at 22.5 deg steps of azimuth, which is finer than the widest half-fan the
-        // aim wheel can open (22 deg).
-        assist_probe_rings: 2,
-        assist_probes_per_ring: 4,
+        // Resolution of the candidate sweep, PER HEMISPHERE.
+        //
+        // The user, 2026-08-19: „die seile sollen immer auf der horzontalen fest sein. also
+        // wenn das fadenkreuz 0, 0 ist sollen die seile nur auf der x achse snappen (objekte
+        // finden) also seitlich! dann ist es auch besser einzuschaetzen."
+        //
+        // So the sweep is a LINE on the screen-horizontal through the crosshair, not a cone:
+        // 8 rays a side, 16 extra rays for a player at 0.21 us each = 3.4 us a tick against a
+        // 16 666 us budget — and only while the assist is switched on at all. That is exactly
+        // the budget the 2 rings x 4 probes cone cost before it collapsed; what changed is
+        // where the rays go.
+        //
+        // ⚠️ `PlayerSettings::assist_catch_pct` (0..100 % -> 0..20 deg, src/shared/settings.rs)
+        // keeps its meaning and changes its SHAPE: it is now the HALF-WIDTH of a line, the
+        // furthest a probe may sit left or right of the crosshair, and no longer the radius of
+        // a disc. 100 % is 20 deg to the left and 20 deg to the right, and 0 deg up or down.
+        //
+        // 8 steps sample the widest catch half-width (20 deg) at 2.5 deg,
+        // which is finer than the widest half-fan the aim wheel can open (22 deg), so no
+        // reachable anchor sits between two probes on the axis that is left.
+        assist_probe_steps: 8,
         // F-025 verbatim: „Winkelabweichung zum Fadenkreuz (Hauptgewicht 45 Prozent)".
         assist_score_angle_w: 0.45,
         // „Momentum-Erhalt (25 Prozent, bevorzugt Punkte, die die aktuelle Flugbahn
@@ -731,5 +743,20 @@
         // Collision margin: the distance at which a body comes to a stop in front of a
         // surface. Without it every contact jitters, and the number lands as 1e-3 in Rust.
         collision_margin_m: 0.01,
+    ),
+    // The session (docs/multiplayer.md). ⚠️ UNTUNED, and two of the four are not free
+    // inventions: slot_hold_s is the bible's own 120 s (F-158a), and the port is only a
+    // default — --host <port> overrides it.
+    net: (
+        // 34197 is not lucky: it is out of the ephemeral range and out of the way of
+        // everything a desktop usually has open.
+        port: 34197,
+        // One squad, not one stack. The deployment pads in the hub are 6 m across.
+        seat_spread_m: 3.0,
+        // Five seconds of silence is a dropped line, not a stutter. A client that sends one
+        // packet per tick has missed 300 of them by then.
+        peer_timeout_s: 5.0,
+        // Bible F-158a, and it is a spec and not a taste: the seat stays his for two minutes.
+        slot_hold_s: 120.0,
     ),
 )

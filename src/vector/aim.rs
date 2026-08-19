@@ -29,8 +29,11 @@
 //!    on the **same** entity as the body. Whoever moves it into a child re-breaks this.
 //!
 //! And the rule the whole feature hangs on: **hit first, then check anchorable.** The ray is
-//! cast with the default filter — no layer mask, no `cast_ray_predicate` that skips untagged
-//! bodies. Measured on 2026-08-09 with exactly the pair `maps.ron` keeps for it: a filtered
+//! cast with no `cast_ray_predicate` and with the widest mask that is still correct —
+//! [`shared::AIM_RAY_SEES`](crate::shared::AIM_RAY_SEES), which is everything except another
+//! **player**. Untagged geometry is bit 0 and stays in; only a team mate is dropped, and he is
+//! dropped because he is not a surface (`docs/BUGS.md` B-010).
+//! Measured on 2026-08-09 with exactly the pair `maps.ron` keeps for it: a filtered
 //! ray travels 19.85 m **through** the untagged wall at `z = -33.5` to reach the anchorable
 //! roof behind it at 9.85 m. `F-023` forbids that in so many words ("line-of-sight check
 //! prevents hooking through walls"), and [`AimPoint`] is built for it: `point_m` and
@@ -43,7 +46,7 @@ use bevy::prelude::*;
 use crate::data::{GameData, VectorTuning};
 use crate::shared::{
     AimPoint, ArmAim, Body, BodyId, BodyMask, Hook, HookState, Intent, LocalPlayer,
-    MovementState, PlayerSettings, Side, Velocity,
+    MovementState, PlayerSettings, Side, Velocity, AIM_RAY_SEES,
 };
 
 use super::hook::anchor_target;
@@ -405,14 +408,14 @@ pub fn side_hit_is_coherent(
 // ## The three things that decide the design
 //
 // 1. **The candidate query is a ray sweep, not a region query.** `shared::SpatialIndex` cannot
-//    answer "what is anchorable in this cone" — `aabb_overlaps` is a stub with no callers
+//    answer "what is anchorable along this line" — `aabb_overlaps` is a stub with no callers
 //    (`src/world/index.rs`'s own header says so), and `vector` has no edge to `world` to build
 //    a new one there. But a region query would be the wrong shape anyway: it returns points
 //    behind walls, and every one of them would then need a line-of-sight ray to be usable at
 //    all. The sweep asks avian's BVH the same question `F-002` already trusts (0.21 us a ray),
 //    and every answer is a real, unoccluded, anchorable surface by construction.
 // 2. **The hemisphere split is `F-023`'s and it is checked twice.** The probe directions of a
-//    side are generated inside that side's half of the cone, and the winner is then re-tested
+//    side are generated on that side's half of the sweep, and the winner is then re-tested
 //    against `u · right` — an assertion about the *point*, not about the loop that produced it.
 // 3. **What the rope flies at and what the marker shows stay ONE number.** The selection
 //    happens *inside* [`aim`], before the single write to [`ArmAim`]; `vector::hook` and
@@ -445,7 +448,9 @@ pub struct ScoreContext {
     pub look: Vec3,
     /// The horizontal-plus-vertical velocity, m/s. The momentum term reads its direction.
     pub velocity_m_s: Vec3,
-    /// The catch cone, radians off [`Self::look`] — `PlayerSettings::assist_catch_deg`.
+    /// **The catch HALF-WIDTH**, radians left and right of [`Self::look`] along the camera's
+    /// horizontal — `PlayerSettings::assist_catch_deg`. It was the radius of a cone until
+    /// 2026-08-19; the knob's numbers did not move, the shape did ([`probe_dirs`]).
     pub catch_rad: f32,
     /// The bodies this player's two arms are on right now (anchored or in flight). `F-025`'s
     /// *"Abwertung des zuletzt genutzten Punktes"*, and the reason it needs no memory of its
@@ -490,33 +495,53 @@ pub fn deviation_rad(look: Vec3, offset_m: Vec3) -> f32 {
     u.dot(look).clamp(-1.0, 1.0).acos()
 }
 
-/// The probe directions for **one** hemisphere: `rings * per_ring` unit vectors inside the
-/// catch cone, on that side of the vertical plane through the crosshair.
+/// The probe directions for **one** hemisphere: `steps` unit vectors on the **screen-horizontal
+/// line through the crosshair**, out to [`PlayerSettings::assist_catch_deg`] on that side.
 ///
-/// Rings at `catch_rad * (i+1)/rings`, azimuths at the midpoints of `per_ring` equal wedges of
-/// the half-plane — so no probe ever lands **on** the seam, where [`hemisphere`] would refuse
-/// it. Nothing is allocated: the caller casts as it iterates.
+/// > *„die seile sollen immer auf der horzontalen fest sein. also wenn das fadenkreuz 0, 0 ist
+/// > sollen die seile nur auf der x achse snappen (objekte finden) also seitlich! dann ist es
+/// > auch besser einzuschätzen."* — the user, 2026-08-19
+///
+/// **The sweep used to be a 2D cone** — `rings × probes_per_ring` directions spread over the
+/// half-disc around the look direction (`docs/FINDINGS.md` FIND-104) — and it could therefore
+/// hand an arm a point **above or below** where the player was looking. Measured over the
+/// shipped map before this changed: **9.23° / 3.41 m** of camera-vertical deviation on a
+/// published aim point. His reason for wanting it gone is the requirement and not a preference:
+/// *„dann ist es auch besser einzuschätzen"* — a snap that moves in two axes cannot be
+/// predicted, one that moves along a single named axis can be learned. **Legibility beats a
+/// marginally better anchor.**
+///
+/// ⚠️ **"Horizontal" is the CAMERA's horizontal at every pitch, not the world's.** The axis is
+/// `basis[1]`, the same `(cos yaw, 0, -sin yaw)` that [`side_dirs`] leans against, and the plane
+/// it spans with `look` is the plane whose camera-space `y` is exactly zero. So every probe —
+/// like every side ray and like the centre ray — projects onto the **same screen row as the
+/// crosshair**, at every pitch including straight down, and a snap moves the marker sideways and
+/// by nothing else. A *world*-horizontal sweep would satisfy the sentence at pitch 0 and violate
+/// it everywhere else (`docs/QUESTIONS.md` Q-040 carries the alternative and its rollback point).
+///
+/// Steps at `catch_rad * (i+1)/steps`, so the outermost probe sits exactly on the catch cone's
+/// edge and none of them sits at `theta = 0`, where [`hemisphere`] would refuse it — the
+/// crosshair's own direction is the incumbent and is never a candidate. `look` and `right` are
+/// orthonormal by construction ([`side_dirs`] says why), so the sum is a unit vector without a
+/// normalize and its camera-space `y` is an exact zero rather than a rounded one. Nothing is
+/// allocated: the caller casts as it iterates.
 pub fn probe_dirs(
     basis: [Vec3; 3],
     catch_rad: f32,
-    rings: u32,
-    per_ring: u32,
+    steps: u32,
     side: Side,
 ) -> impl Iterator<Item = Vec3> {
-    let [look, right, up] = basis;
-    let base_phi = match side {
-        Side::Left => std::f32::consts::FRAC_PI_2,
-        Side::Right => -std::f32::consts::FRAC_PI_2,
+    let [look, right, _up] = basis;
+    // Left of a player looking along -Z is -X, exactly as in [`side_dirs`].
+    let sign = match side {
+        Side::Left => -1.0,
+        Side::Right => 1.0,
     };
-    let (rings, per_ring) = (rings.max(1), per_ring.max(1));
-    (0..rings).flat_map(move |i| {
-        (0..per_ring).map(move |j| {
-            let theta = catch_rad * (i + 1) as f32 / rings as f32;
-            let phi = base_phi + std::f32::consts::PI * (j as f32 + 0.5) / per_ring as f32;
-            let (sin_t, cos_t) = theta.sin_cos();
-            let (sin_p, cos_p) = phi.sin_cos();
-            (look * cos_t + (right * cos_p + up * sin_p) * sin_t).normalize_or_zero()
-        })
+    let steps = steps.max(1);
+    (0..steps).map(move |i| {
+        let theta = catch_rad * (i + 1) as f32 / steps as f32;
+        let (sin_t, cos_t) = theta.sin_cos();
+        look * cos_t + right * (sign * sin_t)
     })
 }
 
@@ -540,7 +565,7 @@ pub fn score_candidate(v: &VectorTuning, ctx: &ScoreContext, c: &AimCandidate) -
         return f32::NEG_INFINITY;
     };
 
-    // 45 % — how far off the crosshair it is, as a fraction of the catch cone the player has
+    // 45 % — how far off the crosshair it is, as a fraction of the catch half-width the player has
     // dialled. Straight down the crosshair is 1, at the rim it is 0.
     let deviation = u.dot(ctx.look).clamp(-1.0, 1.0).acos();
     let angle = 1.0 - (deviation / ctx.catch_rad.max(f32::MIN_POSITIVE)).clamp(0.0, 1.0);
@@ -598,7 +623,7 @@ pub fn required_margin(margin_full: f32, strength_pct: f32) -> f32 {
 ///
 /// **Every filter is applied to the CANDIDATE and not to the loop that produced it**: a point
 /// is kept only if it really lies in this arm's hemisphere and really lies inside the catch
-/// cone. A probe fan that generated a direction outside its own side would be caught here
+/// sweep. A probe sweep that generated a direction outside its own side would be caught here
 /// rather than silently handing the left arm a point on the right.
 ///
 /// `incumbent` is what free aim found for this arm — `None` when the player is pointing at
@@ -832,16 +857,8 @@ pub fn aim(
             let (Some(s), Some(ctx)) = (assist, score_ctx) else {
                 return free;
             };
-            let mut candidates = Vec::with_capacity(
-                (v.assist_probe_rings * v.assist_probes_per_ring) as usize,
-            );
-            for dir in probe_dirs(
-                basis,
-                ctx.catch_rad,
-                v.assist_probe_rings,
-                v.assist_probes_per_ring,
-                side,
-            ) {
+            let mut candidates = Vec::with_capacity(v.assist_probe_steps as usize);
+            for dir in probe_dirs(basis, ctx.catch_rad, v.assist_probe_steps, side) {
                 let probe = cast(&space, &bodies, player, eye_m, dir, range_m);
                 if let Some((point_m, body)) = anchor_target(&probe) {
                     candidates.push(AimCandidate {
@@ -917,9 +934,13 @@ fn cast(
 
     // `solid: true` — an eye that has ended up inside a body reports **that** body at zero
     // distance instead of shooting out through its far side and offering an anchor across
-    // half the map (`system_param.rs:111-120`). No filter and no predicate: the mask is
-    // asked AFTER the hit, never before it (`F-023`).
-    let filter = SpatialQueryFilter::from_excluded_entities([player]);
+    // half the map (`system_param.rs:111-120`). The `anchorable` mask is still asked AFTER
+    // the hit, never before it (`F-023`) — the one thing filtered up front is **another
+    // player**, because he is not a surface and blocking on him reads as a miss
+    // (`shared::AIM_RAY_SEES`, `docs/BUGS.md` B-010). Excluding only `player` was enough
+    // while two bodies shoved each other apart; since F-163a they stand inside each other
+    // and `solid: true` answered the ray at the caster's own eye, distance 0.
+    let filter = SpatialQueryFilter::from_excluded_entities([player]).with_mask(AIM_RAY_SEES);
     let Some(hit) = space.cast_ray(eye_m, direction, range_m, true, &filter) else {
         return AimPoint::default();
     };

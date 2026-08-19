@@ -196,6 +196,7 @@ pub struct Game {
     pub vector: VectorTuning,
     pub camera: CameraTuning,
     pub world: WorldTuning,
+    pub net: NetTuning,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -373,17 +374,21 @@ pub struct VectorTuning {
     // retune the feel without a rebuild — which is the whole reason he asked for the two
     // sliders (*„damit ich testen kann was am besten wäre"*).
     // -----------------------------------------------------------------------------------
-    /// How many rings of probe rays the candidate sweep casts **per hemisphere**.
+    /// How many probe rays the candidate sweep casts **per hemisphere**, along the
+    /// screen-horizontal line through the crosshair.
     ///
     /// The sweep is the candidate query, and it is a BVH walk and not an iteration over the
-    /// world (§6 rule 6): `rings * probes_per_ring` extra `SpatialQuery::cast_ray` calls per
-    /// hemisphere, at the 0.21 us per ray `vector::aim`'s header measured. **Only cast while
-    /// the assist is on** — at 0 % the game casts exactly the three rays it always did.
-    pub assist_probe_rings: u32,
-    /// How many probes sit on one ring, per hemisphere. Together with
-    /// [`VectorTuning::assist_probe_rings`] this is the resolution of the candidate set: 2x4
-    /// is 8 probes a side, 16 extra rays for a player, ~3.4 us a tick.
-    pub assist_probes_per_ring: u32,
+    /// world (§6 rule 6): `this` extra `SpatialQuery::cast_ray` calls per hemisphere, at the
+    /// 0.21 us per ray `vector::aim`'s header measured. **Only cast while the assist is on** —
+    /// at 0 % the game casts exactly the three rays it always did.
+    ///
+    /// ⚠️ **It replaced `assist_probe_rings` × `assist_probes_per_ring` on 2026-08-19**, when the
+    /// user asked for the search to be locked to the horizontal (*„nur auf der x achse … also
+    /// seitlich"*). A ring has no meaning on a line, and a key whose name describes a shape the
+    /// code no longer has is a lie the next reader pays for. The ray budget did not move: 2 × 4
+    /// was 8 a side and this is 8 a side, so the resolution along the one axis that is left went
+    /// from 2 samples to 8 for the same 16 rays. See [`vector::aim::probe_dirs`].
+    pub assist_probe_steps: u32,
     /// `F-025`: *"Winkelabweichung zum Fadenkreuz (Hauptgewicht 45 Prozent)"*.
     pub assist_score_angle_w: f32,
     /// `F-025`: *"Momentum-Erhalt (25 Prozent, bevorzugt Punkte, die die aktuelle Flugbahn
@@ -553,6 +558,29 @@ pub struct WorldTuning {
     pub min_wall_m: f32,
     /// Collision margin against jitter in contact.
     pub collision_margin_m: f32,
+}
+
+/// The session: the port, the seat, and how long a dropped connection keeps its chair.
+///
+/// **Numbers, not mechanics** (§4). What a transport *is* stands in `src/net/`; how long it
+/// waits stands here, because a timeout is a thing you tune against a real line and not a
+/// thing you rebuild for.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetTuning {
+    /// The UDP port `--host` opens when it is given no number of its own.
+    pub port: u16,
+    /// How far apart joining players are seated, in meters, along +X from the origin. Small
+    /// enough to be one squad, big enough that nobody spawns inside the deployment pad the
+    /// player before him is standing on.
+    pub seat_spread_m: f32,
+    /// After how many seconds of silence a peer counts as **disconnected**. Not "gone" — his
+    /// seat is still his; see [`NetTuning::slot_hold_s`].
+    pub peer_timeout_s: f32,
+    /// **How long a dropped connection holds its slot** (bible F-158a: 120 s). The session
+    /// outlives the connection: his body, his gas and his kills hang on a `PlayerId`, and
+    /// reconnecting inside this window puts him back in the same chair.
+    pub slot_hold_s: f32,
 }
 
 // ---------------------------------------------------------------------------

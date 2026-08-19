@@ -1229,8 +1229,7 @@ fn f024_every_probe_stays_inside_the_catch_cone_and_on_its_own_side() {
                     for dir in probe_dirs(
                         look_basis(&intent),
                         catch_rad,
-                        v.assist_probe_rings,
-                        v.assist_probes_per_ring,
+                        v.assist_probe_steps,
                         side,
                     ) {
                         seen += 1;
@@ -1254,9 +1253,8 @@ fn f024_every_probe_stays_inside_the_catch_cone_and_on_its_own_side() {
                         assert!(dir.is_finite() && (dir.length() - 1.0).abs() < 1e-4);
                     }
                     assert_eq!(
-                        seen,
-                        (v.assist_probe_rings * v.assist_probes_per_ring) as usize,
-                        "the fan lost probes"
+                        seen, v.assist_probe_steps as usize,
+                        "the sweep lost probes"
                     );
                 }
             }
@@ -1536,4 +1534,238 @@ fn f025_a_settings_line_moves_the_running_games_assist_knobs() {
     assert_eq!(after.fov_deg, before.fov_deg);
     assert_eq!(after.aim_spread_deg, before.aim_spread_deg);
     assert_eq!(after.mouse_deg_per_px, before.mouse_deg_per_px);
+}
+
+// ---------------------------------------------------------------------------------------
+// `F-024` — **the candidate search is a LINE, and the line is horizontal on the SCREEN.**
+//
+// > *„ok von snapping. die seile sollen immer auf der horzontalen fest sein. also wenn das
+// > fadenkreuz 0, 0 ist sollen die seile nur auf der x achse snappen (objekte finden) also
+// > seitlich! dann ist es auch besser einzuschätzen."* — the user, 2026-08-19
+//
+// The reason is the requirement: **einzuschätzen**. A snap that can move in two axes is
+// guesswork; one that moves along a single, named axis can be learned. So the assist may search
+// left and right of the crosshair and **never up or down** — and "up" is the *camera's* up at
+// every pitch, because that is the axis the player reads (`docs/QUESTIONS.md` Q-040).
+// ---------------------------------------------------------------------------------------
+
+/// The camera's up axis, **derived here by hand** and not taken from `vector::aim::look_basis`.
+///
+/// `docs/conventions.md`: `look = (-sin y · cos p, sin p, -cos y · cos p)` and the horizontal
+/// right is `(cos y, 0, -sin y)`. Their cross product is `(sin y · sin p, cos p, cos y · sin p)`,
+/// and that closed form is what stands here — `FIND-103`: a test that asks the function under
+/// test for its own frame cannot see the frame being wrong.
+fn camera_up(yaw_rad: f32, pitch_rad: f32) -> Vec3 {
+    let (sy, cy) = yaw_rad.sin_cos();
+    let (sp, cp) = pitch_rad.sin_cos();
+    Vec3::new(sy * sp, cp, cy * sp)
+}
+
+/// Every probe the candidate sweep casts lies on the **screen-horizontal line through the
+/// crosshair**: its component along the camera's up axis is zero at every yaw and every pitch.
+///
+/// This is the whole feature in one assertion. A probe with any vertical component is a
+/// candidate the snap could take that sits above or below where the player is looking, and that
+/// is the thing he asked to be rid of.
+#[test]
+fn f024_every_probe_sits_on_the_crosshairs_own_row_and_never_above_or_below_it() {
+    let v = vector_tuning();
+    let mut worst_rad = 0.0_f32;
+    for catch_deg in [5.0_f32, 12.5, 20.0] {
+        let catch_rad = catch_deg.to_radians();
+        for yaw_deg in [-170.0_f32, -35.0, 0.0, 91.0, 179.0] {
+            for pitch_deg in [-89.0_f32, -60.0, -45.0, 0.0, 45.0, 89.0] {
+                let intent = Intent {
+                    yaw: yaw_deg.to_radians(),
+                    pitch: pitch_deg.to_radians(),
+                    ..default()
+                };
+                let up = camera_up(intent.yaw, intent.pitch);
+                for side in Side::ALL {
+                    for dir in probe_dirs(
+                        look_basis(&intent),
+                        catch_rad,
+                        v.assist_probe_steps,
+                        side,
+                    ) {
+                        let vertical = up.dot(dir).abs();
+                        worst_rad = worst_rad.max(vertical.asin());
+                        assert!(
+                            vertical < 1e-5,
+                            "a probe at yaw {yaw_deg} pitch {pitch_deg} sits {} deg above or \
+                             below the crosshair — the sweep is still a cone",
+                            vertical.asin().to_degrees()
+                        );
+                    }
+                }
+            }
+        }
+    }
+    println!(
+        "F-024 sideways-only: worst probe elevation off the crosshair over the whole sweep = \
+         {:.6} deg",
+        worst_rad.to_degrees()
+    );
+}
+
+/// The two side rays are on that same row — so a snap moves the marker **along** the row and
+/// never off it. Without this the previous test would be true of the candidates and still leave
+/// a vertical jump between the free-aim point and the snapped one.
+#[test]
+fn f024_the_side_rays_share_the_crosshairs_row_so_a_snap_moves_only_sideways() {
+    for yaw_deg in [-170.0_f32, -35.0, 0.0, 91.0, 179.0] {
+        for pitch_deg in [-89.0_f32, -45.0, 0.0, 45.0, 89.0] {
+            let intent = Intent {
+                yaw: yaw_deg.to_radians(),
+                pitch: pitch_deg.to_radians(),
+                ..default()
+            };
+            let up = camera_up(intent.yaw, intent.pitch);
+            for half_deg in [0.0_f32, 5.6, 14.0, 22.0] {
+                for dir in defeated_by_titan::vector::aim::side_dirs(&intent, half_deg.to_radians())
+                {
+                    assert!(
+                        up.dot(dir).abs() < 1e-5,
+                        "a side ray at yaw {yaw_deg} pitch {pitch_deg} half {half_deg} leaves \
+                         the crosshair's row by {} deg",
+                        up.dot(dir).abs().asin().to_degrees()
+                    );
+                }
+            }
+            assert!(up.dot(intent.look_dir()).abs() < 1e-5);
+        }
+    }
+}
+
+/// **In the running game, on the shipped map, with real rays**: whatever the assist publishes
+/// into `ArmAim`, the direction from the eye to it has no vertical component in the camera's
+/// frame. Measured over a yaw × pitch sweep at both end stops of the knobs.
+///
+/// The probe test above is arithmetic about directions; this one is about the **points the game
+/// actually hands the rope and the HUD**, which is the thing the player sees. The number it
+/// prints is the answer to "how far up or down can a snap still move a rope": in degrees off the
+/// crosshair's row, and in metres of camera-vertical offset at the range it landed.
+#[test]
+fn f024_a_published_snap_point_never_sits_above_or_below_the_crosshair_in_the_running_game() {
+    let mut app = app();
+    settle(&mut app);
+    let e = me(&mut app);
+    let eye_height = data(&app).game.player.eye_height_m;
+
+    let mut worst_deg = 0.0_f32;
+    let mut worst_m = 0.0_f32;
+    let mut worst_at = (0.0_f32, 0.0_f32);
+    let mut seen = 0_u32;
+
+    for (catch, strength) in [(0.0_f32, 0.0_f32), (50.0, 50.0), (100.0, 100.0)] {
+        for yaw_deg in (0..360).step_by(30) {
+            for pitch_deg in [-60.0_f32, -25.0, 0.0, 25.0, 60.0] {
+                set_assist(&mut app, catch, strength);
+                look_at(&mut app, yaw_deg as f32, pitch_deg);
+                ticks(&mut app, 4);
+                let arms = arms_of(&app, e);
+                let eye = app.world().get::<Transform>(e).expect("a transform").translation
+                    + Vec3::Y * eye_height;
+                let up = camera_up((yaw_deg as f32).to_radians(), pitch_deg.to_radians());
+                for side in Side::ALL {
+                    let Some(p) = arms[side.index()].point_m else { continue };
+                    seen += 1;
+                    let off = p - eye;
+                    let vertical_m = up.dot(off).abs();
+                    let vertical_deg = (vertical_m / off.length().max(1e-6))
+                        .clamp(-1.0, 1.0)
+                        .asin()
+                        .to_degrees();
+                    if vertical_deg > worst_deg {
+                        worst_deg = vertical_deg;
+                        worst_m = vertical_m;
+                        worst_at = (yaw_deg as f32, pitch_deg);
+                    }
+                }
+            }
+        }
+    }
+
+    println!(
+        "F-024 sideways-only, {seen} published arm points: worst camera-vertical deviation \
+         {worst_deg:.6} deg / {worst_m:.4} m, at yaw {} pitch {}",
+        worst_at.0, worst_at.1
+    );
+    assert!(seen > 100, "only {seen} points — the sweep found almost nothing to aim at");
+    assert!(
+        worst_deg < 0.01,
+        "a published aim point sits {worst_deg:.4} deg ({worst_m:.3} m) above or below the \
+         crosshair at yaw {} pitch {} — the snap is still allowed to search vertically",
+        worst_at.0,
+        worst_at.1
+    );
+}
+
+/// **What the collapse to a line costs `F-025`'s height weight, measured and not argued.**
+///
+/// *"Hoehenvorteil relativ zur Bewegungsrichtung (15 Prozent)"* scores `point.y - eye.y`. On a
+/// **screen-horizontal** sweep every probe of a hemisphere leaves the eye at the same camera
+/// elevation, so its world elevation is `asin(sin pitch · cos α)` — and at **pitch 0 that is
+/// exactly 0 for every α**: every candidate is at eye height, `height` is 0.5 for all of them,
+/// and the term contributes the same 0.075 to every score. It **cannot separate two candidates
+/// while the player looks level**, which is the common case. Off level it comes back, because
+/// the candidates then sit at different distances along rays of different world elevation.
+///
+/// The measurement is the honest one: run the same sweep twice, once with the file's weights and
+/// once with `assist_score_height_w` set to 0 at run time, and count the arm-directions whose
+/// published point moves. A term that separates nothing changes nothing when it is deleted.
+///
+/// **This test does not retune anything** — the five weights are the backlog's numbers and they
+/// are the user's to judge (`docs/FINDINGS.md` FIND-131). It exists so the judgement has a
+/// number under it.
+#[test]
+fn f025_the_height_term_stops_separating_candidates_when_the_player_looks_level() {
+    let mut app = app();
+    settle(&mut app);
+    let e = me(&mut app);
+    let pitches = [-60.0_f32, -25.0, 0.0, 25.0, 60.0];
+
+    let sweep = |app: &mut App| {
+        let mut out: Vec<Option<Vec3>> = Vec::new();
+        for pitch_deg in pitches {
+            for yaw_deg in (0..360).step_by(30) {
+                set_assist(app, 100.0, 100.0);
+                look_at(app, yaw_deg as f32, pitch_deg);
+                ticks(app, 4);
+                let arms = arms_of(app, e);
+                out.push(arms[0].point_m);
+                out.push(arms[1].point_m);
+            }
+        }
+        out
+    };
+
+    let with_height = sweep(&mut app);
+    app.world_mut().resource_mut::<GameData>().game.vector.assist_score_height_w = 0.0;
+    let without = sweep(&mut app);
+
+    assert_eq!(with_height.len(), without.len());
+    let per_pitch = 12 * 2; // 12 yaws, two arms
+    let mut moved_level = 0;
+    let mut moved_off_level = 0;
+    let mut line = String::new();
+    for (p, pitch_deg) in pitches.iter().enumerate() {
+        let lo = p * per_pitch;
+        let moved = (lo..lo + per_pitch).filter(|i| with_height[*i] != without[*i]).count();
+        line.push_str(&format!(" pitch {pitch_deg:+.0}: {moved}/{per_pitch};"));
+        if *pitch_deg == 0.0 {
+            moved_level += moved;
+        } else {
+            moved_off_level += moved;
+        }
+    }
+    println!(
+        "F-025 height term on a horizontal sweep — arm-directions whose point moves when the \
+         15 % height weight is deleted:{line} (level {moved_level}, off level {moved_off_level})"
+    );
+    assert_eq!(
+        moved_level, 0,
+        "looking level, deleting the height weight moved {moved_level} points — then the term \
+         does separate candidates on a horizontal sweep and the arithmetic above is wrong"
+    );
 }

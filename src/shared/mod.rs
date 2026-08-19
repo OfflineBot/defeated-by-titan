@@ -40,7 +40,7 @@ pub use intent::{LookOverride, Intent, Buttons};
 pub use message::{
     Impact, HookReleased, HookAnchored, BodyGone, HitZone, ReleaseReason, MissReason, Mark,
     BladeRestockRequest, RefuelRequest, WarpPlayer, TitanHit, SpawnTitan,
-    AbandonSortie, DeployRequest,
+    AbandonSortie, DeployRequest, SeatPlayer, UnseatPlayer, HostRequest,
 };
 pub use settings::PlayerSettings;
 pub use spatial::{IndexEntry, SpatialIndex, RayResult, RayHit};
@@ -52,6 +52,7 @@ pub use state::{
 };
 pub use layers::{
     GameLayer, LAYER_WORLD, LAYER_PLAYER, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
+    PLAYER_COLLIDES_WITH, AIM_RAY_SEES,
 };
 pub use anchors::{
     is_anchor_name, ModelAnchors, ModelName, ANCHOR_NAMES, CORTEX_ANCHOR, HOOK_PREFIX,

@@ -36,6 +36,12 @@
 #          `26 x 11.5 x 14`, `anchorable: true` in `maps.ron`: near face z = -1, roof y = 11.5.
 #          The ray lands at (51, 11.09, -1); the same aim `scripts/f-001-hooks.txt` hooks with.
 #          Long ticks, cyan.
+#   ⚠️ **The CORTEX stand is `(17.5, 1.55, 76.5)` since 2026-08-19** — the ground under it is
+#   1.50 m, one terrace step (see the repair note further down). The verdict run is green
+#   again, but **the third panel's framing has not been re-seen since the eye rose 1.5 m**:
+#   whoever retakes `docs/images/f171-crosshair.png` re-checks `look 0 17` against the husk
+#   before he trusts the crop. Nothing in this file can assert it — `CrosshairState` is view
+#   state and no script metric reads it.
 #   CORTEX (17.5, 0.05, 76.5), `look 0 17` — a husk stands 24 m away. `titan.ron` puts his
 #          cortex at 8.9 m with a radius of 0.55 m; 17 degrees from an eye at 1.65 m reaches
 #          8.99 m at that distance, inside the sphere. Eight nodes, amber.
@@ -97,13 +103,22 @@ assert rope == 0           # still nothing HELD — the state is what the ray SE
 
 # ---- 3: a cortex in range ---------------------------------------------------------------
 wait 0.5
-warp 17.5 0.05 76.5
+warp 17.5 1.55 76.5        # 0.05 above the ground, and the ground here is 1.50 — see below
 look 0 17
 wait 0.3
 mark f171-cortex
 assert titans == 1         # the husk is really standing there, and it is exactly one
-assert height > -0.10      # and the stand is bare ground, not a lot: measured -0.000
-assert height < 0.10
+# ⚠️ **THE GROUND UNDER THIS STAND ROSE 1.5 m, AND THE CLAIM DID NOT** — repaired 2026-08-19.
+# The stand was `17.5 0.05 76.5` with the bracket `-0.10 .. 0.10` ("measured -0.000") from
+# before Ashgate had terrain. `maps.ron: ashgate.terrain` is `step_m: 1.5`, and this cell is
+# level 1, so `y = 0.05` is 1.45 m INSIDE the ground: avian spent the whole 0.3 s pushing the
+# capsule back out and the assert read **1.303** on the way up. Measured, not reasoned —
+# dropped from `y = 8` at this exact column the player comes to rest at **1.500** with speed
+# 0.000, which is `1 * step_m` to the millimetre.
+# The claim is unchanged: *the stand is bare ground, not a lot.* A lot here would be a house
+# roof, metres higher and a different number. Only the ground moved, so only the number did.
+assert height > 1.40       # bare ground, one terrace step up: measured 1.500
+assert height < 1.60
 
 # ---- 4: and the ANCHOR panel is not a lie ------------------------------------------------
 #

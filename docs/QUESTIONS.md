@@ -1260,7 +1260,7 @@ turn speeds up.
 
 ---
 
-## Q-038 — the aim assist is a machine setting, and multiplayer has no machine
+## Q-038 — the aim assist is a machine setting, and multiplayer has no machine  ✅ DECIDED (2)
 
 **Raised 2026-08-19 by the round that built `F-024`/`F-025`.** Carried here by the main head
 because `docs/QUESTIONS.md` was not that agent's file — the detail and the rollback point are in
@@ -1309,9 +1309,48 @@ The user playing with the knobs and telling us the number he likes. If a *single
 to be right for everybody, (2) becomes trivially correct and the question dies. If he wants it
 different per situation, (1) and (3) get interesting.
 
+### ✅ DECIDED 2026-08-19: **(2), and the evidence is that it costs nothing.**
+
+Decided by the round that built the socket transport, **not by the user** — under the autonomous
+rule (`CLAUDE.md`: a decision that belongs to the user gets made anyway, visibly, with a rollback
+point). What changed is that the question is no longer hypothetical: there is a wire now
+(`src/net/wire.rs`), a peer really drives a body in this world (`tests/multiplayer.rs::
+net_a_peer_on_a_real_socket_drives_his_own_body`), and the three answers can be priced instead of
+argued.
+
+**(2) is already what the code does, and it needed no byte.** A frame carries `yaw` and `pitch` —
+*the direction that was fired*. Under (2) the assist is a way of **choosing** that direction on
+the sender's machine, so the receiver takes it as given and re-resolves the hook from it. That is
+exactly what `vector::aim`'s `Has<LocalPlayer>` filter already does: this machine assists this
+machine's aim, and every other body's arms follow the angle that arrived. **Zero wire change, zero
+divergence** — the thing the question feared (*"a remote player's arms would resolve as if his
+assist were 0 %"*) is not a divergence at all once the direction is understood as the payload,
+because his assist has already been spent by the time the angle is put in the packet.
+
+**What (1) would cost, now that the frame is a measured object:** the two knobs are 8 bytes on a
+**37-byte** frame — **+21.6 %** on every packet of every player of every tick, i.e. 44 kB/s → 53
+kB/s at the bible's twenty players — bought in exchange for a value the sender can lie about
+anyway. A client that wants 100 % assist under (1) sets the field; under (2) he can already aim
+wherever he likes, so (1) buys no honesty and costs a fifth of the bandwidth.
+
+**(3) is not refused, it is out of order.** Moving the assist into the save profile makes `F-016` a
+progression knob, and the design's hard rule is that no meta system starts before the Vector Gear
+gate is passed (`CLAUDE.md`, `docs/gameplay/pillars.md`). If the trait tree ever wants it, it takes
+it from (2) without anything in `net/` changing.
+
+**Rollback point is unchanged and still cheap:** `PlayerSettings::assist_catch_pct` /
+`assist_strength_pct` and the `Has<LocalPlayer>` filter in `vector::aim`. For (1), those two move
+onto `Intent` — which means `net::wire` grows two `f32` and `FRAME_BYTES` becomes 45, and
+`wire_a_frame_is_always_the_same_size` is the test that will say so. For (3) they move into the
+save profile. **Still nothing else depends on the choice**: the scoring function is pure and takes
+the two numbers as arguments.
+
+⚠️ **What is still the user's:** the *number*. Whether the shipped assist is 40 % or 80 % is a feel
+question and this decision does not touch it.
+
 ---
 
-## Q-039 — looking straight down: should the fan collapse, or is "within what it asked for" enough?
+## Q-039 — ✅ ANSWERED (2026-08-19) — looking straight down: should the fan collapse, or is "within what it asked for" enough?
 
 **Raised 2026-08-19 by the round that fixed `B-008`.** It is a feel question and the user is the
 only one who can settle it; the mechanical half is already fixed and measured
@@ -1368,3 +1407,107 @@ the pitch. If he wants (3) instead it is one number in `game.ron` and no code at
 
 Him flying over Ashgate, looking down at a street from 40–80 m, and saying whether the two arms
 grabbing the roofs beside him reads as *"the game helped me"* or as *"the game ignored me"*.
+
+### ✅ ANSWERED, 2026-08-19 — **(1) stands, (2) is ruled out, and nothing rolls back**
+
+> *„ok von snapping. **die seile sollen immer auf der horzontalen fest sein.** also wenn das
+> fadenkreuz 0, 0 ist sollen die seile nur auf der x achse snappen (objekte finden) **also
+> seitlich!** dann ist es auch besser einzuschätzen."* — the user, 2026-08-19
+
+He was writing about the **snap**, and the sentence answers the **fan** as well, because option (2)
+contradicts it in so many words. Collapsing the fan with pitch means that at −90° all three rays
+are one — the ropes stop being sideways exactly where he says they should *always* be sideways
+(*„immer"*). (3) was already measured as the wrong screw (1.2 refuses coherent hits on real
+facades at 45° of grazing). **So (1) is not just the assumption the work ran under any more, it is
+the answer**, and the residue it leaves — the two roofs beside the street from 60 m, at 1.21× and
+1.25× of what the fan asked for — is the sideways catch he asked to keep, shown by the marker.
+
+**Nothing has to be rolled back**: the work already ran under (1). `effective_spread_rad` keeps no
+pitch term and `f023_the_side_ray_sits_at_half_the_wheel_at_every_pitch` stays as it is.
+
+⚠️ **What this does NOT answer** is `B-008`'s own residue — the pavement under a steeply-aimed
+crosshair is still not the thing you hook from 60 m. That is a `aim_side_coherence_k` question, it
+is measured (FIND-121), and it is not a fan question. Evidence for the closure:
+`docs/FINDINGS.md` FIND-133, `scripts/f024-sideways.txt` leg 6 (30 m up, 60° down, the shot still
+lands: `body 1361 at 169.57 1.50 −65.95`).
+
+---
+
+## Q-040 — "horizontal" is the SCREEN's horizontal, not the world's. Is that what he meant?
+
+**Raised 2026-08-19 by the round that built the sideways-only snap (`docs/FINDINGS.md` FIND-133).**
+His sentence names the case where the two readings **coincide** and says nothing about the rest:
+
+> *„wenn das fadenkreuz 0, 0 ist sollen die seile nur auf der x achse snappen … also seitlich!"*
+
+At a level crosshair, screen-horizontal **is** world-horizontal. They part company the moment he
+pitches:
+
+- **screen-horizontal (built):** the sweep spans `look·cos θ ± right·sin θ` with `right` the
+  camera's own horizontal. Looking 60° down, "sideways" is still left and right *of the crosshair*;
+  the candidates' world elevation then spans `asin(sin(−60°)·cos α)`, i.e. −60° to −54.5° at the
+  20° end stop, and at −89° it spans a full 20° of world elevation. **On the screen the deviation
+  is exactly zero at every pitch** — measured 0.000006° over 313 published points, 0.041 px over
+  136 drawn pairs.
+- **world-horizontal (not built):** the sweep stays in the world's XZ plane whatever the pitch.
+  Then the *world* claim is exact — but looking 60° down the two markers walk **diagonally** away
+  from the crosshair on screen, and at −90° "sideways" has no screen meaning at all.
+
+**ASSUMPTION the work continues under: screen-horizontal.** Three reasons, in order of weight:
+1. **His own criterion is a reading criterion** — *„dann ist es auch besser einzuschätzen"* — and
+   what he reads is the screen. A marker that leaves the crosshair's row cannot be judged against
+   the crosshair however tidy its world coordinates are.
+2. His literal constraint as the brief states it is *"the snap must never move a rope up or down
+   **relative to where the player is looking**"*, and "relative to where he is looking" is the
+   camera's frame by definition.
+3. `F-023`'s two side rays have yawed around the **camera's** up axis since 2026-08-18, for exactly
+   this reason (`side_dirs`, FIND-096). One axis for the fan and another for the search would put
+   the two markers and the two candidates in different frames.
+
+**Rollback point if he meant the world's horizontal:** `src/vector/aim.rs::probe_dirs`, one line —
+replace `basis[1]` and `basis[0]` with their XZ projections (`Vec3::new(look.x, 0, look.z)`
+normalised, and `right` unchanged, which is already horizontal), and re-normalise. Then
+`tests/vector_hooks.rs::f024_every_probe_sits_on_the_crosshairs_own_row_and_never_above_or_below_it`
+and `::f024_a_published_snap_point_never_sits_above_or_below_the_crosshair_in_the_running_game`
+**both have to be rewritten** — they assert the camera frame — and
+`tests/hud.rs::f024_a_snap_moves_the_marker_sideways_on_the_screen_and_never_up_or_down` would go
+red at every non-zero pitch by design. Nothing else reads the sweep's frame.
+
+### What would settle it
+
+Him flying, looking 45–60° down at a street with the assist at 50/50, and saying whether the two
+markers sliding **along the crosshair's row** reads right — or whether he expected them to stay
+level with the *horizon* instead.
+
+---
+
+## Q-041 — the marker now dodges the crosshair 4× as often. Does that read as the snap moving up?
+
+**Raised 2026-08-19, same round.** A cost of the feature and it is measured, not feared.
+
+Every candidate now projects onto the crosshair's own screen row, so a marker near the middle of
+the screen collides with `SIGHT_CORE_PX` — the 6 px square the player is cutting — far more often
+than it did when candidates were scattered over a disc. `tests/hud.rs::f023_the_drawn_pixel_...`,
+same sweep, before and after: **101 of 768 samples stepped out of the core → 302 of 708**, and the
+worst step went 20.0 px → 21.5 px. The step is bounded (`full_h/2 + SIGHT_CORE_PX`) and it is the
+only vertical movement a marker has left — but it is now the common case rather than the corner one.
+
+**The three answers:**
+1. **Leave it.** The step is small, bounded, and `F-170` ("nothing covers the middle of the
+   screen") is a photographed claim the user made himself.
+2. **Shrink `SIGHT_CORE_PX`** from 6. Every pixel off it is a pixel the marker keeps. FIND-098
+   measured that the *keep-out box* cannot shrink below 3.4 % without collapsing the crosshair —
+   this is the other, much smaller square and it has never been measured.
+3. **Let the marker sit on the core** when it holds a place, and thin the glyph instead. Maximal
+   honesty, and it trades against `F-170` a second time in one day.
+
+**ASSUMPTION the work continues under: (1).** The dodge is the rule FIND-129 landed hours earlier
+and it is bounded; changing it twice in one day on nobody's complaint is how a verified picture
+gets un-verified. **Rollback point for (2):** `src/hud/arm_aim.rs::SIGHT_CORE_PX`, one constant —
+`f023_the_drawn_pixel_...` and `f170_a_world_marker_keeps_its_pixel_and_a_badge_keeps_out_of_the_box`
+both read it and move with it. For (3) it is the two `over_the_core` arms of `layout_for`.
+
+### What would settle it
+
+**A screenshot, and this round did not take one.** Nobody has looked at a marker sitting 12–24 px
+under the crosshair in a window. That is 🟨 on the look and 🟧 on the number.
