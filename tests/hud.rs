@@ -31,13 +31,14 @@ use defeated_by_titan::hud::crosshair::{
 use defeated_by_titan::hud::arm_aim::{self, ArmAimState, ArmMarker, ArmMarkerLabel};
 use defeated_by_titan::hud::gas_bar::GasBar;
 use defeated_by_titan::hud::health_bar::{HealthBar, HealthTrack};
+use defeated_by_titan::hud::hit_mark::{HitFlash, HitMark};
 use defeated_by_titan::hud::objective::ObjectiveLine;
 use defeated_by_titan::hud::{HudElement, KEEP_OUT_HIGH_PCT, KEEP_OUT_LOW_PCT};
 use defeated_by_titan::mission::{KillTally, MissionPhase};
 use defeated_by_titan::shared::settings::{FOV_MAX_DEG, FOV_MIN_DEG};
 use defeated_by_titan::shared::{
-    BodyId, Blades, Cli, Gas, Health, Hook, HookState, LocalPlayer, PlayerId, PlayerSettings,
-    Side, TitanId,
+    BodyId, Blades, Cli, Gas, Health, HitZone, Hook, HookReleased, HookState, LocalPlayer,
+    MissReason, PlayerId, PlayerSettings, ReleaseReason, Side, TitanHit, TitanId,
 };
 
 /// Builds the **real** app, headless — not a second, similar one.
@@ -2378,4 +2379,340 @@ fn f023_every_bearing_flip_is_a_hard_jump_and_this_is_how_big() {
         fallback.abs()
     );
     let _ = (fired, anchored);
+}
+
+// ---------------------------------------------------------------------------------------
+// F-043 — a landed blade says so, and a miss says nothing
+// ---------------------------------------------------------------------------------------
+//
+// The user, after playing on 2026-08-19: *„attack fehlt aber noch (mit schwertern..)"*. The
+// round that measured it (`scripts/f032-swords.txt`, the table in that file's header) found the
+// swing firing, the cast landing and `TitanHit` written on all four acts — and nothing on screen
+// changing on three of them, because `F-034`'s hit-stop and camera kick fire on a Cortex kill
+// only. These tests are what stops that from coming back.
+
+/// Writes the hit the way `blades::cut` writes it — the **real** message, not a stand-in.
+fn land_a_hit(app: &mut App, by: PlayerId, zone: HitZone, speed_m_s: f32) {
+    app.world_mut().write_message(TitanHit { titan: TitanId(1), by, zone, speed_m_s });
+    app.world_mut().run_schedule(Update);
+}
+
+/// What the hit mark reads: `(text, font px, colour, drawn at all)`.
+fn hit_mark(app: &mut App) -> (String, f32, Color, bool) {
+    let mut q = app
+        .world_mut()
+        .query_filtered::<(&Text, &TextFont, &TextColor, &Node), With<HitMark>>();
+    let (text, font, colour, node) = q.iter(app.world()).next().expect(
+        "no node with `HitMark` — `hud::hit_mark::spawn_hit_mark` is not registered",
+    );
+    let px = match font.font_size {
+        bevy::text::FontSize::Px(px) => px,
+        other => panic!("the hit mark's font size is {other:?} and not a pixel size"),
+    };
+    (text.0.clone(), px, colour.0, node.display != Display::None)
+}
+
+fn me(app: &mut App) -> PlayerId {
+    let player = local_player(app);
+    *app.world().entity(player).get::<PlayerId>().expect("the local player carries a PlayerId")
+}
+
+#[test]
+fn f043_a_landed_blade_puts_a_line_on_screen_and_nothing_else_does() {
+    // ★ **The one with teeth.** This is the user's sentence turned into an assert: before
+    // today every one of the four acts of `scripts/f032-swords.txt` looked identical on screen.
+    // It goes red the moment the element is wired to something that is not the hit — a timer, a
+    // constant, or the swing rather than its result.
+    let mut app = app();
+    let mine = me(&mut app);
+
+    // 1. Nothing has happened. An empty screen is the honest state, and it is what makes the
+    //    appearance below mean something.
+    let (_, _, _, drawn) = hit_mark(&mut app);
+    assert!(!drawn, "the hit mark is on screen before any blade has landed");
+
+    // 2. A body cut at the speed the measured pass actually produced.
+    land_a_hit(&mut app, mine, HitZone::Torso, 20.67);
+    let (text, _, _, drawn) = hit_mark(&mut app);
+    assert!(drawn, "a blade landed in the titan's body and the screen said nothing");
+    assert!(
+        text.contains("CUT") && text.contains("20.7"),
+        "the line reads {text:?} — it has to name what landed and how fast"
+    );
+
+    // 3. The kill is a different line, not a louder version of the same one.
+    land_a_hit(&mut app, mine, HitZone::Cortex, 21.0);
+    let (kill_text, _, _, drawn) = hit_mark(&mut app);
+    assert!(drawn);
+    assert!(
+        kill_text.contains("KILL"),
+        "the cortex kill reads {kill_text:?} — the one hit the whole game is built around is \
+         not being told apart from a scratch"
+    );
+
+    // 4. **The miss.** Nothing landed, so nothing may be said — and the previous mark has to be
+    //    gone, or the line would keep asserting a hit that is over. The countdown itself is
+    //    `hit_mark::step_flash`'s unit test; here the component is cleared the way the clock
+    //    clears it and the screen has to follow.
+    {
+        let mut q = app.world_mut().query_filtered::<&mut HitFlash, With<HitMark>>();
+        for mut flash in q.iter_mut(app.world_mut()) {
+            *flash = HitFlash::default();
+        }
+    }
+    app.world_mut().run_schedule(Update);
+    let (text, _, _, drawn) = hit_mark(&mut app);
+    assert!(!drawn, "the line is still drawn after the mark ran out: {text:?}");
+    assert!(text.is_empty(), "the line still reads {text:?} with nothing to report");
+}
+
+#[test]
+fn f043_a_team_mates_blade_does_not_flash_on_my_screen() {
+    // `docs/multiplayer.md` rule 1. `TitanHit` carries `by`, every player's cuts travel on the
+    // same channel, and a HUD that reads "the only hit there is" is a HUD that lies the day a
+    // second player exists. Cheap to hold now, expensive to find later.
+    let mut app = app();
+    let mine = me(&mut app);
+    let somebody_else = PlayerId(mine.0.wrapping_add(1));
+    assert_ne!(somebody_else, mine);
+
+    land_a_hit(&mut app, somebody_else, HitZone::Cortex, 30.0);
+    let (text, _, _, drawn) = hit_mark(&mut app);
+    assert!(
+        !drawn,
+        "another player's kill flashed on my screen and read {text:?}"
+    );
+}
+
+#[test]
+fn f043_the_three_hit_kinds_differ_in_word_size_and_colour() {
+    // `F-171`'s rule about the arm markers, applied here: they may not differ **only** in
+    // colour. Three signals per kind — word, size, colour — so a player who cannot tell amber
+    // from crimson still reads three different lines.
+    //
+    // And the two colours are checked against `maps.ron`'s `signals:` block, not against a
+    // literal: `docs/conventions.md` §3 makes amber the cortex and crimson the damage, and a
+    // hard-coded red here would be exactly the drift that table exists to prevent.
+    let mut app = app();
+    let mine = me(&mut app);
+    let (amber, crimson) = {
+        let data = app.world().resource::<GameData>();
+        (
+            data.maps.signals.get("amber").copied().expect("maps.ron has an amber"),
+            data.maps.signals.get("crimson").copied().expect("maps.ron has a crimson"),
+        )
+    };
+    let strong = app.world().resource::<GameData>().gear.feel.strong_hit_m_s;
+
+    let mut readings = Vec::new();
+    for (label, zone, speed, want) in [
+        ("kill", HitZone::Cortex, strong + 3.0, amber),
+        ("cut", HitZone::Torso, strong + 3.0, crimson),
+        ("graze", HitZone::Torso, strong - 3.0, crimson),
+    ] {
+        land_a_hit(&mut app, mine, zone, speed);
+        let (text, px, colour, drawn) = hit_mark(&mut app);
+        assert!(drawn, "the {label} was not drawn at all");
+        let want = Color::linear_rgb(want.0, want.1, want.2);
+        assert_eq!(
+            colour.to_linear().to_vec3(),
+            want.to_linear().to_vec3(),
+            "the {label} is painted {colour:?} and `maps.ron` says {want:?}"
+        );
+        readings.push((label, text, px));
+    }
+
+    for (i, (a_name, a_text, a_px)) in readings.iter().enumerate() {
+        for (b_name, b_text, b_px) in &readings[i + 1..] {
+            let a_word = a_text.split_whitespace().next().unwrap_or("");
+            let b_word = b_text.split_whitespace().next().unwrap_or("");
+            assert_ne!(a_word, b_word, "{a_name} and {b_name} say the same word");
+            assert_ne!(a_px, b_px, "{a_name} and {b_name} are drawn at the same size");
+        }
+    }
+}
+
+#[test]
+fn f043_a_hold_of_zero_seconds_switches_the_whole_element_off() {
+    // `F-043`'s row: *"Vollstaendig abschaltbar"*. One RON value, no settings screen, and **no
+    // frame at all** — not "it flashes once and then stops", which is what a naive off-switch
+    // that only shortens the countdown would produce.
+    let mut app = app();
+    let mine = me(&mut app);
+
+    // The file ships it **on** — an off-switch nobody can tell from a broken feature is worth
+    // nothing, so the shipped value is read first and has to be positive.
+    let shipped = app.world().resource::<GameData>().gear.feel.hit_mark_s;
+    assert!(
+        shipped > 0.0,
+        "`gear.ron: feel.hit_mark_s` ships at {shipped}, so the element is off in the game"
+    );
+
+    app.world_mut().resource_mut::<GameData>().gear.feel.hit_mark_s = 0.0;
+
+    land_a_hit(&mut app, mine, HitZone::Cortex, 30.0);
+    let (text, _, _, drawn) = hit_mark(&mut app);
+    assert!(!drawn, "hit_mark_s = 0.0 still drew {text:?}");
+
+}
+
+#[test]
+fn f043_the_hit_mark_stays_out_of_the_middle_in_every_kind() {
+    // `F-170`: no node this domain spawns may intersect the central 20 % x 20 %. The hit mark
+    // is 50 % of the screen wide, so it overlaps the box in x by construction and has to clear
+    // it in y — at the **kill**'s font size, which is the biggest the element can be.
+    //
+    // `f170_nothing_covers_the_middle_of_the_screen` cannot see this element: it is
+    // `Display::None` until something lands, and a hidden node covers nothing.
+    let mut app = app();
+    attach_screen(&mut app);
+    let mine = me(&mut app);
+    let (w, h) = screen(&mut app);
+    assert!(w > 0.0 && h > 0.0, "the UI laid out into a {w} x {h} viewport");
+
+    let box_min_x = w * KEEP_OUT_LOW_PCT / 100.0;
+    let box_max_x = w * KEEP_OUT_HIGH_PCT / 100.0;
+    let box_min_y = h * KEEP_OUT_LOW_PCT / 100.0;
+    let box_max_y = h * KEEP_OUT_HIGH_PCT / 100.0;
+
+    for (label, zone) in [("kill", HitZone::Cortex), ("cut", HitZone::Torso)] {
+        land_a_hit(&mut app, mine, zone, 40.0);
+        app.world_mut().run_schedule(PostUpdate);
+        app.world_mut().run_schedule(PostUpdate);
+
+        let mut q = app
+            .world_mut()
+            .query_filtered::<(&Node, &ComputedNode, &UiGlobalTransform), With<HitMark>>();
+        let (node, computed, at) =
+            q.iter(app.world()).next().expect("the hit mark node must exist");
+        assert_ne!(node.display, Display::None, "the {label} was not laid out at all");
+        let (min_x, min_y, max_x, max_y) = rect(computed, at);
+        assert!(
+            max_x - min_x > 0.0 && max_y - min_y > 0.0,
+            "the {label}'s rect is empty — this test just checked nothing"
+        );
+        let overlaps =
+            min_x < box_max_x && max_x > box_min_x && min_y < box_max_y && max_y > box_min_y;
+        assert!(
+            !overlaps,
+            "the {label} covers the middle of the screen: ({min_x:.1}, {min_y:.1})..\
+             ({max_x:.1}, {max_y:.1}) against the box ({box_min_x:.1}, {box_min_y:.1})..\
+             ({box_max_x:.1}, {box_max_y:.1})"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// F-029 — the rope that is torn off a dying titan
+// ---------------------------------------------------------------------------------------
+
+/// What one arm's letter reads, and in what colour.
+fn arm_letter(app: &mut App, side: Side) -> (String, Color) {
+    let mut q = app.world_mut().query::<(&ArmMarkerLabel, &Text, &TextColor)>();
+    for (label, text, colour) in q.iter(app.world()) {
+        if label.0 == side {
+            return (text.0.clone(), colour.0);
+        }
+    }
+    panic!("no `ArmMarkerLabel` for {side:?}");
+}
+
+#[test]
+fn f029_a_rope_torn_off_a_dying_titan_says_so_on_the_marker() {
+    // `F-029`'s acceptance ends *"und loest sich beim Tod des Titanen **mit Feedback**"*. The
+    // release itself has been right since 2026-08-18 (`tests/titan.rs::f029_the_rope_lets_go_
+    // when_the_titan_dies_and_says_why`) — `vector::hook` writes `ReleaseReason::BodyGone` in
+    // the tick the body leaves the index. What was missing is the second half: `sense_arm_miss`
+    // matched **only** `ReleaseReason::NoAnchor(_)`, so the rope went slack in complete silence
+    // and the player was left to guess whether he had let go himself.
+    //
+    // This uses `F-028`'s channel and `F-028`'s crimson label — not a second mechanism. Two
+    // ways of saying "your arm has nothing" would drift apart within a week.
+    let mut app = app();
+    let mine = me(&mut app);
+    let crimson = {
+        let c = app.world().resource::<GameData>().maps.signals.get("crimson").copied().unwrap();
+        Color::linear_rgb(c.0, c.1, c.2)
+    };
+
+    let (idle, _) = arm_letter(&mut app, Side::Left);
+    assert_eq!(idle, "Q", "the resting letter is the key and nothing else");
+
+    app.world_mut().write_message(HookReleased {
+        player: mine,
+        side: Side::Left,
+        reason: ReleaseReason::BodyGone,
+        tick: 1,
+    });
+    app.world_mut().run_schedule(Update);
+
+    let (torn, ink) = arm_letter(&mut app, Side::Left);
+    assert_ne!(
+        torn, "Q",
+        "the titan died under the hook and the marker said nothing — `F-029`'s acceptance is \
+         \"loest sich beim Tod des Titanen mit Feedback\", and silence is not feedback"
+    );
+    assert_eq!(
+        ink.to_linear().to_vec3(),
+        crimson.to_linear().to_vec3(),
+        "the torn rope is not painted in `F-028`'s crimson — a second colour for the same \
+         kind of event is a second mechanism"
+    );
+
+    // The other arm is untouched: one rope tore, not two.
+    let (other, _) = arm_letter(&mut app, Side::Right);
+    assert_eq!(other, "E", "the right marker reacted to the left arm's rope");
+}
+
+#[test]
+fn f029_a_torn_rope_and_an_empty_pull_do_not_say_the_same_thing() {
+    // Two different situations that both leave the arm empty: *you* found nothing, versus *the
+    // thing you were holding* died. They ask the player for different moves — aim again, or
+    // look for the next anchor while you are already falling — so they may not read the same.
+    let mut app = app();
+    let mine = me(&mut app);
+
+    app.world_mut().write_message(HookReleased {
+        player: mine,
+        side: Side::Left,
+        reason: ReleaseReason::NoAnchor(MissReason::NothingInRange),
+        tick: 1,
+    });
+    app.world_mut().run_schedule(Update);
+    let (missed, _) = arm_letter(&mut app, Side::Left);
+
+    app.world_mut().write_message(HookReleased {
+        player: mine,
+        side: Side::Left,
+        reason: ReleaseReason::BodyGone,
+        tick: 2,
+    });
+    app.world_mut().run_schedule(Update);
+    let (torn, _) = arm_letter(&mut app, Side::Left);
+
+    assert_ne!(
+        missed, torn,
+        "a pull that found nothing and a rope torn off a dead titan both read {missed:?}"
+    );
+}
+
+#[test]
+fn f029_a_release_i_asked_for_says_nothing() {
+    // The control, and it is the one that keeps the two above honest: letting go of the button
+    // is not a failure and must not flash anything. A marker that shouted on every release
+    // would pass both tests above and be worse than silence.
+    let mut app = app();
+    let mine = me(&mut app);
+
+    for reason in [ReleaseReason::Released, ReleaseReason::Overextended] {
+        app.world_mut().write_message(HookReleased {
+            player: mine,
+            side: Side::Left,
+            reason,
+            tick: 1,
+        });
+        app.world_mut().run_schedule(Update);
+        let (text, _) = arm_letter(&mut app, Side::Left);
+        assert_eq!(text, "Q", "{reason:?} put {text:?} under the marker");
+    }
 }

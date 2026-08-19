@@ -240,8 +240,8 @@ pub fn state_for(hook: &HookState, anchorable: bool) -> ArmAimState {
 /// **One writer:** [`sense_arm_miss`].
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 pub struct ArmMiss {
-    /// `None` = this arm has not missed recently, and the marker says what it always said.
-    pub reason: Option<MissReason>,
+    /// `None` = this arm has nothing to report, and the marker says what it always said.
+    pub reason: Option<ArmHint>,
     /// Seconds of hint left. Counted down on the **generic** `Time`, not `Time<Fixed>`: this is
     /// view state on a frame-rate clock, and a hint that lived in fixed ticks would flicker at a
     /// frame rate the simulation does not share.
@@ -270,13 +270,45 @@ pub const MISS_HINT_S: f32 = 1.6;
 /// | `TOO FAR` | come closer — there is something, past your reach |
 /// | `WONT HOLD` | aim past it — including past a titan (`B-007`) |
 /// | `NO ANCHOR` | nothing he can do; the world is at fault (`B-001`) |
-pub const fn miss_label(reason: MissReason) -> &'static str {
+/// | `ROPE TORN` | nothing he can do either — but for the opposite reason: he had a good anchor and it died under him (`F-029`) |
+pub const fn miss_label(reason: ArmHint) -> &'static str {
     match reason {
-        MissReason::NothingInRange => "NO TARGET",
-        MissReason::OutOfReach => "TOO FAR",
-        MissReason::SurfaceHoldsNothing => "WONT HOLD",
-        MissReason::NoCarrier => "NO ANCHOR",
+        ArmHint::Miss(MissReason::NothingInRange) => "NO TARGET",
+        ArmHint::Miss(MissReason::OutOfReach) => "TOO FAR",
+        ArmHint::Miss(MissReason::SurfaceHoldsNothing) => "WONT HOLD",
+        ArmHint::Miss(MissReason::NoCarrier) => "NO ANCHOR",
+        ArmHint::CarrierGone => "ROPE TORN",
     }
+}
+
+/// **Everything one arm can have to tell the player, in one type.**
+///
+/// Until 2026-08-19 this was a bare [`MissReason`], and that shape was the bug: `F-028` built
+/// the whole channel — the countdown, the crimson, the word under the letter — for the *pull*
+/// that finds nothing, and [`sense_arm_miss`] matched `ReleaseReason::NoAnchor(_)` and nothing
+/// else. So [`ReleaseReason::BodyGone`] went past in complete silence: the titan you were
+/// hanging on dies, `vector::hook` drops the rope in that same tick
+/// (`tests/titan.rs::f029_the_rope_lets_go_when_the_titan_dies_and_says_why`), and the marker
+/// went back to grey as if you had let go of the button yourself. `F-029`'s acceptance is
+/// explicit that this is half the feature — *"loest sich beim Tod des Titanen **mit
+/// Feedback**"*.
+///
+/// **One type and not a second channel.** The alternative was another component with another
+/// countdown and another colour, and two ways of saying *"this arm has nothing"* drift apart
+/// within a week — which is the argument [`MissReason`] itself makes for riding on
+/// [`ReleaseReason`] rather than travelling on a message of its own.
+///
+/// The two are kept apart as *variants* rather than merged into a fifth [`MissReason`] because
+/// they are not the same kind of fact. A `MissReason` is about the shot you just took; this is
+/// about a rope you were already holding. `MissReason` is `shared`'s, it goes over a wire, and
+/// `vector::hook` produces it — none of which is true of a HUD's word for "your anchor died".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ArmHint {
+    /// A trigger pull that found nothing (`F-028`). The four reasons of [`MissReason`].
+    Miss(MissReason),
+    /// **The thing you were holding is gone** (`F-029`): the titan died, or the area unloaded.
+    /// Not your mistake, and the word says so — the rope tore, you did not miss.
+    CarrierGone,
 }
 
 /// **The world point this arm's marker stands on**, or `None` when it has none.
@@ -809,14 +841,23 @@ pub fn sense_arm_miss(
     let dt = time.delta_secs();
     // The freshest miss per side this frame. An array and not a lookup: two sides, and the
     // second pull of the same arm in one frame is the one the player is asking about.
-    let mut fresh: [Option<MissReason>; 2] = [None; 2];
+    let mut fresh: [Option<ArmHint>; 2] = [None; 2];
     if let Some(me) = players.iter().next() {
         for message in released.read() {
             if message.player != *me {
                 continue;
             }
-            if let ReleaseReason::NoAnchor(why) = message.reason {
-                fresh[message.side.index()] = Some(why);
+            // **Two of the four reasons say something and two do not.** `Released` is the
+            // player letting go — an intention, not a failure — and `Overextended` is the rope
+            // running out against a wall, which he sees happen. A marker that flashed on every
+            // release would be noise on the one channel that has to mean something.
+            let hint = match message.reason {
+                ReleaseReason::NoAnchor(why) => Some(ArmHint::Miss(why)),
+                ReleaseReason::BodyGone => Some(ArmHint::CarrierGone),
+                ReleaseReason::Released | ReleaseReason::Overextended => None,
+            };
+            if let Some(hint) = hint {
+                fresh[message.side.index()] = Some(hint);
             }
         }
     } else {
@@ -843,7 +884,7 @@ pub fn sense_arm_miss(
 /// press is the one the player is asking about, and a hint that kept showing the first reason
 /// would answer the wrong question. It resets even when the reason is *the same*, so the word
 /// visibly reappears instead of quietly ageing out mid-press.
-pub fn step_miss(miss: ArmMiss, fresh: Option<MissReason>, dt_s: f32) -> ArmMiss {
+pub fn step_miss(miss: ArmMiss, fresh: Option<ArmHint>, dt_s: f32) -> ArmMiss {
     match fresh {
         Some(why) => ArmMiss { reason: Some(why), left_s: MISS_HINT_S },
         None => {
@@ -1043,15 +1084,21 @@ mod tests {
 
     const SCREEN: Vec2 = Vec2::new(1280.0, 720.0);
 
-    /// `F-028` — the four reasons are four different words, and each of them asks the player
-    /// for a different move. Two rows that read the same are a table that explains nothing.
+    /// `F-028` + `F-029` — the **five** things an arm can say are five different words, and
+    /// each of them asks the player for a different move. Two rows that read the same are a
+    /// table that explains nothing.
+    ///
+    /// The fifth is `F-029`'s: a rope torn off a dying titan. It rides on this channel and it
+    /// may not read like any of the four misses — he did not aim badly, he had a good anchor
+    /// and it died.
     #[test]
     fn f028_every_reason_gets_its_own_word_under_the_marker() {
         let all = [
-            MissReason::NothingInRange,
-            MissReason::OutOfReach,
-            MissReason::SurfaceHoldsNothing,
-            MissReason::NoCarrier,
+            ArmHint::Miss(MissReason::NothingInRange),
+            ArmHint::Miss(MissReason::OutOfReach),
+            ArmHint::Miss(MissReason::SurfaceHoldsNothing),
+            ArmHint::Miss(MissReason::NoCarrier),
+            ArmHint::CarrierGone,
         ];
         for (i, a) in all.iter().enumerate() {
             assert!(!miss_label(*a).is_empty(), "{a:?} has no word");
@@ -1074,8 +1121,9 @@ mod tests {
         assert_eq!(quiet.reason, None, "a fresh marker says nothing");
 
         // The press.
-        let hinting = step_miss(quiet, Some(MissReason::SurfaceHoldsNothing), 1.0 / 60.0);
-        assert_eq!(hinting.reason, Some(MissReason::SurfaceHoldsNothing));
+        let why = ArmHint::Miss(MissReason::SurfaceHoldsNothing);
+        let hinting = step_miss(quiet, Some(why), 1.0 / 60.0);
+        assert_eq!(hinting.reason, Some(why));
         assert_eq!(hinting.left_s, MISS_HINT_S);
 
         // It survives a full second of frames — long enough to read two words.
@@ -1083,7 +1131,7 @@ mod tests {
         for _ in 0..60 {
             running = step_miss(running, None, 1.0 / 60.0);
         }
-        assert_eq!(running.reason, Some(MissReason::SurfaceHoldsNothing), "it vanished too fast");
+        assert_eq!(running.reason, Some(why), "it vanished too fast");
 
         // And it is gone before two seconds, back to the exact default so that `set_if_neq`
         // stops writing.
@@ -1093,8 +1141,14 @@ mod tests {
         assert_eq!(running, ArmMiss::default(), "the hint outlived the situation it described");
 
         // A second press wins over a hint that is still running, even for the same reason.
-        let second = step_miss(hinting, Some(MissReason::OutOfReach), 1.0 / 60.0);
-        assert_eq!(second, ArmMiss { reason: Some(MissReason::OutOfReach), left_s: MISS_HINT_S });
+        let far = ArmHint::Miss(MissReason::OutOfReach);
+        let second = step_miss(hinting, Some(far), 1.0 / 60.0);
+        assert_eq!(second, ArmMiss { reason: Some(far), left_s: MISS_HINT_S });
+
+        // `F-029`: and a rope torn off a dying titan wins over a running miss hint too. The
+        // rope going slack is the fact the player is standing in right now.
+        let torn = step_miss(second, Some(ArmHint::CarrierGone), 1.0 / 60.0);
+        assert_eq!(torn, ArmMiss { reason: Some(ArmHint::CarrierGone), left_s: MISS_HINT_S });
     }
 
     #[test]

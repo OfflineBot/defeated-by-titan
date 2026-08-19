@@ -1,4 +1,4 @@
-//! hud — gas, blade state, health, objective, crosshair
+//! hud — gas, blade state, health, objective, crosshair, hit feedback
 //!
 //! **Reads only.** And reads the state **of the local player** through the
 //! [`LocalPlayer`](crate::shared::LocalPlayer) marker — this is the one place in the code that
@@ -7,7 +7,7 @@
 //! PC-only means: more information at once, because no thumb covers half the screen
 //! (Bible 3.5).
 //!
-//! ## Five elements, and one of them still has no producer
+//! ## Six elements, and one of them still has no producer
 //!
 //! | element | file | reads | producer |
 //! |---|---|---|---|
@@ -17,6 +17,7 @@
 //! | crosshair, centre | [`crosshair`] | [`AimPoint`](crate::shared::AimPoint) | `vector::aim` — **exists** |
 //! | arm markers `Q`/`E`, below centre | [`arm_aim`] | [`Hook`](crate::shared::Hook), [`AimPoint`](crate::shared::AimPoint) | `vector` — **exists since 2026-08-10** |
 //! | objective line, top centre | [`objective`] | `KillTally`, `State<MissionPhase>` | `mission` — **exists since 2026-08-10** |
+//! | hit mark, above the crosshair | [`hit_mark`] | [`TitanHit`](crate::shared::TitanHit) | `blades::cut` — **exists**; the element is `F-043` and landed 2026-08-19 |
 //!
 //! The objective line is the one edge this domain has out of `bevy`, `shared` and `data`:
 //! `hud -> mission`, read-only, with its reason on the allow list in `docs/architecture.md`.
@@ -67,6 +68,17 @@
 //! | the three of them stacked, 4x, around the crosshair | `docs/images/f171-aim-crop.png` |
 //! | **the landing preview on two different anchors**, `Q` on (41.91, 7.73, −1.00) and `E` on (60.09, 7.73, −1.00) | `docs/images/f171-preview-two-anchors.png` |
 //! | the same pair after 9° of yaw — both markers travelled, the crosshair did not | `docs/images/f171-preview-turned.png` |
+//! | **`F-043`, the kill** — `KILL  21.0 m/s` in amber over the husk whose nape was just cut | `scripts/f032-swords.txt --ticks 162` → `docs/images/f043-hit-mark-kill.png` |
+//! | the same run's **body cut**, smaller and crimson | `… --ticks 331` → `docs/images/f043-hit-mark-cut.png` |
+//! | and the same band 43 ticks after the kill — **empty** | `… --ticks 200` → `docs/images/f043-hit-mark-gone.png` |
+//!
+//! The hit mark was decoded out of the three frames above rather than against a control run:
+//! in the band `y 195..250, x 320..960` the kill accounts for **1 401 saturated pixels** in a
+//! box of `x 516..763, y 206..232` at a mean sRGB of (237, 202, 92) — `maps.ron`'s amber; the
+//! body cut for **698** in `x 555..723, y 204..223` at (224, 106, 115) — its crimson; and the
+//! frame at tick 200, 43 ticks after a mark that holds 33, for **0**. Different word, different
+//! size, different colour, and it takes itself away. Both boxes end at `y 232` against a
+//! keep-out box that starts at `y 288` — 56 px of measured margin.
 //!
 //! The preview was decoded against the map instead of against a control run, which is the
 //! stronger check of the two: the two anchor coordinates come out of the game's own log, the
@@ -109,6 +121,7 @@ pub mod blade_pips;
 pub mod crosshair;
 pub mod gas_bar;
 pub mod health_bar;
+pub mod hit_mark;
 pub mod objective;
 
 use bevy::prelude::*;
@@ -129,6 +142,7 @@ impl Plugin for HudPlugin {
                 objective::spawn_objective,
                 crosshair::spawn_crosshair,
                 arm_aim::spawn_arm_aim,
+                hit_mark::spawn_hit_mark,
             ),
         )
         .add_systems(
@@ -138,6 +152,12 @@ impl Plugin for HudPlugin {
                 blade_pips::update_blade_pips,
                 health_bar::update_health_bar,
                 objective::update_objective,
+                // `F-043`: sense, then show — the same two-step split the crosshair and the
+                // arm markers use, and for the same reason. What a hit *is* (word, size,
+                // colour) is then testable against a `HitFlash` set by hand, without a titan,
+                // a blade and a swept cast having to be arranged first.
+                (hit_mark::sense_hit_mark, hit_mark::show_hit_mark).chain(),
+
                 // Sense, then shape, then paint — **three systems on purpose**: the shape is
                 // then testable against a state somebody set by hand, without a titan, a
                 // physics world and a look direction having to be arranged first, and the

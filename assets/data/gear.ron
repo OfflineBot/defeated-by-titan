@@ -69,6 +69,24 @@
         hit_stop_normal_s: 0.04,
         camera_kick_deg: 3.5,
         camera_kick_s: 0.18,
+
+        // F-043 — the hit mark above the crosshair. ⚠️ UNTUNED, both invented on 2026-08-19.
+        //
+        // **0.0 switches the whole element off** and that is the row's "vollstaendig
+        // abschaltbar", answered here instead of in a settings screen. It is not a disabled
+        // feature hiding behind a flag: the node stays spawned, `step_flash` simply never
+        // gives it anything to say (src/hud/hit_mark.rs).
+        //
+        // 0.55 s is longer than `hit_stop_cortex_s` (0.12) plus `camera_kick_s` (0.18), on
+        // purpose — the word has to still be there when the image starts moving again, or the
+        // player reads it during the freeze and never connects it to the swing.
+        hit_mark_s: 0.55,
+        // Where CUT stops and GRAZE starts. `blades.min_speed_m_s` (8.0) is the floor below
+        // which no hit is reported at all, so this number splits the band 8.0 .. ~40 that a
+        // player actually produces. 18.0 puts the measured pass of `scripts/f032-swords.txt`
+        // (20.67 m/s out of an 11.20 m fall) on the CUT side — a fall that deliberate should
+        // not read as a scratch — and leaves the whole run-up-and-poke range below it.
+        strong_hit_m_s: 18.0,
     ),
     // What a resupply point of the main building gives back, per second of standing at it.
     // **Where** the points are is `missions.ron: hub`, what they DO is here (§4).
