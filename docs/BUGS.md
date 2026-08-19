@@ -577,3 +577,146 @@ Any test that releases at a single tick has a 2-in-3 chance of sitting in the gr
 | **Green** | `cargo test --test combat b004` → **5 passed** (the two sweeps plus the three older point tests). |
 | **Red again** | `remove::<DistanceJoint>()` taken out of `despawn_rope`: `7 of 21 ticks died: t+0 … t+6`, sweep B `4 died: t+3 … t+6`. Same bracket, to the tick. |
 | **In the running game** | the documented repro — `sed 's/^hook right 4.0/hook right 0.74/' scripts/f-flight-cut.txt` — **exit 101 → exit 0**. |
+
+---
+
+## B-006 — the crosshair lies for 0.18 s after every cortex kill
+
+**Stage: 🟨 — found by reading, NOT yet reproduced in the running game.** Rule 5 says a bug
+without evidence is a rumor; this entry is the hypothesis and the repro recipe, not a fix. Whoever
+picks it up runs the repro FIRST and writes the measured numbers in here.
+
+**Reported by the user, 2026-08-18, after playing:**
+
+> *"die accuracy von anzeige zu wo seil landet ist nicht immer korrekt (was nicht gut ist)"*
+
+The **"nicht immer"** is the clue that made this findable: the divergence is transient and it is
+tied to killing something.
+
+### The mechanism
+
+| what | reads | schedule |
+|---|---|---|
+| `vector::aim::aim` — casts the hook rays | `intent.look_dir()`, **un-kicked** | `FixedUpdate`, `SimulationSystems::World` |
+| `render::camera::rotate_camera` — points the image | `intent.pitch` **+ `kick.pitch_rad(tick)`** | `Update` |
+| `hud::crosshair` | screen centre, i.e. wherever the camera points | `Update` |
+
+`src/render/camera.rs:132` — `let pitch = (pitch + kick.pitch_rad(tick.0)).clamp(-limit, limit);`
+`assets/data/gear.ron:70-71` — `camera_kick_deg: 3.5`, `camera_kick_s: 0.18`.
+
+`F-034`'s kick fires on a **Cortex** hit only (`camera.rs:100`, *"Only the kill kicks"*). For those
+0.18 s the image is pitched **3.5 ° down** while the aim ray is not, so **the crosshair is not the
+aim point**. At `camera.fov_deg` 60 vertical that is ~5.8 % of screen height: **≈ 42 px at 720p,
+≈ 84 px at 1440p** — an order of magnitude too big to be a rounding artefact.
+
+⚠️ **The arm MARKERS are probably innocent.** They are world points pushed through
+`Camera::world_to_viewport`, so they follow the kicked camera and keep landing on the true target;
+`FIND-098`'s verifier measured the kick's effect on them as a `1/cos(kick)` factor, sub-pixel.
+**It is the crosshair — the thing at screen centre that the player reads as "where I am
+pointing" — that goes wrong.** Do not "fix" the markers.
+
+### The repro to run first
+
+```bash
+# a script that cuts a cortex and then fires a hook inside the 0.18 s window (11 ticks at 60 Hz)
+./target/debug/defeated_by_titan --headless --script scripts/<new>.txt --ticks 900 2>&1 \
+  | grep -E 'MARK|assert|cut |Cortex' | tail -20
+```
+Cut, then `hook right` on the next tick, and compare the **fired direction** against the
+**camera's forward** on that tick. Expected: they differ by up to 3.5 °, decaying to 0 over 11
+ticks. `scripts/f-flight-cut.txt` already lands a cortex cut and is the cheapest starting point.
+
+### The decision this needs, and it is a design question, not a repair
+
+Both readings are defensible and they give opposite fixes:
+
+1. **The kick is only an image effect and must not move the aim** — then the aim is right and the
+   **crosshair must be drawn at the true aim point**, i.e. offset from screen centre while the
+   kick runs. The crosshair stops being "the middle of the screen", which `src/hud/crosshair.rs`
+   currently assumes throughout.
+2. **What you see is what you get** — then the kick belongs in the `Intent` (or the aim must read
+   the camera), and a kill genuinely nudges your aim down. That is a *feel* decision: it makes a
+   kill cost you a beat, which may be exactly right for a game about committing to a cut.
+
+**Reading (1) is the safer default** — it keeps `F-034`'s proven 🟧 evidence and touches only the
+HUD — but **(2) is the one a player might actually prefer**, and only he can say.
+→ `docs/QUESTIONS.md`, and it is cheap to try both because `camera_kick_deg` is one number in
+`gear.ron`: set it to `0.0` and the symptom must vanish entirely. **That is also the fastest way
+to confirm this is the cause at all**, and it needs no code change.
+
+### Related
+
+`FIND-098` and `FIND-099` each found a *different* marker lie on 2026-08-18 — the keep-out box
+pinning both markers to a fixed slot, and the flying marker being drawn from the rope's tip (which
+starts in the hand, on the near plane). **Both were real and both were invisible to their own
+tests.** This is the third candidate in the same family, and the family's lesson is that
+`F-023`'s "the marker and the rope are one number" was only ever proven for the *marker*, never
+for the *crosshair*.
+
+---
+
+## B-007 — a titan eats your hook, and the game never says so
+
+**Stage: 🟨 — found by reading the code, NOT yet reproduced in the running game.** The repro is
+below and it is cheap. Whoever fixes this runs it first (rule 5).
+
+**Reported by the user, 2026-08-18, after playing:**
+
+> *"teilweise kann man gar nicht usen weil keine ahnung wieso"*
+
+### The mechanism, and it is two failures in one
+
+`vector::aim` casts with avian's **default `SpatialQueryFilter` — no layer mask, no predicate**
+(`src/vector/aim.rs:32`, deliberately: *"hit first, then check anchorable"*, so a rope can never
+go **through** an untagged wall). It therefore hits **every** collider, and a titan is a stack of
+capsule colliders plus a cortex sensor (`src/titan/rig.rs:355-370`).
+
+**But no titan entity carries a `shared::Body`.** `grep -rln 'shared::Body\|Body {' src/titan/`
+returns nothing; the rig carries a marker struct `TitanBody` (`rig.rs:98`), which is a different
+thing entirely. So:
+
+```rust
+// src/vector/hook.rs:95
+pub fn anchor_target(aim: &AimPoint) -> Option<(Vec3, BodyId)> {
+    if !aim.anchorable { return None; }     // ← titan carries no ANCHORABLE mask
+    Some((aim.point_m?, aim.body?))         // ← and no BodyId at all
+}
+```
+→ `None` → `ReleaseReason::NoAnchor` → **the arm stays `Idle` and nothing happens.**
+
+1. **You cannot hook a titan.** That is `F-029` *Dynamische Ankerpunkte* (⬜ Unbuilt), whose
+   description names exactly this: *"Ankerpunkte an bewegten Objekten: Titanenkörper (Schulter,
+   Arm, Nacken), fahrende Eskortkarren, Hafenkräne, Mauerlifte."*
+2. 🔴 **Worse, and nobody has written this down: a titan BLOCKS the hook.** The ray stops at the
+   nearest solid hit, so a perfectly good wall **behind** a titan is unreachable. Ashgate is
+   100 % anchorable, so the player's whole mental model is "everything holds" — and then the one
+   moment it silently does not is the moment a 10 m body is between him and the city.
+
+**Both failures happen precisely when a titan is in the line of fire, i.e. whenever he is
+fighting.** That matches *"teilweise"* exactly, and it explains why it feels random: it depends on
+what is in front of the crosshair, not on what he pressed.
+
+### The repro
+
+```bash
+# aim at a spawned husk from ~15 m and pull both triggers; then aim at a wall BEHIND it
+./target/debug/defeated_by_titan --headless --script scripts/<new>.txt --ticks 600 2>&1 \
+  | grep -E 'MARK|assert|NoAnchor|hook|Idle' | tail -20
+```
+`scripts/f056-husk.txt` already spawns one and is the cheapest starting point. Expected:
+`ReleaseReason::NoAnchor` on both pulls, with the arm never leaving `Idle`.
+
+### The fix is two decisions, not one
+
+- **Feedback** is `F-028` *Fallback ohne Kandidat* (⬜), whose acceptance is the user's sentence
+  turned around: *"Kein Tastendruck bleibt ohne Rückmeldung; der Spieler versteht immer, warum
+  kein Haken gesetzt wurde."* **This half is not optional and it is the cheap half** — a sound and
+  a HUD state would have told him in one sortie what took a code read to find.
+- **Whether a titan should hold a rope at all** is `F-029` and it is a *design* question with real
+  consequences: hooking a titan is a central move in the genre, but it needs anchors that ride a
+  moving body and detach cleanly on death (`F-029`'s own acceptance), and the pack ships
+  `a-064-zone-{cortex,gelenk,huefte,riss}` hit-zone empties that look built for exactly that.
+- **The blocking half needs an answer either way**, and it is independent of `F-029`: if a titan
+  is not hookable, should the ray *pass through* him to the wall behind? "Hit first, then check
+  anchorable" exists so a rope cannot go through a **wall**; a titan is not a wall, and treating
+  him as one costs the player the city. → `docs/QUESTIONS.md`.

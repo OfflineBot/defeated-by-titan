@@ -1662,7 +1662,7 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 ---
 
 ## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
-**NEXT FREE ID: FIND-094.** Claim it by bumping this line in the same `cat >>` that
+**NEXT FREE ID: FIND-102.** Claim it by bumping this line in the same `cat >>` that
 appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
 file separately and both read the same maximum. One line beats a 108 kB grep.
  — and append with `>>`, never with an edit tool
@@ -4396,6 +4396,11 @@ I did not take it. Cost of the corner: a rope you are standing next to drains th
 
 ## FIND-086 — `aim_spread_deg` is a half-angle in the file and a full angle in the brief, and W3 followed the file
 
+> ✅ **CLOSED 2026-08-18 by FIND-096: the full-angle reading wins.** The tiebreaker this
+> entry lacked arrived from the only person who has played the game — *„der spread für seile ist
+> zu weit auseinander"*. `aim_spread_deg` is now the angle **between** the two rays, decided in
+> one place (`src/vector/aim.rs::wheel_half_rad`).
+
 **2026-08-13, W3 (instant refire + three rays).** One spec conflict, one foreign-file touch,
 one pre-existing red test the round would otherwise have blamed on this work.
 
@@ -4872,3 +4877,728 @@ the four screens have not been looked at since the change. The next windowed run
 `f175-pause/-settings/-lobby` — the edge, the 452 px `Invert Y` row, the `recruit | veteran |
 elite` order and an empty middle of the screen are all visible in one frame each. Stage stays 🟨
 for the changed pixels; the behaviour they carry is 🟧 by test.
+
+---
+
+## FIND-094 — „zu weit auseinander und mehr dynamisch": the rope spread is a separation in metres now, not an angle
+
+**Date:** 2026-08-18 · **Feature:** `F-023` · **Files:** `src/vector/aim.rs`,
+`assets/data/game.ron`, `src/data/mod.rs`, `tests/vector_aiming.rs` · **Stage: 🟨** (asserted in
+process, never seen in a running window).
+
+The user, 2026-08-18: *„der spread für seile ist zu weit auseinander und sollte mehr dynamisch
+sein!"* Two claims, and both are answered by one change: **the wheel stops being the angle and
+becomes a ceiling, and what the two ropes really open to is solved every fixed tick out of a
+separation in METRES that the player's own state decides.**
+
+### Why a constant angle was wrong at both ends
+
+A degree is a screen quantity whose world meaning moves by a factor of 20 over the 500 m hook
+range. At the shipped `aim_spread_deg: 28.0` the two landing points are `2 · d · sin(28°)` apart:
+9.4 m at 10 m and **187.8 m at 200 m** — four Ashgate block pitches (`lot_m` 36 + `street_m` 6 =
+42), i.e. two anchors in different parts of town, of which at most one is where you are going.
+It is also the same defect as FIND-039: a fan wider than the target's angular width makes the side
+ray miss, `src/vector/aim.rs`'s fallback hands that arm the **centre** ray, and both arms silently
+share one point again. **"Too wide" and "the two arms collapse into one" are one bug.**
+
+### The model (`src/vector/aim.rs::effective_spread_rad`, pure, no new raycast)
+
+The centre ray is already cast eleven lines before the angle is chosen, so the aim distance is
+free — `cast` builds the point as `eye + dir · hit.distance`, so its length back is exact.
+
+1. state → metres: `Tethered` 14 (courtyard `lot 36 − 2·wing 11`), `Grounded`/`OnWall` 36
+   (`lot_m`, the block face), `Airborne` 42 (the block pitch).
+2. the wheel scales it, `k = wheel_deg / aim_sep_neutral_deg`, and caps the result.
+3. horizontal speed collapses it linearly towards `aim_sep_floor_m` 12 (one `frontage_m`)
+   between `run_speed_m_s` 6.0 and FIND-041's measured chained-swing peak 43.0.
+4. metres → angle at the smoothed aim distance: `asin(sep / 2d)`; **nothing under the crosshair
+   holds the wheel**, byte-identical to the old game.
+5. `clamp(aim_spread_floor_deg 2°, wheel)` — the ceiling is the invariant.
+   Smoothing: a low-pass on **log2(distance)** (`aim_spread_settle_s` 0.10 s), which is a constant
+   *relative* rate, so a roof edge feels the same at 12 m and at 300 m; **a miss holds the last
+   distance** (absence of evidence, not evidence of distance); plus a
+   `aim_spread_slew_deg_s` 180 °/s outer clamp. State lives in `AimSpread { distance_m, half_rad }`
+   — per player, `Option` = "snap, nothing seen yet", one writer, never a `Resource`.
+
+### The measurement — metric separation of the two landing points, wheel 28°
+
+Produced by `tests/vector_aiming.rs::f023_the_spread_is_a_separation_in_metres_at_every_range`
+from the real code, not alongside it.
+
+| context | 10 m | 25 m | 50 m | 100 m | 200 m |
+|---|---|---|---|---|---|
+| **BEFORE** constant 28° | 9.4 | 23.5 | 46.9 | **93.9** | **187.8** |
+| grounded, standing | 9.4 | 23.5 | 36.0 | **36.0** | **36.0** |
+| tethered, swing 19 m/s | 9.4 | 13.3 | 13.3 | **13.3** | 14.0 |
+| airborne, stepped off | 9.4 | 23.5 | 42.0 | 42.0 | 42.0 |
+| tethered, boosted 50 m/s | 9.4 | 12.0 | 12.0 | 12.0 | 14.0 |
+| airborne, falling 30 m/s | 9.4 | 22.5 | 22.5 | 22.5 | 22.5 |
+| nothing under the crosshair | 9.4 | 23.5 | 46.9 | 93.9 | 187.8 |
+
+Never wider than before, anywhere (asserted). Dynamic in the sense the sentence asks for: at one
+distance of 100 m the same crosshair gives 10.37° standing, 12.12° searching, 3.81° swinging,
+3.44° boosting and 28.00° on the sky — a factor of 8 driven by what the player is doing.
+
+### What was renegotiated, and what is still owed
+
+- **The F-023 acceptance number is gone on purpose.** `apart >= 45.0 m at 100 m` said the two
+  hooks must be a whole city block apart at range, which is exactly the complaint. It is replaced
+  by *at most one block face (36 m) and never under one frontage (12 m)* beyond the near field.
+  The old test's surviving half — the 28-attitude, 0.01° sweep that is the only guard on "the
+  spread is a SCREEN spread, yawed around the camera up axis" — is untouched in
+  `f023_the_side_ray_sits_at_the_wheel_angle_at_every_pitch`.
+- **⚠️ The HUD hides the win where the win is, and this is NOT fixed.** `F-170`'s keep-out box is
+  ±128 px + 8 px gap = 136 px of a 1280 px screen = **12.304°** of the 45.746° horizontal half-FOV
+  (`camera.fov_deg` 60 vertical on 16:9). Every marker narrower than that is pushed to the box
+  edge, so under this model both glyphs park at ~146 px beyond **84.5 m** grounded and beyond
+  **31.2 m** while swinging — the player flies better and sees the same picture. Fixing it means
+  shrinking `KEEP_OUT_PCT` (`src/hud/mod.rs`, not this round's file) or exempting the arm markers,
+  and that collides head-on with `W5`'s landed acceptance *"both glyphs ≥ 145 px from centre x"*
+  (`tests/hud.rs::f026_two_idle_arms_preview_two_different_points`). **Two of the user's own
+  requirements disagree** — requirement 9 (the marker is where the rope lands) against W5 (the
+  markers stand well left and right) — so it is not relaxed here.
+  **ASSUMPTION:** requirement 9 wins and the box should shrink for these two glyphs.
+  **Rollback point:** one constant, `KEEP_OUT_PCT`, plus f026's `off >= 145.0`.
+- **The metres are Ashgate's.** 12 / 14 / 36 / 42 come from `maps.ron: ashgate.layout`; the
+  graybox is a different city (`lot_m` 28 + `street_m` 7 = 35 m pitch, no frontage key), and
+  `maps.ron` has no per-map override for aim tuning. **ASSUMPTION:** Ashgate is the tuning target.
+  **Rollback point:** the four `aim_sep_*_m` keys in `game.ron`.
+- **`maps.ron:492` is stale**: it says *"lot_m 36 + street_m 7 = block pitch 43 m"* while `:499`
+  sets `street_m: 6.0`. The pitch is **42**. Three designs derived numbers from that comment; the
+  key above uses the value, not the comment. Not fixed here — `maps.ron` is another file's.
+- **The titan branch was deliberately NOT built.** A titan under the crosshair should collapse the
+  fan to the floor (both hooks into one nape — `docs/gameplay/references.md` §5), but titans carry
+  no `Body` and therefore no `BodyMask`, so nothing on them is anchorable and no rope flies there
+  until `F-029`. Building it now would be a changelog entry for dead code. It costs one
+  `Option<&TitanId>` in `cast`'s existing query on the day `F-029` lands.
+- **Citation debt fixed in passing:** `src/vector/aim.rs` and `tests/vector_aiming.rs` both cited
+  FIND-083 for the half-angle/full-angle history. That entry is about lighting; the real one is
+  **FIND-086**.
+- **Not covered by any test:** the far branch above ~170 m. The graybox is 400×400 m with its
+  furthest anchorables at ~168 m against a 500 m hook range, so every number past that is
+  arithmetic through the real code with no ray behind it.
+- **Not measured:** rope-solver conditioning. `rope_iterations: 2` is documented as not converging
+  when the two anchors are "nearly in one line", and the 2° floor at 200 m is narrower than
+  anything the old model produced. Owed before this leaves 🟨.
+
+## FIND-095 — the aim-tuning metres have no per-map home
+
+Split out of FIND-094 so it can be closed on its own: `aim_sep_floor_m` / `_tether_m` / `_stand_m`
+/ `_search_m` describe **one district**. `game.ron` is global, `maps.ron` has no aim section, and
+every map with a different block pitch silently gets Ashgate's rulers. The graybox (35 m pitch)
+is already such a map, and it is the only one the tests run on. The real fix is a per-map override
+with `game.ron` as the fallback — a `maps.ron` schema change nobody has costed yet.
+
+## FIND-096 — the wheel is the angle BETWEEN the rays, and the near field was never governed at all
+
+**2026-08-18.** Closes **FIND-086** and answers the half of the user's sentence the 2026-08-18
+metre model did not touch. *„der spread für seile ist zu weit auseinander und sollte mehr
+dynamisch sein!"* — the *dynamic* half landed and was confirmed by two adversaries; the *too wide*
+half was **a measured no-op at every range he actually hooks at.**
+
+### 1. FIND-086 resolved: `aim_spread_deg` is a full angle
+
+FIND-086 recorded that `assets/data/game.ron` + `src/data/mod.rs` read the key as a **half**-angle
+(`±28°` = 56° of fan) while `docs/NEXT.md` §1B specified *"two side rays at ±`aim_spread_deg`/2"*
+(28° of fan), resolved it *for the file* on rule 2, and noted that nothing decided between them on
+merit. **The tiebreaker arrived: the game has now been played and the verdict is "too wide".**
+
+| | old reading | new reading |
+|---|---|---|
+| fan at the shipped wheel | 56° | **28°** |
+| share of the 91.5° horizontal frustum between the two markers | 61 % | **31 %** |
+| separation at 10 m | 9.39 m | 4.84 m (blind) / **3.33 m** (governed, below) |
+
+**The three wheel numbers did not move, their unit did** — and each was re-justified rather than
+halved. `aim_spread_min_deg: 10` is now 10° of fan = ±5° = 1.74 m apart at 10 m: narrow, still
+visibly two markers. `aim_spread_max_deg: 44` kept its numeral because its old justification was
+frustum geometry (*"1.75° to spare"* against the 45.75° half-image) and that argument only ever
+held for a half-angle; as a **total** the frustum would allow 91.5° and the binding constraint is
+no longer geometry but the complaint — **44° of fan is narrower than the 56° the game used to hand
+him by default.** `aim_sep_neutral_deg: 28` is a wheel number and stays in wheel units, so
+`k = wheel / neutral` is unchanged.
+
+The meaning is stated in **exactly one place**, `src/vector/aim.rs::wheel_half_rad`; everything
+else derives from it, and `tests/vector_aiming.rs::f023_the_side_ray_sits_at_half_the_wheel_at_
+every_pitch` goes red the moment it is made the identity again (verified by mutilation).
+
+### 2. The near field was never governed — the third adversary was right
+
+The metre model resolves `half = asin(sep_m / 2d)` and clamps that to the wheel. At the ranges
+Ashgate is built at, `sep_m` (36 m block face, 42 m block pitch) asks for **more** than the wheel
+allows — 36 m of separation on a point 10 m away is ±61° — so the clamp caught it and handed back
+**the wheel, i.e. exactly the old game**. Measured reduction over 10–50 m before this round:
+standing **~4 %**, airborne-slow **~1 %**. `game.ron` said so in its own comment (*"the near field
+is exactly today's game"*) and it was read as a note rather than as the defect.
+
+The fix is one new key, `aim_sep_full_reach_m: 108.0` (**+1 field in `VectorTuning`**, 11 keys now
+instead of 10): the metre budget is only fully available once you are looking that far, and nearer
+than that it scales by `d / reach`. Below the reach the `d` cancels — **the near field is a
+constant angle per state** (9.6° standing, 11.2° searching, 3.7° tethered) and the separation grows
+linearly with range, which is the right shape for a screen quantity. 108 = 3 · `lot_m`, fixed by
+its handover and not chosen for the look of it: a grounded player looking at the far edge of his
+own block (36 m) gets 36 · 36/108 = **12 m** between his hooks — exactly one house frontage,
+exactly `aim_sep_floor_m`, so the ramp meets the metre floor at the block face and nothing steps.
+
+Separation at the shipped wheel, computed by `tests/vector_aiming.rs::f023_the_spread_is_a_
+separation_in_metres_at_every_range` out of the shipped code:
+
+| context | 5 m | **10 m** | 15 m | 20 m | **25 m** | 35 m | 50 m | 100 m | 200 m |
+|---|---|---|---|---|---|---|---|---|---|
+| BEFORE 28° as a half-angle | 4.69 | **9.39** | 14.08 | 18.78 | **23.47** | 32.86 | 46.95 | 93.89 | 187.79 |
+| grounded, standing | 1.67 | **3.33** | 5.00 | 6.67 | **8.33** | 11.67 | 16.67 | 33.33 | 36.00 |
+| airborne, stepped off | 1.94 | **3.89** | 5.83 | 7.78 | **9.72** | 13.61 | 19.44 | 38.89 | 42.00 |
+| airborne, 30 m/s | 1.04 | 2.09 | 3.13 | 4.17 | 5.22 | 7.30 | 10.44 | 20.87 | 22.54 |
+| tethered, swing 19 m/s | 0.62 | 1.23 | 1.85 | 2.46 | 3.08 | 4.31 | 6.16 | 12.31 | 13.96 |
+| tethered, boost 50 m/s | 0.56 | 1.11 | 1.67 | 2.22 | 2.78 | 3.89 | 5.56 | 11.11 | 13.96 |
+
+**65 % narrower at both of the two columns that matter**, and the far field is untouched (100 m:
+33.3 against the previous round's 36.0). **The wheel cannot undo it**: the governor is the reach
+ramp, not the ceiling, so at the widest notch the near field is 5.24 m at 10 m — still 44 %
+narrower than the *default* he complained about.
+
+### 3. The slew escaped the ceiling for 0.19 s
+
+`aim()` clamped inside `effective_spread_rad` and then rate-limited **after** it without
+re-clamping, so a wheel dropped 44 → 10 left the fan at 41/38/35/32/29/26° for ~11 ticks — wider
+than the player had just allowed, and the ceiling is his word (*„wie weit auseinander es gehen
+**darf**"*). Fixed in `slew_spread_rad`, which is also the extraction that made it testable.
+
+### Owed, and not fixed here because the files belong to other rounds
+
+- `src/shared/settings.rs:59` still documents `aim_spread_deg` as *"Half-angle"* and
+  `src/shared/intent.rs`'s doc does not name the unit at all. Both are doc comments only; the code
+  in them is correct under either reading.
+- `src/menu/settings.rs:99` prints *"{:.1} deg max"*. Not wrong, but it should read
+  **"deg apart max"** now that the number is the angle between the ropes. Its metre preview
+  (`aim_sep_stand_m * wheel / neutral`) is still exactly right — as the **far-field** budget; it
+  overstates the near field by the reach ramp.
+- **Not measured:** how the new near field feels in the hand. Every number here is arithmetic
+  through the real code plus Ashgate's rulers. 🟨 until he flies it.
+
+---
+
+## FIND-097 — first eyes on the art pack in the running game: the titan is right, the city is untouched, and the player has no body at all
+
+**Date** 2026-08-18 · **Stage** 🟧 for the titan model (image + number + the analytic prediction it
+is held against), ⬜ for everything else · **Binary** `target/debug/defeated_by_titan` of 20:47,
+copied to scratchpad and pinned for every run below.
+
+### How this was measured, and what was NOT touched
+
+`assets/data/art.ron` in the repository is **unchanged** (`md5 bfa6dbb5…` before and after). The
+two reachable rows were bound in a **mirror asset root in scratchpad** — `assets/3d` and
+`assets/texturen` symlinked to the real ones, `assets/data/*.ron` copied — and the game run with
+that directory as CWD, which is what `data::assets_root()` resolves against first
+(`src/data/mod.rs:47`). Nothing in the working tree was written except the three images below and
+this entry.
+
+All frames are `--offscreen --screenshot` at **1280x720**, the engine's own `OFFSCREEN_WIDTH`
+and the resolution all 69 existing `docs/images/*.png` already use. Camera `fov_deg 60` is
+**vertical**, so focal = `720 / (2·tan 30°)` = **623.54 px**, and a vertical segment at depth `d`
+projects to exactly `623.54·h/d` px when pitch is 0 — which is why every measurement frame below
+is shot at `look <yaw> 0`, with the titan **spawned after the warp** so it cannot walk before the
+shutter.
+
+### 1. 🟧 The titan model is correctly sized and correctly grounded — `docs/images/t075-titan.png`
+
+`titan_husk -> a-042-koerpertyp-a-hager-mittel.glb`, husk at the origin, eye at 1.6 m, depth
+**16.0 m**, screenshot 6 ticks after spawn. Silhouette taken by differencing against a
+titan-free plate of the identical camera, so nothing is eyeballed:
+
+| | predicted | measured | delta |
+|---|---|---|---|
+| head-top y | 30.4 px | 44 | +13.6 px = **0.35 m** |
+| feet y | 422.4 px | 427 | +4.6 px = **+0.119 m** |
+| span | 391.9 px | 384 | **−1.5 %** |
+
+Implied standing height **9.853 m** against the class's 10.0 m and the file's authored 10.0566 m.
+**Feet land 0.12 m off the analytic ground plane** — planted, not sunk and not floating. The
+0.35 m at the head is the file's `hit.max` sitting above the actual skull, not a fit error; the
+fit is driven by that box, so it is expected and harmless. A second frame at 40 m gave −2.4 % and
+feet −0.06 m, i.e. the agreement is not a one-distance accident.
+
+**Textured, and the textures resolve.** Two materials, `TEX-TITAN-01` (skin) and `TEX-TITAN-02`
+(wounds), both `baseColorFactor 1,1,1` with a `baseColorTexture`, both reached through
+`../../texturen/` with zero loader warnings.
+
+### 2. 🔴 The gold plate on the head is `cortex_kern`, and it proves `MODEL_FACES` is RIGHT
+
+The first close-up showed a flat **gold rectangle where the face should be**, which reads as a
+texture bug. It is not. It is atlas field **`cortex_kern` `#F0A63C`** in
+`TEX-TITAN-02.felder.ron` (cell 4,3) — the pack paints the kill zone into the skin, next to
+`cortex_angeschnitten`, `cortex_getroffen` and `cortex_getroffen_glut`. It was visible because
+the titan had existed for 0.1 s and had **not yet turned**; its spawn orientation puts its back
+to a camera standing at +Z.
+
+Counted over three ticks of one run (26 m, `look 0 0`), cortex-gold pixels: **21 → 30 → 0**. Once
+the husk has turned to face the player the nape is hidden and the gold is gone.
+**So the drop's `cortex` empty and its gold nape patch agree, and the 180° `MODEL_FACES` turn is
+correct** — the earlier round's C-crop/D-crop conclusion survives an independent attack.
+It also means the kill zone is **visually marked on the model**, which no primitive rig ever was.
+
+### 3. ⬜ The district uses none of the 278 models — `docs/images/t075-town.png`
+
+Ashgate from 55 m: **5155 blocks, 0 models.** Confirmed independently of the previous round's
+prose — the only writer of `ModelName` is `render::model::name_the_titans_model` (`model.rs:286`),
+driven by `TitanKindName`; `world::map` pushes every building as a `BlockPlan` carrying size and
+colour only (`map.rs:155`). There is no entity to hang `house_small`, `wall_segment`, `city_gate`
+or `lamp_street` on. The frame is grey gantry monoliths and a mosaic of flat-topped boxes.
+
+### 4. 🔴 The player has **no body at all** — `docs/images/t075-player.png`
+
+Not "no vanguard model": no mesh. `player::spawn_player` (`src/player/mod.rs:109`) inserts a
+collider, the gear components and a transform, and **no `Mesh3d` and no `ModelName`**. Looking
+straight down (`look 0 -89`) the centre 400x400 block of the frame holds **9 unique colours** and
+the centre pixel equals a corner pixel — bare pavement. No legs, no torso, no gear, no blades.
+The `vanguard` row's blocker is therefore **not** only the first/third-person decision the
+previous round recorded; there is nothing to swap, because nothing is drawn.
+
+### 5. The wall casts a 165 m shadow and everything outside it photographs as void
+
+Sun `azimuth 108° / elevation 36°` gives `to_sun = (0.769, 0.588, 0.250)`, so a 120 m wall throws
+`120/tan 36° = 165 m`. Standing 67 m outside the gate the whole upper frame reads a **flat
+(46,52,62)** with no zenith→horizon gradient anywhere in it — it is the unlit outer wall face, and
+it is indistinguishable from the night sky it sits against. Titans placed in that band are
+unreadable. Not a bug in the art pack; worth knowing before anyone shoots a "titans at the wall"
+picture. Terrain outside the wall is also **not** at y=0 (an `assert height` in [−0.5, 0.5] at
+(28.5, ·, −310.7) went red), so open-field vantages need probing, not arithmetic.
+
+### 6. Two things that cost this round time and are cheap to avoid
+
+- **`game.ron` moved under a live measurement.** A parallel workflow added
+  `VectorTuning.aim_sep_full_reach_m` mid-session; the pinned binary predates the field and every
+  run panicked at `src/data/mod.rs:165`. CLAUDE.md already says pin the binary — **pin the RON
+  too.** Copying `assets/data/*.ron` into the mirror root fixed it for good.
+- **XWayland takes the App ID from the executable name.** The window of a binary copied to
+  `dbt-pinned` announces `App ID: "dbt-pinned"`, not `defeated_by_titan`; matching on
+  `Title: "Defeated by Titan"` is stable. The windowed 2560x1440 route was abandoned anyway: the
+  user has Factorio running fullscreen on DP-2, `move-window-to-monitor-down` + `fullscreen-window`
+  did not get above it, and **1280x720 is the house convention** for all 69 existing images, so
+  the offscreen path is both cheaper and more correct.
+
+### Verdict against the reference, plainly
+
+The **titan model passes on every objective axis** — right height, feet on the ground, textured,
+correctly turned, kill zone marked — **and still does not look like Attack on Titan.** What stands
+in the street is a low-poly **artist's posing mannequin**: ball shoulders, a separate ribcage
+plate, a floating pelvis block, stick limbs with visible joint caps, blocky box feet, flat
+salmon-tan skin, no hair and no face. The reference titan is fleshy, over-muscled and wears a
+disturbingly human grin. This one reads as a wooden dummy, and at 10 m it reads as a *big* wooden
+dummy. That is an asset-authoring gap, not a wiring gap, and no amount of `art.ron` fixes it.
+
+The **city is worse off than the titan**, because the user's complaint is about the city and the
+city got nothing: the drop's architecture kit is the largest thing in the pack and not one row of
+it can be reached until a block carries a model name.
+
+
+---
+
+## FIND-098 — the spread narrowed by 65 % and the HUD drew the same picture, 2026-08-18
+
+**The fix was right and the player could not see it.** `vector::aim::effective_spread_rad` landed
+the same day, verified twice: the two-rope fan is now state-dependent and ~65 % narrower at the
+ranges the user hooks at. A third adversary then refuted the round **on its consequence** — the
+resolved fan projects entirely *inside* `F-170`'s keep-out box, `hud::arm_aim::layout_for` pushed
+anything touching the box to a fixed slot at its edge, and **the one test guarding that could not
+see it** because it fed the raw wheel into `side_dirs` and never called `effective_spread_rad`.
+
+### The measurement (`tests/hud.rs::f023_the_marker_x_against_the_resolved_fan_is_the_evidence_table`)
+
+`E` glyph centre, px right of screen centre, standing still, looking 40 m out. `before` is the
+box rule, `after` is what ships. Both columns are real code paths, printed by the test.
+
+| state | wheel | resolved half | projected | before (1280) | after (1280) | before (2560) | after (2560) |
+|---|---|---|---|---|---|---|---|
+| grounded | min 10 | 3.412° | 37.2 px | **146.0** | 37.2 | **274.0** | 74.4 |
+| grounded | def 28 | 9.594° | 105.4 px | **146.0** | 105.4 | **274.0** | 210.8 |
+| grounded | max 44 | 15.183° | 169.2 px | 169.2 | 169.2 | 338.4 | 338.4 |
+| airborne | min 10 | 3.982° | 43.4 px | **146.0** | 43.4 | **274.0** | 86.8 |
+| airborne | def 28 | 11.212° | 123.6 px | **146.0** | 123.6 | **274.0** | 247.2 |
+| airborne | max 44 | 17.792° | 200.1 px | 200.1 | 200.1 | 400.2 | 400.2 |
+| tethered | min 10 | 3.185° | 34.7 px | **146.0** | 34.7 | **274.0** | 69.4 |
+| tethered | def 28 | 3.716° | 40.5 px | **146.0** | 40.5 | **274.0** | 81.0 |
+| tethered | max 44 | 5.846° | 63.8 px | **146.0** | 63.8 | **274.0** | 127.7 |
+
+**Seven of nine drew one number.** Only the two `max`-wheel rows that already cleared the box were
+honest. A 24-step sweep of the whole reachable band (2°..22°) found **13 of 24 steps flat at
+146.0 px** — from the floor all the way to 12°.
+
+### What the box is for, and why it was not shrunk
+
+`KEEP_OUT_PCT` is **sized to the crosshair's own arms**, not to the target under them
+(`src/hud/crosshair.rs`: the crosshair is four ticks standing outside the box *because* one node
+with a dot in it would cover the pixels the player is cutting). The honest requirement to make the
+fan clear it is a half-width under **21.8 px of 1280 = 1.70 % of width** (`aim_spread_floor_deg`
+2°, reachable past 108 m at the min wheel) — `KEEP_OUT_PCT` 20 → **3.4**. That collapses the
+crosshair to a 44 px cross and moves every pixel of `F-171`'s photographed geometry. **Option (a)
+is not available**, and the earlier estimate of "≤ 2.93 % at 200 m" was itself two ranges short.
+
+### The decision: split the rule by what the node *is* (option c)
+
+`layout_for` now takes a `Bearing`:
+
+- **`Bearing::World`** — a tip in flight, an anchor being held, or an arm that fell back to the
+  centre ray. **Unchanged**, pushed out of the full box. The box costs nothing here: `render::rope`
+  is already drawing the rope to that point, or the marker is a state badge with no position of its
+  own (FIND-087 §2, kept).
+- **`Bearing::Fan`** — an idle arm on its **own** side ray. Its x *is* the resolved half-angle.
+  Exempt from the box, held out of `SIGHT_CORE_PX` (6 px) instead — the pixels the player is
+  cutting, which is what the box was protecting.
+
+The two are told apart by comparing the arm's point with the shared `AimPoint` **by value, no
+tolerance**: `vector::aim` assigns the very same value on fallback, so they are bit-identical when
+and only when the fallback ran.
+
+**What the box loses, measured:** an idle glyph is 20 px wide and the narrowest reachable angle
+projects 21.8 px off centre at 1280, so the inner edge is 11.8 px clear of the aim pixel at the
+*worst* angle. The `SIGHT_CORE_PX` guard therefore **never binds above a 941 px viewport** — it is
+there for a narrow window and for the day `aim_spread_floor_deg` drops, and the monotonicity sweep
+would see it as a flat step if it fired.
+
+### Tests (all seen red first, and each re-broken in one line afterwards)
+
+- `f023_the_drawn_marker_stands_at_the_resolved_fan_angle` — 3 states × 3 notches, drawn x within
+  1 px of `tan(θ)/tan(45.746°) · w/2`, computed independently of `world_to_viewport`.
+  Red: *"grounded at the min wheel resolves to 3.412 deg, which projects 37.2 px off the centre —
+  the Left glyph was drawn at 146.0 px."*
+- `f023_the_drawn_marker_is_strictly_monotone_in_the_resolved_fan` — 25-point sweep of 2°..22°,
+  strictly increasing, and no glyph over the aim pixel. Red: *"stopped following the fan on 13 of
+  24 steps."*
+- `hud::arm_aim::tests::f023_a_fan_marker_keeps_its_angle_and_clears_the_aim_pixel` — 257-point
+  screen sweep: outside the core the glyph is the projection and **nothing else** (`assert_eq!`),
+  plus one narrow-viewport case proving the guard can fire at all.
+- `f170_no_projected_point_can_push_a_marker_into_the_middle` and both integration keep-out tests
+  are untouched and green — they are the `Bearing::World` claim, and the bare app is that case.
+
+### ⚠️ The landed acceptance that was deliberately rolled back
+
+`f026_two_idle_arms_preview_two_different_points` asserted **`off >= 145.0`** for both glyphs. That
+number *is* the box plus the gap — the fixed slot — so it could only ever be met by a marker that
+had stopped following the fan, and it was measured against the raw wheel fed into `side_dirs` as a
+half-angle, which is neither the unit the wheel carries nor what the game resolves. It is the exact
+rollback point FIND-096 named, and requirement 9 (*"und dann muss das seil auch dahin!!"*) wins over
+W5 (*"weiter rechts und links"*). Replaced by: the pair never swaps, never covers the aim pixel
+(`off > 10`), and **opens with the wheel** — the clause the box push used to eat.
+
+**ASSUMPTION:** the user would rather see a narrow fan drawn narrow than a wide pair that means
+nothing. **Rollback point:** `Bearing::Fan` in `hud::arm_aim::bearing_of` — one match arm returns
+`Bearing::World` and the old picture is back, with three tests going red to say so.
+
+### Two label repairs owed elsewhere (both files dirty, not touched)
+
+- `src/shared/settings.rs:59` still documents `aim_spread_deg` as *"Half-angle"*. It is the angle
+  **between** the rays since FIND-096.
+- `src/menu/settings.rs:99` prints `"{:.1} deg max"`; it should read `"{:.1} deg apart max"`.
+
+## FIND-099 — the two residues FIND-098 did not cover: a 608 px teleport on every shot, and a fixed slot that comes back with the FOV slider, 2026-08-18
+
+FIND-098 made the fan marker's x the resolved half-angle. Two adversaries then found that the
+*transition* into that rule and the *range* it holds over were both unmeasured. Both are closed
+here, both with a test seen red first.
+
+### 1 · The bearing flip, measured
+
+`bearing_of` can flip four ways and each one moves the glyph. Measured on a 1280 × 720 screen at
+60° FOV, right arm, a resolved half-angle of 5.6° (projects 61.1 px) —
+`tests/hud.rs::f023_every_bearing_flip_is_a_hard_jump_and_this_is_how_big` prints this table:
+
+| step | state | off centre | jump |
+|---|---|---|---|
+| fan, own side ray | Ready | 61.0 px | — |
+| fell back to the centre ray | Ready | 146.0 px | **+85.0** |
+| back on its own side ray | Ready | 61.0 px | −85.0 |
+| fired at that same point | Busy | 150.0 px | +89.0 |
+| anchored on it | Anchored | 146.0 px | −4.0 |
+
+At the *tethered* default (40.5 px, FIND-098's table) the fallback jump is **105.5 px** — the
+number the refutation quoted.
+
+**The decision: the jump stays hard and is not smoothed.** A slide would put the marker, for the
+whole time constant, on a place the rope does not go — and "the marker and the rope are one
+number" is the whole of `F-023`/`F-026` and the thing FIND-047 was about. Hysteresis is worse
+still: it would hold the old preview while `vector::hook::fire` already reads the new `ArmAim`,
+so the HUD would promise a point the shot cannot take. The flip is a **change of meaning** (this
+arm's own ray → the shared centre ray it fell back to), the player has to know in the same frame,
+and a hard step is the only reading that stays true at every instant. The test asserts that
+directly: two further frames of identical input may not move the glyph by 0.01 px, so anyone
+adding a filter has to come to that test and argue.
+
+### 2 · …except that one of the four was not a flip of meaning, it was a lie
+
+`target_of` handed `Flying` the **tip**, and `vector::hook::fire` starts the tip *in the hand*
+(its decision 5). So for the first ticks of every shot the marker's point sits on the camera's
+own near plane, `world_to_viewport` refuses it, `edge_pixel` gives it a bearing and the clamp puts
+it on the edge of the screen. Measured, red before the fix:
+
+> *Left fired at Vec3(-9.68, 1.6, -38.81) — the point its own marker was standing on 155.0 px
+> off the centre of a 1280 px screen — and the marker jumped to **608.0 px**.*
+
+…and then crawled back inwards over the flight, as if the target were moving. It was not: the
+target is `HookState::Flying { target_m }`, frozen at fire time, and it is bit-identical to the
+point the idle marker was already standing on.
+
+**Fix:** `Flying` previews `target_m`. `Retracting` and `Anchored` keep the tip, where
+`render::rope` really is drawing to that point. After the fix, firing at a point outside the box
+moves the marker **0.0 px** — the requirement is *"dass man direkt sieht wo man landet"*, and the
+honest picture of committing to a place you were already pointing at is that nothing moves.
+A point inside the box still steps to the side slot (155 → 150 px, and 22 → 150 px for a floor
+fan): that is `F-170`'s box, which is 🟧 with a photograph behind it and was not touched.
+
+### 3 · The FOV residue: `SIGHT_CORE_PX` was a fixed slot in miniature
+
+`PlayerSettings.fov_deg` is live from 55 to 110° since the settings screen landed, and
+`render::apply_field_of_view` carries it to the camera — but both of FIND-098's tests read
+`data.game.camera.fov_deg`, so they only ever saw the default 60. The old fan guard clamped the
+**x** to `centre ± SIGHT_CORE_PX`, which binds whenever the fan projects under
+`SIGHT_CORE_PX + glyph_w/2` = 16 px. Red, at the range the slider actually reaches:
+
+> *at fov 110 deg, tethered at the min wheel resolves to 3.185 deg, which projects 14.0 px off
+> the centre — the Left glyph was drawn at 16.0 px*
+> *at fov 110 deg the drawn marker stopped following the fan on 2 of 24 steps: 2.00 deg → 16.0 px,
+> 2.83 deg → 16.0 px, 3.67 deg → 16.0 px*
+
+**Fix: the sight core is a 6 px *square* and a fan marker steps down out of it, never sideways.**
+That costs nothing, and the reason is geometric rather than a taste: `vector::aim::side_dirs`
+yaws the two rays around the **camera's** up axis, so their camera-space y is exactly 0 and their
+projected y is the middle of the screen at every angle and every pitch. A fan marker's y carries
+no information at all; its x carries all of it. Travel over the reachable band, after the fix:
+
+| FOV | travel, floor → ceiling | flat steps |
+|---|---|---|
+| 55° | 255.3 px | 0 |
+| 60° | 230.2 px | 0 |
+| 90° | 132.9 px | 0 |
+| 110° | 93.0 px | 0 |
+
+### Tests (each seen red first, each re-broken in one line afterwards)
+
+- `tests/hud.rs::f026_a_fired_arm_previews_where_it_lands_and_not_the_hook_in_its_hand` — red at
+  608.0 px past a 150.0 px slot.
+- `tests/hud.rs::f023_every_bearing_flip_is_a_hard_jump_and_this_is_how_big` — the table above,
+  plus the no-smoothing clause and the no-residue clause on the round trip.
+- `tests/hud.rs::f023_the_drawn_marker_stands_at_the_resolved_fan_angle` and
+  `…_is_strictly_monotone_in_the_resolved_fan` — now over `FOVS = [55, 60, 90, 110]`, reading the
+  **live** `PlayerSettings.fov_deg` through the new `set_fov`/`live_fov_deg` helpers, and the
+  aim-pixel clause is a rect-against-the-square check instead of `x > 10 px` (at a wide FOV the
+  honest x for a floor fan *is* under 10 px).
+- `hud::arm_aim::tests::f023_a_fan_marker_keeps_its_angle_and_clears_the_aim_pixel` — the 257-point
+  screen sweep now asserts `assert_eq!` on the x **everywhere**, including over the core, and
+  counts the dodges so the guard cannot become dead code.
+
+Green after: `--test hud` 34, `--test menu` 27, `--test vector_aiming` 20, `--lib hud::arm_aim` 9.
+
+**ASSUMPTION:** a fan marker may give up its y. **Rollback point:** the `Bearing::Fan` arm of
+`layout_for` — put the `x.max(centre + SIGHT_CORE_PX)` clamp back and three tests go red to say so.
+
+### Open, and not mine to close
+
+- **The fallback's 85–105 px jump is silent.** When the side ray misses but the *centre* ray is
+  anchorable, `state_for` keeps the arm on `Ready`: same glyph, same colour, same size, and the
+  marker moves 105 px. Every other flip in the table changes the shape in the same frame. Near a
+  roof edge the underlying hit/miss can alternate, and then the glyph strobes between two places
+  at frame rate. Nothing in the code is wrong — the two states genuinely mean different things —
+  but the player is given no signal that the *meaning* changed, only the movement. Wants a look in
+  the running game before anything is done about it, and it needs a fifth `ArmAimState` or a
+  colour, both of which move `F-171`'s photographed table.
+- **`Retracting` keeps the tip and therefore keeps a smaller version of the same whip** in the
+  last centimetres of the reel-in, where the tip is inside the camera. Not fixed here: the rope
+  really is at that point, so it is not a lie in the way the flying case was.
+- Both label repairs FIND-098 owed (`src/shared/settings.rs:59`, `src/menu/settings.rs:99`) are
+  still owed — neither file is this round's.
+
+---
+
+## FIND-100 — eyes on the SHIPPED binding: the titans are models, the city is still a greybox, 2026-08-18
+
+**Date** 2026-08-18 · **Stage** 🟧 for the three pictures (image + measured number + analytic
+prediction) · **Binary** `target/debug/defeated_by_titan` of 22:17, unchanged for every run below
+(`find src assets/data -newer` names only `art.ron`, which is data and is read at runtime).
+
+### What was measured, and what was NOT touched
+
+**No mirror asset root, no local edit.** This is the difference to FIND-097: that round bound
+`art.ron` in a scratchpad copy; this one runs the working tree as it stands. `art.ron` binds
+`titan_husk -> 3d/glb/a-042-koerpertyp-a-hager-mittel.glb` and nothing else, and the startup line
+in every run below is `art.ron: 1 model(s) come out of a file, the rest stay primitives`.
+
+Only `docs/images/t075-town.png`, `t075-titan.png`, `t075-street.png` and this entry were
+written. All three are `--offscreen --screenshot` at **1280x720** — the engine's own
+`OFFSCREEN_WIDTH/HEIGHT`, and what all 69 pre-existing `docs/images/*.png` use. Camera
+`fov_deg 60` is vertical, so focal = `720 / (2·tan 30°)` = **623.54 px**.
+
+The camera moves are **not in `scripts/`** (not this round's files). They are reproducible from
+these lines alone, each as `wait 1.5 · look <yaw> <pitch> · warp <x> <y> <z> · wait 1.2 · mark`
+at `--ticks 165`, and the titan frame at `--ticks 240`:
+
+| image | look | warp | source |
+|---|---|---|---|
+| `t075-town.png`   | `30 -24` | `220 95 230`  | new, corner of the district above the gate lane |
+| `t075-street.png` | `0 14`   | `168 4.2 292` | the street `scripts/w2-terrain-walk.txt` walks |
+| `t075-titan.png`  | `0 16`   | `0 2 20`      | husk `0 0 -2`, scuttler `-8 0 0`, warden `11 0 -6`, spawned from 250 m away, 3.5 s before the warp-in |
+
+The titan frame is a real script run: `1 asserts held` (`assert titans == 3`), **exit 0** on its
+own run.
+
+### 1. 🟧 The titans really are models in the shipped build — and the sizes are right to 1.5 %
+
+Two `titan_husk` instances load, at the two scales `fit_to_class` computes, both logged:
+
+```
+model "titan_husk": 6 anchor(s) read out of the file … drawn at scale 1.0000   (husk, medium)
+model "titan_husk": 6 anchor(s) read out of the file … drawn at scale 0.4157   (scuttler, small)
+```
+
+Measured against the analytic projection, camera eye 1.7 m, `look 0 16`:
+
+| | predicted | measured | delta |
+|---|---|---|---|
+| scuttler silhouette height (4.181 m @ 20.1 m) | 130 px | **132 px** | +1.5 % |
+| husk silhouette height (10.057 m @ 22.0 m) | 285 px | **275 px** | −3.5 %, and the dark hair on the skull is outside the flesh mask |
+| husk cortex marker, screen y (8.90 m) | 332 px | **335.5 px** | +3.5 px = **0.06 m** |
+| scuttler cortex marker, screen y (3.70 m) | 477 px | **473.5 px** | −3.5 px = **0.05 m** |
+
+Both feet sets end on the ground plane (`y=589` husk, `y=592` scuttler, ground edge at 592):
+**planted, not sunk and not floating.** The amber `cortex_kern` patch is on the nape of both, back
+turned to the camera — `MODEL_FACES` is right, as FIND-097 §2 already argued from a different frame.
+
+### 2. 🔴 …and next to them a grey box golem. The mixed district is now photographed
+
+`t075-titan.png` was framed on purpose to hold **all three**: husk (bound), scuttler (bound,
+squeezed to 0.4157) and **warden** (`titan_large`, still `Primitive`). Crop `790,180 → 1000,620`:
+the warden is a stack of four flat grey cuboids, 21 m tall, with a 2×14 px amber sliver where its
+Cortex is. Two humanoid meshes and one grey box standing in the same street.
+
+That is the visible cost of the `titan_large` blocker (1.39 cm of x, `art.ron` at the row) — and
+it is worse on screen than the report reads, because the warden is the **biggest** thing in frame.
+
+### 3. ⬜ The district is 5 155 cuboids. It is a very good greybox and it is a greybox
+
+`t075-town.png`, 1280x720: **16 103 distinct RGB values, 404 at 5-bit, mean saturation 24.5,
+70.1 % of pixels below saturation 30, and the 100 most common colours cover 44.2 % of the frame.**
+`t075-street.png` is flatter still: **3 703 distinct, top-100 cover 61.3 %**. Those are the
+numbers of flat-shaded untextured geometry, and they are what they should be — nothing in the
+district asks for a model, so nothing loads one.
+
+At district scale it honestly works: closed blocks with courtyards, party walls, alleys you can
+see down, roof heights that vary block to block, the wall and the gate towers behind. Crop
+`560,380 → 900,620` says what it is made of: **a cuboid with a stair-stepped roof of four to five
+stacked slabs**, one flat colour per wall (terracotta / sand / grey), **no window, no door, no
+chimney, no texture, no ornament anywhere in 5 155 blocks.**
+
+`house_town` and `house_large` exist as `Primitive` rows in `art.ron`; the blocker is that
+`BlockPlan::spawn` inserts no `ModelName`, so no district block can ask for a model at all
+(`src/world/map.rs:1016` says the same thing from the other side).
+
+### 4. 🔴 Two shipped scripts photograph the wrong thing on Ashgate — `f056-husk` and `f003-city`
+
+Both were written for the **Graybox** map and neither was re-aimed when `maps.ron: current`
+flipped to `"ashgate"`:
+
+- `scripts/f056-husk.txt` warps to `17.5 0.05 24`, which on Ashgate is **inside a building**. The
+  first `t075-titan.png` this round shot through it: 60 % of the frame is one flat grey wall and
+  **there is no titan in the picture at all**. `docs/images/f056-husk.png` is therefore a picture
+  of a map the game no longer builds.
+- `scripts/f003-city.txt` warps to `0 70 130`, which on Ashgate is 12 m above the crossbeams of
+  the nine-gate swing lane at `z = 70`. The frame is gate columns; the district is two strips at
+  the edges.
+
+Neither is a rendering fault and neither was touched here. But every 🟧 that leans on those two
+images is leaning on the Graybox.
+
+### 5. 🔴 I disturbed the user's Factorio window, and the windowed cross-check did not happen
+
+The plan was one windowed run on DP-2 as a cross-check that the offscreen path is not lying. The
+game window opened (`MARK t=229 win-titan` in its log), but
+`niri msg action move-window-to-monitor-down` and `fullscreen-window` act on the **focused**
+window — and the focused window was **`Factorio: Space Age 2.0.77`, which the user is playing right
+now**. `grim -o DP-2` captured Factorio, not the game. The game process was killed and nothing is
+left running (`pgrep` 0, pointer not locked), but Factorio may have been moved between outputs
+and/or had fullscreen toggled once. It is currently focused on workspace 2, tiled 2560x1410.
+
+**No second attempt was made** — a human is at the machine and stealing focus mid-game costs him
+more than the cross-check is worth.
+
+**The rule that follows, for whoever next takes the screen:** never drive `niri msg action` at the
+focused window. Get the game's own id first —
+`niri msg windows | grep -B4 'PID: <pid>'` — and use `--id`. And check
+`niri msg focused-window` before touching the compositor at all: on this machine the user is
+sometimes sitting in front of it.
+
+### Open
+
+- Nobody has still seen a bound titan **in a window** on this machine. Everything above is the
+  offscreen path — the same wgpu adapter and the same render graph, but not the same swapchain.
+- Nothing in this round flew at a **weaver**; the scuttler stands in for the whole small class.
+
+
+---
+
+## FIND-101 — the terrain's seed reaches exactly one cell of Ashgate, and its own test said the opposite (2026-08-18)
+
+`src/shared/terrain.rs`'s `f003_the_same_seed_yields_exactly_the_same_ground` failed at the
+first full-gate run since the module was written: its `assert_ne!` half claimed that two seeds
+give two grounds, and on its own fixture they give **byte-identical** ones.
+
+**Why it was never seen.** The five unit tests of that module live *inside*
+`src/shared/terrain.rs`, and only `cargo test --lib` runs those. The round that wrote the
+module was commissioned with `--test world --test data --test render` — the restriction
+excluded the one binary its own tests were in, so none of the five had ever been executed.
+**A commission that names test binaries has to name `--lib` whenever the work adds a `mod
+tests` to `src/`.**
+
+**The mechanism, and it is exact — not statistical.** `TerrainField::new` gives every unpinned
+cell `levels - 1 - notch` with `notch < START_SPREAD` (= 2), then relaxes `level <=
+min(4 neighbours) + 1` with the outside counting as 0. That relaxation's fixed point is the
+**L1 distance transform** from the pinned cells and from the rim, capped by the cell's own
+draw. So, writing `D` for a cell's L1 distance to the nearest pin or to the outside:
+
+> **the seed can change a cell if and only if `D >= levels - 1`.** Below that the distance
+> transform is already under the draw and erases it completely.
+
+Swept in a model of the generator (12x12 … 24x24, `levels` 5 and 6, random pinning 0…30 %,
+20 fixtures each, two seeds): the fraction of fixtures in which two seeds differ tracks
+`max D >= levels - 1` with no exceptions. 16x16 / `levels: 6`: 100 % of fixtures differ at
+2 % pinning (13.1 cells on average), 60 % at 5 %, 20 % at 8 %, **0 % from 16 % pinning on**.
+Raising `levels` by one is worth about as much as adding 4 points of pinning density.
+
+**And for the shipped map** (`assets/data/maps.ron`, `ashgate`: `cell_m: 42`, `levels: 6`,
+16x16 = 256 cells), measured through the real pin pipeline in
+`tests/world.rs::f003_the_districts_ground_comes_from_the_map_and_barely_from_the_seed`:
+
+* **86 of 256 cells (34 %) are pinned** by hand-placed geometry — canal, wall, gate axis,
+  spawn radius, stalls.
+* **`max D` = 5 = `levels - 1`, reached by exactly one cell, (11, 11).** It is the *only* cell
+  in the district the seed can move, and it moves by one level (1.5 m).
+* Six seeds tried: two of them lower that cell from 5 to 4, four leave it. **0.4 % of the
+  district.**
+
+So `rng`/`stream` on `TerrainField::new` are **not decorative — by one cell.** They stay, and
+the tests now state the boundary from both sides instead of asserting a variety that is not
+there. This is FIND-090 ("the shape comes from the map's geometry, not from the draw") measured
+to its exact edge.
+
+**⚠️ What this does to the landed 🟧 numbers of the terrain round:** relief p90−p10 = **3.00 m**
+and **926/926 houses** stand untouched (p10 1.50 m / p90 4.50 m; the top cell is far outside the
+p90). **The "6 levels" number is the fragile one:** `levels_used` = `[0..5]` only because that
+one cell drew `notch = 0`. Under seed 1 or 999999999 the district has **five** ground heights,
+not six. The sixth is carried by **8 houses of 926 (0.9 %)** on a single 42 x 42 m cell. It is
+true for the shipped seed and it is one cell wide — do not read "6 levels of relief" as a
+property of the map.
+
+**A second false claim in the same never-run module,** also fixed: the invariant test said *"the
+raw draw alone puts a level-4 cell next to a level-2 one"*. With `START_SPREAD = 2` the draw
+only ever hands out `ceiling` or `ceiling - 1`, so two unpinned neighbours never differ by more
+than one level (measured on that fixture: worst gap between two unpinned cells = **1**). What
+the relaxation actually carves is the slope down to the pins and the rim, where the raw gap is
+**4 levels = 3.6 m**.
+
+**Not ours, seen in passing:** the `terrain` comment block in `assets/data/maps.ron` still
+argues *"step_m 0.9 over 5 levels = 3.6 m of relief"* while the block below it reads
+`step_m: 1.5, levels: 6` (= 7.5 m ceiling). The prose and the numbers were changed at different
+times; whoever owns `maps.ron` should reconcile them.
+
+Evidence: `src/shared/terrain.rs::f003_the_draw_reaches_only_cells_the_relaxation_leaves_room_for`
+· `tests/world.rs::f003_the_districts_ground_comes_from_the_map_and_barely_from_the_seed`
+(prints `at most 1 cells (0.4 %) depend on the seed`) · one-line break `START_SPREAD 2 -> 6`
+turns both red, `--lib` 198 passed, `--test world` 24, `--test data` 55.

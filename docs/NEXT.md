@@ -881,3 +881,296 @@ go through the current `anchorable: false` blocks one at a time and justify each
 with a real reason are the **ground slab** (hooking the pavement under your feet) and the **canal
 bed**; the gate columns' reason (`FIND-042`) dies with the gantries if those are deleted.
 **Rare exceptions are a design tool, not an oversight — each survivor gets a comment saying why.**
+
+---
+
+## §1E — the 2026-08-18 session, and the two things the user said
+
+Both came in chat rather than through `user-messages.md`, so they are recorded here verbatim —
+his phrasing carries information a paraphrase loses (CLAUDE.md, "quote him verbatim").
+
+### 1 · The rope spread — ✅ DONE, and it exposed a units bug
+
+> *"der spread für seile ist zu weit auseinander und sollte mehr dynamisch sein!"*
+
+**He was right twice over, and the second half was a bug nobody had grounds to settle.**
+`aim_spread_deg: 28.0` was read as a **half**-angle, so the two ropes opened **56°** and landed
+**93.9 m apart at 100 m** — a fixed angle makes the metric separation grow without bound
+(278 m apart at 200 m on the widest notch). `FIND-083` had recorded that the RON comment and
+`docs/NEXT.md` §1B disagreed about half-vs-full by a factor of two, and it sat open because
+nothing could break the tie. **His complaint is the tiebreaker**, and `FIND-086` is now closed:
+the wheel is the angle **between** the rays, stated in exactly one place (`wheel_half_rad`).
+
+What shipped, verified by adversaries who reproduced the arithmetic independently:
+
+| at | before | after (grounded) | |
+|---|---|---|---|
+| 10 m | 9.39 m | **3.33 m** | −64.5 % |
+| 25 m | 23.47 m | **8.33 m** | −64.5 % |
+| 100 m | 93.89 m | 33.33 m | −64.5 % |
+
+- **Near field is governed, not defaulted.** `aim_sep_full_reach_m: 108.0` (= 3 · `lot_m`) makes
+  the metre budget scale with distance below that range, so `d` cancels and the near field is a
+  **constant angle per state** (9.6° standing, 11.2° searching). **The wheel cannot undo it** —
+  at the widest notch 10 m still gives 5.24 m, 35 % under the *old default* and 56 % under the
+  old max. Far field stays constant-metres, which is what killed the runaway.
+- **Dynamic** — at a fixed 100 m the fan spans 3.44°..28° with state and speed: tight swinging
+  and boosting, open standing and searching, widest at open sky.
+- Two bugs found on the way: the wheel clamp ran **before** the slew and was never re-applied
+  (a 44→10 notch drop left the fan wider than allowed for ~0.19 s), and the HUD's keep-out box
+  pinned both markers to a **fixed slot** so the narrower fan was invisible (`FIND-098`), which
+  in turn uncovered a **608 px marker teleport on every shot** — the flying marker was given the
+  rope's tip, which starts *in the hand*, on the near plane (`FIND-099`).
+
+**Still open here:** the fallback flip (side ray misses, centre ray anchorable) moves the glyph
+85–105 px with **no change of shape or colour**, so near a roof edge it can strobe. Fixing it
+needs a fifth `ArmAimState` or a colour, and both move `F-171`'s photographed table — **it wants
+his eyes in the running game before anyone picks.**
+
+### 2 · The art pack — models exist, the town is not dressed yet
+
+> *"in downloads sind defeated-by-titan assets. in zip. nutze diese!"*
+
+**278 `.glb` + 17 atlases, installed and git-tracked** (341 files). The pack is authored **in the
+game's exact metres** — `fachwerkhaus` klein/stadthaus/gross measure 4.5 / 8.0 / 11.5 m against
+`scale.ron`'s `house_small` / `house_town` / `house_large` to the decimal — and it carries
+machine-readable metadata the loader was already written for: `hit.min`/`hit.max` on all 278,
+`cortex` on 45, and **439 named `hook.*` points across 144 files** (`traufe`, `first`, `krone`,
+`spitze`, `gesims_15..105`).
+
+⚠️ **The pack's own `assets/data/*.ron` were NOT copied** — they are the 2026-08-09 German
+scaffolding (`skala.ron`), long superseded. ⚠️ **`assets/texturen/` must never be renamed**: every
+`.glb` references `../../texturen/TEX-*.png` by relative URI. ⚠️ **Zero animation clips** — the
+rigs are there, nothing is authored, so `animations: {}` stays everywhere and a titan will stand
+rather than walk.
+
+**A titan renders and is measured** (`docs/images/t075-titan.png`): span 384 px against 391.9
+predicted (−1.5 %), implied height 9.853 m against a class 10.0, feet +0.119 m off the ground
+plane. That is 🟧 and it is the only model that has reached it.
+
+**Why the shipped game is still grey**, all five found and being cleared:
+1. 🔴 `src/lib.rs` sets no asset root — Bevy resolves `assets/` against the **exe** dir, so
+   `cargo run` works and `./target/debug/defeated_by_titan` does not. Every script run uses the
+   direct binary, so every model-bearing run would render nothing **and exit 0**.
+2. 🔴 The pack's `cortex` empty sits 0.139 m off the neck axis; binding it naively moves the kill
+   zone ~0.4 m forward and **a husk becomes cuttable from the front** (`q030`/`q031` red).
+   The design rule wins: model decides the height, rig keeps the nape depth.
+3. `ANCHOR_NAMES` discards all 439 `hook.*` points — the whole anchorable surface of the
+   architecture kit, in a grappling-hook game.
+4. `world::map` spawns every building as a bare `Block` (size + colour, **no kind**), so there is
+   nothing to hang a `ModelName` on — which is why 8 registry rows have models and no spawner.
+5. `tools/norms.py` reports 317 orphans; the rule cannot survive a 278-file pack as-is.
+
+**Not started, and deliberately:** the towers he rejected (*"es sind random türme da die nicht so
+sein sollte"*) still stand — deleting them blind puts the rope back to contributing nothing
+(`FIND-026`), so the replacement has to be measured first. And **animation**, which the pack
+cannot supply.
+
+### 3 · Two convention debts the art round left, both found by `tools/norms.py`
+
+Neither is behaviour, both are the kind of thing that quietly rots `docs/STATUS.md`.
+
+**a · The model tests are filed under the wrong feature.** `tests/render.rs` names ten tests
+`f030_*` — but in `docs/features.ron` **`F-030` is "Nape-Trefferzone (Cortex)"**, the nape hit
+zone, and the tests are about the model registry. Nothing in the backlog covers the registry at
+all: it is **infrastructure**, so it wants a `T-` id (the existing ones run to `T-074`, and
+`tests/` already uses `t003_`/`t005_`/`t036a_` for exactly this). Left as-is for now only because
+a workflow was live in `tests/render.rs` — **whoever touches that file next renames them**, or
+`F-030`'s evidence column will keep claiming model screenshots as proof of the cortex cut.
+
+**b · The new screenshots break the naming rule.** `docs/images/t075-titan.png`, `-town.png`,
+`-street.png`, `-player.png` do not match `<f-id>-<short>[-before|-after].png` (§10). They should
+carry whatever id (a) settles on. `docs/images/t075-titan.png` is currently the **only** model
+picture with a measurement behind it (384 px vs 391.9 predicted, feet +0.119 m), so it is worth
+renaming rather than retaking.
+
+### 4 · The tower measurement is already written and has never been run
+
+Two orphans that `tools/norms.py` caught, both real work from 2026-08-13, neither of them scrap:
+
+- **[`scripts/w5-lane.txt`](../scripts/w5-lane.txt)** — a complete, documented run that answers
+  §1D item 4 (*"es sind random türme da die nicht so sein sollte"*) **with numbers instead of
+  taste**. Rope only: no boost, no reel, no `W`, and `assert gas == 300` at the end proves every
+  metre of height and every m/s came out of the rope and gravity. It measures whether the town
+  now carries the swing lane by itself, which became a live question when the district went
+  **100 % anchorable** and grew terrain and gable roofs — the arithmetic in `FIND-041`/`FIND-058`
+  predates all three.
+- **[`docs/images/f003-skyline-before.png`](images/f003-skyline-before.png)** — the *before* half
+  of the roofscape work. There is no `-after` yet; whoever takes the skyline round shoots one.
+
+**This is the cheapest open item in the file:** the script exists, the criterion is in its header,
+and the answer decides whether the gantries can be deleted or must be replaced by architecture.
+
+---
+
+## §1F — 🔴 THE MAP IS THE WRONG PLACE. The user, 2026-08-18:
+
+> *"hast du die map schon überarbeitet? weil aktuell ist das nicht die echte map!"*
+
+**He is right, and nobody had noticed.** This is not a look complaint — it is a setting
+complaint, and it is checkable in one line.
+
+[`docs/gameplay/world.md`](gameplay/world.md) states the premise:
+
+> Humanity lives in **three concentric bastion rings** — **Ashgate** outside, **Ironrose** in the
+> middle, **Highspire** inside. […] **The central difference to the source material: the war is
+> already lost.** […] **Ashgate has long since fallen**; the Vanguard runs **salvage missions into
+> its own ruins**, not campaigns of reconquest.
+
+**What is actually built is an intact, inhabited, tidy walled town.**
+
+```
+grep -ci 'ruin|rubble|collapse|fallen|debris' assets/data/maps.ron   ->  0
+maps in maps.ron                                                     ->  2 (graybox fixture, ashgate)
+ruin/rubble models in the pack, all unused                           ->  14
+```
+
+The art drop ships the whole kit and the map uses none of it: `a-089-ruine-{dach-eingestuerzt,
+dach-haelfte, giebel, haufen, obergeschoss, pfeiler, wand-ecke, wand-hoch}` and
+`a-090-schutt-{balken, deckung, flach, haufen-gross, hoch, wandstueck}`.
+
+### ⚠️ And the 2026-08-18 session made it worse, not better
+
+Everything landed on the map that day pushed it **further from the design**: the district got
+denser (926 houses, closed blocks, party walls), got **terrain** (6 levels, 3.00 m relief), got
+**gabled roofs** and an 18 m `house_tall` class, and got an **enterable, furnished HQ**. Every one
+of those answers *"lass es wie die echte stadt aussehen"* — and every one of them makes Ashgate
+read as a **living town**, which is exactly what the design says it stopped being a century ago.
+
+**The two complaints are not the same complaint**, and conflating them is how a day of good work
+went in a direction the bible forbids:
+- *"lass es wie die echte stadt aussehen"* → proportion, density, roofs, materials. **Done.**
+- *"das ist nicht die echte map"* → **the place is wrong.** A fallen outer ring, not a market town.
+
+### What that means concretely, in build order
+
+1. **Ashgate has to fall.** Collapsed roofs, half-standing gables, rubble in the streets, blocked
+   lanes, no market stalls and no lit lanterns. The kit exists; the generator has no notion of
+   damage. ⚠️ **This is a traversal change, not a decoration change** — rubble alters what a rope
+   can reach, and Ashgate is 100 % anchorable on purpose (§1D item 10), so a collapsed facade must
+   still be hookable or the two rules fight.
+2. **The salvage premise has to be visible.** Carts, crates, the objects the missions are *about*
+   (`missions.ron` already knows about rescue and hold objectives). The pack has `a-087` stalls
+   and prop atlases for exactly this.
+3. **Ironrose and Highspire do not exist.** Two of three rings are unbuilt. Whether they are
+   needed before the P1 movement gate is a real question — the gate is about *movement*, and one
+   district can carry it — but the hub currently pretends to be inside a world that has one place.
+4. **Sky and fog are still missing**, and `world.md` says so itself: *"Neither exists yet […]
+   uniform dark gray upper half: that is Bevy's ClearColor, not a sky."* An elegiac ruin reads
+   through **fog and light** more than through geometry, so this is closer to the theme than to
+   the renderer.
+
+**ASSUMPTION until he says otherwise:** Ashgate stays the one playable district and gets **ruined
+in place**, rather than a second map being built. Rollback point: `assets/data/maps.ron`'s
+`ashgate` block and whatever generator flag carries the damage.
+
+---
+
+# §2 — TOMORROW'S QUEUE (2026-08-19), from the user after playing
+
+He played the build and wrote, 2026-08-18 late:
+
+> *"ok bis jetzt deutlich besser. attack fehlt aber noch (mit schwertern..) die accuracy von
+> anzeige zu wo seil landet ist nicht immer korrekt (was nicht gut ist) und teilweise kann man gar
+> nicht usen weil keine ahnung wieso. es sollte best match sein. und seinstellen können wie weit
+> ca es sein sollte und wie aggressive (damit ich testen kann was am besten wäre mach debug
+> einstellungen dafür)"*
+
+and, a minute later:
+
+> *"zudem fehlen noch die häuser. mach das nicht jetzt. schreieb das auf für morgen"*
+
+**⚠️ Read this section before designing anything. Four of his five complaints are already
+specified features that were never built** — `FIND-039`'s lesson exactly (a feature re-derived
+without reading the backlog came out worse than the spec). **Two of them match his words almost
+literally.**
+
+## §2A — 🔴 THE ANCHOR CANDIDATE SYSTEM. Five unbuilt features, one round.
+
+Today the hook is a **pure raycast** (`F-002`, built): where the ray hits is where the rope goes.
+The backlog specifies a whole **candidate-and-scoring** layer on top of it, and **none of it
+exists**. His four aiming complaints are its four acceptance criteria.
+
+| his words | feature | stage | the spec's own acceptance |
+|---|---|---|---|
+| *"teilweise kann man gar nicht usen weil keine ahnung wieso"* | **F-028** Fallback ohne Kandidat | ⬜ | *"Kein Tastendruck bleibt ohne Rückmeldung; der Spieler versteht immer, warum kein Haken gesetzt wurde."* |
+| *"accuracy von anzeige zu wo seil landet ist nicht immer korrekt"* | **F-026** Highlighting der Ankerpunkte | ⬜ | *"Ein Testspieler kann jederzeit ohne Nachdenken sagen, wohin Q und E ihn bringen würden."* |
+| *"es sollte best match sein"* | **F-024** Snap auf Q und E · **F-025** Bewertungsfunktion | ⬜ | angle deviation **45 %**, momentum preservation **25 %**, height advantage…; *"wählt nie einen Punkt hinter dem Spieler, wenn ein brauchbarer vor ihm liegt"* |
+| *"einstellen wie weit ca und wie aggressive"* | **F-016** Ziel-Assist-Regler | ⬜ | a **0–100 % stepless snap catch angle**; 0 % = today's pure free aim |
+| (density, so the view does not silt up) | **F-027** Marker-Dichtebegrenzung | ⬜ | max 12 markers, opacity and count in the settings |
+
+**`F-024` also specifies the three aim modes he is asking to test between:**
+**FREI** (no snap, pure raycast — today's behaviour), **ASSISTIERT** (snap only inside `F-016`'s
+catch angle — *the default*), and a third full-snap mode. *"Moduswechsel ist ohne Neustart
+wirksam."*
+
+**So his "mach debug einstellungen dafür" is `F-016` + `F-024`'s mode switch, and the settings
+screen built on 2026-08-18 is where they go** — it already carries live sliders (sensitivity, FOV,
+aim spread) that take effect within a tick, seeded from `game.ron` with no new RON keys.
+
+⚠️ **The accuracy complaint may ALSO be a real bug, not only a missing feature — check both.**
+`F-023`'s whole promise is that the marker and the rope are one number, and `src/vector/aim.rs`
+has exactly one `side_dirs` caller so they cannot diverge *in principle*. But `FIND-099` found the
+flying marker was drawn from the rope's **tip** (which starts in the hand, on the near plane) and
+`FIND-098` found the keep-out box pinning markers to a fixed slot — **two marker lies in one day,
+both real, both invisible to their own tests.** A third is likelier than not. Start with a repro,
+not with a design: `docs/BUGS.md`, rule 5.
+
+**Suggested order:** F-028 first (it is the smallest and it answers *"keine Ahnung wieso"*, which
+is the most frustrating of the four), then F-025 + F-024, then F-026, then F-016 + F-027.
+
+## §2B — ⚔️ THE ATTACK. *"attack fehlt aber noch (mit schwertern..)"*
+
+**The mechanism exists; what is missing is everything that makes it READ as an attack.**
+`Buttons::SLASH_LEFT`/`SLASH_RIGHT` are declared and bound to the mouse in `src/net/local.rs`,
+`src/blades/swing.rs` (338 lines) and `cut.rs` are built, and `F-030` (cortex) and `F-034`
+(hit-stop) are 🟧 Proven. So a cut lands — but:
+
+- **No blade is visible.** `art.ron: "blade"` is still `source: Primitive`. The pack has
+  `a-023-klingengriffe`, `a-024-klingen-paar-neu`, `a-024-klingen-paar-gebrochen` and **ten**
+  `a-025-klinge-kosmetik-*` finishes.
+- **No swing animation.** The pack has **zero animation clips** — a swing has no motion to play.
+- **Only the nape counts.** `F-032` Sekundäre Trefferzonen ⬜ — a blade in a titan's arm or leg
+  does nothing at all.
+- **No hit feedback.** `F-043` Schadenszahlen und Trefferfeedback ⬜.
+- **No combo, no ground melee.** `F-041` ⬜, `F-044` ⬜.
+
+**Hypothesis to verify first, not a claim:** he swings, the cut works mechanically, and nothing on
+screen tells him so. **Cheapest honest test:** bind a debug readout of `Swings`/`BladeTiming` and
+watch one sortie — before building any of the five features above.
+
+## §2C — 🏚️ THE HOUSES. *"zudem fehlen noch die häuser"* — deferred by him to tomorrow
+
+The plumbing is done and one thing blocks it: **`BlockPlan::spawn` never inserts `ModelName`,
+because `ModelName` lives in `src/render/model.rs`** and `world` inserting it would need a
+`world -> render` edge that `docs/architecture.md`'s allow list does not have.
+**The project's own rule answers it:** shared component types live in `shared/` so a receiver
+never needs an edge to its sender. Move `ModelName` there and the rest already exists —
+`BlockPlan.model: Option<&'static str>`, the `DRESSING` table (`house_small` 6.56×4.50×8.32,
+`house_town` 9.10×8.00×7.90, `house_large` 8.30×11.50×9.90, all measured against the real models)
+and `dress_for`, which refuses to dress a name still on `Primitive`.
+
+⚠️ **Do this together with §1F (ruining Ashgate), not before it.** Dressing 926 houses as intact
+`fachwerkhaus` and then ruining the district throws the work away twice — the ruin kit
+(14 unused models) and the house kit go through the same `BlockPlan.model` mechanism, so the
+distribution is **one design decision asked once**.
+
+## §2D — still open from today, unchanged
+
+- **Commit.** 375 files, including the whole asset pack, are uncommitted. `target/` was deleted to
+  free disk, so this costs a full rebuild (~20 min) plus the gate before anything is staged.
+- **`scripts/w5-lane.txt`** has never been run — it answers the tower question with numbers.
+- **Two label repairs** owed: `src/shared/settings.rs:59` still says *"Half-angle"*,
+  `src/menu/settings.rs:99` prints *"deg max"* where it now means *"deg apart max"*.
+- **Sky and fog do not exist** (`docs/gameplay/world.md` says so itself).
+
+### §2A footnote — a third, narrower candidate for *"teilweise"*, unverified
+
+`net::local::read_input` runs in `FixedPreUpdate` and samples `keys.pressed(..)` — a **level**,
+not an edge (the edge is computed inside the sim against `PrevButtons`, which is correct). Bevy
+runs the fixed loop **zero or more times per frame**, so at a high frame rate a tap shorter than
+one 16.7 ms sim step can fall entirely between two fixed steps and never be sampled.
+
+**Weaker than B-006 and B-007 and listed below them on purpose** — a normal tap is 30–80 ms and
+spans two to five sim steps. Worth one measurement, not a round: log every `Buttons` edge the sim
+sees against every physical key event for a minute of play, and compare the counts.

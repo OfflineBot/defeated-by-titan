@@ -121,6 +121,18 @@ one finding for 400 000 tokens is a *bad round*, and the supervisor is the one s
   and several rounds on 2026-08-10 were spent re-deriving something one file already said.
 - **Do not order the full `cargo test` in a commission.** It belongs to the main head, once, at the
   round gate. Ordering it three times in parallel cost load average 205 and a 22-minute build.
+- 🔴 **But a restricted test list MUST include `--lib` whenever the agent writes code under
+  `src/`.** Measured 2026-08-18: a commission said *"only `--test world`, `--test data`,
+  `--test render`"*, and the agent's own five unit tests lived inside the new
+  `src/shared/terrain.rs` — which **only `--lib` runs**. So its tests were never executed once,
+  it reported green in good faith, and
+  `f003_the_same_seed_yields_exactly_the_same_ground` sat red until the gate found it days later.
+  **The restriction excluded the one binary its work was in.** The agent did nothing wrong; the
+  supervisor wrote a list that could not see the agent's own file.
+  **So: name `--lib` in every commission that touches `src/`, and name the integration binaries
+  that cover the file being changed — the cut is by WHAT THE AGENT WRITES, not by what the
+  feature is called.** A cheap habit that would have caught it: `grep -c '#\[test\]' <the file>`
+  before writing the commission.
 - **Read `docs/backlog/` for the F-ID before designing anything** — `FIND-039`: a feature was
   re-derived over a day that the backlog had already specified, and the re-derived version was
   worse.
