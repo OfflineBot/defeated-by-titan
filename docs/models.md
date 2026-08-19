@@ -620,6 +620,65 @@ cargo test --test titan 2>&1 | grep -E '^test result'
   - `crate_resupply` — `a-130-nachschubstation` (3.90 × 4.20 × 3.35) would replace a silhouette
     that was hand-tuned on purpose (FIND-080) and needs its own before/after picture.
 
+### The pack is merged on the way in: `tools/glb_merge.py`
+
+**A model that ships has one mesh primitive per material, and it is a tool that guarantees it,
+not a habit.** The 2026-08-18 drop was authored unmerged: `a-083-fachwerkhaus-gross.glb` was
+**115 separate meshes that all shared ONE material**, and the whole pack was **10 958 primitives
+across 12 706 nodes**. Bevy spawns a glTF scene as an entity hierarchy — **one entity per node** —
+so Ashgate's 788 dressed instances were **43 988 entities** whose transforms propagate every
+tick. `docs/FINDINGS.md` FIND-105 measured that as the district's frame cost and FIND-107
+measured the fix:
+
+| | primitives | nodes | glTF entities in Ashgate | ms / tick |
+|---|---|---|---|---|
+| authored | 10 958 | 12 706 | 43 988 | **32.3** |
+| merged | **311** | **2 059** | **5 444** | **9.7** |
+
+**Primitives that share a material and an attribute set concatenate with no visual change
+whatsoever** — the same triangles, the same texture, in one draw. That is all the tool does.
+
+```bash
+python3 tools/glb_merge.py --check          # what it would do; writes nothing
+python3 tools/glb_merge.py                  # rewrite assets/3d/glb/*.glb in place
+python3 tools/glb_merge.py FILE ...         # or just the file that came in
+```
+
+**It is safe to run and it is safe to run twice.** Nothing is deleted; a file whose material
+groups are already single-primitive is not written at all, so a second run is a no-op and
+`git status` stays clean. Before every write it re-derives — from the output bytes, by a path
+that never calls the merge (FIND-103) — that the named empties still sit at the same world
+transform, that every triangle is where it was in world space, that vertex and triangle counts
+are unchanged, that the material list and the `../../texturen/TEX-*.png` URIs are untouched, and
+that the GLB header still agrees with the file size. A file that fails any of those is
+**skipped and reported**, never shipped.
+
+**The way back**, should one ever be wanted: `git checkout -- assets/3d/glb/`.
+
+**What it refuses to touch, and why that is the right answer:** the tool asserts the shape it
+understands — one scene, one untransformed root, every mesh node a direct child of it carrying a
+**translation only**, one primitive per mesh, `TRIANGLES`, attributes exactly
+`POSITION`/`NORMAL`/`TEXCOORD_0`. A rotation or a scale on a mesh node would have to be baked
+into the **normals** by the inverse transpose, which this tool does not do, so it declines the
+file with a reason instead of guessing. All 278 files of the drop satisfy the shape; four (the
+rigs `a-001`, `a-007`, `a-040`, `a-041`) have nothing to merge.
+
+**What it does not promise: pixel equality.** Merging changes the granularity Bevy sorts opaque
+draws at — per sub-mesh becomes per model — so **coplanar surfaces tie-break differently**.
+Measured on `scripts/f003-ruins.txt` at 1280×720: **837 of 921 600 pixels (0.09 %)**, in 498
+scattered runs no longer than 26 px, while the same build against itself differs in 2 pixels and
+the merged build against itself in **0**. The picture pair is
+[`f003-merged-before.png`](images/f003-merged-before.png) /
+[`f003-merged-after.png`](images/f003-merged-after.png). Geometry equality is the claim, and it
+is checked exactly; z-fighting order is not geometry.
+
+**The guard:** `tests/render.rs::f030_a_bound_model_is_merged_and_cannot_bring_a_hundred_primitives_back`
+holds it over every row `art.ron` binds, and
+`f030_the_whole_drop_is_merged_and_not_only_the_rows_that_ship_today` over all 278 files —
+because `art.ron` is one line per class, so an unmerged file is bound the moment somebody
+dresses another building. The ceiling is **3 primitives**, which is the pack's own maximum after
+the merge (238 files carry one material, 36 carry two, one carries three), not a budget.
+
 ## The same chain three more times: atlas, sound, VFX
 
 **The rule behind the model chain is not about models.** It is always the same four links:
