@@ -92,6 +92,25 @@ titan -> mission   # a titan's LIFETIME is his sortie: `titan::spawn_titan` hang
                    #  points BACKWARDS along the plugin order below — harmless, because a
                    #  component name creates no init-order requirement, and named here so that
                    #  nobody has to rediscover it.
+progress -> save   # `progress` decides what a finished sortie MEANS and says so with one
+                   #  `save::SortieOutcome` per player; `save` is the only writer of `Profile`
+                   #  and the only thing that opens a file (authority table below, the row that
+                   #  has said "save game | save | progress" since the day both folders were
+                   #  empty). The message type lives in `save/` and not in `shared/` on purpose:
+                   #  `save` is the one domain that reads it, so putting it in `shared` would
+                   #  widen the type's audience to everybody in exchange for nothing. This is
+                   #  the same seam as `shared::RefuelRequest` — the asker is not the writer
+                   #  (FIND-063).
+progress -> mission # the verdict, the kill tally and the mission clock are STATE, and the one
+                   #  frame in which all three are still true is the transition itself:
+                   #  `OnEnter(Won)`/`OnEnter(Lost)`, exactly where `mission::announce` already
+                   #  reads the same three for the log. **Read-only** — `mission` stays the one
+                   #  writer of the phase, of `KillTally` and of `MissionClock`.
+                   #  A message will not do, and this is the same argument the `titan -> mission`
+                   #  line above makes: a `SortieEnded` would be a SECOND end-of-sortie
+                   #  mechanism beside the state transition that already despawns the field, and
+                   #  it would have to be sent by `mission` — a domain that today sends nothing
+                   #  when a sortie ends and gains nothing by learning to.
 ```
 
 **One line as of 2026-08-09**, and it was empty until then. `prompts/init.md` §5 names `render`
@@ -146,7 +165,7 @@ toss at 60 Hz — and over the network a divergence nobody can reproduce (§5 ru
 | titan body (limbs, cortex) | `titan` | `combat` reads, sends messages |
 | `shared::ModelAnchors` (the empties a swapped glTF brings: `cortex`, `hook.l/r`, `hand.l/r`, `eye`, `hit.min/max`) | **`render::model`** — it is the only thing that reads a loaded scene's node tree | `titan::rig` (the `cortex` anchor overrides the position computed from `scale.ron`; **no anchor ⇒ no write at all**, so the computed value stands unchanged) |
 | mission state | `mission` | `hud`, `squad`, and since 2026-08-13 `menu` — **read-only**: the Escape menu offers *Abandon sortie* only inside one. The two buttons that act write `shared::DeployRequest` / `shared::AbandonSortie` and `mission::take_orders_from_the_menu` is what sets the phase, so the lobby is a front door to `hub::deploy_on_contact`'s mechanism and not a second one |
-| save game | `save` | `progress` |
+| save game (`save::Profile`, one **component per player** — never a `Resource`, rule 4) | **`save`** and nothing else: it reads the file at spawn and writes it when a sortie is recorded. `progress` never holds a `&mut Profile` — it sends `save::SortieOutcome` and `save::record_outcomes` books it, the `RefuelRequest` seam for the same reason (FIND-063) | `progress`, and later `hud`/`menu` for a career screen |
 
 ## The three separations that do not get blurred
 

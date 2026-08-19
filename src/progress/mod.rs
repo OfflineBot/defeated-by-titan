@@ -1,21 +1,130 @@
-//! progress — XP, Mark/Sigil, gear budget, Traits, Lineage, Ascension
+//! progress — what a finished sortie **means**, and it is the other half of the save game.
 //!
-//! ⚠️ **Comes only after the Vector Gear gate.** The skill tree, the economy and Lineages are
-//! not started as long as the movement does not feel convincing (Bible 6.1) — the graveyard of
-//! this genre is made of games that did it the other way round.
+//! ⚠️ **The meta systems still come only after the Vector Gear gate.** The trait tree, the two
+//! currencies, the lineages and the ascension (`F-120`…`F-148`) are ⬜ and none of them is
+//! started here (bible 6.1): the graveyard of this genre is made of games that built the
+//! economy before the movement convinced. What *is* built is the seam they all hang off —
+//! **the one place that notices a sortie has ended and says who was in it.**
 //!
-//! **Skill beats numbers** (pillar P2): stat growth opens new content, it does not replace an
-//! ability. And **no progress without a guarantee** (P3): every goal is reachable on a
-//! deterministic path, and every probability is visible inside the game.
+//! ## The one thing this domain does today
 //!
-//! **Still empty.** The plugin stands in the tree so that the order in `lib.rs` is right from
-//! the start and a fan-out across domains is possible without five agents creating the same
-//! folder (`prompts/init.md` §17).
+//! On `OnEnter(Won)` and `OnEnter(Lost)` it reads the mission's own numbers and writes one
+//! [`SortieOutcome`](crate::save::SortieOutcome) **per player**. That is all. It does not touch
+//! a [`Profile`](crate::save::Profile), it does not open a file, and it does not decide what a
+//! kill is worth.
+//!
+//! ### Why `save` and not a `&mut Profile` here
+//!
+//! Because `Profile` has exactly one writer (`docs/architecture.md`, authority table), and the
+//! reason is the one `Gas` cost a repair for on 2026-08-12 (`FINDINGS.md` FIND-063): a second
+//! domain moving the same field is a coin toss at 60 Hz and, over a wire, two machines
+//! disagreeing about a player's career. So this domain **asks** — and it asks with *facts*
+//! (kills, seconds, a verdict), never with rewards. "12 XP for a husk" is `F-120`'s question
+//! and its answer belongs in a RON file, not in this one (rule 2).
+//!
+//! ### Why it reads `mission` instead of waiting for a message
+//!
+//! `mission` sends nothing when a sortie ends, and it may not be made to: a `SortieEnded`
+//! message would be a **second** end-of-sortie mechanism beside the state transition that
+//! already despawns the field, and `docs/architecture.md` argues exactly that under
+//! `titan -> mission`. The verdict, the tally and the clock are **state**, and the one frame
+//! they are all still true in is the transition itself — `mission::announce` reads them the
+//! same way, in the same schedule, for the same reason. Read-only, and `mission` stays the one
+//! writer of every one of them.
+//!
+//! ### What is deliberately not recorded
+//!
+//! An **abandoned** sortie. `shared::AbandonSortie` takes the phase straight back to `Hub`
+//! without a verdict, so nothing was decided and nothing is booked — walking out of a fight you
+//! are losing must not be able to pad a career. When that turns out to be the wrong call it is
+//! one `OnEnter` away, and the profile field it needs already exists.
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+
+use crate::data::GameData;
+use crate::mission::{KillTally, Mission, MissionClock, MissionPhase, Sortie};
+use crate::save::SortieOutcome;
+use crate::shared::{PlayerId, Tick};
 
 pub struct ProgressPlugin;
 
 impl Plugin for ProgressPlugin {
-    fn build(&self, _app: &mut App) {}
+    fn build(&self, app: &mut App) {
+        // Two thin systems and one function: a Bevy system cannot take the verdict as an
+        // argument, and duplicating the body is how the two halves drift apart.
+        app.add_systems(OnEnter(MissionPhase::Won), record_a_win)
+            .add_systems(OnEnter(MissionPhase::Lost), record_a_loss);
+    }
+}
+
+/// Everything the recorder needs, in one place so the two entry points cannot disagree.
+#[derive(SystemParam)]
+pub struct Field<'w, 's> {
+    tick: Res<'w, Tick>,
+    data: Res<'w, GameData>,
+    sortie: Res<'w, Sortie>,
+    missions: Query<'w, 's, (&'static Mission, &'static MissionClock, &'static KillTally)>,
+    players: Query<'w, 's, &'static PlayerId>,
+}
+
+fn record_a_win(field: Field, out: MessageWriter<SortieOutcome>) {
+    record(true, field, out);
+}
+
+fn record_a_loss(field: Field, out: MessageWriter<SortieOutcome>) {
+    record(false, field, out);
+}
+
+/// One [`SortieOutcome`] per player, and none at all when there was no sortie.
+///
+/// **Per player and not per sortie** — twenty people fly the same mission and each of them
+/// carries his own kills out of it (`F-096`, `F-161a`). `KillTally::of` already answers per
+/// player, so the shape costs nothing today and is the one that is still right on the day
+/// `net` is real. No `.single()` on the player query: there is no such thing as *the* player.
+fn record(won: bool, field: Field, mut out: MessageWriter<SortieOutcome>) {
+    let mut flown = field.missions.iter();
+    let Some((mission, clock, tally)) = flown.next() else {
+        // A verdict without a mission entity. `mission::deploy` refuses to build a half-mission,
+        // so this is the honest "nothing was flown" and not an error worth shouting about.
+        return;
+    };
+    if flown.next().is_some() {
+        // Two tallies in one frame would book every sortie twice. `mission::hub::open_hub`
+        // despawns the old mission before the new one is furnished precisely so this cannot
+        // happen — if it ever does, the career is what pays for it.
+        error!("progress: two missions ended in the same frame — only the first is recorded");
+    }
+
+    let hz = field.data.game.simulation_hz;
+    let ticks_flown = field.tick.0.saturating_sub(clock.started_at_tick);
+    let seconds = (ticks_flown as f64 / hz) as f32;
+    // The tier comes from the order, not from the template: `skirmish` is one mission with
+    // three of them, and a Recruit clear is not an Elite clear (`missions.ron`).
+    let difficulty = field.sortie.0.as_ref().and_then(|order| order.difficulty.clone());
+
+    let mut recorded = 0u32;
+    for player in &field.players {
+        out.write(SortieOutcome {
+            player: *player,
+            template: mission.template.clone(),
+            difficulty: difficulty.clone(),
+            won,
+            kills: tally.of(*player),
+            seconds,
+            tick: field.tick.0,
+        });
+        recorded += 1;
+    }
+    info!(
+        "progress: sortie {:?} {} at tick {} after {:.1} s — {} {} recorded, {}/{} kills",
+        mission.template,
+        if won { "WON" } else { "LOST" },
+        field.tick.0,
+        seconds,
+        recorded,
+        if recorded == 1 { "career" } else { "careers" },
+        tally.total(),
+        tally.target
+    );
 }
