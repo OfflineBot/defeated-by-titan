@@ -46,14 +46,16 @@
 //! crosshair four ticks around a hole instead of one node — `tests/hud.rs` computes every
 //! element's rect out of `ComputedNode` and falls over if one of them creeps inward.
 //!
-//! **One exception, and it is the aim itself** (`docs/FINDINGS.md` FIND-098): an idle arm's
-//! landing preview, whose x *is* the resolved fan half-angle
-//! ([`arm_aim::Bearing::Fan`]). The whole reachable fan lives inside this box — 2°..22° of
-//! half-angle is 21.8..252 px of a 1280 px screen — so applying the box to it pinned both
-//! markers to one fixed slot and the mouse wheel stopped reaching the screen. That marker is
-//! held out of [`arm_aim::SIGHT_CORE_PX`] instead: the pixels the player is cutting, which is
-//! what the box was protecting in the first place. Everything else — bars, pips, banner,
-//! letters, the crosshair, and any marker tracking a world position — still obeys the full box.
+//! **One exception, and it is the aim itself**: the two arm markers, whenever they carry a
+//! *place* — an idle arm's landing preview at the resolved fan half-angle
+//! ([`arm_aim::Bearing::Fan`], FIND-098), a tip in flight, an anchor being held, or an arm that
+//! fell back to the centre ray ([`arm_aim::Bearing::World`], FIND-129). Applying the box to any
+//! of them draws the marker somewhere the rope does not go — measured at 146 px for the fan and
+//! at **150 px / 47.7 m** for the rest — and `F-023`'s whole claim is that the rope and the
+//! marker are one number. Those markers are held out of [`arm_aim::SIGHT_CORE_PX`] instead: the
+//! pixels the player is cutting, which is what the box was protecting in the first place.
+//! Everything else — bars, pips, banner, letters, the crosshair, and a marker with **no** point
+//! of its own to be honest about — still obeys the full box.
 //!
 //! ## The evidence
 //!

@@ -470,10 +470,10 @@ fn f170_nothing_covers_the_middle_of_the_screen() {
     // objective forced visible although nothing produces it, and the crosshair in `Cortex` —
     // the state with eight nodes and the widest reach.
     //
-    // **The one documented exception is not in this app**: an idle arm previewing its own side
-    // ray (`arm_aim::Bearing::Fan`) may stand inside the box and is held out of the aim pixel
-    // instead (FIND-098). Nothing here has an `ArmAim`, so both markers are badges in their side
-    // slots and every node below is under the full rule.
+    // **The one documented exception is not in this app**: an arm marker that carries a place —
+    // a fan preview (FIND-098) or a tip, an anchor, a fallback (FIND-129) — stands on that place
+    // and is held out of the aim pixel instead. Nothing here has an `ArmAim`, so both markers are
+    // badges in their side slots and every node below is under the full rule.
     let mut app = app();
     attach_screen(&mut app);
     let player = local_player(&mut app);
@@ -1110,12 +1110,12 @@ fn f170_the_arm_markers_stay_out_of_the_middle_in_every_state() {
     // player is in. The pair changes size with its state, so it gets its own loop over all four
     // — including the widest glyph and the one with the tether.
     //
-    // **Scope, since FIND-098:** this is the `arm_aim::Bearing::World` claim, and the bare app
-    // is exactly that case — no `ArmAim` data, so neither arm has a point of its own and both
-    // markers are badges in their side slots. An idle arm aiming down its own side ray is a
-    // `Bearing::Fan` marker and is deliberately allowed inside the box; what it may not cover is
-    // the aim pixel, and `f023_the_drawn_marker_is_strictly_monotone_in_the_resolved_fan` is
-    // where that is swept.
+    // **Scope, since FIND-098 and FIND-129:** this is the *badge* claim, and the bare app is
+    // exactly that case — no `ArmAim` data, so neither arm has a point of its own and both
+    // markers park in their side slots. A marker that carries a place is deliberately allowed
+    // inside the box and may only not cover the aim pixel; that is swept by
+    // `f023_the_drawn_marker_is_strictly_monotone_in_the_resolved_fan` for the fan and by
+    // `f023_the_drawn_pixel_is_the_projection_of_the_point_the_rope_flies_to` for the rest.
     let mut app = app();
     attach_screen(&mut app);
     let (w, h) = screen(&mut app);
@@ -1498,32 +1498,38 @@ fn f171_the_idle_pair_stands_wide_of_the_keep_out_box() {
 }
 
 #[test]
-fn f170_an_anchor_dead_ahead_does_not_cover_the_middle() {
-    // ★ **The trap, sprung on purpose.** `f170_nothing_covers_the_middle_of_the_screen` is a
-    // proven 🟧 claim, and a marker that follows a world point will sooner or later be aimed
-    // straight at — that is not an edge case, it is what a player does before he shoots.
+fn f170_an_anchor_dead_ahead_stands_on_the_anchor_and_off_the_sight_core() {
+    // ★ **The trap, sprung on purpose** — and since FIND-129 it catches the opposite lie.
     //
-    // Measured while writing this: with the keep-out push taken out of `layout_for`, the whole
-    // `--test hud` suite stayed **green**, because in a bare test app the aim ray finds nothing
-    // and the pair sits in its side slots. The unit sweep caught it and no integration test did.
-    // This is that hole, closed at the level where the rects are real.
+    // A marker that follows a world point will sooner or later be aimed straight at; that is not
+    // an edge case, it is what a player does before he shoots. This test used to demand that
+    // `F-170`'s box win that collision, and the box winning it is what drew the marker
+    // **146 px** from an anchor 30 m dead ahead. The user, 2026-08-19: *„wichtig wäre nur dass
+    // diese auch genau da sind visuell wo das seil auch landen würde!"*
+    //
+    // So the claim is now the pair of things that can both be true: the glyph stands on the
+    // anchor's own pixel, and it is off the [`SIGHT_CORE_PX`] square the player is cutting.
+    use defeated_by_titan::hud::arm_aim::SIGHT_CORE_PX;
     let mut app = app();
     attach_screen(&mut app);
     let eye_height_m = app.world().resource::<GameData>().game.player.eye_height_m;
     stand_and_look(&mut app, Vec3::ZERO, 0.0, 0.0);
 
-    // Straight ahead at eye height: this projects onto the exact centre pixel — the one place
-    // the HUD may not draw.
+    // Straight ahead at eye height: this projects onto the exact centre pixel.
     let dead_ahead = Vec3::new(0.0, eye_height_m, -30.0);
     anchor_arm_at(&mut app, Side::Left, dead_ahead);
     anchor_arm_at(&mut app, Side::Right, dead_ahead);
     run_hud(&mut app);
 
     let (w, h) = screen(&mut app);
-    let box_min_x = w * KEEP_OUT_LOW_PCT / 100.0;
-    let box_max_x = w * KEEP_OUT_HIGH_PCT / 100.0;
-    let box_min_y = h * KEEP_OUT_LOW_PCT / 100.0;
-    let box_max_y = h * KEEP_OUT_HIGH_PCT / 100.0;
+    let (camera, camera_at) = camera_of(&mut app);
+    let want = camera
+        .world_to_viewport(&camera_at, dead_ahead)
+        .expect("an anchor 30 m dead ahead projects onto the screen");
+    assert!(
+        (want - Vec2::new(w * 0.5, h * 0.5)).length() < 1.0,
+        "the anchor was supposed to be on the centre pixel and projects to {want:?}"
+    );
 
     let mut seen = 0;
     let mut q = app
@@ -1538,23 +1544,33 @@ fn f170_an_anchor_dead_ahead_does_not_cover_the_middle() {
             continue;
         }
         seen += 1;
-        let overlaps =
-            min_x < box_max_x && max_x > box_min_x && min_y < box_max_y && max_y > box_min_y;
+        let covers_core = min_x < want.x + SIGHT_CORE_PX
+            && max_x > want.x - SIGHT_CORE_PX
+            && min_y < want.y + SIGHT_CORE_PX
+            && max_y > want.y - SIGHT_CORE_PX;
         assert!(
-            !overlaps,
+            !covers_core,
             "{name} sits at x {min_x:.1}..{max_x:.1}, y {min_y:.1}..{max_y:.1} with both arms \
-             anchored dead ahead — inside the box x {box_min_x:.1}..{box_max_x:.1}, \
-             y {box_min_y:.1}..{box_max_y:.1}. F-170 is a claim the player has already seen \
-             hold; a landing preview does not get to break it"
+             anchored dead ahead — on the {SIGHT_CORE_PX} px square around {want:?} that the \
+             player is cutting. The marker may stand on its anchor; it may not stand on the \
+             blade's own pixels"
         );
     }
     assert!(seen >= 4, "only {seen} arm nodes were measured — the test is looking at nothing");
 
-    // And the pair still says which arm is which, even squeezed against the box.
+    // The glyphs are on the anchor's x, and the vertical step out of the core is all that moved.
     let left = glyph_centre(&mut app, Side::Left);
     let right = glyph_centre(&mut app, Side::Right);
-    println!("f170 dead ahead: {seen} nodes, Q at {left:?}, E at {right:?}");
-    assert!(left.x < right.x, "Q was pushed right of E: {left:?} against {right:?}");
+    println!("f170 dead ahead: {seen} nodes, anchor at {want:?}, Q at {left:?}, E at {right:?}");
+    for (side, at) in [(Side::Left, left), (Side::Right, right)] {
+        assert!(
+            (at.x - want.x).abs() < 1.0,
+            "{side:?} is anchored on a point that projects to {want:?} and its glyph was drawn \
+             at {at:?} — the x of a marker holding a place is that place"
+        );
+    }
+    // One place, two ropes: the two glyphs coincide, and the letters keep them apart.
+    assert!((left - right).length() < 1.0, "Q and E hold the same point and were drawn apart");
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2077,9 +2093,13 @@ fn f023_the_drawn_marker_is_strictly_monotone_in_the_resolved_fan() {
 
 #[test]
 fn f023_the_marker_x_against_the_resolved_fan_is_the_evidence_table() {
-    // **The evidence for FIND-098, computed from the shipped code rather than quoted.** Both
-    // columns are real code paths that still exist: `Bearing::World` *is* the rule every marker
-    // obeyed before the fix, `Bearing::Fan` is what an idle arm on its own side ray obeys now.
+    // **The evidence for FIND-098, computed from the shipped code rather than quoted.**
+    //
+    // ⚠️ **Since FIND-129 the two columns are equal, and that is the result.** The `World` column
+    // was the box rule the fan used to obey; the box no longer applies to any marker that carries
+    // a place, so both columns now print the projection. The table is kept because it is the
+    // measurement FIND-098 was written from and because the day somebody puts a marker back
+    // inside the box the two columns come apart again and say so in one line.
     // Two viewport widths, because the box is a percentage and the glyph is not.
     use defeated_by_titan::hud::arm_aim::{layout_for, shape_of, Bearing};
     use defeated_by_titan::shared::MovementState;
@@ -2096,7 +2116,7 @@ fn f023_the_marker_x_against_the_resolved_fan_is_the_evidence_table() {
         let centre = Vec2::new(w * 0.5, h * 0.5);
         println!(
             "\nf023 evidence, {w:.0} x {h:.0} — E glyph centre, px right of screen centre:\n\
-             \x20 state     wheel   half-angle   projected   before(World)   after(Fan)"
+             \x20 state     wheel   half-angle   projected      x(World)      x(Fan)"
         );
         for (state_name, state) in [
             ("grounded", MovementState::Grounded),
@@ -2371,12 +2391,27 @@ fn f023_every_bearing_flip_is_a_hard_jump_and_this_is_how_big() {
             half_rad.to_degrees()
         );
     }
+    // **The fallback now moves the marker INWARDS, onto the centre ray it was handed.** Until
+    // FIND-129 it went the other way — out to the side slot at 146 px, about a point 40 m dead
+    // ahead — and that was the biggest single lie in the table. The flip is still hard, still
+    // visible and still a change of meaning; what changed is that the place it flips to is the
+    // place the rope goes.
+    let centre_px = camera_of(&mut app)
+        .0
+        .world_to_viewport(&camera_of(&mut app).1, centre_m)
+        .expect("the shared centre point 40 m ahead projects onto the screen");
     assert!(
-        fallback.abs() > fan.abs() + 1.0,
-        "falling back to the centre ray moved the marker {:.1} -> {:.1} px, which is nothing. \
-         The two states mean different things and the test is proving neither",
-        fan.abs(),
-        fallback.abs()
+        (fallback + centre_x - centre_px.x).abs() <= 1.0,
+        "the arm fell back to the centre ray at {centre_m:?}, which projects {:.1} px off the \
+         middle, and the marker was drawn {fallback:.1} px off it. A fallback marker is a shot \
+         that has not happened yet and `render::rope` is drawing nothing — the glyph is the \
+         player's only reading of where the hook would land",
+        centre_px.x - centre_x
+    );
+    assert!(
+        (fallback - fan).abs() > 1.0,
+        "falling back to the centre ray moved the marker {fan:.1} -> {fallback:.1} px, which is \
+         nothing. The two states mean different things and the test is proving neither"
     );
     let _ = (fired, anchored);
 }
@@ -2715,4 +2750,408 @@ fn f029_a_release_i_asked_for_says_nothing() {
         let (text, _) = arm_letter(&mut app, Side::Left);
         assert_eq!(text, "Q", "{reason:?} put {text:?} under the marker");
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// F-023 — the guard: the DRAWN pixel against the FIRED world point, in the running app
+// ---------------------------------------------------------------------------------------
+
+/// The 3D camera and its transform, so a test can project a world point **itself**.
+///
+/// `hud::arm_aim::place_arm_aim` uses exactly this pair; reading it here is not comparing a
+/// function to itself (`docs/FINDINGS.md` FIND-103), because what is compared is the laid-out
+/// **rectangle** on one side and a raw `Camera::world_to_viewport` on the other — the whole of
+/// `target_of`, `bearing_of` and `layout_for` sits between the two and none of it is consulted.
+fn camera_of(app: &mut App) -> (Camera, GlobalTransform) {
+    let mut q = app
+        .world_mut()
+        .query_filtered::<(&Camera, &GlobalTransform), With<Camera3d>>();
+    let (camera, at) = q.iter(app.world()).next().expect("there must be a 3D camera");
+    (camera.clone(), *at)
+}
+
+/// **Where this arm's rope really is or really goes**, read without asking `hud` anything.
+///
+/// Four states, four sources, and every one of them is a `vector` value:
+/// - `Idle` — [`vector::hook::anchor_target`] on this arm's own [`AimPoint`]: the exact `Vec3`
+///   `vector::hook::fire` would freeze into `Flying { target_m }` if the key went down now.
+/// - `Flying` — that frozen `target_m`, which is where the rope **ends up** (FIND-099).
+/// - `Anchored` / `Retracting` — `tip_m`, which is where `render::rope` really draws to.
+fn rope_point(
+    hook: &Hook,
+    arms: &defeated_by_titan::shared::ArmAim,
+    side: Side,
+) -> Option<Vec3> {
+    use defeated_by_titan::vector::hook::anchor_target;
+    match hook.arm(side).state {
+        HookState::Idle => anchor_target(arms.side(side)).map(|(point_m, _)| point_m),
+        HookState::Flying { target_m, .. } => Some(target_m),
+        HookState::Anchored { .. } | HookState::Retracting => Some(hook.arm(side).tip_m),
+    }
+}
+
+/// Moves the two aim-assist knobs the way the settings screen moves them (`F-024` / `F-025`).
+fn set_assist(app: &mut App, catch_pct: f32, strength_pct: f32) {
+    let mut s = app.world_mut().resource_mut::<PlayerSettings>();
+    s.assist_catch_pct = catch_pct;
+    s.assist_strength_pct = strength_pct;
+}
+
+/// Puts one arm into a state **around a real world point**, the way the simulation would.
+fn put_arm_on(app: &mut App, side: Side, state: &str, target_m: Vec3) {
+    let eye_height_m = app.world().resource::<GameData>().game.player.eye_height_m;
+    let player = local_player(app);
+    let hand_m = app
+        .world()
+        .entity(player)
+        .get::<Transform>()
+        .expect("the player has a `Transform`")
+        .translation
+        + Vec3::Y * eye_height_m;
+    let mut hook = app
+        .world()
+        .entity(player)
+        .get::<Hook>()
+        .copied()
+        .expect("the player carries a `Hook`");
+    let arm = &mut hook.arms[side.index()];
+    match state {
+        "idle" => {
+            arm.state = HookState::Idle;
+            arm.tip_m = hand_m;
+        }
+        "flying" => {
+            arm.state = HookState::Flying { target_m, body: BodyId(1) };
+            arm.tip_m = hand_m;
+        }
+        "anchored" => {
+            arm.state = HookState::Anchored { body: BodyId(1), local_m: Vec3::ZERO };
+            arm.tip_m = target_m;
+        }
+        "retracting" => {
+            arm.state = HookState::Retracting;
+            arm.tip_m = target_m;
+        }
+        other => panic!("no arm state called {other:?}"),
+    }
+    app.world_mut().entity_mut(player).insert(hook);
+}
+
+/// The four arm states the sweep below walks, by the name [`put_arm_on`] answers to.
+const ROPE_STATES: [&str; 4] = ["idle", "flying", "anchored", "retracting"];
+
+#[test]
+fn f023_the_drawn_pixel_is_the_projection_of_the_point_the_rope_flies_to() {
+    // ★ **The user, 2026-08-19:** *„wichtig wäre nur dass diese auch genau da sind visuell wo
+    // das seil auch landen würde!"* — and this is the only test in the repository that can see
+    // it, because it is the only one that compares the **laid-out rectangle** against a world
+    // point projected by hand.
+    //
+    // Everything before it compared one world value with another (`f026_the_marker_stands_
+    // exactly_where_that_arm_fires`) or one screen value against an angle (`f023_the_drawn_
+    // marker_stands_at_the_resolved_fan_angle`, which only ever runs on idle arms). The gap
+    // between the two is `layout_for`, and **both** of the last two lies lived exactly there:
+    // FIND-098's fixed slot and FIND-099's 608 px teleport. So the guard has to straddle it.
+    //
+    // ## What is swept, and why each axis is in
+    //
+    // - **both assist knobs** at 0 / 25 / 50 / 75 / 100 (`F-024`/`F-025`, FIND-104): with the
+    //   snap on, `ArmAim` is a *candidate* off the probe cone and not the ray's own hit, so the
+    //   drawn pixel has to follow somewhere the fan angle cannot predict;
+    // - **pitch from +89 to −89**, because `B-008` (FIND-121) lived at straight down;
+    // - **three stands**, one of them 60 m up, so the near field, the far field past
+    //   `aim_sep_full_reach_m` and the sky lane are all in;
+    // - **all four arm states**, because FIND-099's lie was in exactly one of them and was
+    //   invisible from the other three.
+    //
+    // ## The one allowance, and it is bounded
+    //
+    // A marker whose rectangle would sit on the pixels the player is cutting steps out of
+    // `SIGHT_CORE_PX` — the 6 px square inside the crosshair. That is the only place the drawn
+    // pixel may leave the projection, it is at most half a glyph plus six pixels, and the test
+    // counts how often it fires so the allowance can never quietly become the rule.
+    use defeated_by_titan::hud::arm_aim::{shape_of, SIGHT_CORE_PX};
+
+    let mut app = app();
+    attach_screen(&mut app);
+    let (w, h) = screen(&mut app);
+    let centre = Vec2::new(w * 0.5, h * 0.5);
+
+    let stands = [
+        // The market square, where `scripts/f-001-hooks.txt` anchors from.
+        Vec3::new(51.0, 0.0, 13.0),
+        // FIND-121's own stand, the street `B-008` was measured over.
+        Vec3::new(168.19, 0.0, -50.12),
+        // 60 m up: the roofs are below, the towers past 108 m are ahead.
+        Vec3::new(51.0, 60.0, 13.0),
+    ];
+    let looks: [(f32, f32); 9] = [
+        (0.0, 0.0),
+        (0.0, 89.0),
+        (0.0, -89.0),
+        (37.0, -60.0),
+        (90.0, 10.0),
+        (180.0, -5.0),
+        (200.0, 45.0),
+        (270.0, -30.0),
+        (120.0, 3.0),
+    ];
+    let assists: [(f32, f32); 5] =
+        [(0.0, 0.0), (25.0, 25.0), (50.0, 50.0), (75.0, 75.0), (100.0, 100.0)];
+
+    let mut checked = 0;
+    let mut strict = 0;
+    let mut dodged = 0;
+    let mut worst = (0.0_f32, String::new());
+
+    for (catch_pct, strength_pct) in assists {
+        set_assist(&mut app, catch_pct, strength_pct);
+        for stand in stands {
+            for (yaw_deg, pitch_deg) in looks {
+                stand_and_look(&mut app, stand, yaw_deg, pitch_deg);
+                // A real fixed step on the real map: `ArmAim` is raycast, coherence-tested and
+                // snapped by the shipped systems, never invented here.
+                sim_step(&mut app);
+                let fired = {
+                    use defeated_by_titan::vector::hook::anchor_target;
+                    let (_, arms) = aim_snapshot(&mut app);
+                    Side::ALL.map(|s| anchor_target(arms.side(s)).map(|(p, _)| p))
+                };
+
+                for state in ROPE_STATES {
+                    for side in Side::ALL {
+                        if let Some(target_m) = fired[side.index()] {
+                            put_arm_on(&mut app, side, state, target_m);
+                        }
+                    }
+                    run_hud(&mut app);
+                    let (hook, arms) = aim_snapshot(&mut app);
+                    let (camera, camera_at) = camera_of(&mut app);
+
+                    for side in Side::ALL {
+                        let Some(point_m) = rope_point(&hook, &arms, side) else {
+                            continue;
+                        };
+                        let Ok(want) = camera.world_to_viewport(&camera_at, point_m) else {
+                            continue;
+                        };
+                        let shape = shape_of(arm_state(&mut app, side));
+                        let full_h =
+                            shape.glyph_h_px + shape.tether_px.map_or(0.0, |t| 4.0 + t);
+                        // A point whose glyph would not fit on the screen is legitimately
+                        // clamped inwards (`layout_for` step 2) — that is a courtesy, not a
+                        // claim, and it is not what this test is about.
+                        let margin = Vec2::new(shape.glyph_w_px + 32.0, full_h + 32.0);
+                        if want.x < margin.x
+                            || want.y < margin.y
+                            || want.x > w - margin.x
+                            || want.y > h - margin.y
+                        {
+                            continue;
+                        }
+
+                        let drew = glyph_centre(&mut app, side);
+                        let off = (drew - want).length();
+                        checked += 1;
+
+                        // Would the honest rectangle have sat on the pixels being cut? The
+                        // rectangle is **not** centred on the point: `layout_for` centres the
+                        // *glyph* on it and the tether hangs below, so `full_h` runs downwards
+                        // from `want.y - glyph_h/2`. Spelling that out is the difference
+                        // between an exemption that matches the rule and one that is a guess.
+                        let top = want.y - shape.glyph_h_px * 0.5;
+                        let over_the_core = (want.x - centre.x).abs()
+                            < shape.glyph_w_px * 0.5 + SIGHT_CORE_PX
+                            && top < centre.y + SIGHT_CORE_PX
+                            && top + full_h > centre.y - SIGHT_CORE_PX;
+                        let allowed = if over_the_core {
+                            dodged += 1;
+                            // The step goes to the NEARER of the two edges of the core, and the
+                            // two are `full_h + 2 * SIGHT_CORE_PX` apart, so half of that is
+                            // the most it can ever move.
+                            full_h * 0.5 + SIGHT_CORE_PX + 1.0
+                        } else {
+                            strict += 1;
+                            1.5
+                        };
+                        if off > worst.0 {
+                            worst = (
+                                off,
+                                format!(
+                                    "assist {catch_pct:.0}/{strength_pct:.0}, stand \
+                                     {stand:?}, yaw {yaw_deg} pitch {pitch_deg}, {state} \
+                                     {side:?}"
+                                ),
+                            );
+                        }
+                        assert!(
+                            off <= allowed,
+                            "assist {catch_pct:.0}/{strength_pct:.0}, standing at {stand:?} \
+                             looking yaw {yaw_deg} pitch {pitch_deg}, the {side:?} arm is \
+                             {state} on {point_m:?}. That point projects to {want:?} and the \
+                             glyph was drawn at {drew:?} — {off:.1} px away, {allowed:.1} px \
+                             allowed. The user's requirement is that the marker is exactly \
+                             where the rope lands (2026-08-19); a marker parked somewhere \
+                             else is the HUD promising a place the shot does not take"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    println!(
+        "f023 drawn-vs-fired: {checked} samples, {strict} exact, {dodged} out of the sight \
+         core, worst {:.1} px ({})",
+        worst.0, worst.1
+    );
+    // The sweep has to have really looked at all four states in both keep-out regimes, or a
+    // green run means nothing. 600-ish samples came out of the shipped map on 2026-08-19.
+    assert!(
+        checked >= 400,
+        "only {checked} (state, side) pairs had a rope point on screen at all — the sweep \
+         stopped reaching the geometry it was written for"
+    );
+    assert!(
+        strict >= 300,
+        "only {strict} of {checked} samples were held to the exact projection; the rest were \
+         let off by the sight-core allowance. An allowance that covers the sweep is not an \
+         allowance, it is the rule"
+    );
+    assert!(
+        dodged > 0,
+        "the sight-core allowance never fired in {checked} samples — it is dead code and the \
+         test is not proving that the dodge is bounded"
+    );
+}
+
+/// **`F-024`, the user's own criterion, measured on the screen: a snap moves the marker
+/// SIDEWAYS and by nothing else.**
+///
+/// > *„die seile sollen immer auf der horzontalen fest sein. also wenn das fadenkreuz 0, 0 ist
+/// > sollen die seile nur auf der x achse snappen (objekte finden) also seitlich! dann ist es
+/// > auch besser einzuschätzen."* — 2026-08-19
+///
+/// `tests/vector_hooks.rs::f024_a_published_snap_point_never_sits_above_or_below_the_crosshair_in_the_running_game`
+/// proves the same thing about the **point**, in the camera's frame, out of arithmetic. It is
+/// not the whole proof: what the player judges is the **pixel**, and the pixel comes from the
+/// render camera, which is not the transform `vector::aim` cast its rays from (`aim` runs in
+/// `FixedUpdate`, the camera rig one stage later). If those two frames disagree, two points on
+/// the aim's row project to two different screen rows and the promise is broken on screen while
+/// holding in the world. That gap is exactly where FIND-098, FIND-099 and FIND-129 all lived.
+///
+/// So this measures the difference the user would see: the same arm, the same stand, the same
+/// look, at five assist settings — and the projected **y** of the point the rope flies to may
+/// not move. The x may move as much as it likes; that is the feature.
+#[test]
+fn f024_a_snap_moves_the_marker_sideways_on_the_screen_and_never_up_or_down() {
+    let mut app = app();
+    attach_screen(&mut app);
+    let (w, h) = screen(&mut app);
+
+    let stands = [
+        Vec3::new(51.0, 0.0, 13.0),
+        Vec3::new(168.19, 0.0, -50.12),
+        Vec3::new(51.0, 60.0, 13.0),
+    ];
+    let looks: [(f32, f32); 7] = [
+        (0.0, 0.0),
+        (0.0, -89.0),
+        (37.0, -60.0),
+        (90.0, 10.0),
+        (180.0, -5.0),
+        (200.0, 45.0),
+        (270.0, -30.0),
+    ];
+    let assists: [(f32, f32); 5] =
+        [(0.0, 0.0), (25.0, 25.0), (50.0, 50.0), (75.0, 75.0), (100.0, 100.0)];
+
+    let mut worst_dy = 0.0_f32;
+    let mut worst_dx = 0.0_f32;
+    let mut worst_at = String::new();
+    let mut compared = 0;
+    let mut moved_sideways = 0;
+
+    for stand in stands {
+        for (yaw_deg, pitch_deg) in looks {
+            // Column per arm: the projected point at each assist setting, or `None`.
+            let mut seen: [Vec<(f32, Vec2)>; 2] = [Vec::new(), Vec::new()];
+            for (catch_pct, strength_pct) in assists {
+                set_assist(&mut app, catch_pct, strength_pct);
+                stand_and_look(&mut app, stand, yaw_deg, pitch_deg);
+                // ⚠️ **At rest, and the fixture has to say so.** `vector::aim` casts from the
+                // eye *before* avian integrates and the camera renders from the eye *after*,
+                // so a moving player carries one step of parallax between the ray and the
+                // picture — 0.5 m at 30 m/s. That parallax is distance-dependent, so it moves
+                // a near point and a far point by different amounts and would show up here as
+                // a vertical jump the snap did not cause. Left uncontrolled it was 8.6 px, and
+                // all of it was a 60 m stand in free fall accelerating across the sweep.
+                // The parallax is real and it is `docs/FINDINGS.md` FIND-133's second half;
+                // it is not the axis this test is about.
+                let me = local_player(&mut app);
+                app.world_mut()
+                    .entity_mut(me)
+                    .insert(avian3d::prelude::LinearVelocity(Vec3::ZERO));
+                sim_step(&mut app);
+                // Put the eye back exactly where `vector::aim` cast from, before the camera is
+                // asked where the point projects. Without it the two are one integration step
+                // apart and the difference is **distance-dependent**, so it moves a near point
+                // and a far point by different amounts and reads as a vertical jump the snap did
+                // not cause: 8.6 px uncontrolled (a 60 m stand in free fall), 1.4 px with the
+                // velocity zeroed but the step still taken. The parallax is real in the running
+                // game and it is `docs/FINDINGS.md` FIND-133's last section; it is not the axis
+                // this test is about, and a guard that measures both cannot tell them apart.
+                stand_and_look(&mut app, stand, yaw_deg, pitch_deg);
+                run_hud(&mut app);
+                let (hook, arms) = aim_snapshot(&mut app);
+                let (camera, camera_at) = camera_of(&mut app);
+                for side in Side::ALL {
+                    let Some(point_m) = rope_point(&hook, &arms, side) else { continue };
+                    let Ok(at) = camera.world_to_viewport(&camera_at, point_m) else { continue };
+                    // Off-screen projections carry no readable row.
+                    if at.x < 0.0 || at.y < 0.0 || at.x > w || at.y > h {
+                        continue;
+                    }
+                    seen[side.index()].push((catch_pct, at));
+                }
+            }
+            for side in Side::ALL {
+                let column = &seen[side.index()];
+                let Some((_, base)) = column.first().copied() else { continue };
+                for (catch_pct, at) in column.iter().skip(1) {
+                    compared += 1;
+                    let dy = (at.y - base.y).abs();
+                    let dx = (at.x - base.x).abs();
+                    if dx > 1.0 {
+                        moved_sideways += 1;
+                    }
+                    if dy > worst_dy {
+                        worst_dy = dy;
+                        worst_dx = dx;
+                        worst_at = format!(
+                            "stand {stand:?} yaw {yaw_deg} pitch {pitch_deg} {side:?} at \
+                             {catch_pct:.0} %: free {base:?} -> snapped {at:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    println!(
+        "F-024 on the screen: {compared} free-vs-snapped pairs, {moved_sideways} of them moved \
+         the marker sideways by more than 1 px; worst VERTICAL movement {worst_dy:.3} px \
+         (with {worst_dx:.1} px of sideways at the same sample) — {worst_at}"
+    );
+    assert!(compared > 50, "only {compared} pairs — the sweep found almost nothing to aim at");
+    assert!(
+        moved_sideways > 0,
+        "no snap moved any marker at all, so this test proves nothing about the axis"
+    );
+    assert!(
+        worst_dy <= 1.0,
+        "a snap moved the marker {worst_dy:.2} px UP OR DOWN on the screen — {worst_at}. The \
+         user asked for the search to be locked to the horizontal so that it can be judged; a \
+         vertical jump is exactly what he asked to be rid of"
+    );
 }

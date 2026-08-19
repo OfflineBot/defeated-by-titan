@@ -1,0 +1,140 @@
+# f023-truth — the marker and the rope are ONE number, at every aim-assist setting.
+#
+# The user, 2026-08-19: *„wichtig wäre nur dass diese auch genau da sind visuell wo das seil
+# auch landen würde!"*
+#
+# ## What this file can prove, and what it hands to the test
+#
+# A script can measure the **world** half of the promise: it fires the arm that the HUD was
+# previewing and the log names the point the rope reached
+# (`hook Right of player 1 anchored on body 58 at 51.00 11.09 -1.00`, `vector::hook`). That
+# point is `ArmAim.side(side).point_m` and nothing else — `vector::hook::fire` freezes exactly
+# that `Vec3` into `HookState::Flying { target_m }` and `update_hooks` sets `tip_m = target_m`
+# on arrival. So a run of this file in which every `assert rope` holds is a run in which every
+# shot landed on the value the marker was drawn from.
+#
+# The **pixel** half cannot be seen from here — there is no `Metric` for a UI rectangle — and
+# it is where both of the last two lies lived (FIND-098's fixed slot, FIND-099's 608 px
+# teleport). That half is
+# `tests/hud.rs::f023_the_drawn_pixel_is_the_projection_of_the_point_the_rope_flies_to`, which
+# lays the real HUD out over 772 samples and compares the laid-out rectangle against a world
+# point it projects itself. **Neither half is evidence on its own** (`docs/FINDINGS.md`
+# FIND-129).
+#
+# ## Why the assist knobs are the axis
+#
+# Since `F-024`/`F-025` (FIND-104) a snap does not publish the ray's own hit but a **candidate**
+# off a probe cone up to 20 deg wide. The marker therefore has to follow somewhere the fan angle
+# cannot predict, and a HUD that drew the fan instead of the point would be right at 0 % and
+# wrong at 100 %. Each leg below fires the same shot from the same stand at a different setting;
+# a leg that stops anchoring is the snap moving the point, which is the interesting case and not
+# a failure of this file.
+#
+# ## Running it
+#
+#   cargo run -q -- --headless --script scripts/f023-truth.txt --ticks 900
+#   ./target/debug/defeated_by_titan --headless --script scripts/f023-truth.txt --ticks 900 \
+#       2>&1 | grep -E 'MARK|assert|anchored|found no anchor|script run finished' | tail -25
+#   # and the exit code needs its OWN run — a pipeline's $? is the last command's:
+#   ./target/debug/defeated_by_titan --headless --script scripts/f023-truth.txt \
+#       --ticks 900 >/dev/null 2>&1; echo $?
+#
+# The stand is `scripts/f-001-hooks.txt`'s: (51, 0, 13) at `look 0 34`, the nave of the
+# market-square church, the one aim in this repository whose anchor is measured
+# — `body 58 at 51.00 11.09 -1.00`.
+
+wait 1.5                       # world, camera, meshes and the render pipelines come up
+
+# ── leg 1 · free aim, the shipped default ────────────────────────────────────────────────
+settings assist_catch 0
+settings assist_strength 0
+warp 51 0 13
+look 0 34
+wait 0.3                       # the warp takes effect one tick after it is written
+assert height > -0.1           # standing, not sunk and not floating — the baseline
+assert height < 0.5
+assert speed < 0.5
+mark f023-truth-free-aim
+hook right 0.8
+wait 0.4
+assert rope >= 1
+wait 0.9          # the hold has to EXPIRE before the next leg, or its press is not an edge               # the shot the marker was previewing reached its point
+
+# ── leg 2 · a quarter of both knobs ──────────────────────────────────────────────────────
+settings assist_catch 25
+settings assist_strength 25
+warp 51 0 13
+look 0 34
+wait 0.4
+mark f023-truth-assist-25
+hook right 0.8
+wait 0.4
+assert rope >= 1
+wait 0.9          # the hold has to EXPIRE before the next leg, or its press is not an edge
+
+# ── leg 3 · half ─────────────────────────────────────────────────────────────────────────
+settings assist_catch 50
+settings assist_strength 50
+warp 51 0 13
+look 0 34
+wait 0.4
+mark f023-truth-assist-50
+hook right 0.8
+wait 0.4
+assert rope >= 1
+wait 0.9          # the hold has to EXPIRE before the next leg, or its press is not an edge
+
+# ── leg 4 · both knobs at 100 %, where the snap reaches furthest off the crosshair ───────
+settings assist_catch 100
+settings assist_strength 100
+warp 51 0 13
+look 0 34
+wait 0.4
+mark f023-truth-assist-100
+hook right 0.8
+wait 0.4
+assert rope >= 1
+wait 0.9          # the hold has to EXPIRE before the next leg, or its press is not an edge
+
+# ── leg 5 · both arms at once, still at 100 % ────────────────────────────────────────────
+#
+# Two arms on their own side rays: this is the `F-023` fan, and the leg exists because a
+# marker that is honest for one arm and mirrored for the other is a bug no single-arm leg can
+# see (`tests/hud.rs::f026_two_idle_arms_preview_two_different_points`).
+warp 51 0 13
+look 0 34
+wait 0.4
+mark f023-truth-both-arms
+hook left 0.9
+hook right 0.9
+wait 0.5
+assert rope >= 1
+wait 1.0
+
+# ── leg 6 · straight down, where B-008 lived ─────────────────────────────────────────────
+#
+# `docs/FINDINGS.md` FIND-121: over a 100 %-anchorable district a side ray aimed steeply down
+# used to bite a roof cap beside the street instead of the pavement the crosshair stands on, at
+# up to 2.34x what the fan asked for. `side_hit_is_coherent` refuses that hit now and the arm
+# falls back to the centre ray — which is the case whose marker was drawn **146 px** away
+# until FIND-129, with no rope on screen to correct it.
+settings assist_catch 0
+settings assist_strength 0
+warp 168.19 60 -50.12
+look 0 -89
+wait 0.5
+mark f023-truth-straight-down
+hook right 0.9
+wait 0.5
+assert rope >= 1
+wait 1.0
+
+end
+
+# ⚠️ **The hold of one leg must expire before the next leg presses.** `hook right <s>` does not
+# consume script time — it starts a hold and the script walks straight on — and
+# `vector::hook::update_hooks` fires on the **edge** (`intent.buttons.just_pressed(prev)`), never
+# on the held button. Written without the trailing `wait` the first version of this file had two
+# legs' holds overlapping, the second press was no edge at all, and four of nine asserts read
+# `Rope 0.000` about shots that had never left. Nothing in the log said so: the leg simply had no
+# `anchored on body` line among the ones that did.
