@@ -266,7 +266,11 @@ fn apply_screen(
 ///
 /// - the **screen** changed — Paused → Settings, Settings → Playing, anything;
 /// - a **setting** changed while the settings screen is up, so a number on it is stale;
-/// - the **choice** changed while the lobby is up, so the highlighted mission is the old one.
+/// - the **choice** changed while the lobby is up, so the highlighted mission is the old one;
+/// - the **session** changed while the lobby is up — the door opened, or somebody joined or
+///   left, so the squad list is the old one. ⚠️ Both resources are written by systems that run
+///   every tick, so both take care not to mark themselves changed for nothing; the argument is
+///   on `net::session::seat_the_local_player` and `net::socket::sweep_peers`.
 ///
 /// Rebuilding the whole plate instead of patching one `Text` is deliberate: it happens on a
 /// click and never per frame (§6 rule 6), and it means every screen has exactly one place where
@@ -277,6 +281,8 @@ fn despawn_menu(
     screen: Res<Screen>,
     settings: Res<PlayerSettings>,
     choice: Res<lobby::LobbyChoice>,
+    roster: Res<crate::net::Roster>,
+    host: Res<crate::net::Host>,
     roots: Query<&MenuRoot>,
     elements: Query<Entity, With<PauseElement>>,
 ) {
@@ -285,7 +291,8 @@ fn despawn_menu(
     }
     let stale = roots.iter().any(|root| root.0 != *screen)
         || (*screen == Screen::Settings && settings.is_changed())
-        || (*screen == Screen::Lobby && choice.is_changed());
+        || (*screen == Screen::Lobby
+            && (choice.is_changed() || roster.is_changed() || host.is_changed()));
     if !stale {
         return;
     }
@@ -308,6 +315,9 @@ fn spawn_menu(
     data: Res<GameData>,
     settings: Res<PlayerSettings>,
     choice: Res<lobby::LobbyChoice>,
+    roster: Res<crate::net::Roster>,
+    host: Res<crate::net::Host>,
+    start: Res<crate::shared::Cli>,
     phase: Res<State<MissionPhase>>,
     roots: Query<&MenuRoot>,
 ) {
@@ -319,7 +329,9 @@ fn spawn_menu(
         Screen::Title => title::spawn_title_screen(&mut commands),
         Screen::Paused => pause::spawn_pause_screen(&mut commands, in_a_sortie(&phase)),
         Screen::Settings => settings::spawn_settings_screen(&mut commands, &data, &settings),
-        Screen::Lobby => lobby::spawn_lobby_screen(&mut commands, &data, &choice),
+        Screen::Lobby => {
+            lobby::spawn_lobby_screen(&mut commands, &data, &choice, &roster, &host, &start)
+        }
     }
 }
 

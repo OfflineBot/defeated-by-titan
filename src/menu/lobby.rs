@@ -33,7 +33,8 @@ use bevy::prelude::*;
 
 use super::{plate, Screen};
 use crate::data::GameData;
-use crate::shared::DeployRequest;
+use crate::net::{socket, Host, Roster};
+use crate::shared::{Cli, DeployRequest, HostRequest};
 
 /// What the player has picked, until he picks something else.
 ///
@@ -58,6 +59,14 @@ pub enum LobbyAction {
     PickDifficulty(String),
     /// Start it. The one button on this screen that changes the game.
     Deploy,
+    /// **Open or close the door** — the port other people's input arrives on.
+    ///
+    /// ⚠️ There is deliberately **no `Join`** next to it. Joining means seeing the world you
+    /// joined, and `net::socket` replicates no world state: a peer drives a body in the host's
+    /// process and cannot see it. A *Join* row with an address field would take an address and
+    /// then show nothing — which is the row `title.rs` refuses to draw, in the same words:
+    /// *do not add a row nothing can spawn.* When there is a client, this is where it goes.
+    Host(bool),
     Back,
 }
 
@@ -101,7 +110,14 @@ pub fn chosen(data: &GameData, choice: &LobbyChoice) -> Option<(String, Option<S
 }
 
 /// Builds the plate out of `missions.ron` and the current choice.
-pub fn spawn_lobby_screen(commands: &mut Commands, data: &GameData, choice: &LobbyChoice) {
+pub fn spawn_lobby_screen(
+    commands: &mut Commands,
+    data: &GameData,
+    choice: &LobbyChoice,
+    roster: &Roster,
+    host: &Host,
+    start: &Cli,
+) {
     let missions = &data.missions;
     let picked = chosen(data, choice);
     commands.spawn(plate::root(Screen::Lobby, "lobby")).with_children(|screen| {
@@ -155,6 +171,8 @@ pub fn spawn_lobby_screen(commands: &mut Commands, data: &GameData, choice: &Lob
             (seconds % 60.0).round() as u32
         )));
 
+        squad_section(screen, data, roster, host, start);
+
         screen
             .spawn((Name::new("lobby_Deploy"), LobbyAction::Deploy, plate::button(plate::BUTTON_W, true)))
             .with_child(plate::label("Deploy"));
@@ -162,6 +180,46 @@ pub fn spawn_lobby_screen(commands: &mut Commands, data: &GameData, choice: &Lob
             .spawn((Name::new("lobby_Back"), LobbyAction::Back, plate::button(plate::BUTTON_W, false)))
             .with_child(plate::label("Back  (Esc)"));
     });
+}
+
+/// **Who is here, and the one door there is.**
+///
+/// Every line on it is a fact the transport already knows: the seats out of `net::Roster` in
+/// id order, and the port out of `net::Host` — the one the OS really gave, not the one that
+/// was asked for. Nothing on this screen is a placeholder.
+///
+/// The note under the row says what the link is, in the plainest words there are. A player who
+/// reads *"input only"* and finds out that his friend cannot see the world has been told; one
+/// who reads *"Multiplayer"* has been lied to.
+fn squad_section(
+    screen: &mut ChildSpawnerCommands,
+    data: &GameData,
+    roster: &Roster,
+    host: &Host,
+    start: &Cli,
+) {
+    screen.spawn(plate::note(format!("Squad  ({} in this session)", roster.len())));
+    for (id, seat) in roster.iter() {
+        let who = if seat.kind.is_local() { "you" } else { &seat.name };
+        let state = if seat.connected() { "" } else { "  (quiet - seat held)" };
+        screen.spawn(plate::note(format!("  {}  {who}{state}", id.0)));
+    }
+
+    let open = host.is_open();
+    let label = match host.port() {
+        Some(port) => format!("Stop hosting  (port {port})"),
+        None => format!("Host  (port {})", socket::wanted_port(None, start, data)),
+    };
+    screen
+        .spawn((
+            Name::new("lobby_Host"),
+            LobbyAction::Host(!open),
+            plate::button(plate::BUTTON_W, open),
+        ))
+        .with_child(plate::label(label));
+    screen.spawn(plate::note(
+        "Input only: a peer drives a body here, he cannot see this world yet.",
+    ));
 }
 
 /// What the buttons do.
@@ -180,6 +238,7 @@ pub fn lobby_buttons(
     mut choice: ResMut<LobbyChoice>,
     mut screen: ResMut<Screen>,
     mut deploy: MessageWriter<DeployRequest>,
+    mut door: MessageWriter<HostRequest>,
 ) {
     for (interaction, action) in &buttons {
         if *interaction != Interaction::Pressed {
@@ -205,6 +264,13 @@ pub fn lobby_buttons(
                 info!("lobby: deploying {template:?} at {difficulty:?}");
                 deploy.write(DeployRequest { template, difficulty });
                 *screen = Screen::Playing;
+            }
+            // **Asks, exactly like Deploy above.** `net` owns the socket; a menu that bound a
+            // port itself would be a second writer of the transport, and `--host` and this row
+            // would disagree the first time both were used.
+            LobbyAction::Host(open) => {
+                info!("lobby: {} the door", if *open { "opening" } else { "closing" });
+                door.write(HostRequest { open: *open, port: None });
             }
             LobbyAction::Back => *screen = Screen::Playing,
         }

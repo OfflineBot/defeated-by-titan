@@ -303,3 +303,213 @@ fn multiplayer_velocity_is_a_component_on_the_player() {
     let n = app.world_mut().query::<(&PlayerId, &Velocity)>().iter(app.world()).count();
     assert_eq!(n, 1, "velocity belongs on the player, not in the world");
 }
+
+// ───────────────────────────────────────────────────────────────────────────────────────
+// The bible's four ground rules for players among players (3.6, `docs/multiplayer.md`).
+// ───────────────────────────────────────────────────────────────────────────────────────
+
+/// ★ **No collision between players** (F-163a) — *"at this speed the single biggest source of
+/// frustration there is"* (`src/squad/mod.rs`).
+///
+/// Two bodies standing in the same spot. avian resolves an overlap by pushing both out of it,
+/// so without a collision filter this is a shove — and at 75 m/s it is a shove that ends a
+/// flight.
+#[test]
+fn f163a_two_players_in_the_same_spot_do_not_push_each_other() {
+    let mut app = app();
+    app.update();
+
+    let second = {
+        let world = app.world_mut();
+        let data = world.resource::<GameData>().clone();
+        let mut ids = world.resource::<IdCounter>().to_owned();
+        let mut commands = world.commands();
+        // 0.1 m apart, i.e. deep inside each other: the player capsule's radius is ~0.4 m.
+        let e = spawn_player(&mut commands, &mut ids, &data, Vec3::new(0.1, 2.0, 0.0), false);
+        *world.resource_mut::<IdCounter>() = ids;
+        e
+    };
+    app.update();
+
+    let ids: Vec<PlayerId> =
+        app.world_mut().query::<&PlayerId>().iter(app.world()).copied().collect();
+    let first = ids.iter().copied().min_by_key(|p| p.0).expect("a local player");
+
+    let before_a = position(&mut app, first).xz();
+    let before_b = app.world().get::<Transform>(second).unwrap().translation.xz();
+    ticks(&mut app, 60);
+    let after_a = position(&mut app, first).xz();
+    let after_b = app.world().get::<Transform>(second).unwrap().translation.xz();
+
+    let moved_a = (after_a - before_a).length();
+    let moved_b = (after_b - before_b).length();
+    println!(
+        "a {before_a:?} -> {after_a:?} ({moved_a:.3} m), b {before_b:?} -> {after_b:?} \
+         ({moved_b:.3} m)"
+    );
+    assert!(
+        moved_a < 0.01 && moved_b < 0.01,
+        "nobody asked either player to move, and they still travelled {moved_a:.3} m / \
+         {moved_b:.3} m sideways — they are shoving each other (F-163a)"
+    );
+}
+
+/// ★ **No damage between players** (F-162a), and it is checked at the layer and not at the
+/// outcome.
+///
+/// `blades::cut::sweep` casts against `LAYER_TITAN_CORTEX` and `LAYER_TITAN_BODY` and against
+/// nothing else. So the rule holds exactly as long as a player's collider is a member of
+/// neither mask — which is a property of the player, checkable without a blade, a titan or a
+/// swing.
+#[test]
+fn f162a_a_player_is_not_a_member_of_any_mask_a_blade_cuts() {
+    use avian3d::prelude::CollisionLayers;
+    use defeated_by_titan::shared::{LAYER_TITAN_BODY, LAYER_TITAN_CORTEX};
+
+    let mut app = app();
+    app.update();
+
+    let mut q = app.world_mut().query::<(&PlayerId, &CollisionLayers)>();
+    let seen: Vec<(PlayerId, u32)> =
+        q.iter(app.world()).map(|(id, l)| (*id, l.memberships.0 as u32)).collect();
+    assert!(!seen.is_empty(), "a player has to carry CollisionLayers for this rule to be readable");
+    for (id, memberships) in seen {
+        let cuttable = memberships & (LAYER_TITAN_BODY.0 as u32 | LAYER_TITAN_CORTEX.0 as u32);
+        assert_eq!(
+            cuttable, 0,
+            "player {} is on a mask a blade casts against ({memberships:#b}) — a blade could \
+             hit him (F-162a)",
+            id.0
+        );
+    }
+}
+
+// ───────────────────────────────────────────────────────────────────────────────────────
+// The wire. `FIND-103`: a two-player test that drives both players through the same local
+// code proves nothing about a network — so this half goes through a real socket.
+// ───────────────────────────────────────────────────────────────────────────────────────
+
+/// ★ **A second player, driven from outside the process, over UDP.**
+///
+/// Everything about this test is deliberately the long way round: the intent is **encoded to
+/// bytes**, handed to the **operating system**, sent to a **port**, and read back by the game
+/// through `recv_from`. Nothing in it calls a function the local player's input also calls.
+/// That is the point — the older two-player test spawns its second player with
+/// `player::spawn_player` and pokes his `Intent` component, which would stay green if the wire
+/// did not exist at all.
+///
+/// It checks three things at once, and the third is the only security property this transport
+/// has:
+///
+/// 1. an unknown address gets a **seat and a body**;
+/// 2. his intents move **him** and not the player at this keyboard;
+/// 3. the `PlayerId` **in** the datagram is ignored — he sends `99` and does not get it.
+#[test]
+fn net_a_peer_on_a_real_socket_drives_his_own_body() {
+    use defeated_by_titan::net::wire::{self, Frame};
+    use defeated_by_titan::net::{Host, Roster, SeatKind};
+    use std::net::UdpSocket;
+
+    // `port: Some(0)` — the OS picks a free one. A fixed port would make this test fail
+    // whenever the game is running beside it, which on this machine it often is.
+    let mut app =
+        defeated_by_titan::app(Cli { headless: true, host: true, port: Some(0), ..default() });
+    app.update(); // Startup opens the door, the first Update binds it
+
+    let port = app
+        .world()
+        .resource::<Host>()
+        .port()
+        .expect("--host has to have bound a port by the end of the first frame");
+    println!("the game is listening on 127.0.0.1:{port}");
+
+    let local = *app
+        .world_mut()
+        .query_filtered::<&PlayerId, With<defeated_by_titan::shared::LocalPlayer>>()
+        .iter(app.world())
+        .next()
+        .expect("this machine has a player");
+    let local_before = position(&mut app, local);
+
+    let peer = UdpSocket::bind("127.0.0.1:0").expect("a socket of our own");
+    // ⚠️ `PlayerId(99)` is a lie the sender tells. The seat comes from the address.
+    let running = Frame {
+        player: PlayerId(99),
+        intent: Intent { move_y: 1.0, tick: 0, ..default() },
+    };
+
+    // Send and step, forty times. UDP on loopback is quick but it is not synchronous, and a
+    // test that sends once and steps once measures the kernel's mood.
+    for tick in 0..40u64 {
+        let mut frame = running;
+        frame.intent.tick = tick;
+        peer.send_to(&wire::encode(&frame), ("127.0.0.1", port))
+            .expect("loopback must accept a datagram");
+        ticks(&mut app, 1); // FixedPreUpdate: the socket is read here
+        app.update(); // Update: `player::seat_players` builds the body
+    }
+
+    let ids: Vec<PlayerId> =
+        app.world_mut().query::<&PlayerId>().iter(app.world()).copied().collect();
+    assert_eq!(
+        ids.len(),
+        2,
+        "a peer sent 40 frames and the world has {} player(s): {ids:?}",
+        ids.len()
+    );
+    let remote = *ids.iter().find(|id| **id != local).expect("somebody who is not me");
+    assert_ne!(
+        remote,
+        PlayerId(99),
+        "the seat was taken from the datagram — a peer can claim to be anybody"
+    );
+
+    let roster = app.world().resource::<Roster>();
+    assert_eq!(roster.len(), 2, "both seats belong in the roster");
+    assert!(roster.get(local).expect("my seat").kind.is_local());
+    assert!(
+        matches!(roster.get(remote).expect("his seat").kind, SeatKind::Remote(_)),
+        "the peer's seat has to remember where he is"
+    );
+
+    let remote_at = position(&mut app, remote);
+    let local_after = position(&mut app, local);
+    println!(
+        "local {:?} -> {:?}, remote at {remote_at:?} (seat {})",
+        local_before, local_after, remote.0
+    );
+    assert!(
+        remote_at.z < -0.5,
+        "he pressed forward for 40 ticks and stands at {remote_at:?} — nothing came off the wire"
+    );
+    assert!(
+        (local_after.xz() - local_before.xz()).length() < 1e-3,
+        "the player at this keyboard moved too ({local_before:?} -> {local_after:?}) — a \
+         remote intent is landing on the wrong body"
+    );
+}
+
+/// A UDP port is reachable by anything on the machine. Rubbish must cost a log line and not
+/// the process.
+#[test]
+fn net_a_hostile_datagram_does_not_take_the_game_down() {
+    use defeated_by_titan::net::Host;
+    use std::net::UdpSocket;
+
+    let mut app =
+        defeated_by_titan::app(Cli { headless: true, host: true, port: Some(0), ..default() });
+    app.update();
+    let port = app.world().resource::<Host>().port().expect("bound");
+
+    let peer = UdpSocket::bind("127.0.0.1:0").expect("a socket of our own");
+    for junk in [vec![], vec![0u8], vec![0xffu8; 37], vec![1u8; 2000], vec![1u8; 36]] {
+        let _ = peer.send_to(&junk, ("127.0.0.1", port));
+    }
+    for _ in 0..20 {
+        ticks(&mut app, 1);
+        app.update();
+    }
+
+    let players = app.world_mut().query::<&PlayerId>().iter(app.world()).count();
+    assert_eq!(players, 1, "junk on the port must not seat anybody: {players} players");
+}

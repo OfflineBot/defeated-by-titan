@@ -50,6 +50,16 @@ pub struct Cli {
     /// For measuring. Under vsync every frame time is 16.6 ms — so "what does this cost?"
     /// measures the same ceiling six times over (§11).
     pub novsync: bool,
+    /// `--host`: **open the door.** A UDP port on which peers may drive their own player
+    /// bodies in this world.
+    ///
+    /// ⚠️ **Input only.** Nothing is sent back, no world state is replicated, and a peer
+    /// therefore cannot see the game he is playing in. Read the header of
+    /// [`crate::net::socket`] before calling it multiplayer. The lobby's *Host* row sends the
+    /// same request this flag does.
+    pub host: bool,
+    /// `--port <n>`: which port [`Cli::host`] opens. `None` takes `game.ron: net.port`.
+    pub port: Option<u16>,
     /// Simulated latency in milliseconds. **Every movement feature is also checked at
     /// 200 ms** (bible T-019) — "feels good locally" is not an acceptance.
     pub lag_ms: u32,
@@ -104,6 +114,15 @@ impl Cli {
                 "--novsync" => s.novsync = true,
                 "--reexport" => s.reexport = true,
                 "--no-export" => s.no_export = true,
+                "--host" => s.host = true,
+                "--port" => {
+                    if let Some(v) = value(&mut s, "--port") {
+                        match v.parse() {
+                            Ok(n) => s.port = Some(n),
+                            Err(_) => s.unknown.push(format!("--port {v} is not a port number")),
+                        }
+                    }
+                }
                 "--mission" => s.mission = value(&mut s, "--mission"),
                 "--script" => s.script = value(&mut s, "--script").map(PathBuf::from),
                 "--screenshot" => s.image = value(&mut s, "--screenshot").map(PathBuf::from),

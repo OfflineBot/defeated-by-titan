@@ -292,3 +292,56 @@ pub struct DeployRequest {
 /// at all — nobody died, nobody won, the run simply did not happen.
 #[derive(Message, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AbandonSortie;
+
+/// **Somebody joined — give him a body.**
+///
+/// Written by `net` alone: the transport is the only thing that knows a peer exists, and it
+/// knows it one moment *before* there is anything in the world to move. `player::seat_players`
+/// reads it and builds the body — the same seam `mission` and `titan` already use for
+/// [`SpawnTitan`], and it buys no domain edge in either direction.
+///
+/// ⚠️ **The id is allocated by the sender, not by the spawner.** A seat exists before its body
+/// does: the intents of the packet that opened the seat are already in the inbox addressed to
+/// that [`PlayerId`], and a body that gave itself a different number would be a player nobody
+/// can address (`docs/multiplayer.md` rule 7).
+#[derive(Message, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SeatPlayer {
+    pub player: PlayerId,
+    /// Whether this seat is the one at *this* keyboard. Only the transport knows.
+    pub local: bool,
+    pub pos_x: f32,
+    pub pos_y: f32,
+    pub pos_z: f32,
+}
+
+impl SeatPlayer {
+    pub fn pos(&self) -> Vec3 {
+        Vec3::new(self.pos_x, self.pos_y, self.pos_z)
+    }
+}
+
+/// **Open or close the door** — the lobby's *Host* row.
+///
+/// Same seam and same reason as [`DeployRequest`]: `menu` owns the button, `net` owns the
+/// socket. A menu that bound a port itself would be a second writer of the transport, and the
+/// day the transport grows a second kind the two would disagree about which one is open.
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostRequest {
+    /// `true` opens the port, `false` closes it and drops every peer.
+    pub open: bool,
+    /// Which port, or `None` for the one in `game.ron: net.port`. `--port` is the only thing
+    /// that fills it in — the lobby's row has no text field, because there is nothing on the
+    /// other end of one yet.
+    pub port: Option<u16>,
+}
+
+/// **His slot hold ran out — take the body out of the world.**
+///
+/// The counterpart of [`SeatPlayer`], and it exists for the same reason: `net` knows when a
+/// chair becomes free, `player` knows what a body is. Between the connection dropping and
+/// this message lie the bible's 120 s (`game.ron: net.slot_hold_s`) — during which the body
+/// stays standing and the seat stays his (F-158a).
+#[derive(Message, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnseatPlayer {
+    pub player: PlayerId,
+}

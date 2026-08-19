@@ -1,28 +1,49 @@
-//! net — **the seam for multiplayer.** One transport today, client and server later.
+//! net — **the seam for multiplayer**, and since 2026-08-19 the first thing that went
+//! through it.
 //!
-//! The net code is not part of this commission. **But the place it will one day stand in
-//! exists from day 1, and it is empty** — instead of cutting through five domains later
-//! (`prompts/init.md` §6, `docs/multiplayer.md`).
+//! For ten days this folder held one transport, `LocalOnly`, and a comment saying the place
+//! client and server will stand *exists from day 1, and it is empty* — instead of being cut
+//! through five domains later (`prompts/init.md` §6, `docs/multiplayer.md`). The bill came in
+//! and it was cheap: **a player now arrives over a UDP socket and nothing behind
+//! [`deliver_intents`] was touched**, no domain grew an edge, and no system learned that a
+//! network exists.
 //!
 //! ```text
 //! Keyboard ─┐
-//! Script   ─┼─► Inbox ─► deliver_intents ─► Intent on the player ─► Simulation
-//! (net)    ─┘   (PlayerId → Intent)   FixedPreUpdate
+//! Script    ─┼─► Inbox ─► deliver_intents ─► Intent on the player ─► Simulation
+//! UDP       ─┘   (PlayerId → Intent)         FixedPreUpdate
 //! ```
 //!
 //! **Three sources, one channel.** The script driver is not a second, wrong way to play —
 //! every system behind it is the real one. And because nobody in this environment can
 //! click, this channel gets built anyway: **one effort, two problems solved.**
 //!
+//! | file | what |
+//! |---|---|
+//! | [`local`] | the keyboard and the mouse become an [`Intent`] |
+//! | [`wire`] | that `Intent` becomes **37 bytes**, little-endian, one version byte |
+//! | [`socket`] | a UDP port. ⚠️ **Input only** — nothing is sent back, so a peer cannot see the world he plays in. Read that file's header before calling any of this multiplayer |
+//! | [`session`] | who is here, and the seat that is held for 120 s after a line drops (F-158a) |
+//!
 //! The **latency switch** (`--lag 200`) lives here too. It belongs in the tooling and not
-//! in some later ticket: "feels good locally" is not an acceptance (bible T-019).
+//! in some later ticket: "feels good locally" is not an acceptance (bible T-019). ⚠️ It is
+//! also the only latency in this folder that is **deterministic** — a UDP frame arrives on
+//! whichever tick it arrives on, and [`socket`] says so out loud.
 
 pub mod local;
+pub mod session;
+pub mod socket;
+pub mod wire;
 
 use bevy::prelude::*;
 use std::collections::{BTreeMap, VecDeque};
 
-use crate::shared::{IntentSystems, Intent, PlayerId, Cli, Tick};
+use crate::shared::{
+    Cli, HostRequest, Intent, IntentSystems, PlayerId, SeatPlayer, Tick, UnseatPlayer,
+};
+
+pub use session::{Roster, Seat, SeatKind};
+pub use socket::Host;
 
 pub struct NetPlugin;
 
@@ -39,8 +60,16 @@ impl Plugin for NetPlugin {
         // dangerous direction.
         let lag_ticks = (start.lag_ms as f64 / 1000.0 * 60.0).ceil() as u64;
 
-        app.insert_resource(Transport::LocalOnly)
+        app.insert_resource(Transport::for_run(&start))
             .insert_resource(Inbox::with_lag(lag_ticks))
+            .init_resource::<Roster>()
+            .init_resource::<Host>()
+            // Registered here and not in `src/lib.rs`, exactly like `mission`'s two: the
+            // domain that writes a message registers it, so a domain that is not in the app
+            // takes its messages with it.
+            .add_message::<SeatPlayer>()
+            .add_message::<UnseatPlayer>()
+            .add_message::<HostRequest>()
             .init_resource::<crate::shared::LookOverride>()
             .init_resource::<local::MouseSinceTick>()
             .configure_sets(
@@ -56,6 +85,26 @@ impl Plugin for NetPlugin {
                 local::gather_mouse_motion.in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop),
             )
             .add_systems(FixedPreUpdate, local::read_input.in_set(IntentSystems::Collect))
+            // **The wire, ahead of the keyboard.** `Source` runs before `Collect`, so a frame
+            // that arrived this tick and a key held this tick land in the same inbox and the
+            // simulation cannot tell which was which. `.chain()` because a peer whose hold
+            // ran out must not be swept between his own frame arriving and it being read.
+            .add_systems(
+                FixedPreUpdate,
+                (socket::receive_frames, socket::sweep_peers)
+                    .chain()
+                    .in_set(IntentSystems::Source),
+            )
+            // Both in `Update`: the lobby stops `Time<Virtual>`, so a fixed schedule does not
+            // run while the button that opens the door is on screen (`menu::apply_screen`).
+            .add_systems(
+                Update,
+                (socket::open_or_close_the_door, session::seat_the_local_player),
+            )
+            // The only thing a run with no screen can show about a session. Once per second,
+            // and only while the door is open — see the function.
+            .add_systems(FixedPostUpdate, session::report_the_squad)
+            .add_systems(Startup, open_the_door_from_the_command_line)
             .add_systems(
                 FixedPreUpdate,
                 (advance_tick, deliver_intents)
@@ -67,13 +116,40 @@ impl Plugin for NetPlugin {
 
 /// Where the intents come from.
 ///
-/// Today there is exactly one variant. It stands there as an enum anyway, because
-/// otherwise the day the second one arrives is the day somebody rebuilds `net` instead of
-/// extending it.
+/// The enum stood here with one variant for ten days, so that the day the second one arrived
+/// nobody would rebuild `net` instead of extending it. This is that day, and the line that
+/// changed to add [`Transport::Socket`] is this one — nothing behind
+/// [`deliver_intents`] was touched.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Transport {
+    /// One player, this machine. The keyboard or the `--script` driver.
     #[default]
     LocalOnly,
+    /// A UDP port is open and peers may drive their own bodies through it. **Input only** —
+    /// nothing is sent back and no world state is replicated. Read the header of
+    /// [`socket`] before calling this multiplayer.
+    Socket,
+}
+
+impl Transport {
+    /// Which one this run uses. `--host` is the only thing that picks the second.
+    pub fn for_run(start: &Cli) -> Self {
+        if start.host { Transport::Socket } else { Transport::LocalOnly }
+    }
+}
+
+/// `--host` on the command line is the same request the lobby's *Host* row sends.
+///
+/// **One route into the socket and not two.** A startup system that bound the port itself
+/// would be a second writer of [`Host`], and the two would disagree about the port the first
+/// time somebody typed `--port` and then clicked the row.
+fn open_the_door_from_the_command_line(
+    start: Res<Cli>,
+    mut requests: MessageWriter<HostRequest>,
+) {
+    if start.host {
+        requests.write(HostRequest { open: true, port: start.port });
+    }
 }
 
 /// The one channel. **Nobody writes an `Intent` straight onto a player** — everybody posts

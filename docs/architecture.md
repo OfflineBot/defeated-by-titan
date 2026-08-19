@@ -111,6 +111,17 @@ progress -> mission # the verdict, the kill tally and the mission clock are STAT
                    #  mechanism beside the state transition that already despawns the field, and
                    #  it would have to be sent by `mission` — a domain that today sends nothing
                    #  when a sortie ends and gains nothing by learning to.
+menu -> net        # the lobby draws the SQUAD: who is in this session, whether each is still
+                   #  answering, and which port the door is really on (`net::Roster`,
+                   #  `net::Host::port`). Same argument as `menu -> mission` two lines up and no
+                   #  other: a screen has to be right in the frame it is drawn in, so it needs
+                   #  the STATE and not a `SomebodyJoined` that fired three ticks ago — and a
+                   #  roster mirrored into shared/ would have two writers for the sake of one
+                   #  list. **Read-only, and the write half goes the other way**: the *Host* row
+                   #  writes `shared::HostRequest` and `net::socket::open_or_close_the_door` is
+                   #  what binds the port, exactly as *Deploy* writes `DeployRequest` and never
+                   #  touches the phase. `net` stays the one writer of the transport, which is
+                   #  the whole reason `--host` and the row cannot disagree about a port.
 ```
 
 **One line as of 2026-08-09**, and it was empty until then. `prompts/init.md` §5 names `render`
@@ -134,7 +145,7 @@ zero in the middle of the game (§4).
 | `shared/` | *(none)* | types that belong to nobody: `Intent`, `PlayerId`, `TitanId`, messages, meters, axis helpers |
 | `data/` | `DataPlugin` | load RON → `GameData` + handles. Before everything else. |
 | `save/` | `SavePlugin` | the save game: profile, gear budget, traits, lineage, progress |
-| `net/` | `NetPlugin` | ⭐ the seam for multiplayer: today the `LocalOnly` transport, which pushes the local player's intents into the simulation (§6) |
+| `net/` | `NetPlugin` | ⭐ the seam for multiplayer: the `Inbox` every intent goes through, the `LocalOnly` transport (keyboard, script) and since 2026-08-19 a second one — a **UDP socket, input only**, plus the session roster. What it is not: [`docs/multiplayer.md`](multiplayer.md) |
 | `world/` | `WorldPlugin` | the maps, bastion rings, houses; anchor points, collision, **spatial index** |
 | `render/` | `RenderPlugin` | camera, light, sky, building meshes, loading models |
 | `player/` | `PlayerPlugin` | the body: running, jumping, ground collision, state machine |
@@ -158,7 +169,9 @@ toss at 60 Hz — and over the network a divergence nobody can reproduce (§5 ru
 
 | Field / component | Writer | Readers |
 |---|---|---|
-| `Intent` on the player | **`net`** (`LocalOnly` transport: keyboard, script driver, later the network) | `player`, `vector`, `blades` |
+| `Intent` on the player | **`net`** (the `LocalOnly` transport — keyboard, script driver — and since 2026-08-19 the `Socket` one: a UDP datagram from a peer lands in the same `Inbox` in `IntentSystems::Source`) | `player`, `vector`, `blades` |
+| the **session**: `net::Roster` (who is seated), `net::Host` (the open port and which address owns which chair) | **`net`** and nothing else. The lobby's *Host* row asks with `shared::HostRequest`; `--host` writes the identical message at `Startup`, so there is one route into the socket and not two | `menu`, read-only (allow list above) |
+| a player **body's existence** | **`player`**. `net` knows *that* somebody joined and says so with `shared::SeatPlayer` / `shared::UnseatPlayer`; `player::seat_players` is what spawns a capsule. The same seam `mission`→`titan` uses for `SpawnTitan`, and it costs no domain edge in either direction | — |
 | the player's `Transform` | `player` (ground, gravity) and `vector` (rope forces) — **split by state**, never at the same time; the state stands in `shared::MovementState` | everyone, read-only |
 | `Gas`, `Blades` | `vector` and `blades` respectively | `hud`, `sound` |
 | `Gas` — **one writer again since 2026-08-12** (the second writer stood for one day) | **`vector::gas` and nothing else.** It debits in `gas_budget` (`Intent`) and it is the only thing that ever raises a tank, in `apply_refuel_requests` (`Intent`, one tick after the request). A refuel station is `mission` furniture and **asks**: `mission::hub::refuel_at_stations` writes `shared::RefuelRequest` in `PostStep` and holds no `&mut Gas` anywhere | `hud`, `sound`. The message lives in `shared`, so no domain edge was bought for it. Red test: `tests/mission.rs::f072_a_station_asks_for_gas_and_never_writes_the_tank_itself` runs the station with **no `vector` in the app** — the shape a whole-app test cannot see. History and the one-tick cost: `FINDINGS.md` FIND-063, the violation it replaced FIND-057 §2 |

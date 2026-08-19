@@ -42,16 +42,16 @@ pub mod locomotion;
 pub mod rope;
 
 use avian3d::prelude::{
-    CoefficientCombine, Collider, Friction, LinearVelocity, LockedAxes, MaxLinearSpeed,
-    PhysicsSystems, Restitution, RigidBody, SleepingDisabled,
+    CoefficientCombine, Collider, CollisionLayers, Friction, LinearVelocity, LockedAxes,
+    MaxLinearSpeed, PhysicsSystems, Restitution, RigidBody, SleepingDisabled,
 };
 use bevy::prelude::*;
 
 use crate::data::GameData;
 use crate::shared::{
     AimPoint, Blades, BoostAccel, Cli, Gas, GasGrant, Hook, IdCounter, Intent, LocalPlayer,
-    MovementState, PlayerId, PrevButtons, ReelSpeed, RopeLength, RunAccel, SimulationSystems,
-    Velocity, WarpPlayer,
+    MovementState, PlayerId, PrevButtons, ReelSpeed, RopeLength, RunAccel, SeatPlayer,
+    SimulationSystems, UnseatPlayer, Velocity, WarpPlayer, LAYER_PLAYER, PLAYER_COLLIDES_WITH,
 };
 
 pub struct PlayerPlugin;
@@ -59,6 +59,11 @@ pub struct PlayerPlugin;
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_local_player)
+            // **A body for somebody who joined.** In `Update` and not in a fixed schedule, for
+            // the same reason `mission::take_orders_from_the_menu` is: the message can arrive
+            // while `Time<Virtual>` is stopped (a lobby is open), and a system in `FixedUpdate`
+            // would then never run to answer it.
+            .add_systems(Update, (seat_players, unseat_players))
             .add_systems(
                 FixedUpdate,
                 (
@@ -113,7 +118,23 @@ pub fn spawn_player(
     pos: Vec3,
     local: bool,
 ) -> Entity {
-    let id = ids.next_player();
+    spawn_player_with_id(commands, ids.next_player(), data, pos, local)
+}
+
+/// The same body, but with an id somebody else has already handed out.
+///
+/// **This is the door a joining player comes through.** `net` allocates the seat's
+/// [`PlayerId`] the moment a peer's first packet arrives — before there is a body — and asks
+/// for the body with `shared::SeatPlayer`. The id therefore cannot be allocated here: the
+/// seat and the body have to carry the same number, or the intents that arrive next go to
+/// nobody (`docs/multiplayer.md` rule 7).
+pub fn spawn_player_with_id(
+    commands: &mut Commands,
+    id: PlayerId,
+    data: &GameData,
+    pos: Vec3,
+    local: bool,
+) -> Entity {
     let s = &data.game.player;
     // Nested, because a tuple in `spawn` takes only so many elements and beyond that
     // hits you as an unreadable trait error (`docs/lessons/bevy.md`).
@@ -159,12 +180,59 @@ pub fn spawn_player(
             // friction on the player. See `game.ron: player.friction`.
             Friction::new(s.friction).with_combine_rule(CoefficientCombine::Min),
             Restitution::new(s.restitution).with_combine_rule(CoefficientCombine::Min),
+            // **No collision between players** (bible 3.6, F-163a). Without this line two
+            // bodies standing 0.1 m apart shove each other 0.194 m apart in one second with
+            // nobody touching a key — and at 75 m/s that shove ends a flight. The membership
+            // moves the player off avian's default bit; no spatial query in this game filters
+            // by it, so nothing else changes (`shared::PLAYER_COLLIDES_WITH`).
+            CollisionLayers::new(LAYER_PLAYER, PLAYER_COLLIDES_WITH),
         ),
     ));
     if local {
         e.insert(LocalPlayer);
     }
     e.id()
+}
+
+/// Gives every seat `net` has opened a body.
+///
+/// **`net` decides who is in the session, `player` decides what a body is** — the same seam
+/// `mission`/`titan` already use for `shared::SpawnTitan`, and it buys no domain edge in
+/// either direction. The `local` flag rides on the message because the transport is the only
+/// thing that knows whether the seat is this machine's.
+fn seat_players(
+    mut commands: Commands,
+    data: Res<GameData>,
+    mut seats: MessageReader<SeatPlayer>,
+    existing: Query<&PlayerId>,
+) {
+    for seat in seats.read() {
+        if existing.iter().any(|id| *id == seat.player) {
+            // A seat that already has a body. Not an error — a message is read for two frames
+            // and a second body on the same id would be a player nobody can address.
+            continue;
+        }
+        info!("net: player {} gets a body at {:?}", seat.player.0, seat.pos());
+        spawn_player_with_id(&mut commands, seat.player, &data, seat.pos(), seat.local);
+    }
+}
+
+/// Takes a body out once `net` says the chair is free again.
+fn unseat_players(
+    mut commands: Commands,
+    mut gone: MessageReader<UnseatPlayer>,
+    players: Query<(Entity, &PlayerId)>,
+) {
+    for leaving in gone.read() {
+        for (entity, id) in &players {
+            if *id == leaving.player {
+                info!("net: player {} left the world", id.0);
+                // `try_despawn`: the body may already be gone for another reason, and a menu
+                // that panics is worse than one that shrugs.
+                commands.entity(entity).try_despawn();
+            }
+        }
+    }
 }
 
 fn spawn_local_player(

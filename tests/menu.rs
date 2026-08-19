@@ -1579,3 +1579,93 @@ fn f175_a_named_door_walks_straight_past_the_title() {
     assert!(plates(&mut app).is_empty(), "a plate was built for a run that asked for the hub");
     assert_eq!(cursor(&app, window).grab_mode, CursorGrabMode::Locked);
 }
+
+// ---------------------------------------------------------------------------
+// The lobby's squad section — the multiplayer front door (2026-08-19)
+// ---------------------------------------------------------------------------
+
+/// Opens the lobby the way a player does: `Esc`, then *Mission select*.
+fn open_the_lobby(start: Cli) -> (App, Entity) {
+    let (mut app, window) = windowed(start);
+    press_esc(&mut app, window);
+    press(&mut app, &PauseAction::Lobby);
+    app.update();
+    assert_eq!(*app.world().resource::<Screen>(), Screen::Lobby);
+    (app, window)
+}
+
+/// ★ **Who is here** — and it is the roster's answer, not a sentence in the menu.
+#[test]
+fn f176_the_lobby_lists_every_seat_in_the_session() {
+    use defeated_by_titan::net::{Roster, SeatKind};
+
+    let (mut app, _window) = open_the_lobby(Cli { headless: true, port: Some(0), ..default() });
+
+    let seats = app.world().resource::<Roster>().len();
+    assert_eq!(seats, 1, "a run with no peers has exactly one seat, not {seats}");
+    let lines = plate_text(&mut app);
+    assert!(
+        lines.iter().any(|l| l.starts_with("Squad") && l.contains("1 in this session")),
+        "the lobby has to say how many are in the session: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("you")),
+        "the player has to find himself on the list: {lines:?}"
+    );
+
+    // Somebody joins — and the list is the roster's, so it grows without the menu knowing how.
+    let addr = "127.0.0.1:40404".parse().expect("a literal address");
+    app.world_mut().resource_mut::<Roster>().seat(
+        defeated_by_titan::shared::PlayerId(9),
+        SeatKind::Remote(addr),
+        addr.to_string(),
+        0,
+    );
+    app.update();
+    let lines = plate_text(&mut app);
+    assert!(
+        lines.iter().any(|l| l.contains("2 in this session")),
+        "the squad list did not follow the roster: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("127.0.0.1:40404")),
+        "a seat that is on the roster has to be on the screen: {lines:?}"
+    );
+}
+
+/// ★ **The *Host* row really opens a port, and the label says which one the OS gave.**
+///
+/// There is no *Join* row next to it and that is checked here too: a row that took an address
+/// and then showed nothing would be the row `title.rs` refuses to draw.
+#[test]
+fn f176_the_host_row_opens_a_real_port_and_shows_it() {
+    use defeated_by_titan::net::Host;
+
+    // `port: Some(0)` — the OS picks a free one, so this test does not fight the game or a
+    // second test run for 34197.
+    let (mut app, _window) = open_the_lobby(Cli { headless: true, port: Some(0), ..default() });
+    assert!(!app.world().resource::<Host>().is_open(), "nothing is hosting before the click");
+
+    press(&mut app, &LobbyAction::Host(true));
+    app.update();
+
+    let port = app
+        .world()
+        .resource::<Host>()
+        .port()
+        .expect("pressing Host has to leave a bound port behind");
+    let lines = plate_text(&mut app);
+    println!("bound port {port}, plate says {lines:?}");
+    assert!(
+        lines.iter().any(|l| l.contains(&port.to_string())),
+        "the row has to show the port the OS really gave, {port}: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("Input only")),
+        "the screen has to say what the link is and is not: {lines:?}"
+    );
+    // Clicking it again closes it — the same row, the other way.
+    press(&mut app, &LobbyAction::Host(false));
+    app.update();
+    assert!(!app.world().resource::<Host>().is_open(), "the door did not close again");
+}

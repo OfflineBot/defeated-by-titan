@@ -108,11 +108,34 @@ pub struct ModelName {
     /// the primitive rig has always been built — one shape at the class height. A `.glb` is
     /// authored at exactly one height, so `render::model::fit_to_class` brings it to this one.
     pub height_m: Option<f32>,
+    /// **Where, in this entity's own frame, the model's floor belongs** — in metres on y.
+    ///
+    /// The whole drop is authored **on its feet**: `hit.min.y = 0` on 204 of 278 files, and on
+    /// every one the world puts down (`a-042` bodies, `a-083` houses, `a-089` ruins, `a-090`
+    /// rubble). The 74 that differ are *parts* authored in their parent rig's space — a head at
+    /// y = 8.9, a cloak at y = 0.15 — and moving those would be the bug, not the fix.
+    ///
+    /// So the field is an `Option` and the two answers are different sentences:
+    ///
+    /// * `None` — **the entity's origin is the model's origin.** Draw the file where it was
+    ///   authored. That is a titan (its origin is the ground under it, which is the same frame
+    ///   `cortex_height_m` is measured in), the blades in a hand, and every hand-placed model.
+    /// * `Some(y)` — bring the model's authored floor to `y`. A **dressed block** passes
+    ///   `-size_m.y * 0.5`, because a block's origin is the box's **centre** while the model's
+    ///   is its feet — without it the building floats by half its own height (5.75 m for
+    ///   `a-083-fachwerkhaus-gross`), which is what the user saw on 2026-08-19:
+    ///   *„zudem sind die gebäude nicht auf dem boden sondern in der luft!"*
+    ///
+    /// ⚠️ **It moves the anchors with the mesh.** `render::model::read_the_models_anchors`
+    /// applies one offset to the scene child's transform *and* to every entry of
+    /// [`ModelAnchors`], so what the rope bites and what the eye sees stay one thing. A version
+    /// of this fix that moved only the drawing would be `FIND-098`/`-099`/`-127`/`-129` again.
+    pub feet_y_m: Option<f32>,
 }
 
 impl ModelName {
     pub fn new(name: impl Into<String>) -> Self {
-        ModelName { name: name.into(), cortex_height_m: None, height_m: None }
+        ModelName { name: name.into(), cortex_height_m: None, height_m: None, feet_y_m: None }
     }
 }
 
