@@ -1211,3 +1211,28 @@ shape works (5 swaps, 16.9 → 45.2 m/s, `rope == 1` on every leg).
 once (`FIND-096`); it is this same stale compensation. Nothing is wrong with the gantries that
 this explains — which means the user's *"random türme die nicht so sein sollten"* still has to be
 answered by measurement, not by the fact that the old script fails.
+
+### §2E — the roster fights, and one kind still cannot spawn
+
+Landed 2026-08-19. `docs/gameplay/enemies.md` names **8 kinds**; **7 now fight differently**, each
+by a `titan.ron: <kind>.behaviour` switch read once at spawn and enforced in `brain.rs`. The proof
+of each is a **kind-vs-husk pair in one app**, and each went red on a one-line RON edit —
+[`scripts/f051-kinds.txt`](../scripts/f051-kinds.txt) holds the played version (7/7 asserts, exit 0):
+10 s at 20 m costs **0** damage against the lurker and **34** against the husk, while 0.42 s at
+**5 m** costs **48** against that same lurker.
+
+⚠️ **The `bellower` still cannot spawn** — `scale.ron: max_spawnable_class` caps at `large`, and
+raising it is no longer the one-line change `art.ron:183` has claimed since it was written: it
+reddens three assertions in `tests/titan.rs::f064_*`. The exact diff is in `FIND-118`. And even
+raised he is half a kind, because `F-051` (gas noise, the thing he is supposed to call *about*)
+does not exist — he would call on sight.
+
+⚠️ **Every number in the roster is UNTUNED.** Seven kinds' worth of swerve, lunge, guard window,
+flank offset and facing cone were chosen to be *distinguishable*, not to be *good*. That is the
+same state the aim-assist knobs are in, and it wants the same answer: the user plays and says which
+ones feel wrong.
+
+**`FIND-119` is the round's real lesson:** an ambusher that cannot turn swings at empty street.
+The test that proved "the lurker does not chase" was green and blind to it; **writing the script
+found it.** A behaviour test that only measures the thing it switched off cannot see what the
+switch broke next to it.

@@ -720,3 +720,54 @@ what is in front of the crosshair, not on what he pressed.
   is not hookable, should the ray *pass through* him to the wall behind? "Hit first, then check
   anchorable" exists so a rope cannot go through a **wall**; a titan is not a wall, and treating
   him as one costs the player the city. → `docs/QUESTIONS.md`.
+
+### B-007 — ✅ FIXED 2026-08-19 (`F-029` landed)
+
+Both halves are closed, and the fix was **one component**: `shared::Body { mask: SOLID |
+ANCHORABLE }` on the titan rig root (`src/titan/rig.rs`). Everything else this needed had been
+standing unused — `vector::aim` always hit the capsule, `world::index::maintain_index`'s third
+block (`Changed<GlobalTransform>`) was written for `F-029` and had nothing to update, and
+`HookState::Anchored { body, local_m }` already resolves as `index.body(id).center_m + local_m`.
+
+- **You can hook a titan.** `tests/titan.rs::f029_a_rope_bites_a_walking_titan_and_rides_him`: a
+  husk walks **2.910 m** and the anchor follows to within **0.0389 m** (tolerance 0.0485 m = one
+  tick of his own travel). A world-nailed anchor misses by the full 2.910 m.
+- **A titan no longer hides the wall behind him**, because he *is* an anchor now.
+- **Release on death** goes through the existing channel — the `Body` comes off at
+  `TitanState::Death`, `world::index`'s `on_remove` observer fires, `ReleaseReason::BodyGone`.
+  `scripts/f029-grapple.txt`: `cut titan 2 Cortex at 9.75 m/s (t=373)` → `let go: BodyGone (t=375)`.
+- **Cost:** 159 ns per walking titan per tick, O(1) in world size. 100 titans = 0.095 % of a tick.
+
+⚠️ **The "mit Feedback" half of `F-029`'s acceptance is only a log line.**
+`hud::arm_aim::sense_arm_miss` matches only `ReleaseReason::NoAnchor(_)`, so a rope torn away by a
+death says nothing on screen. One arm on an existing `match` in `src/hud/`.
+
+---
+
+## B-008 — a downward hook is unaimable and lands somewhere else in silence
+
+**Stage: 🟨 — measured by the `F-029` round (`FIND-116`), not yet reproduced on its own.**
+
+Aiming **down** does not do what the crosshair says. The arm rays sit on a fan around the look
+direction (`F-023`), and at the shipped setting that is ~12.9° off centre per arm — so a shot aimed
+at the ground under you resolves to whatever the *side* ray finds, which near a roof edge is not
+what you were looking at. Measured:
+
+```
+left arm bit a roof 8.5 m aside      — body 150 at (38.00,  0.39,  -8.53)
+from 520 m up, a tower top 429 m off — body  77 at (29.81, 123.00, -96.31)
+```
+
+🔴 **And `F-028`'s fallback cannot save it.** "No candidate ⇒ fall back to the centre ray" never
+triggers in Ashgate, because the district is **100 % anchorable** (the user: *"überall! ohne
+ausnahmen!"*) and the **ground is always under the cone** — so there is always *a* hit, just not
+the one the player asked for. The two design decisions are individually right and fight each other
+here.
+
+This is `F-024`/`F-025` territory (the snap now picks a best candidate) and it wants the aim-assist
+knobs pointed at it: does the scoring function prefer *what the crosshair is on* strongly enough
+when the player looks straight down? → `docs/QUESTIONS.md`, and it is worth asking the user, since
+he is the one who will feel it.
+
+**Related:** `B-003` releases **every** rope on any `warp`, whatever the distance — that cost the
+`F-029` round two runs and is documented nowhere a script author looks.

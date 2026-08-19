@@ -30,18 +30,40 @@
 //! `Alerted` belongs to `F-051` and `Stagger` to `F-032`. Neither is built, and a variant
 //! nothing enters or leaves is exactly the decoration above.
 //!
+//! ## The roster, since 2026-08-19 (`F-057`..`F-063`)
+//!
+//! Until that date all eight kinds of `titan.ron` ran **this** brain with different numbers, and
+//! `docs/gameplay/enemies.md` calls that failure by name: *"at least half of all enemy kinds
+//! carry an anti-autopilot property"*, and a kind that is only a different number is a reskin.
+//! Five switches out of `titan.ron: <kind>.behaviour` are what makes them different, and each
+//! one changes what the PLAYER has to do:
+//!
+//! | switch | kind | what it costs the player |
+//! |---|---|---|
+//! | `swerve_deg` / `swerve_period_s` | errant | he is never on the line you aimed at — lead him |
+//! | `lunge_m_s` | scuttler | the blow carries forward; sideways is not far enough, up is |
+//! | `flank_offset_m` | chorus | two of them arrive from two sides; pick one and give the other your back |
+//! | `ambush` | lurker | he never chases. Notice him, or pay 48 |
+//! | `cortex_guard` | weaver, warden | the nape is not always a target. See [`Guard`] |
+//! | `call_radius_m` | bellower | one sighting wakes the district — ⚠️ he cannot spawn, see below |
+//!
+//! **What is honestly NOT built:** the weaver's roll (it needs a `TitanState` arm and
+//! `shared/state.rs` was another hand's this round — the *lesson* is built, the roll is not),
+//! the bellower's ear (`F-051`: he calls on sight, not on the sound of gas), and the bellower
+//! himself (`scale.ron: max_spawnable_class` is `large`, `docs/QUESTIONS.md` Q-028).
+//!
 //! ## What this round is NOT
 //!
 //! **No navigation.** The titan walks in a straight line at whatever it is facing, turning at
 //! `turn_deg_per_s`. A path around a house is `F-052` and Round 2; `MoveAndSlide` is the right
 //! *collision* tool and the wrong *navigation* tool (`docs/PLAN-GAME.md` §5).
 
-use avian3d::prelude::{Collider, LinearVelocity};
+use avian3d::prelude::{Collider, ColliderDisabled, LinearVelocity};
 use bevy::prelude::*;
 
-use crate::data::{GameData, TitanKind};
+use crate::data::{CortexGuard, GameData, TitanKind};
 use crate::shared::{
-    HitStop, HitZone, PlayerId, StateClock, TitanHit, TitanId, TitanState, Velocity,
+    HitStop, HitZone, PlayerId, StateClock, Tick, TitanHit, TitanId, TitanState, Velocity,
 };
 
 use super::rig::{TitanBody, TitanPart};
@@ -93,6 +115,11 @@ pub fn ticks(seconds: f32, simulation_hz: f64) -> u32 {
 pub struct TitanClock {
     /// Ticks before the next `Pursue → Windup` is allowed.
     pub cooldown_left: u32,
+    /// Ticks this titan keeps coming **because somebody called it** (`F-062`), independent of
+    /// its own `aggro_radius_m`. Written by [`answer_the_call`], counted down by [`advance`],
+    /// read by [`decide`]. Without it the call is a one-tick flicker: `decide` sends anything
+    /// outside its own aggro radius straight home again.
+    pub alerted_left: u32,
 }
 
 /// How long a state lasts, out of the timings resolved from `titan.ron` at spawn.
@@ -125,10 +152,27 @@ pub struct TitanTuning {
     pub turn_rad_per_s: f32,
     pub attack_range_m: f32,
     pub aggro_radius_m: f32,
+    // ---- `titan.ron: <kind>.behaviour` — what makes this kind not the husk ---------------
+    /// `F-057`, in **radians**: how far off the straight line the walk swings, to each side.
+    pub swerve_rad: f32,
+    /// How many ticks one swing lasts before the heading flips. 0 means no swerve at all —
+    /// and it has to be checked, or the modulo below divides by zero.
+    pub swerve_period_ticks: u64,
+    /// `F-058`: how fast the body carries itself forward through its own `Strike`.
+    pub lunge_m_s: f32,
+    /// `F-063`: how far to the side of the player this kind aims.
+    pub flank_offset_m: f32,
+    /// `F-062`: the radius in which this kind wakes idle titans when it acquires a target.
+    pub call_radius_m: f32,
+    /// How long an answered call holds, in ticks. See [`TitanClock::alerted_left`].
+    pub call_hold_ticks: u32,
+    /// `F-061`: an ambusher has no `Pursue`. See [`decide`].
+    pub ambush: bool,
 }
 
 impl TitanTuning {
-    pub fn of(kind: &TitanKind) -> Self {
+    pub fn of(kind: &TitanKind, simulation_hz: f64) -> Self {
+        let b = &kind.behaviour;
         TitanTuning {
             speed_m_s: kind.speed_m_s,
             accel_m_s2: kind.accel_m_s2,
@@ -137,6 +181,59 @@ impl TitanTuning {
             turn_rad_per_s: kind.turn_deg_per_s.to_radians(),
             attack_range_m: kind.attack_range_m,
             aggro_radius_m: kind.aggro_radius_m,
+            swerve_rad: b.swerve_deg.to_radians(),
+            swerve_period_ticks: ticks(b.swerve_period_s, simulation_hz) as u64,
+            lunge_m_s: b.lunge_m_s,
+            flank_offset_m: b.flank_offset_m,
+            call_radius_m: b.call_radius_m,
+            call_hold_ticks: ticks(b.call_hold_s, simulation_hz),
+            ambush: b.ambush,
+        }
+    }
+}
+
+/// **When this titan's nape is a target, and whether it is one right now.**
+///
+/// The enforcement is physical: [`guard_the_cortex`] puts avian's `ColliderDisabled` on the
+/// cortex sensor while the guard is closed, so `blades::cut` never finds it and never writes a
+/// `TitanHit { zone: Cortex }` at all. **That is the load-bearing detail.** The obvious
+/// implementation — let the hit happen and drop it in [`receive_hits`] — would leave
+/// `mission::count_kills` crediting a kill for a titan that is still standing, because it reads
+/// the message and not the corpse. A guard that is a rule in one domain and invisible in
+/// another is worse than no guard.
+///
+/// `open_left` is a tick accumulator like every other one in this file, never a `Timer`.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct Guard {
+    pub rule: CortexGuard,
+    /// Ticks a body cut has bought, for [`CortexGuard::WhenOpened`]. 0 for everyone else.
+    pub open_left: u32,
+    /// What one body cut buys, resolved once at spawn.
+    pub open_ticks: u32,
+    /// Whether the cortex sensor is currently OUT of the world. Held so the systems below can
+    /// insert and remove the marker on the edge instead of every tick.
+    pub covered: bool,
+}
+
+impl Guard {
+    pub fn of(kind: &TitanKind, simulation_hz: f64) -> Self {
+        let open_ticks = match kind.behaviour.cortex_guard {
+            CortexGuard::WhenOpened(seconds) => ticks(seconds, simulation_hz),
+            _ => 0,
+        };
+        Guard { rule: kind.behaviour.cortex_guard, open_left: 0, open_ticks, covered: false }
+    }
+
+    /// Is the nape a target this tick? **Pure**, so the test can ask it without an app.
+    pub fn open(&self, state: TitanState) -> bool {
+        match self.rule {
+            CortexGuard::Always => true,
+            // Committed = inside his own attack. `Idle` and `Pursue` are not, and `Death` is
+            // past caring — a corpse's cortex is despawned by `receive_hits` anyway.
+            CortexGuard::WhenCommitted => {
+                matches!(state, TitanState::Windup | TitanState::Strike | TitanState::Recover)
+            }
+            CortexGuard::WhenOpened(_) => self.open_left > 0,
         }
     }
 }
@@ -170,7 +267,7 @@ pub(super) fn receive_hits(
     mut commands: Commands,
     mut hits: MessageReader<TitanHit>,
     mut bodies: Query<
-        (Entity, &TitanId, &mut TitanState, &mut StateClock, &TitanTiming),
+        (Entity, &TitanId, &mut TitanState, &mut StateClock, &TitanTiming, &mut Guard),
         With<TitanBody>,
     >,
     children: Query<&Children>,
@@ -178,9 +275,19 @@ pub(super) fn receive_hits(
 ) {
     for hit in hits.read() {
         if hit.zone != HitZone::Cortex {
+            // **The warden's two-stage attack** (`F-060`): a cut into the body is what knocks
+            // the hand off the nape. The same cut already staggers him for `stagger_s`
+            // (`combat::hitstop`, `F-032`), so one blade buys both halves — he stumbles, and
+            // for `WhenOpened(s)` seconds the cortex is a target. For every other kind
+            // `open_ticks` is 0 and this line does nothing.
+            for (_, id, state, _, _, mut guard) in &mut bodies {
+                if *id == hit.titan && *state != TitanState::Death && guard.open_ticks > 0 {
+                    guard.open_left = guard.open_ticks;
+                }
+            }
             continue;
         }
-        for (root, id, mut state, mut clock, timing) in &mut bodies {
+        for (root, id, mut state, mut clock, timing, _) in &mut bodies {
             if *id != hit.titan || *state == TitanState::Death {
                 continue;
             }
@@ -231,14 +338,21 @@ pub(super) fn advance(
             &mut TitanTarget,
             &TitanTiming,
             &TitanTuning,
+            &mut Guard,
         ),
         With<TitanBody>,
     >,
 ) {
     let _ = &data; // the numbers are baked; the resource stays so a reload is one line
-    for (transform, mut state, mut clock, mut cooldown, mut target, timing, tuning) in &mut bodies {
+    for (transform, mut state, mut clock, mut cooldown, mut target, timing, tuning, mut guard) in
+        &mut bodies
+    {
         clock.ticks_in_state = clock.ticks_in_state.saturating_add(1);
         cooldown.cooldown_left = cooldown.cooldown_left.saturating_sub(1);
+        // The warden's window closing again. One accumulator, one writer, like every other one
+        // in this file — and it counts down even in `Death`, where it is simply irrelevant.
+        guard.open_left = guard.open_left.saturating_sub(1);
+        cooldown.alerted_left = cooldown.alerted_left.saturating_sub(1);
 
         // Dead bodies do not think. The dissolve reads the same accumulator.
         if *state == TitanState::Death {
@@ -247,7 +361,15 @@ pub(super) fn advance(
 
         *target = nearest_player(&players, transform.translation);
 
-        let next = decide(*state, &clock, cooldown.cooldown_left, timing, tuning, &target);
+        let next = decide(
+            *state,
+            &clock,
+            cooldown.cooldown_left,
+            cooldown.alerted_left > 0,
+            timing,
+            tuning,
+            &target,
+        );
         if next != *state {
             // Every attack starts the cooldown, not every recovery: `attack_cooldown_s` is the
             // gap between two attacks, and it is shorter than one full attack for no kind.
@@ -272,21 +394,37 @@ pub fn decide(
     state: TitanState,
     clock: &StateClock,
     cooldown_left: u32,
+    alerted: bool,
     timing: &TitanTiming,
     tuning: &TitanTuning,
     target: &TitanTarget,
 ) -> TitanState {
     let seen = target.player.is_some();
+    // A titan that answered a bellower's call comes on regardless of its own eyes. It is the
+    // ONE thing that widens `aggro_radius_m`, and it is temporary: `call_hold_s` ticks.
+    let in_range = seen && (alerted || target.distance_m <= tuning.aggro_radius_m);
     match state {
         TitanState::Idle => {
-            if seen && target.distance_m <= tuning.aggro_radius_m {
+            // **The ambusher has no `Pursue`** (`F-061`). He is not a slow titan, he is a
+            // titan that never comes to you: the only edge out of `Idle` he owns is straight
+            // into his own telegraph, and it fires when you walk into `attack_range_m`. That
+            // is why the lurker cannot be kited and cannot be outrun — there is nothing to
+            // outrun. `aggro_radius_m` still governs whether he TURNS to face you, in
+            // [`walk`], so he is not a statue either.
+            if tuning.ambush {
+                if seen && target.distance_m <= tuning.attack_range_m && cooldown_left == 0 {
+                    TitanState::Windup
+                } else {
+                    TitanState::Idle
+                }
+            } else if in_range {
                 TitanState::Pursue
             } else {
                 TitanState::Idle
             }
         }
         TitanState::Pursue => {
-            if !seen || target.distance_m > tuning.aggro_radius_m {
+            if !in_range {
                 TitanState::Idle
             } else if target.distance_m <= tuning.attack_range_m && cooldown_left == 0 {
                 TitanState::Windup
@@ -309,10 +447,14 @@ pub fn decide(
             }
         }
         TitanState::Recover => {
-            if clock.ticks_in_state >= timing.recover_ticks {
-                TitanState::Pursue
-            } else {
+            if clock.ticks_in_state < timing.recover_ticks {
                 TitanState::Recover
+            } else if tuning.ambush {
+                // Back to standing still. `Recover -> Pursue` would turn the lurker into a
+                // slow husk the moment he had swung once, which is the whole thing he is not.
+                TitanState::Idle
+            } else {
+                TitanState::Pursue
             }
         }
         TitanState::Death => TitanState::Death,
@@ -344,6 +486,150 @@ fn nearest_player(
     best
 }
 
+/// **Where this titan is walking, which is not always where the player is standing.**
+///
+/// Returns the ground vector from `from` to the point the body wants to face. For the husk that
+/// is the player and nothing else — `swerve_rad` and `flank_offset_m` are both 0 and this
+/// function is two subtractions. The two kinds that do use it are the reason the roster is not
+/// eight husks:
+///
+/// * **`flank_offset_m`** (`F-063`, chorus) shifts the aim sideways, with the sign taken off the
+///   titan's own id — even ids left, odd ids right — so a pair arrives from two sides. It
+///   **fades to nothing** as the body closes: full down to twice `attack_range_m`, zero at
+///   `attack_range_m` itself. Without that fade a chorus would circle at 9 m forever and never
+///   once reach the range its own attack needs.
+/// * **`swerve_rad`** (`F-057`, errant) rotates the aim by a fixed angle whose sign flips every
+///   `swerve_period_ticks`. Deterministic out of `(tick, id)` and **never `rand`**: a spawn
+///   position or a heading out of an rng is a desync (`docs/multiplayer.md` rule 4), and the
+///   phase offset by id is what keeps two errants from zig-zagging in lockstep.
+///
+/// Both are gated on `Pursue`. In `Windup` the body tracks the player straight — a telegraph
+/// that swerves is a telegraph nobody can read (P4), and the strike cone would never bear.
+pub fn aim(
+    id: &TitanId,
+    state: TitanState,
+    target: &TitanTarget,
+    tuning: &TitanTuning,
+    from: Vec3,
+    tick: u64,
+) -> Vec3 {
+    let to = target.pos - from;
+    let mut to = Vec3::new(to.x, 0.0, to.z);
+    if to.length_squared() <= f32::EPSILON || state != TitanState::Pursue {
+        return to;
+    }
+
+    if tuning.flank_offset_m > 0.0 {
+        // **Full offset down to twice his own reach, then gone by the time he is inside it.**
+        // The fade is not cosmetic: a constant offset would leave a chorus orbiting at 9 m and
+        // never once reaching the `attack_range_m` its own attack needs. Fading it over the
+        // reach rather than over the offset is what keeps the flank a flank — measured
+        // 2026-08-19, over the offset the pair only ever reached 7.48 m of separation against
+        // a husk pair's 4.00 m; over the reach it reaches 11.32 m
+        // (`tests/mission.rs::f063_a_chorus_pair_splits_where_a_husk_pair_stacks`).
+        let fade =
+            ((target.distance_m - tuning.attack_range_m) / tuning.attack_range_m).clamp(0.0, 1.0);
+        if fade > 0.0 {
+            let side = if id.0 % 2 == 0 { 1.0 } else { -1.0 };
+            let left = Vec3::new(to.z, 0.0, -to.x).normalize();
+            to += left * (side * tuning.flank_offset_m * fade);
+        }
+    }
+
+    if tuning.swerve_rad != 0.0 && tuning.swerve_period_ticks > 0 {
+        let half = tick / tuning.swerve_period_ticks + u64::from(id.0);
+        let sign = if half % 2 == 0 { 1.0 } else { -1.0 };
+        to = Quat::from_rotation_y(sign * tuning.swerve_rad) * to;
+    }
+    to
+}
+
+/// **The bellower's call** (`F-062`): one titan sees you, the district comes.
+///
+/// Every kind with `call_radius_m > 0` that has a target of its own writes `call_hold_s` worth
+/// of ticks onto every OTHER titan inside that radius. What that buys is one line in
+/// [`decide`]: while `alerted_left > 0` a titan ignores its own `aggro_radius_m`. It does not
+/// change the state directly — a state written here would be overwritten by [`advance`] on the
+/// next tick, and the two would fight over one field (§5 rule 4, one writer).
+///
+/// **Rule 6, and it is why the first loop exists.** With no caller in the world this system is
+/// one pass over the titans and a `Vec` that stays empty — it never looks at a pair. The
+/// quadratic part costs `callers × titans`, and a caller is the rarest kind in the game.
+///
+/// ⚠️ The design's bellower reacts to the **sound of gas** (`docs/gameplay/enemies.md`,
+/// `F-051`). There is no perception model, so he calls on sight. The stealth layer that the
+/// enemy design hangs off this kind is **not built**, and this is the call without the ear.
+pub(super) fn answer_the_call(
+    mut bodies: Query<(&TitanId, &Transform, &TitanState, &TitanTuning, &mut TitanClock)>,
+) {
+    let mut callers: Vec<(TitanId, Vec3, f32, u32)> = Vec::new();
+    for (id, transform, state, tuning, _) in &bodies {
+        if tuning.call_radius_m > 0.0
+            && tuning.call_hold_ticks > 0
+            && matches!(*state, TitanState::Pursue | TitanState::Windup | TitanState::Strike)
+        {
+            callers.push((*id, transform.translation, tuning.call_radius_m, tuning.call_hold_ticks));
+        }
+    }
+    if callers.is_empty() {
+        return;
+    }
+    for (id, transform, state, _, mut clock) in &mut bodies {
+        if *state == TitanState::Death {
+            continue;
+        }
+        for (caller, at, radius_m, hold) in &callers {
+            if caller == id {
+                continue;
+            }
+            let d = transform.translation - *at;
+            if Vec3::new(d.x, 0.0, d.z).length() <= *radius_m {
+                clock.alerted_left = clock.alerted_left.max(*hold);
+            }
+        }
+    }
+}
+
+/// **Takes the cortex sensor out of the world while the nape is covered** (`F-059`, `F-060`).
+///
+/// The whole of [`Guard`] is this system. It runs on the **edge** and not per tick: a kind
+/// whose rule is [`CortexGuard::Always`] leaves on the first line, and the others touch their
+/// children only when `covered` actually flips — which for a warden is twice per body cut and
+/// for a weaver twice per attack, not sixty times a second (rule 6).
+///
+/// Why the collider and not the message: see [`Guard`]. A `TitanHit { zone: Cortex }` that
+/// `titan/` throws away has already been counted by `mission::count_kills`.
+pub(super) fn guard_the_cortex(
+    mut commands: Commands,
+    mut bodies: Query<(Entity, &TitanState, &mut Guard), With<TitanBody>>,
+    children: Query<&Children>,
+    parts: Query<&TitanPart>,
+) {
+    for (root, state, mut guard) in &mut bodies {
+        if guard.rule == CortexGuard::Always {
+            continue;
+        }
+        let cover = *state != TitanState::Death && !guard.open(*state);
+        if cover == guard.covered {
+            continue;
+        }
+        guard.covered = cover;
+        let mut pending = vec![root];
+        while let Some(entity) = pending.pop() {
+            if let Ok(kids) = children.get(entity) {
+                pending.extend(kids.iter());
+            }
+            if parts.get(entity) == Ok(&TitanPart::Cortex) {
+                if cover {
+                    commands.entity(entity).insert(ColliderDisabled);
+                } else {
+                    commands.entity(entity).remove::<ColliderDisabled>();
+                }
+            }
+        }
+    }
+}
+
 /// Turn, accelerate, move — **the step only in `Pursue`, the turn also in `Windup`.**
 ///
 /// The split is `Q-031`'s answer and it is the load-bearing half of it: a strike cone
@@ -369,8 +655,10 @@ fn nearest_player(
 #[allow(clippy::type_complexity)]
 pub(super) fn walk(
     data: Res<GameData>,
+    tick: Res<Tick>,
     mut bodies: Query<
         (
+            &TitanId,
             &TitanState,
             &TitanTarget,
             &TitanTuning,
@@ -387,7 +675,7 @@ pub(super) fn walk(
     // make the titan's path depend on the frame rate, and with it the `--offscreen` sha256.
     let dt = (1.0 / data.game.simulation_hz) as f32;
 
-    for (state, target, tuning, stop, mut gait, mut transform, mut linear, mut velocity) in
+    for (id, state, target, tuning, stop, mut gait, mut transform, mut linear, mut velocity) in
         &mut bodies
     {
         if stop.is_some_and(HitStop::is_frozen) {
@@ -418,9 +706,33 @@ pub(super) fn walk(
         // - **`Recover`** is the punish window (`recover_s`). A titan who spends it turning to
         //   face you has no punish window.
         // - **`Idle`** has no target to turn to, and **`Death`** never reaches this line.
-        let turning = seen && matches!(*state, TitanState::Pursue | TitanState::Windup);
+        // **The ambusher tracks you with his eyes and nothing else** (`F-061`). He has no
+        // `Pursue` at all, so without this arm the only ticks a lurker could turn in are the
+        // 24 of his own `windup_s` — 18° at 45 °/s — and a body he never came about to face
+        // would swing his 60° cone at empty street. He turns on the spot inside
+        // `aggro_radius_m` (25 m) and takes no step: `gait.speed_m_s` stays 0 through all of
+        // it, which is what `tests/mission.rs::f061_…` measures.
+        let crouched_and_watching =
+            tuning.ambush && *state == TitanState::Idle && target.distance_m <= tuning.aggro_radius_m;
+        let turning = seen
+            && (matches!(*state, TitanState::Pursue | TitanState::Windup) || crouched_and_watching);
         let pursuing =
             *state == TitanState::Pursue && seen && target.distance_m > tuning.attack_range_m;
+        // **The leap** (`F-058`). The one place in this file where a titan moves outside
+        // `Pursue`, and it is deliberate: the scuttler's blow carries his body forward through
+        // his own `Strike`, so a player who sidestepped at 2.5 m is still inside it when it
+        // lands. He does NOT turn while he does it — `Strike` is committed, see above — which
+        // is what leaves the answer open: go up, not sideways.
+        let lunging = *state == TitanState::Strike && tuning.lunge_m_s > 0.0;
+
+        if lunging {
+            gait.speed_m_s = tuning.lunge_m_s;
+            let step = *transform.forward() * tuning.lunge_m_s;
+            transform.translation += step * dt;
+            linear.0 = step;
+            velocity.0 = step;
+            continue;
+        }
 
         if !pursuing {
             // Planted. A titan that keeps sliding through its own wind-up is the "FSM as
@@ -436,8 +748,7 @@ pub(super) fn walk(
         }
 
         // ---- turn -------------------------------------------------------------------
-        let to = target.pos - transform.translation;
-        let to = Vec3::new(to.x, 0.0, to.z);
+        let to = aim(id, *state, target, tuning, transform.translation, tick.0);
         if to.length_squared() > f32::EPSILON {
             // Bevy's forward is −Z, so the yaw that looks at `to` is `atan2(−x, −z)`.
             let wanted = f32::atan2(-to.x, -to.z);
@@ -514,6 +825,7 @@ mod tests {
         TitanTiming { windup_ticks: 36, strike_ticks: 12, recover_ticks: 24, cooldown_ticks: 90, death_ticks: 60 }
     }
 
+    /// The husk's numbers: no swerve, no leap, no flank, no call, no ambush.
     fn tuning() -> TitanTuning {
         TitanTuning {
             speed_m_s: 3.0,
@@ -521,6 +833,13 @@ mod tests {
             turn_rad_per_s: 50f32.to_radians(),
             attack_range_m: 6.0,
             aggro_radius_m: 45.0,
+            swerve_rad: 0.0,
+            swerve_period_ticks: 0,
+            lunge_m_s: 0.0,
+            flank_offset_m: 0.0,
+            call_radius_m: 0.0,
+            call_hold_ticks: 0,
+            ambush: false,
         }
     }
 
@@ -544,7 +863,7 @@ mod tests {
         // telegraph, or the wind-up is a decoration nobody has to respect.
         let clock = StateClock::default();
         assert_eq!(
-            decide(TitanState::Pursue, &clock, 0, &timing(), &tuning(), &at(1.0)),
+            decide(TitanState::Pursue, &clock, 0, false, &timing(), &tuning(), &at(1.0)),
             TitanState::Windup
         );
     }
@@ -553,7 +872,7 @@ mod tests {
     fn a_cooldown_holds_the_titan_in_pursue_even_inside_reach() {
         let clock = StateClock::default();
         assert_eq!(
-            decide(TitanState::Pursue, &clock, 7, &timing(), &tuning(), &at(1.0)),
+            decide(TitanState::Pursue, &clock, 7, false, &timing(), &tuning(), &at(1.0)),
             TitanState::Pursue
         );
     }
@@ -563,11 +882,11 @@ mod tests {
         let clock = StateClock::default();
         let nobody = TitanTarget::default();
         assert_eq!(
-            decide(TitanState::Pursue, &clock, 0, &timing(), &tuning(), &nobody),
+            decide(TitanState::Pursue, &clock, 0, false, &timing(), &tuning(), &nobody),
             TitanState::Idle
         );
         assert_eq!(
-            decide(TitanState::Idle, &clock, 0, &timing(), &tuning(), &at(99.0)),
+            decide(TitanState::Idle, &clock, 0, false, &timing(), &tuning(), &at(99.0)),
             TitanState::Idle
         );
     }
@@ -586,7 +905,7 @@ mod tests {
         ] {
             let clock = StateClock { ticks_in_state, state_ticks: duration_ticks(state, &t) };
             assert_eq!(
-                decide(state, &clock, 0, &t, &u, &at(1.0)),
+                decide(state, &clock, 0, false, &t, &u, &at(1.0)),
                 wanted,
                 "{state:?} @ {ticks_in_state}"
             );
@@ -597,7 +916,7 @@ mod tests {
     fn death_is_a_one_way_street() {
         let clock = StateClock { ticks_in_state: 9999, state_ticks: 60 };
         assert_eq!(
-            decide(TitanState::Death, &clock, 0, &timing(), &tuning(), &at(1.0)),
+            decide(TitanState::Death, &clock, 0, false, &timing(), &tuning(), &at(1.0)),
             TitanState::Death
         );
     }
@@ -630,12 +949,12 @@ mod tests {
             let last_inside = StateClock { ticks_in_state: total - 1, state_ticks: total };
             let first_after = StateClock { ticks_in_state: total, state_ticks: total };
             assert_eq!(
-                decide(state, &last_inside, 0, &t, &u, &at(1.0)),
+                decide(state, &last_inside, 0, false, &t, &u, &at(1.0)),
                 state,
                 "{state:?} ended one tick before its own `state_ticks`"
             );
             assert_ne!(
-                decide(state, &first_after, 0, &t, &u, &at(1.0)),
+                decide(state, &first_after, 0, false, &t, &u, &at(1.0)),
                 state,
                 "{state:?} ran past the `state_ticks` the overlay prints under it"
             );

@@ -25,8 +25,9 @@
 // are only the two GEOMETRICALLY impossible cases (cortex larger than the whole head) —
 // not the ratio as a whole.
 //
-// ⚠️ `strike_half_angle_deg` is NEW (2026-08-13, Q-031 option 2) and it is UNTUNED — 55.0 on
-// every kind, which is a guess nobody has played. It is half the arc a blow can land in,
+// ⚠️ `strike_half_angle_deg` is NEW (2026-08-13, Q-031 option 2) and it is UNTUNED. It stood at
+// 55.0 on every kind — a guess nobody had played — until 2026-08-19; see the spread at the
+// bottom of this header. It is half the arc a blow can land in,
 // off the titan's own forward vector, on the ground plane: with `attack_range_m` it makes the
 // strike a CONE. Until it existed the strike was a cylinder and a player in the titan's back
 // took exactly what a player in his face took (docs/FINDINGS.md FIND-012), which is why
@@ -51,9 +52,22 @@
 // The spread is by mass: the 4.2 m scuttler is thrown off his line, the 21 m bellower shrugs.
 // ⚠️ UNTUNED — nobody has played any of these eight numbers.
 //
-// The per-kind spread is the obvious next tuning pass: a bellower who swings a tree should
-// probably cover more arc than a scuttler, and the warden's shielding hand argues the other
-// way. Nothing here is measured, so nothing here is differentiated.
+// **That spread was taken on 2026-08-19** (`F-051` roster round) and it is still UNTUNED, but
+// it is no longer uniform: the husk keeps 55.0 because every other measured number in this
+// repository is calibrated against him (F-030, q030, q031, F-034, F-032) and moving him would
+// move the evidence. The others follow the shape of the blow, not a curve:
+//   scuttler 40  a leap is a line, not a sweep — and the line is what you dodge upward out of
+//   weaver   45  a short body's short arc
+//   errant   50  fast and narrow; he catches you by being where you did not lead
+//   husk     55  the baseline, and the calibration. DO NOT MOVE.
+//   chorus   55  a husk's arc — the pair is the mechanic, not the swing
+//   lurker   60  a snatch out of the air; behind him is still safe
+//   warden   75  the shielding hand sweeps wide, which is the price of his open flank
+//   bellower 85  21 m of arm; there is almost no behind
+//
+// ⚠️ `behaviour` is NEW (2026-08-19, F-057..F-063) and it is the first thing in this file that
+// is not a number: it is what makes a kind a kind. Read `docs/gameplay/enemies.md` before
+// touching a row — the identities are designed, not invented here.
 (
     kinds: {
         // Basis: learning the approach angle. The standard titan on which the player
@@ -66,7 +80,15 @@
                      attack_range_m: 6.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 1.5,
                      stagger_s: 0.22,
                      aggro_radius_m: 45.0, death_s: 1.0, health: 100.0, damage: 34.0,
-                     model: "titan_husk"),
+                     model: "titan_husk",
+                     // **The teaching piece, and it stays one.** Eight zeros and an open nape:
+                     // whatever the player learns on a husk is the approach angle and nothing
+                     // else. Every number of the husk's is also the calibration other things
+                     // are pinned to (F-030, q030, q031, F-034, F-032) — it is the one row in
+                     // this file that is NOT free to be made interesting.
+                     behaviour: (swerve_deg: 0.0, swerve_period_s: 0.0, lunge_m_s: 0.0,
+                      flank_offset_m: 0.0, call_radius_m: 0.0, call_hold_s: 0.0, ambush: false,
+                      cortex_guard: Always)),
         // Unpredictable changes of direction -> leading your shots. Stays husk-sized:
         // the surprise lies in the movement, not in the bulk.
         // 5.0 m -> 10.0 m (class `medium`)
@@ -74,10 +96,16 @@
                      regen_per_s: 0.8, windup_s: 0.45, 
                      turn_deg_per_s: 100.0, accel_m_s2: 6.0,
                      strike_s: 0.18, recover_s: 0.37,
-                     attack_range_m: 6.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 1.2,
+                     attack_range_m: 6.0, strike_half_angle_deg: 50.0, attack_cooldown_s: 1.2,
                      stagger_s: 0.20,
                      aggro_radius_m: 50.0, death_s: 1.0, health: 100.0, damage: 30.0,
-                     model: "titan_husk"),
+                     model: "titan_husk",
+                     // 35 degrees to each side, flipping every 0.9 s. He still closes —
+                     // cos 35 deg = 0.82 of 6.5 m/s is 5.3 m/s straight at you — but he is
+                     // never on the line you aimed at. That is the whole lesson: lead him.
+                     behaviour: (swerve_deg: 35.0, swerve_period_s: 0.9, lunge_m_s: 0.0,
+                      flank_offset_m: 0.0, call_radius_m: 0.0, call_hold_s: 0.0, ambush: false,
+                      cortex_guard: Always)),
         // Very fast, jump attack -> vertical evasion. **The fast small one.**
         // The smallest class is his role: small enough to fit between houses.
         // 3.5 m -> 4.2 m (class `small`)
@@ -92,10 +120,17 @@
                      regen_per_s: 1.1, windup_s: 0.40, 
                      turn_deg_per_s: 150.0, accel_m_s2: 12.0,
                      strike_s: 0.2, recover_s: 0.4,
-                     attack_range_m: 2.5, strike_half_angle_deg: 55.0, attack_cooldown_s: 0.9,
+                     attack_range_m: 2.5, strike_half_angle_deg: 40.0, attack_cooldown_s: 0.9,
                      stagger_s: 0.26,
                      aggro_radius_m: 60.0, death_s: 0.8, health: 60.0, damage: 18.0,
-                     model: "titan_husk"),
+                     model: "titan_husk",
+                     // The leap: 14 m/s carried through a 0.2 s `Strike` is 2.8 m of ground
+                     // covered while the blow is already in the air, on top of an
+                     // `attack_range_m` of 2.5. Sidestepping at range no longer works — the
+                     // answer is altitude, which is what the design asks the scuttler to teach.
+                     behaviour: (swerve_deg: 0.0, swerve_period_s: 0.0, lunge_m_s: 14.0,
+                      flank_offset_m: 0.0, call_radius_m: 0.0, call_hold_s: 0.0, ambush: false,
+                      cortex_guard: Always)),
         // Evasive roll with i-frames -> timing instead of spam. A roll needs a short
         // body; 4.5 m sat between `small` (4.2) and `medium` (10) — decided for
         // `small`, because 10 m no longer roll away credibly.
@@ -107,10 +142,18 @@
                      regen_per_s: 1.0, windup_s: 0.50, 
                      turn_deg_per_s: 120.0, accel_m_s2: 8.0,
                      strike_s: 0.18, recover_s: 0.37,
-                     attack_range_m: 2.5, strike_half_angle_deg: 55.0, attack_cooldown_s: 1.1,
+                     attack_range_m: 2.5, strike_half_angle_deg: 45.0, attack_cooldown_s: 1.1,
                      stagger_s: 0.24,
                      aggro_radius_m: 50.0, death_s: 0.8, health: 70.0, damage: 22.0,
-                     model: "titan_husk"),
+                     model: "titan_husk",
+                     // **The nape is shut except inside his own attack.** Not a roll with
+                     // i-frames — a roll needs a `TitanState` arm and `shared/state.rs` is not
+                     // this hand's this round — but the SAME lesson, and the smaller version of
+                     // it: you cannot cut a weaver whenever you like. Bait the wind-up, and the
+                     // 0.5 + 0.18 + 0.37 = 1.05 s of commitment is your window.
+                     behaviour: (swerve_deg: 0.0, swerve_period_s: 0.0, lunge_m_s: 0.0,
+                      flank_offset_m: 0.0, call_radius_m: 0.0, call_hold_s: 0.0, ambush: false,
+                      cortex_guard: WhenCommitted)),
         // Shields the cortex with his hand -> arms first, then cortex. The cover only works
         // when the hand really does hide the cortex: for that he needs arm length.
         // 8.0 m -> 14.0 m (class `large`)
@@ -118,10 +161,20 @@
                      regen_per_s: 0.6, windup_s: 0.70, 
                      turn_deg_per_s: 40.0, accel_m_s2: 3.0,
                      strike_s: 0.22, recover_s: 0.48,
-                     attack_range_m: 8.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 2.0,
+                     attack_range_m: 8.0, strike_half_angle_deg: 75.0, attack_cooldown_s: 2.0,
                      stagger_s: 0.14,
                      aggro_radius_m: 40.0, death_s: 1.4, health: 220.0, damage: 55.0,
-                     model: "titan_large"),
+                     model: "titan_large",
+                     // **The hand is on the nape until you cut it off the nape.** Any body
+                     // cut opens him for 3.0 s — and the same cut already staggers him for
+                     // `stagger_s` 0.14 s (F-032), so the two-stage attack is one loop and not
+                     // two: graze the torso, he stumbles, the nape is a target for three
+                     // seconds. Without the body cut the blade passes through a covered neck
+                     // and books a torso hit instead, which opens him — so the fight teaches
+                     // itself.
+                     behaviour: (swerve_deg: 0.0, swerve_period_s: 0.0, lunge_m_s: 0.0,
+                      flank_offset_m: 0.0, call_radius_m: 0.0, call_hold_s: 0.0, ambush: false,
+                      cortex_guard: WhenOpened(3.0))),
         // Motionless ambush, grab out of the air -> changes of height, attention.
         // "Out of the air" is a question of reach: at 10 m he grabs below the roof, at
         // 14 m above the roof — only then does he force a change of height.
@@ -130,10 +183,19 @@
                      regen_per_s: 0.7, windup_s: 0.40, 
                      turn_deg_per_s: 45.0, accel_m_s2: 2.0,
                      strike_s: 0.2, recover_s: 0.45,
-                     attack_range_m: 8.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 1.8,
+                     attack_range_m: 8.0, strike_half_angle_deg: 60.0, attack_cooldown_s: 1.8,
                      stagger_s: 0.16,
                      aggro_radius_m: 25.0, death_s: 1.4, health: 200.0, damage: 48.0,
-                     model: "titan_large"),
+                     model: "titan_large",
+                     // **He never takes a step.** `ambush` cuts `Idle -> Pursue` out of his
+                     // state machine entirely: he stands until you are inside his 8 m reach,
+                     // strikes, and stands again. Inside his `aggro_radius_m` of 25 he still
+                     // turns on the spot — an ambusher who cannot come about swings his cone at
+                     // empty street. A lurker you have seen is free; a lurker you have not seen
+                     // costs 48.
+                     behaviour: (swerve_deg: 0.0, swerve_period_s: 0.0, lunge_m_s: 0.0,
+                      flank_offset_m: 0.0, call_radius_m: 0.0, call_hold_s: 0.0, ambush: true,
+                      cortex_guard: Always)),
         // Reacts to the sound of gas, calls in reinforcements -> resource discipline.
         // **The big loud one.** He was the largest kind so far and stays it: the largest
         // class that occurs in a normal mission.
@@ -142,10 +204,20 @@
                      regen_per_s: 0.5, windup_s: 0.80, 
                      turn_deg_per_s: 30.0, accel_m_s2: 2.0,
                      strike_s: 0.25, recover_s: 0.55,
-                     attack_range_m: 12.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 2.5,
+                     attack_range_m: 12.0, strike_half_angle_deg: 85.0, attack_cooldown_s: 2.5,
                      stagger_s: 0.10,
                      aggro_radius_m: 70.0, death_s: 1.6, health: 320.0, damage: 70.0,
-                     model: "titan_large"),
+                     model: "titan_large",
+                     // 90 m of call — every idle titan inside it starts walking the moment the
+                     // bellower acquires you. ⚠️ **The ear is missing.** The design has him
+                     // react to the SOUND OF GAS (F-051, F-062); no perception model exists, so
+                     // today he calls on sight, at `aggro_radius_m` 70. The stealth layer is
+                     // the ear, not the call, and it is honestly not built.
+                     // ⚠️ **And he cannot spawn**: he is class `huge` and
+                     // `scale.ron: max_spawnable_class` is `large` (Q-028). See FIND-118.
+                     behaviour: (swerve_deg: 0.0, swerve_period_s: 0.0, lunge_m_s: 0.0,
+                      flank_offset_m: 0.0, call_radius_m: 90.0, call_hold_s: 25.0, ambush: false,
+                      cortex_guard: Always)),
         // Pairs cover each other -> target prioritization, separation. Two equally large
         // standard titans; the task is the pair, not the single body.
         // 5.0 m -> 10.0 m (class `medium`)
@@ -156,7 +228,15 @@
                      attack_range_m: 6.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 1.4,
                      stagger_s: 0.20,
                      aggro_radius_m: 45.0, death_s: 1.0, health: 100.0, damage: 30.0,
-                     model: "titan_husk"),
+                     model: "titan_husk",
+                     // 9 m of flank offset, with the sign taken off the titan's own id — so
+                     // chorus #1 aims 9 m to your left and chorus #2 aims 9 m to your right,
+                     // and they close on you from two sides instead of stacking in one
+                     // silhouette. Turning your back on one is the price of facing the other:
+                     // target prioritization, which is what the pair is for.
+                     behaviour: (swerve_deg: 0.0, swerve_period_s: 0.0, lunge_m_s: 0.0,
+                      flank_offset_m: 9.0, call_radius_m: 0.0, call_hold_s: 0.0, ambush: false,
+                      cortex_guard: Always)),
 
         // The class `boss` (28 m) is deliberately unused: its first representative is a
         // raid opponent, and raids stand behind the Vector Gear gate (docs/ROADMAP.md).

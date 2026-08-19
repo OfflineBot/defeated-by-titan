@@ -1662,7 +1662,7 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 ---
 
 ## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
-**NEXT FREE ID: FIND-114.** Claim it by bumping this line in the same `cat >>` that
+**NEXT FREE ID: FIND-120.** Claim it by bumping this line in the same `cat >>` that
 appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
 file separately and both read the same maximum. One line beats a 108 kB grep.
  — and append with `>>`, never with an edit tool
@@ -6343,3 +6343,334 @@ script that turns it inside an active swing is one tick of drift away from red.
 
 Related: FIND-110 (measured the failure, mis-diagnosed the cause) · FIND-096 · FIND-108 ·
 `docs/QUESTIONS.md` Q-030 · `scripts/q030-reach.txt`
+
+---
+
+## FIND-114 — the game had no front door, and the flag that opens it is the absence of every other flag
+
+**2026-08-19 · `menu` · built and tested, unseen (no window on machine A)**
+
+> *„gibt es ein hauptmenü?"* — the user. It did not. `Screen` had four states
+> (`Playing | Paused | Settings | Lobby`) and a flagless `cargo run` walked into the hub: the
+> game's name appeared in the window bar and nowhere else, and there was no *New Game* and no
+> *Quit* before the first frame of play. `docs/backlog/ui.ron` `UI-001` ("Startbildschirm",
+> prio **Must**) had specified it the whole time.
+
+**What is there now.** `Screen::Title` — the game's name, *New Game*, *Settings*, *Quit* — over
+the hub, which is loaded and frozen behind it (`plate::BACKDROP` is 0.90, not opaque). *New Game*
+is therefore a **release, not a second boot path**: `mission` keeps being the only writer of the
+phase, and no `DeployRequest` is involved.
+
+**The rule, and why it is not a flag.** `Cli::title` is derived from what was *not* said —
+`title_by_default(no_hub, mission, sandbox, script, hub)` is one condition stricter than
+`hub_by_default`, because `--hub` **names** the hub while an empty command line names nothing.
+So: flagless → title; `--hub`, `--mission`, `--sandbox`, `--no-hub`, `--script` → straight into
+the game, exactly as before. **All 35 scripts are untouched by construction**, and the one that
+asks for the hub (`f070-hub.txt`, `--hub --script`) is covered twice over. Measured, pinned
+binary: `f070-hub` 35 asserts / 2845 ticks / exit 0, `p1-overlay` 3 asserts / 431 ticks / exit 0,
+both announcing `first screen … Playing`; a flagless `--headless --ticks 300` announces `Title`
+and exits 0.
+
+**Three things this cost that are worth writing down.**
+
+1. **`Screen` lost its `Default`.** A default would have to be `Title` (which parks several
+   hundred `..default()` tests in front of a plate with the clock stopped) or `Playing` (which
+   swallows the front door silently). It is `FromWorld` out of `Cli` instead — the struct default
+   of `Cli` stays exactly as it was, which is the same trick FIND-057 §5 used for `hub`.
+2. **The one-route-into-Settings invariant would have broken.** *"Settings is reached from the
+   pause screen and from nowhere else, so `Esc` always knows where back is"* — the title is the
+   second route. The way back is now **recorded** (`menu::SettingsFrom`, one writer, a system and
+   not the two buttons) instead of assumed, so a third opener cannot forget it.
+3. 🔴 **The title screen cannot be photographed on either of the two headless modes.** `menu` is
+   gated on `With<PrimaryWindow>`, and `--offscreen` — the only mode that can produce a PNG
+   without a window — has no window entity. So a `--offscreen --screenshot` run with no other
+   flag now *decides* `Title` and *draws* the hub without it. Nothing regressed; but **the stage
+   for this cannot pass 🟨 on machine A at all**, and only the user's windowed machine can raise
+   it. Not worked around: the gate is 🟧 with real compositor evidence (`docs/PLAN-GAME.md` P4)
+   and is worth more than a picture.
+
+**ASSUMPTION (save round, live in parallel):** there is **no *Continue* and no *Load*** on the
+plate, because nothing can be continued yet — the registry rule ("do not add a row nothing can
+spawn") applies to menus too. The row list is one `Vec` in `menu::title::rows`, and the entry
+goes **first** in it, guarded by whatever `save` exposes as "there is a save", passed in the way
+`in_a_sortie` is passed to the pause screen. **Rollback point if that is wrong: `menu/title.rs`
+`rows()` plus one argument on `spawn_title_screen` — nothing else on the screen moves.**
+Likewise *Mission select* is deliberately **not** on the title, so `Screen::Lobby` keeps its
+single route in and its Back button keeps one answer.
+
+Related: FIND-057 §5 (`--hub` became the default the same way) · FIND-092 §4 (the plate) ·
+`docs/backlog/ui.ron` `UI-001` · `tests/menu.rs` (6 new tests) · `src/shared/cli.rs`
+
+---
+
+## FIND-115 — the save file is the one place where "no `serde(default)`" is the wrong rule, and RON almost made that decision for us
+
+**Measured 2026-08-19** by the round that built `src/save/` and `src/progress/` (`F-200`,
+`F-201`). Two things, and the second one is a defect that was found by a red test before it ever
+shipped.
+
+### 1. The rule split, written down so it does not get re-argued
+
+`CLAUDE.md` rule 2 says **no `serde(default)` for game values — a missing value has to crash on
+load.** That rule is about `assets/data/*.ron`: a human typed those files, a missing `gas_per_s`
+has no honest stand-in, and running on a silent `0.0` is worse than not running.
+
+**A save file is not tuning data.** Nobody typed it — *this program* wrote it, possibly a version
+ago, and the player's evening is inside it. A format that crashes on a file yesterday's build
+produced is not rigour, it is data loss with a stack trace, and `F-200` is explicit that no data
+may be lost.
+
+| | `assets/data/*.ron` | `saves/player-<id>.ron` |
+|---|---|---|
+| missing field | **crash at startup** (rule 2, unchanged) | filled from the empty career **and named in a `WARN`** |
+| unknown field | crash | ignored — a newer build wrote it |
+| unparseable | crash | kept as `.ron.broken`, career starts empty, `ERROR` |
+| from a newer schema | n/a | **refused, and never written over** |
+
+**`serde(default)` is allowed in `src/save/` and nowhere else**, and it is not silent there: the
+loader parses every field as an `Option` first, so it can say *which* fields were absent before it
+fills them (`save::file::Loaded::missing`). A default you can read in the log is a decision; a
+default you cannot is the thing rule 2 was written against.
+
+### 2. The defect: RON needs `IMPLICIT_SOME`, or every old save is "broken"
+
+`ron::de::from_str` refuses a bare value where the target is an `Option`. Measured, verbatim:
+
+```
+input:  (schema: 1, profile: (sorties_flown: 2, titans_felled: 6))
+error:  1:37-1:38: Expected option
+```
+
+So the whole optional-field mechanism above **did not work at all**: a file written by a build
+with one field fewer came back as a parse error, went down the corrupt path, got renamed to
+`.ron.broken`, and the career started empty. **`F-201`'s entire promise, inverted, silently, and
+green in every round-trip test** — a serialiser that always writes every field never produces the
+input that fails.
+
+The fix is one function, `save::file::lenient()`:
+
+```rust
+ron::Options::default().with_default_extension(ron::extensions::Extensions::IMPLICIT_SOME)
+```
+
+**It applies to that one parse and nothing else** — `data`'s strict reader is untouched.
+
+**Why it was caught:** `tests/save.rs::f201_a_profile_from_an_older_shape_still_loads_and_names_what_was_missing`
+hand-writes the file as a **string** and asserts on what comes back. It went red with
+`left: 0, right: 2` before the code existed to make it green. A round-trip test —
+serialise a `Profile`, deserialise it, compare — passes with this bug fully present, which is
+`FIND-103` again in a new domain: **the file is the artefact, so the test has to name the bytes.**
+
+### The rollback point
+
+`src/save/file.rs` `lenient()` and the `Option` fields of `ProfileOnDisk`. Whoever decides the
+save must be strict after all deletes both and takes `F-201` off `docs/STATUS.md` in the same
+commit — there is no version of "strict save file" that also loads yesterday's file.
+
+---
+
+## FIND-116 — `F-029` is one component, and `B-007` was never a rope problem
+
+*2026-08-19, `scripts/f029-grapple.txt` (6 of 6 asserts, exit 0) and three tests in `tests/titan.rs`.*
+
+**A rope now stays on a walking titan.** Measured: the husk walks **2.910 m** in a second and the
+anchor follows to within **0.0389 m** — against **0.0485 m**, which is one tick of his own travel
+(`f029_a_rope_bites_a_walking_titan_and_rides_him`). An anchor nailed to the world would have
+missed by the whole 2.910 m.
+
+**What was actually missing was `shared::Body` on the rig root, and nothing else.** Everything the
+feature needs had been standing for days, unused:
+
+| the piece | where it already was |
+|---|---|
+| the hit on a titan | `vector::aim` casts with avian's default filter — it always hit the capsule |
+| a stable id for a moving body | `world::index::maintain_index` block 2 hands out `BodyId` |
+| the hull of a body **that moved** | `maintain_index` block 3, `Changed<GlobalTransform>` — written for `F-029`, until today it had nothing to update |
+| the anchor in the carrier's frame | `HookState::Anchored { body, local_m }`, read back as `index.body(id).center_m + local_m` every tick |
+| the release on a lost carrier | `ReleaseReason::BodyGone`, and the `on_remove` observer that files it |
+
+So the whole of `F-029` is **one `Body` on `titan::rig::build_rig`'s root** plus **one four-line
+system** that takes it off again at `TitanState::Death`. Both halves were red first and each was
+broken back in one line afterwards: dropping `ANCHORABLE` from the mask reds the two ride tests
+(*"the rope found no anchor on a titan 30 m away and dead in the crosshair"*), unregistering
+`rig::the_ropes_let_go_of_a_corpse` reds only the death test (*"the rope is still taut on a dead
+titan"*).
+
+### The cost, and it is rule 6's question
+
+**159 ns per walking titan per tick** — one `SpatialIndex::insert` of a titan-sized hull
+(2.5 × 10 × 2.5 m) against a filled index of 2001 bodies, 200 000 iterations. It is
+**O(1) per titan and independent of world size**: a `BTreeMap` remove/insert plus a `retain` over
+the 1–4 cells a 2.5 m hull touches at `world.cell_m` = 8 m. 100 walking titans would be 15.9 µs,
+**0.095 % of a 16.7 ms tick**. The whole-frame A/B (0/4/8/4/0/8 titans, interleaved) could not
+separate it from noise: 1.65–1.99 ms/tick with the 0-titan runs themselves 0.11 ms apart.
+⚠️ The one thing that could move that number is cell **density** — the `retain` walks the cell's
+whole vector, and the synthetic index above holds ~1–2 blocks per cell where a dense Ashgate block
+holds more. Nobody has measured that against the real map.
+
+### 🔴 Three things fell out of the run that are somebody else's
+
+1. **`B-003` releases every rope on a `warp`, whatever the distance.**
+   `player::rope::update_rope_lengths` sets `overextended` on every anchored arm of a warped
+   player unconditionally, and `vector::hook` releases it in the next tick. So **no script can
+   hook something and then warp**, and the first version of `f029-grapple.txt` read
+   `let go: Overextended (t=329)` two ticks after a warp that had *shortened* the rope from 62 m
+   to 23 m. That is defensible (a teleported rope is not a rope) but it is written down nowhere
+   a script author would look, and it cost this round two runs.
+2. 🔴 **`F-023`'s 12.9° arm fan makes a downward hook unaimable, and it fails silently onto
+   whatever is beneath you.** Aiming a titan at 30 m with `look -90 -28`, the **left arm** bit a
+   roof 8.5 m to the side (`anchored on body 150 at 38.00 0.39 -8.53`) and the run then asserted
+   `rope == 1` about a house. Lifted to 520 m to get the ground out of range it found a **tower
+   top 429 m away** (`body 77 at 29.81 123.00 -96.31`) and spent 51 ticks flying there. The
+   fallback rule (*a side ray that finds nothing anchorable falls back to the centre*) never
+   triggers in Ashgate, because **the ground is anchorable and it is always under the cone.** For
+   a player this is the difference between "I hooked the titan" and "I hooked the street"; the
+   script only made it visible because it prints the anchor. `f029-grapple.txt` act 2 therefore
+   stands at **900 m**, purely so that everything except the titan is past `hook_range_m`.
+   → this is `F-024`/`F-025` territory and it belongs in `docs/QUESTIONS.md`, not in `titan/`.
+3. **`ReleaseReason::BodyGone` has no reader on the HUD.** `hud::arm_aim::sense_arm_miss` reads
+   `HookReleased` but matches **only** `ReleaseReason::NoAnchor(_)`, so the "mit Feedback" half of
+   F-029's acceptance is today a log line (`hook Left of player 1 let go: BodyGone (t=375)`) and
+   nothing on screen. `src/hud/` was not this job's. It is one arm on an existing `match`.
+
+### And the decision this round had to make on its own
+
+**The whole titan silhouette holds a rope, the nape included.** The alternative cannot be built:
+the rig has exactly **one** collider (the root capsule) and every limb box sits *inside* it
+(FIND-109), so a ray never reaches a limb to be refused by one. It does not hand the player a
+free kill either — `blades::cut` drops any pass under `gear.ron: blades.min_speed_m_s` (8.0 m/s)
+**before** it looks at the zone (`src/blades/cut.rs:248`), and a player parked on a nape closes at
+~0 m/s. He has bought position, which is the genre's core move. `F-030`, `Q-030`/`Q-031` and
+`F-034` are untouched and were re-run: `--test titan` 28/28 (the 25 that existed before this round
+all still green, including all six `q030_`/`q031_` and all twelve `f030_`), `--test combat` 20/20.
+
+Related: `docs/BUGS.md` B-007 (both halves closed) · FIND-109 (why there are no limb hitboxes) ·
+FIND-110 · `docs/backlog/` F-024/F-025/F-028 · `scripts/f029-grapple.txt` · `scripts/q030-reach.txt`
+
+---
+
+## FIND-117 — the pass in `f029-grapple.txt` closes at 9.75 m/s, not q030's 20.67
+
+*2026-08-19, same run.*
+
+`scripts/f029-grapple.txt` act 2 is `scripts/q030-reach.txt`'s pass moved 900 m up and otherwise
+unchanged — same `x = −1.80`, same 1.25 s between the warp and the slash. It cuts the cortex, and
+the log says **`cut titan 2 Cortex at 9.75 m/s`** where q030 reports 20.67. The **position** is
+therefore right and the **closing speed** is not: `blades::cut::closing_speed` projects the
+*relative* velocity onto the blade's travel, and the husk in this run is `Pursue`-ing a player
+18 m above him rather than standing 1.88 m away, so his own lean and velocity at the crossing are
+different ones.
+
+**It matters because 9.75 is only 22 % over `gear.ron: blades.min_speed_m_s` = 8.0**, and under
+that number `cut` writes no `TitanHit` at all. The window is narrow in the other direction too: a
+pre-slash wait of 0.50 s lands the cortex, **0.62 s and 0.74 s both miss it entirely** (measured,
+same binary, three runs).
+
+Nothing was tuned to make it pass — the 0.50 s is exactly q030's 0.90 s minus the 0.40 s the hook
+needs, i.e. the same total fall. What this entry is, is a warning on a file: **a script whose
+evidence depends on a 1.75 m/s margin will one day go red for a reason that has nothing to do with
+the feature it is named after**, the way `f030-cortex.txt` did in FIND-110 over five centimetres.
+Whoever finds it red reads the speed in the log before he reads anything else.
+
+Related: FIND-110 (the same shape, five centimetres) · FIND-116 · `scripts/q030-reach.txt`
+
+---
+
+## FIND-118 — the bellower is one line of RON away, and that line is in a test file I may not touch
+
+**Measured 2026-08-19, roster round (`F-057`..`F-063`).**
+
+`assets/data/titan.ron` carries eight kinds. Seven of them now fight differently
+(`docs/gameplay/enemies.md`'s roster, minus one). The eighth, the **bellower**, still cannot be
+spawned at all — `scale.ron: titan.max_spawnable_class` is `"large"` (14 m) and he is `huge`
+(21 m). That is `docs/QUESTIONS.md` Q-028, a user decision taken in his absence, and its own
+entry says taking it back is **one line**.
+
+**It is not one line any more, and that is the finding.** Raising the cap to `"huge"` makes
+`tests/titan.rs::f064_no_kind_spawns_above_the_class_cap` go red in three places, because it
+pins the refusal path down by name:
+
+* `assert!(spawned > 0 && refused > 0, …)` — with the cap at `huge` **nothing is refused**, since
+  the only class above it, `boss` (28 m), has no kind. The test's own sentence for this is *"a cap
+  that refuses nothing or allows nothing tests nothing"*.
+* `assert!(matches!(spawnable(&d, "bellower"), Err(SpawnRefused::AboveClassCap { .. })), …)` —
+  the row it pins by name.
+* the refusal branch's `class.height_m > cap.height_m` assertion never runs again.
+
+`tests/data.rs::t005_the_class_cap_names_a_class_that_exists_and_leaves_something_out` stays
+**green** at `huge`: 21.0 × `width_fraction` 0.25 = 5.25 m in a 7.0 m street, and `boss` is still
+above the cap so its `above > 0` holds. So the whole cost of the change is the three points above.
+
+**What I did instead, and why.** `tests/titan.rs` belonged to another round while this one ran, so
+the cap was left alone and the bellower's mechanic was built and proved **without** him being
+spawnable in the game: `tests/mission.rs::f062_a_bellowers_call_reaches_a_husk_that_is_blind_on_his_own`
+raises the cap **in its own copy of `GameData`**, spawns him, and measures the call — a husk 140 m
+from the player (own `aggro_radius_m` 45, so blind) stays `Idle` alone and goes `Pursue` with a
+bellower 80 m away. So the call is real and one RON line stands between the player and the eighth
+kind.
+
+**The honest second half:** even with the cap raised he would be **half a kind**. The design's
+bellower reacts to the *sound of gas* (`docs/gameplay/enemies.md`, `F-051`, `F-062`) and that is
+the whole stealth layer the enemy chapter hangs off him. There is no perception model, so what is
+built is the **call without the ear**: he calls when he sees you. Raising the cap buys a 21 m
+titan that pulls the district; it does not buy resource discipline.
+
+**ASSUMPTION the work continued under:** the cap stays `"large"` and the bellower does not appear
+in any wave of `missions.ron`.
+**Rollback point:** `assets/data/scale.ron:210` → `max_spawnable_class: "huge"`, plus the three
+assertions above in `tests/titan.rs::f064_…`, plus deleting the two-line cap override in
+`tests/mission.rs::f062_…`. `assets/data/art.ron:183` carries a stale comment saying the same
+thing and should be cleaned in the same commit.
+
+Related: `docs/QUESTIONS.md` Q-028 · FIND-119 · `docs/gameplay/enemies.md`
+
+---
+
+## FIND-119 — an ambusher that cannot turn swings at empty street, and what the roster costs per tick
+
+**Measured 2026-08-19, roster round.**
+
+### 1. The bug the design found, not a test
+
+`titan::brain::walk` gated turning on `matches!(state, Pursue | Windup)`. That is right for every
+kind that walks — and **wrong for the one that does not**. `F-061`'s lurker has no `Pursue` at all
+(`behaviour.ambush`), so the only ticks he could ever have turned in were the 24 of his own
+`windup_s`: 0.4 s at `turn_deg_per_s` 45 = **18°**. A lurker spawned facing away would telegraph,
+swing his 60° cone at empty street, and go back to standing — and it would have read as "the
+ambush does not work" rather than as a facing.
+
+Nothing in the repository would have caught it: `tests/mission.rs::f061_…` measures the ground he
+does **not** cover, and 0.00 m is exactly what a lurker who cannot turn also reports. It was found
+by writing `scripts/f051-kinds.txt` and asking what the player would see. **The fix is one arm:**
+an ambusher turns on the spot while the player is inside `aggro_radius_m`, and takes no step —
+`gait.speed_m_s` stays 0 through all of it, so `f061_…` still holds at `lurker 0.00 m · husk
+28.42 m`.
+
+This is the second time this session that a *script written from the player's side* found what a
+green Rust test could not (`user-messages.md`'s standing note is the first).
+
+### 2. What ten titans cost per tick (rule 6)
+
+Pinned binary (`cp target/debug/defeated_by_titan $SCRATCH/dbt-pinned`), A/B **interleaved and
+order-swapped**, five paired runs of 1800 ticks each, `RUSAGE_CHILDREN` CPU time summed over
+threads. `--headless` is frame-limited to 60 Hz, so **wall clock measures nothing here**: both
+halves came out at 30.136 s / 1800 ticks = 16.74 ms wall on every run, which is the throttle and
+not the work.
+
+| | CPU/tick |
+|---|---|
+| A — the district, nothing spawned | **10.03 ms** |
+| B — the district + **ten titans** (2 husk, 2 errant, scuttler, weaver, warden, lurker, 2 chorus) | **10.85 ms** |
+| delta, median of five paired runs | **+0.81 ms/tick** → ~0.08 ms per titan per tick |
+
+Against the 16.7 ms budget that leaves **5.9 ms of headroom at the elite wave's worst case** —
+`missions.ron: skirmish/elite` sends ten bodies over five minutes, which is exactly what B stood
+up. The spread is wide (−0.60 … +1.02 across the five reps) because three other agents were
+compiling on the same machine; the one negative rep is an A run inflated by somebody else's link
+step, which is what the order-swap is for.
+
+**What is NOT measured:** sixty titans (`F-054`'s own acceptance number), and the guard systems
+under load — `guard_the_cortex` runs on the edge and only for the two guarded kinds, and B carries
+one of each, not ten.
+
+Related: FIND-118 · `docs/lessons/performance.md` · `F-054`

@@ -1079,6 +1079,76 @@ pub struct TitanKind {
     /// That is what makes reading a telegraphed wind-up worth more than tanking it.
     pub damage: f32,
     pub model: String,
+    /// **What this kind does that no other kind does** (`F-057`..`F-063`).
+    ///
+    /// Until 2026-08-19 every kind was the husk with different numbers: one brain, one walk,
+    /// one way to die. `docs/gameplay/enemies.md` says the opposite — *"at least half of all
+    /// enemy kinds carry an anti-autopilot property"* — and a property that is only a number is
+    /// a reskin. This block is where the eight identities stop being prose.
+    pub behaviour: TitanBehaviour,
+}
+
+/// The per-kind behaviour switches. **Every field on every kind, no `serde(default)`** — a kind
+/// that forgets one has to crash on load, not quietly inherit the husk (§4 rule 2).
+///
+/// Zero means "this kind does not do this", and that is deliberate rather than an `Option`: the
+/// husk's row reads as eight zeros and one `Always`, which is exactly what the husk is — the
+/// teaching piece with nothing on top.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TitanBehaviour {
+    /// `F-057` — how far off the straight line to the player the walk swings, in degrees to
+    /// each side. 0 walks straight at you, which is what makes a husk leadable.
+    pub swerve_deg: f32,
+    /// How long one swing lasts before the heading flips to the other side. With `swerve_deg`
+    /// it is the whole of the errant's *"unpredictable changes of direction"*: the player has
+    /// to lead a target that is not where the line says.
+    pub swerve_period_s: f32,
+    /// `F-058` — how fast the body carries itself **forward through its own `Strike`**. 0 is a
+    /// blow struck from a planted stance; anything above it is a leap, and a player who dodges
+    /// sideways at range still gets caught. The scuttler's answer is up, not sideways.
+    pub lunge_m_s: f32,
+    /// `F-063` — how far to the side of the player this kind aims its approach, in meters.
+    /// Two chorus with opposite signs arrive from two sides and cannot both be kept in front.
+    pub flank_offset_m: f32,
+    /// `F-062` — the radius in which this kind wakes every idle titan the moment it acquires a
+    /// target. 0 is silent. This is the *call*, not the ear: the ear is `F-051` and it does not
+    /// exist, so a bellower today calls when it sees you rather than when it hears your gas.
+    pub call_radius_m: f32,
+    /// How long a titan that answered the call keeps coming, in seconds — **the number that
+    /// makes the call worth anything.** Without it a woken titan falls straight back to `Idle`
+    /// on the next tick, because `titan::brain::decide` sends anything outside its own
+    /// `aggro_radius_m` home again; the call would then be a one-tick flicker nobody sees.
+    pub call_hold_s: f32,
+    /// `F-061` — an ambusher never pursues. It stands still until you come inside
+    /// `attack_range_m`, strikes, and goes back to standing still. It cannot be outrun because
+    /// it never ran; it can only be avoided, which is the attention the lurker is for.
+    pub ambush: bool,
+    /// When the nape can be cut at all. See [`CortexGuard`].
+    pub cortex_guard: CortexGuard,
+}
+
+/// **When a kind's cortex is a target.** The cortex is the only lethal spot in the game
+/// (`docs/gameplay/enemies.md`), so this is the strongest per-kind lever there is — and it is
+/// the reason the warden and the weaver are not the husk with other numbers.
+///
+/// It is enforced by taking the cortex sensor **out of the world** while the nape is covered
+/// (`titan::brain::guard_the_cortex`), not by throwing a `TitanHit` away afterwards. That
+/// matters: a hit thrown away in `titan/` would still have been counted as a kill by
+/// `mission::count_kills`, which reads the message and not the corpse.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub enum CortexGuard {
+    /// The nape is always open. Husk, errant, scuttler, lurker, chorus, bellower.
+    Always,
+    /// `F-059` — the nape is open **only while the kind is committed to its own attack**
+    /// (`Windup`, `Strike`, `Recover`). Spamming the approach finds nothing; baiting the blow
+    /// and cutting inside the window is the only way in. That is the weaver's *"timing instead
+    /// of spam"*.
+    WhenCommitted,
+    /// `F-060` — the hand covers the nape until a cut into the **body** knocks it away, and it
+    /// stays away for this many seconds. The warden's two-stage attack: body first, then the
+    /// cortex.
+    WhenOpened(f32),
 }
 
 // ---------------------------------------------------------------------------

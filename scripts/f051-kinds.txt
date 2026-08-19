@@ -1,0 +1,96 @@
+# f051-kinds — **two kinds, the same stance, two different bills.**
+#
+# The roster round of 2026-08-19 (`F-057`..`F-063`) gave every kind in `assets/data/titan.ron`
+# a behaviour instead of only a set of numbers. Six of the seven differences are measured in
+# Rust (`tests/mission.rs::f057_…` .. `f063_…`), because they are geometry: how far a body walks
+# off its own line, how much ground it covers inside its own `Strike`, whether its cortex sensor
+# is in the world. **This file measures the one thing a test cannot: what it costs the PLAYER.**
+#
+#   cargo run -q -- --headless --script scripts/f051-kinds.txt --ticks 1600
+#   # the exit code needs its OWN run — a pipeline's $? is the LAST command's:
+#   ./target/debug/defeated_by_titan --headless --script scripts/f051-kinds.txt --ticks 1600 >/dev/null 2>&1; echo $?
+#
+# ## Why there is no `--mission` on that line
+#
+# The same reason `scripts/f032-swords.txt` has none: a sortie spawns its own waves on the ring
+# at `maps.ron: layout.clear_radius_m`, and a husk that nobody asked for walking into act B is
+# noise in the one number this file is about. `assert kills` is `mission`'s and is therefore not
+# used here — `health` and `titans` carry the whole claim.
+#
+# ## The claim, in one table
+#
+# The player does **exactly the same thing** in act A and act B: he warps to 20 m from a single
+# titan, stands still, and waits ten seconds. Nothing else differs. `titan.ron` does:
+#
+# | act | kind   | aggro | reach | what the kind does | what it costs |
+# |---|---|---|---|---|---|
+# | A | lurker | 25 m | 8.0 m | `behaviour.ambush` — he has no `Pursue` at all | **nothing** |
+# | B | husk   | 45 m | 6.0 m | walks in at 3 m/s and swings | `damage` 34 |
+# | C | lurker | 25 m | 8.0 m | the same lurker, once the player walks into his reach | `damage` 48 |
+#
+# Act C is what makes act A a measurement instead of a broken titan: the lurker in act A is not
+# asleep and he is not blind, he is **waiting**, and the moment the player crosses the 8 m his
+# blow lands harder than the husk's. That is the whole design of the kind
+# (`docs/gameplay/enemies.md`: *"motionless ambush … changes of altitude, attention"*): a lurker
+# you have seen is free ground, a lurker you have not seen is the most expensive thing on the
+# street.
+#
+# ## The control this file owes (rule 5)
+#
+# Act A goes red on one line: `assets/data/titan.ron`, `lurker.behaviour.ambush: false`. He then
+# walks the 20 m like anything else and the `assert health == 100` fails. Measured in Rust as
+# well — `tests/mission.rs::f061_the_lurker_holds_his_ground_while_the_husk_comes_for_you`
+# reports `lurker 0.00 m · husk 28.42 m` and goes red with the same one-line edit.
+#
+# The three acts stand 150 m apart in z, so nothing of a finished act is inside the
+# `aggro_radius_m` of the next one — the widest pair of eyes that can spawn is the husk's 45 m.
+#
+# ## What it produced, 2026-08-19, first clean run — 7 of 7 asserts held
+#
+#   MARK t=92   A-lurker-waits      … ten seconds later: health 100.0/100.0, the lurker at (0,0,0)
+#   MARK t=693  B-husk-comes        … `strike: player 1 takes 34.0 — 66.0/100.0 left` after 8.8 s
+#   MARK t=1294 C-lurker-strikes    … `strike: player 1 takes 48.0 — 18.0/100.0 left` after 0.42 s
+#
+# **Ten seconds at 20 m cost 0 against the lurker and 34 against the husk; 0.42 s at 5 m cost 48
+# against the same lurker.** That is the same player doing the same thing in front of two kinds,
+# and it is the difference the roster round was for.
+
+# The world's blocks are still coming up in the first second.
+wait 1.5
+
+# ---- ACT A — the ambusher. Twenty metres, ten seconds, no bill. ---------------------------
+spawn titan lurker 0 0 0
+warp 0 2 20
+look 180 0
+mark A-lurker-waits
+wait 10.0
+# He is inside his own aggro radius (20 < 25) and outside his own reach (20 > 8). A husk at
+# this distance is on top of the player in five seconds; this one has not moved.
+assert titans == 1
+assert health == 100
+
+# ---- ACT B — the husk. The same twenty metres, the same ten seconds. -----------------------
+spawn titan husk 0 0 150
+warp 0 2 170
+look 180 0
+mark B-husk-comes
+wait 10.0
+assert titans == 2
+# `titan.ron: husk.damage` is 34 of `game.ron: player.health` 100. One landed blow puts him
+# under 70 and nothing else in this run can take health off him.
+assert health < 70
+
+# ---- ACT C — the same lurker, one step too close. ------------------------------------------
+# Not a new titan: the one from act A, still standing where he was spawned twenty seconds ago.
+warp 0 2 5
+look 180 0
+mark C-lurker-strikes
+# 1.5 s and not more: his `attack_cooldown_s` is 1.8, the first blow lands 0.42 s after the
+# player crosses the line, and a second one would take the run to 0 health. Measured.
+wait 1.5
+# `titan.ron: lurker.damage` is 48 — the heaviest blow in the roster that can spawn, and the
+# reason "he does not come to you" is not the same sentence as "he is harmless".
+assert health < 40
+assert health > 0
+assert titans == 2
+end

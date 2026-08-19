@@ -141,8 +141,8 @@
             kill_target: 3,
             waves: [
                 (at_s:   0.0, kind: "husk",     count: 2),
-                (at_s: 120.0, kind: "husk",     count: 2),
-                (at_s: 240.0, kind: "scuttler", count: 1),
+                (at_s: 120.0, kind: "weaver",   count: 1),
+                (at_s: 240.0, kind: "chorus",   count: 2),
             ],
 
             // ---- What a difficulty changes, and it is exactly three things -------------
@@ -162,8 +162,13 @@
                     target_duration_s: 420.0,
                     kill_target: 2,
                     waves: [
-                        (at_s:  60.0, kind: "husk", count: 2),
-                        (at_s: 180.0, kind: "husk", count: 2),
+                        (at_s:  60.0, kind: "husk",   count: 2),
+                        // The one step up a recruit gets: an errant walks 35 degrees off the
+                        // line to each side (`titan.ron: errant.behaviour.swerve_deg`), so the
+                        // hook you fire where he is arrives where he was. Everything else in
+                        // this level is still the husk, and the husk is the teaching piece.
+                        (at_s: 180.0, kind: "husk",   count: 1),
+                        (at_s: 180.0, kind: "errant", count: 1),
                     ],
                 ),
                 // The shape F-071 was written against: three kills in five and a half
@@ -174,22 +179,39 @@
                     kill_target: 3,
                     waves: [
                         (at_s:   0.0, kind: "husk",     count: 2),
-                        (at_s: 120.0, kind: "husk",     count: 2),
-                        (at_s: 240.0, kind: "scuttler", count: 1),
+                        // Two lessons at once and neither of them "more husks": the scuttler
+                        // leaps 2.8 m through his own strike, so the answer is up and not
+                        // sideways; the lurker never moves at all, so the answer is to see him.
+                        (at_s: 100.0, kind: "scuttler", count: 1),
+                        (at_s: 100.0, kind: "lurker",   count: 1),
+                        // And the pair that will not stand in one silhouette.
+                        (at_s: 210.0, kind: "chorus",   count: 2),
                     ],
                 ),
-                // Five kills, five minutes, and the kinds change: `scuttler` is fast and
-                // small (11 m/s, a 0.20 m cortex), `errant` is a husk that keeps up.
-                // That is the difference between "more of them" and "worse ones".
+                // Five kills, five minutes, and **six of the seven spawnable kinds**. That is
+                // the difference between "more of them" and "worse ones": every wave here asks
+                // a different thing of the player, and the warden asks for two blades on the
+                // same body — one into the torso to knock the hand off the nape, then the nape
+                // (`titan.ron: warden.behaviour.cortex_guard: WhenOpened(3.0)`).
+                //
+                // Ten bodies over five minutes, never more than six standing at once. The
+                // eighth kind, the bellower, is missing because he cannot spawn
+                // (`scale.ron: max_spawnable_class`, `docs/QUESTIONS.md` Q-028) — and
+                // `tests/mission.rs::f065_every_wave_of_every_difficulty_asks_for_a_kind_that_may_spawn`
+                // is what stops somebody writing him in here anyway and losing the wave to a
+                // refusal in the log.
                 "elite": (
                     name: "Elite",
                     target_duration_s: 300.0,
                     kill_target: 5,
                     waves: [
-                        (at_s:   0.0, kind: "husk",     count: 3),
-                        (at_s:  60.0, kind: "scuttler", count: 2),
-                        (at_s: 150.0, kind: "errant",   count: 3),
-                        (at_s: 240.0, kind: "scuttler", count: 2),
+                        (at_s:   0.0, kind: "husk",     count: 2),
+                        (at_s:   0.0, kind: "scuttler", count: 1),
+                        (at_s:  70.0, kind: "errant",   count: 2),
+                        (at_s:  70.0, kind: "weaver",   count: 1),
+                        (at_s: 150.0, kind: "warden",   count: 1),
+                        (at_s: 150.0, kind: "lurker",   count: 1),
+                        (at_s: 230.0, kind: "chorus",   count: 2),
                     ],
                 ),
             },

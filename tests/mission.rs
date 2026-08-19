@@ -1490,3 +1490,467 @@ fn f033_a_player_at_a_rack_of_the_hub_walks_away_restocked() {
     assert_eq!(full.pairs_left, capacity, "ten seconds at the rack gave {full:?}");
     assert_eq!(full.sharpness, 1.0);
 }
+
+// ---------------------------------------------------------------------------
+// F-057 .. F-063 — **the roster fights differently, and the difference is mechanical**
+// ---------------------------------------------------------------------------
+//
+// Until 2026-08-19 `titan.ron` carried eight kinds and the game had one enemy: every kind ran
+// `titan::brain` with different numbers, so the player's answer to all eight was the same
+// answer. `docs/gameplay/enemies.md` is explicit that this is the failure mode of the whole
+// combat system — *"of its enemy types, exactly one demands real timing … everything else is
+// mobile feed"* — and it asks for the opposite: **at least half of all kinds carry an
+// anti-autopilot property.**
+//
+// Every test below is a PAIR: the kind that has the property and the husk, which has none, in
+// the same app, under the same tick count. A single-kind assertion ("the errant swerves") is
+// worth nothing here — it cannot tell a behaviour from a coordinate. The husk is the control,
+// and each test names the one line in `assets/data/titan.ron` that has to be zeroed for it to
+// go red.
+
+use avian3d::prelude::ColliderDisabled;
+use defeated_by_titan::shared::{TitanKindName, TitanState};
+use defeated_by_titan::titan::brain::Guard;
+
+/// Every titan of one kind: its root entity, where it stands, and what it is doing.
+fn bodies_of(app: &mut App, kind: &str) -> Vec<(Entity, Vec3, TitanState)> {
+    let mut q = app
+        .world_mut()
+        .query::<(Entity, &TitanKindName, &Transform, &TitanState)>();
+    let mut found: Vec<(Entity, Vec3, TitanState)> = q
+        .iter(app.world())
+        .filter(|(_, name, _, _)| name.as_str() == kind)
+        .map(|(e, _, t, s)| (e, t.translation, *s))
+        .collect();
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    found
+}
+
+/// The one body of a kind, or a message that says which kind was missing.
+fn one_body(app: &mut App, kind: &str) -> (Entity, Vec3, TitanState) {
+    let found = bodies_of(app, kind);
+    assert_eq!(found.len(), 1, "expected exactly one {kind} in the world, found {}", found.len());
+    found[0]
+}
+
+/// **Is this titan's nape out of the world right now?**
+///
+/// Counted over the whole rig rather than looked up by `TitanPart`, on purpose: the cortex is
+/// the only part `titan::brain::guard_the_cortex` ever disables, and a test that names a part
+/// type would have to be rewritten the day the rig grows limb zones. What is under test is the
+/// *effect* — a blade cast finds nothing where the nape is.
+fn nape_is_covered(app: &mut App, root: Entity) -> bool {
+    let mut pending = vec![root];
+    let mut covered = false;
+    while let Some(entity) = pending.pop() {
+        if let Some(kids) = app.world().get::<Children>(entity) {
+            pending.extend(kids.iter());
+        }
+        if app.world().get::<ColliderDisabled>(entity).is_some() {
+            covered = true;
+        }
+    }
+    covered
+}
+
+/// A started app with the player standing at the origin and nothing else going on.
+fn a_field() -> App {
+    let mut app = started(None);
+    place_players(&mut app, Vec3::new(0.0, 2.0, 0.0));
+    ticks(&mut app, 2);
+    app
+}
+
+/// Turns every titan in the world to face the player it can see, on the spot.
+///
+/// A titan spawns facing −Z and turns at `turn_deg_per_s` — 50°/s for a husk. A body that has
+/// to come about 177° therefore spends **three and a half seconds walking an arc**, and any
+/// measurement of where two of them go is measuring that arc and not their behaviour.
+fn face_the_player(app: &mut App) {
+    let mut players = app.world_mut().query_filtered::<&Transform, With<PlayerId>>();
+    let at = players
+        .iter(app.world())
+        .next()
+        .expect("no player to face")
+        .translation;
+    let mut q = app.world_mut().query_filtered::<Entity, With<TitanId>>();
+    let bodies: Vec<Entity> = q.iter(app.world()).collect();
+    for body in bodies {
+        let from = app.world().get::<Transform>(body).expect("a titan has a Transform").translation;
+        let to = Vec3::new(at.x - from.x, 0.0, at.z - from.z);
+        let yaw = f32::atan2(-to.x, -to.z);
+        app.world_mut()
+            .entity_mut(body)
+            .insert(Transform::from_translation(from).with_rotation(Quat::from_rotation_y(yaw)));
+    }
+}
+
+/// How far a point lies off the straight line from `spawn` to `goal`, on the ground plane.
+fn off_the_line(spawn: Vec3, goal: Vec3, at: Vec3) -> f32 {
+    let line = Vec3::new(goal.x - spawn.x, 0.0, goal.z - spawn.z).normalize();
+    let d = Vec3::new(at.x - spawn.x, 0.0, at.z - spawn.z);
+    (d - line * d.dot(line)).length()
+}
+
+/// **`F-057` — the errant is never on the line you aimed at, and the husk always is.**
+///
+/// What it costs the player: a shot has to be led. A husk walks the straight line from where it
+/// stands to where you stand, so the hook you fire at it lands where you fired it; an errant
+/// swings `behaviour.swerve_deg` (35°) to each side, flipping every `swerve_period_s` (0.9 s),
+/// and is metres off that line by the time anything you threw arrives.
+///
+/// **Red when:** `assets/data/titan.ron` gives the errant `swerve_deg: 0.0`. Measured — with
+/// that one edit the errant's excursion falls from 3.15 m to 0.00 m and the assert below fails.
+#[test]
+fn f057_the_errant_leaves_the_line_the_husk_walks() {
+    let mut app = a_field();
+    let goal = Vec3::ZERO;
+    let husk_at = Vec3::new(0.0, 0.0, 40.0);
+    let errant_at = Vec3::new(40.0, 0.0, 0.0);
+    spawn_titan(&mut app, "husk", husk_at);
+    spawn_titan(&mut app, "errant", errant_at);
+
+    // Both are inside their own `aggro_radius_m` (45 and 50) at 40 m, and neither is inside the
+    // other's — nothing here is a group effect.
+    let mut husk_worst = 0.0f32;
+    let mut errant_worst = 0.0f32;
+    for _ in 0..240 {
+        ticks(&mut app, 1);
+        husk_worst = husk_worst.max(off_the_line(husk_at, goal, one_body(&mut app, "husk").1));
+        errant_worst =
+            errant_worst.max(off_the_line(errant_at, goal, one_body(&mut app, "errant").1));
+    }
+
+    assert!(
+        husk_worst < 0.5,
+        "the husk wandered {husk_worst:.2} m off its own line — the control is not a control"
+    );
+    assert!(
+        errant_worst > 2.0,
+        "the errant stayed {errant_worst:.2} m off the line; with swerve_deg 35 and 0.9 s of \
+         half-period at 6.5 m/s it has to leave it by metres, or `behaviour.swerve_deg` is not \
+         reaching `titan::brain::aim`"
+    );
+    println!("F-057 excursion: husk {husk_worst:.2} m · errant {errant_worst:.2} m");
+}
+
+/// **`F-058` — the scuttler's blow carries his body; the husk's does not.**
+///
+/// What it costs the player: sideways is no longer far enough. A husk strikes from a planted
+/// stance, so stepping out of a 6 m reach is the whole answer; a scuttler covers
+/// `behaviour.lunge_m_s` × `strike_s` = 14.0 × 0.2 = **2.8 m** while the blow is already in the
+/// air, on top of a 2.5 m reach. The answer the design asks for is altitude
+/// (`docs/gameplay/enemies.md`: *"vertical evasion"*), and that is what this measures the room
+/// for.
+///
+/// **Red when:** `lunge_m_s: 0.0` on the scuttler — then both numbers are 0.00 m.
+#[test]
+fn f058_the_scuttler_travels_through_his_own_strike_and_the_husk_stands_still() {
+    let mut app = a_field();
+    // Each inside its own `attack_range_m` (2.5 and 6.0) from the start, so both go straight to
+    // `Windup` without a walk that would pollute the measurement.
+    spawn_titan(&mut app, "scuttler", Vec3::new(2.0, 0.0, 0.0));
+    spawn_titan(&mut app, "husk", Vec3::new(0.0, 0.0, 5.0));
+
+    let mut travelled = |app: &mut App, kind: &str, last: &mut Vec3| -> f32 {
+        let (_, at, state) = one_body(app, kind);
+        let step = if state == TitanState::Strike { at.distance(*last) } else { 0.0 };
+        *last = at;
+        step
+    };
+    let mut scuttler_last = one_body(&mut app, "scuttler").1;
+    let mut husk_last = one_body(&mut app, "husk").1;
+    let (mut scuttler_m, mut husk_m) = (0.0f32, 0.0f32);
+    for _ in 0..180 {
+        ticks(&mut app, 1);
+        scuttler_m += travelled(&mut app, "scuttler", &mut scuttler_last);
+        husk_m += travelled(&mut app, "husk", &mut husk_last);
+    }
+
+    assert!(husk_m < 0.01, "the husk moved {husk_m:.3} m inside his own Strike — he must not");
+    assert!(
+        scuttler_m > 2.0,
+        "the scuttler covered {scuttler_m:.3} m inside his Strike; 14.0 m/s × 0.2 s is 2.8 m, so \
+         `behaviour.lunge_m_s` is not reaching `titan::brain::walk`"
+    );
+    println!("F-058 ground covered inside Strike: husk {husk_m:.3} m · scuttler {scuttler_m:.3} m");
+}
+
+/// **`F-059` — a weaver's nape is not a target until he commits.**
+///
+/// What it costs the player: the approach cannot be spammed. On a husk the nape is always
+/// there, so the optimal play is to fly at it whenever the gas allows; on a weaver the cortex
+/// sensor is **out of the world** while he is `Idle` or `Pursue` and comes back only for the
+/// 0.50 + 0.18 + 0.37 = 1.05 s he is inside his own attack. Bait the blow, cut in the window —
+/// which is the *"timing instead of spam"* the design asks the weaver to teach.
+///
+/// It is the collider and not the message that is taken away, and that is the load-bearing
+/// half: a `TitanHit { zone: Cortex }` dropped inside `titan/` would still have been counted a
+/// kill by `mission::count_kills`, which reads the message and not the corpse.
+///
+/// **Red when:** the weaver's `cortex_guard` is set to `Always`.
+#[test]
+fn f059_the_weavers_nape_is_out_of_the_world_until_he_commits() {
+    let mut app = a_field();
+    spawn_titan(&mut app, "weaver", Vec3::new(0.0, 0.0, 20.0));
+    spawn_titan(&mut app, "husk", Vec3::new(0.0, 0.0, -20.0));
+    ticks(&mut app, 4);
+
+    let weaver = one_body(&mut app, "weaver").0;
+    let husk = one_body(&mut app, "husk").0;
+    assert_eq!(one_body(&mut app, "weaver").2, TitanState::Pursue, "the weaver has to be coming");
+    assert!(nape_is_covered(&mut app, weaver), "a weaver in Pursue must not offer his nape");
+    assert!(!nape_is_covered(&mut app, husk), "the husk's nape is always open — that is the husk");
+
+    // He walks 7 m/s into a 2.5 m reach from 20 m: the wind-up is inside three seconds.
+    let mut committed = None;
+    for tick in 0..300 {
+        ticks(&mut app, 1);
+        if matches!(
+            one_body(&mut app, "weaver").2,
+            TitanState::Windup | TitanState::Strike | TitanState::Recover
+        ) {
+            committed = Some(tick);
+            break;
+        }
+    }
+    let at = committed.expect("the weaver never committed in five seconds — the test measured nothing");
+    // One tick of grace: `guard_the_cortex` runs after `advance` in the same tick, but the
+    // `Commands` it queues are applied at the next flush.
+    ticks(&mut app, 2);
+    assert!(
+        !nape_is_covered(&mut app, weaver),
+        "the weaver committed at tick {at} and his nape is still covered — then there is no \
+         window and the kind is unkillable, not hard"
+    );
+    println!("F-059 the weaver's nape opened at tick {at} of his approach");
+}
+
+/// **`F-060` — the warden's hand is on his nape until a body cut knocks it off.**
+///
+/// What it costs the player: a two-stage attack. One pass is not enough — the first blade goes
+/// into the body (which also staggers him for `stagger_s` 0.14 s, `F-032`), and only then is
+/// the cortex a target, for `cortex_guard: WhenOpened(3.0)` seconds. That is
+/// `docs/gameplay/enemies.md`'s *"arms first, then the cortex"*, and it is the one kind in the
+/// roster whose fight has two steps.
+///
+/// **Red when:** the warden's `cortex_guard` is set to `Always`.
+#[test]
+fn f060_a_body_cut_opens_the_wardens_nape_and_time_closes_it_again() {
+    let mut app = a_field();
+    let park = park_players_out_of_aggro(&mut app);
+    assert!(park > 0.0);
+    spawn_titan(&mut app, "warden", Vec3::new(0.0, 0.0, 0.0));
+    spawn_titan(&mut app, "husk", Vec3::new(30.0, 0.0, 0.0));
+    ticks(&mut app, 4);
+
+    let (warden, _, _) = one_body(&mut app, "warden");
+    let husk = one_body(&mut app, "husk").0;
+    assert!(nape_is_covered(&mut app, warden), "a warden starts with his hand on his nape");
+
+    let open_ticks = {
+        let d = data(&app);
+        let guard = Guard::of(&d.titans.kinds["warden"], d.game.simulation_hz);
+        guard.open_ticks
+    };
+    assert!(open_ticks > 0, "titan.ron: the warden's cortex_guard has to be WhenOpened(s)");
+
+    // The same message a blade through the chest writes (`scripts/f032-swords.txt` act B).
+    let warden_id = *app.world().get::<TitanId>(warden).expect("a warden carries a TitanId");
+    let husk_id = *app.world().get::<TitanId>(husk).expect("a husk carries a TitanId");
+    let by = a_player(&mut app);
+    for titan in [warden_id, husk_id] {
+        app.world_mut().write_message(TitanHit {
+            titan,
+            by,
+            zone: HitZone::Torso,
+            speed_m_s: 20.67,
+        });
+    }
+    ticks(&mut app, 3);
+    assert!(!nape_is_covered(&mut app, warden), "a cut into the body has to open the nape");
+    assert!(!nape_is_covered(&mut app, husk), "a husk has no guard and a torso hit changes nothing");
+
+    // …and it closes again. Otherwise the first graze of the sortie makes him a husk forever.
+    ticks(&mut app, open_ticks as u64 + 4);
+    assert!(
+        nape_is_covered(&mut app, warden),
+        "the warden's nape stayed open past his own {open_ticks} ticks — the window is not a window"
+    );
+    println!("F-060 the warden's nape opened on a torso hit and closed again after {open_ticks} ticks");
+}
+
+/// **`F-061` — the lurker never takes a step, and that is the whole kind.**
+///
+/// What it costs the player: attention instead of reflex. He cannot be kited, because there is
+/// nothing to kite; a lurker you have seen is free ground, a lurker you have not seen costs 48
+/// health the moment you pass inside his 8 m reach. `behaviour.ambush` removes `Idle → Pursue`
+/// from his state machine entirely and sends `Recover` back to `Idle` instead of on to
+/// `Pursue`.
+///
+/// **Red when:** `ambush: false` on the lurker — he then walks the 20 m like anything else.
+#[test]
+fn f061_the_lurker_holds_his_ground_while_the_husk_comes_for_you() {
+    let mut app = a_field();
+    let lurker_at = Vec3::new(0.0, 0.0, 20.0);
+    let husk_at = Vec3::new(30.0, 0.0, 20.0);
+    spawn_titan(&mut app, "lurker", lurker_at);
+    spawn_titan(&mut app, "husk", husk_at);
+    ticks(&mut app, 600);
+
+    let (_, lurker_now, lurker_state) = one_body(&mut app, "lurker");
+    let (_, husk_now, _) = one_body(&mut app, "husk");
+    let lurker_m = Vec3::new(lurker_now.x - lurker_at.x, 0.0, lurker_now.z - lurker_at.z).length();
+    let husk_m = Vec3::new(husk_now.x - husk_at.x, 0.0, husk_now.z - husk_at.z).length();
+
+    assert_eq!(lurker_state, TitanState::Idle, "a lurker at 20 m has nothing to do but wait");
+    assert!(lurker_m < 0.05, "the lurker walked {lurker_m:.2} m — an ambusher does not walk");
+    assert!(
+        husk_m > 20.0,
+        "the husk covered {husk_m:.2} m in ten seconds at 3 m/s — the control did not run"
+    );
+    println!("F-061 in ten seconds: lurker {lurker_m:.2} m · husk {husk_m:.2} m");
+}
+
+/// **`F-063` — two chorus arrive from two sides.**
+///
+/// What it costs the player: target prioritization. Two husks walk down the same line and stay
+/// in one silhouette, so facing one faces both; two chorus aim `behaviour.flank_offset_m` (9 m)
+/// to opposite sides of you — the sign comes off the titan's own id — and close from there.
+/// Whichever one you turn to, the other is behind you, and `combat::strike`'s cone (chorus: 55°)
+/// is what makes that cost something.
+///
+/// **The two pairs run in two apps, from the same spawn, facing the player from tick one.**
+/// Both of those are the test's own history: a pair 80 m behind the other pair is inside
+/// nobody's aggro but a pair that has to turn 177° first spends four seconds walking an arc,
+/// and the husk control then "separated" by 7.96 m without any behaviour at all. What is under
+/// test is the walk, not the turn.
+///
+/// **Red when:** `flank_offset_m: 0.0` on the chorus — the separation collapses onto the husks'.
+#[test]
+fn f063_a_chorus_pair_splits_where_a_husk_pair_stacks() {
+    let widest = |kind: &str| -> f32 {
+        let mut app = a_field();
+        spawn_titan(&mut app, kind, Vec3::new(-2.0, 0.0, 40.0));
+        spawn_titan(&mut app, kind, Vec3::new(2.0, 0.0, 40.0));
+        face_the_player(&mut app);
+        let mut worst = 0.0f32;
+        for _ in 0..600 {
+            ticks(&mut app, 1);
+            let pair = bodies_of(&mut app, kind);
+            assert_eq!(pair.len(), 2, "a pair is two bodies");
+            let (a, b) = (pair[0].1, pair[1].1);
+            worst = worst.max(Vec3::new(a.x - b.x, 0.0, a.z - b.z).length());
+        }
+        worst
+    };
+    let chorus_m = widest("chorus");
+    let husk_m = widest("husk");
+
+    assert!(
+        husk_m < 4.5,
+        "the husks came within {husk_m:.2} m of each other's line — they start 4 m apart and \
+         walk at the same point, so they may only converge; the control is broken"
+    );
+    assert!(
+        chorus_m > husk_m * 2.5,
+        "the chorus pair reached {chorus_m:.2} m of separation against the husks' {husk_m:.2} m \
+         — with 9 m of flank offset to each side that has to be a different fight"
+    );
+    println!("F-063 widest separation on the approach: chorus {chorus_m:.2} m · husks {husk_m:.2} m");
+}
+
+/// **`F-062` — one bellower's call wakes a titan that cannot see you.**
+///
+/// What it costs the player: he cannot fight one at a time. A husk 140 m away is blind — his
+/// `aggro_radius_m` is 45 — and stays `Idle` all sortie. Put a bellower between you and him and
+/// the husk comes: `call_radius_m` 90 m, `call_hold_s` 25 s, and `titan::brain::decide` ignores
+/// the husk's own eyes while the alert holds.
+///
+/// ## ⚠️ Two honest holes, and this test names both
+///
+/// 1. **The bellower cannot be spawned in the game.** He is class `huge` (21 m) and
+///    `scale.ron: max_spawnable_class` is `large` (`docs/QUESTIONS.md` Q-028) — so this test
+///    raises the cap **in its own copy of the data** and nowhere else. That is deliberate: it
+///    proves the call is built and that exactly one line of RON stands between the player and
+///    the eighth kind. See `docs/FINDINGS.md` FIND-118.
+/// 2. **The ear is missing.** The design has him react to the *sound of gas* (`F-051`); there
+///    is no perception model, so he calls on sight. The stealth layer is not built.
+///
+/// **Red when:** `call_radius_m: 0.0` on the bellower — the husk then stays `Idle`, which is
+/// what the second half of this test asserts with no bellower in the world at all.
+#[test]
+fn f062_a_bellowers_call_reaches_a_husk_that_is_blind_on_his_own() {
+    let far = Vec3::new(0.0, 0.0, 140.0);
+
+    // ---- with the bellower ------------------------------------------------------------
+    let mut app = built(None);
+    // The one line of `scale.ron` this kind is waiting for, raised here and only here.
+    app.world_mut().resource_mut::<GameData>().scale.titan.max_spawnable_class = "huge".to_string();
+    for _ in 0..4 {
+        app.update();
+        if !app.world().resource::<Log>().0.is_empty() {
+            break;
+        }
+    }
+    place_players(&mut app, Vec3::new(0.0, 2.0, 0.0));
+    ticks(&mut app, 2);
+    spawn_titan(&mut app, "bellower", Vec3::new(0.0, 0.0, 60.0));
+    spawn_titan(&mut app, "husk", far);
+    assert_eq!(
+        bodies_of(&mut app, "bellower").len(),
+        1,
+        "the cap was raised in this app's data and the bellower still did not spawn"
+    );
+    ticks(&mut app, 30);
+    let called = one_body(&mut app, "husk").2;
+
+    // ---- and without him ---------------------------------------------------------------
+    let mut alone = a_field();
+    spawn_titan(&mut alone, "husk", far);
+    ticks(&mut alone, 30);
+    let blind = one_body(&mut alone, "husk").2;
+
+    assert_eq!(
+        blind,
+        TitanState::Idle,
+        "a husk 140 m from the player sees nothing (aggro_radius_m 45) — without that the test \
+         above proves nothing"
+    );
+    assert_eq!(
+        called,
+        TitanState::Pursue,
+        "the bellower stood 80 m from the husk, inside his 90 m call, and the husk did not come"
+    );
+    println!("F-062 the same husk at 140 m: {blind:?} alone · {called:?} with a bellower in earshot");
+}
+
+/// **Every wave of every difficulty names a kind that may actually spawn.**
+///
+/// `tests/data.rs::t005_every_wave_names_a_titan_kind_that_exists` checks the templates' own
+/// waves and stops there — the `difficulties` are where the mixes live, and a kind that is in
+/// `titan.ron` but above `scale.ron: max_spawnable_class` would be refused at spawn and the
+/// wave would simply not arrive. That is a mission short one titan and a log line nobody reads.
+#[test]
+fn f065_every_wave_of_every_difficulty_asks_for_a_kind_that_may_spawn() {
+    let app = built(None);
+    let d = data(&app);
+    let mut seen = 0;
+    for (mission, template) in &d.missions.templates {
+        let levels = template.difficulties.iter().map(|(n, l)| (n.as_str(), &l.waves));
+        let own = std::iter::once(("(the template's own)", &template.waves));
+        for (level, waves) in own.chain(levels) {
+            for wave in waves {
+                seen += 1;
+                assert!(
+                    defeated_by_titan::titan::spawnable(&d, &wave.kind).is_ok(),
+                    "{mission}/{level}: the wave at {} s asks for {:?}, which cannot spawn: {}",
+                    wave.at_s,
+                    wave.kind,
+                    defeated_by_titan::titan::spawnable(&d, &wave.kind).unwrap_err()
+                );
+            }
+        }
+    }
+    assert!(seen > 10, "only {seen} waves were checked — missions.ron got smaller, not the test");
+}
