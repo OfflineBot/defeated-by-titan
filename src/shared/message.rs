@@ -150,6 +150,55 @@ impl HookAnchored {
     }
 }
 
+/// **Why a trigger pull found nothing** (`F-028` *Fallback ohne Kandidat*).
+///
+/// The user, 2026-08-18, after playing: *„teilweise kann man gar nicht usen weil keine ahnung
+/// wieso."* `B-007` found two live causes and neither of them was visible in the running game:
+/// a titan carries no [`Body`](crate::shared::Body), so a ray that ends on him is a hit that
+/// holds nothing — and because he is solid, he also **blocks** the wall behind him. Both came
+/// out as one silent `NoAnchor` and the arm simply stayed idle.
+///
+/// `F-028`'s acceptance is the user's sentence turned around — *"Kein Tastendruck bleibt ohne
+/// Rueckmeldung; der Spieler versteht immer, warum kein Haken gesetzt wurde"* — so the reason
+/// travels **on** [`ReleaseReason::NoAnchor`] and not through a channel of its own: `hud` and
+/// `sound` already read that message, and a second one would be a second truth.
+///
+/// The four are exactly the four answers [`AimPoint`](crate::shared::AimPoint) can give plus
+/// the one probe that tells "nothing at all" from "too far", and each of them asks a different
+/// thing of the player: turn, aim elsewhere, or come closer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MissReason {
+    /// The ray ran the whole of `vector.hook_range_m` and ended in open sky. **Turn.**
+    NothingInRange,
+    /// There **is** something on that line, and it is further away than `vector.hook_range_m`.
+    /// **Come closer.** Told apart from [`Self::NothingInRange`] by one probe ray, cast only
+    /// in the tick a pull failed (`vector::hook`).
+    OutOfReach,
+    /// The ray ended on a real surface that carries no anchor: untagged geometry, or a titan
+    /// — who is solid, so he also hides whatever stands behind him (`B-007`). **Aim past it.**
+    SurfaceHoldsNothing,
+    /// The surface holds, but its carrier has no stable [`BodyId`] — there is nothing to hang
+    /// a rope on that would survive the next tick. A world-building fault, not a player error;
+    /// it is a class of its own so it can never again be read as "you aimed badly"
+    /// (`tests/world.rs` measures it, `B-001` was it).
+    NoCarrier,
+}
+
+impl MissReason {
+    /// One English sentence, for the log and for whoever has to explain a run afterwards.
+    ///
+    /// Lives next to the variants rather than in `hud`, because the headless run has no HUD
+    /// and the log is the only evidence a script leaves behind.
+    pub const fn explains(self) -> &'static str {
+        match self {
+            MissReason::NothingInRange => "nothing within hook range on that line — open sky",
+            MissReason::OutOfReach => "something is out there, but further than hook range",
+            MissReason::SurfaceHoldsNothing => "the surface it hit holds no anchor",
+            MissReason::NoCarrier => "the surface holds, but it has no carrier id",
+        }
+    }
+}
+
 /// Why a hook let go.
 ///
 /// The reason is not log prose: `hud` and `sound` tell from it whether the player let go
@@ -160,8 +209,10 @@ pub enum ReleaseReason {
     Released,
     /// The rope had to be paid out beyond `vector.hook_range_m`, because a wall won.
     Overextended,
-    /// The ray hit nothing anchorable — the tip comes back empty.
-    NoAnchor,
+    /// The ray hit nothing anchorable — the tip comes back empty, **and it carries why**
+    /// (`F-028`). A payload and not a second message: every reader of this enum already gets
+    /// the reason for free, and there is no way to send the one without the other.
+    NoAnchor(MissReason),
     /// **The carrier is gone** (`F-029`: "releases with feedback when the titan dies";
     /// `T-020`: an unloaded area).
     BodyGone,

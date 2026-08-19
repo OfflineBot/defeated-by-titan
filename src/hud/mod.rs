@@ -151,7 +151,16 @@ impl Plugin for HudPlugin {
                 // The same three-step split for the arm markers, and for the same reason: the
                 // shape is then testable against a state set by hand, and the colour can be
                 // neutralised without touching the geometry.
-                (arm_aim::sense_arm_aim, arm_aim::shape_arm_aim, arm_aim::paint_arm_aim)
+                // `F-028`: the miss hint is sensed BEFORE the paint, because the paint reads
+                // `ArmMiss` — a colour that lagged its own cause by a frame would flash after
+                // the player had already pressed again.
+                (
+                    arm_aim::sense_arm_aim,
+                    arm_aim::sense_arm_miss,
+                    arm_aim::shape_arm_aim,
+                    arm_aim::paint_arm_aim,
+                    arm_aim::show_arm_miss,
+                )
                     .chain(),
             ),
         )

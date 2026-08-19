@@ -1662,7 +1662,7 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 ---
 
 ## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
-**NEXT FREE ID: FIND-102.** Claim it by bumping this line in the same `cat >>` that
+**NEXT FREE ID: FIND-104.** Claim it by bumping this line in the same `cat >>` that
 appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
 file separately and both read the same maximum. One line beats a 108 kB grep.
  — and append with `>>`, never with an edit tool
@@ -5602,3 +5602,74 @@ Evidence: `src/shared/terrain.rs::f003_the_draw_reaches_only_cells_the_relaxatio
 · `tests/world.rs::f003_the_districts_ground_comes_from_the_map_and_barely_from_the_seed`
 (prints `at most 1 cells (0.4 %) depend on the seed`) · one-line break `START_SPREAD 2 -> 6`
 turns both red, `--lib` 198 passed, `--test world` 24, `--test data` 55.
+
+---
+
+## FIND-102 — `F-028`: the arm was silent because the *ray* had no vocabulary, not the HUD
+
+**2026-08-19 [offlinebot], measured.** `B-007` said a titan eats your hook and the game never
+says so. The cause is narrower than "no feedback": `vector::hook::anchor_target` collapses
+**four** different worlds into one `None`, and once it has, no HUD downstream can tell them
+apart — the information is destroyed at the moment it is produced.
+
+The four, and each asks the player for a different move:
+
+| `AimPoint` | reason | what he should do |
+|---|---|---|
+| `point_m: None`, nothing beyond reach | `NothingInRange` | turn — that line is empty |
+| `point_m: None`, an anchor further out | `OutOfReach` | come closer |
+| `point_m: Some`, `anchorable: false` | `SurfaceHoldsNothing` | aim past it — **incl. past a titan** |
+| `point_m: Some`, `anchorable`, `body: None` | `NoCarrier` | nothing; the world is at fault (`B-001`) |
+
+**Rows 1 and 2 were not merely undisplayed — they were indistinguishable**, and no amount of HUD
+work could have separated them: `vector::aim::cast` is capped at `vector.hook_range_m`, so an
+anchorable wall one metre past your reach and 500 m of empty sky produce the byte-identical
+`AimPoint::default()`. Telling them apart costs exactly one extra ray, and it is affordable
+because it is cast **only in the tick a pull failed** — never per frame — at `2 *
+world.half_extent_m` (the whole world, so no new tuning number was invented for it).
+
+Measured in the running game, and it reproduces `„teilweise"` in one script
+(`--headless`, exit 0, script kept at `scratchpad/f028-why.txt`; it wants a home in `scripts/`):
+
+```
+t=118  hook Left  found no anchor: NothingInRange      — 400 m up, looking 60 deg up
+t=217  hook Left  found no anchor: SurfaceHoldsNothing — 6 m in front of a husk (B-007)
+t=254  hook Right found no anchor: NothingInRange      — the husk had walked; same key, other reason
+```
+
+That last pair is the user's word measured: **two identical trigger pulls, 0.6 s apart, failing
+for two different reasons because a 10 m body moved.** It depends on what is in front of the
+crosshair, not on what he pressed — which is exactly why it felt random.
+
+⚠️ **What this does NOT fix, deliberately:** a titan still holds no rope (`F-029`, unbuilt) and
+still blocks the wall behind him. `F-028` is that the player *understands*, not that he
+succeeds. The blocking half is still an open design question and is `B-007`'s to carry.
+
+## FIND-103 — a test that asks the screen and the function the same question passes when both are wrong
+
+**2026-08-19 [offlinebot], caught by rule 5 and only by rule 5.** The new
+`tests/menu.rs::f016_the_two_assist_knobs_are_live_and_readable` asserted that the settings row
+shows the right angle like this:
+
+```rust
+shown.iter().any(|t| t.contains(&format!("{:.1} deg", s.assist_catch_deg())))
+```
+
+`assist_catch_deg()` is also what *builds* the row. So the test compared the function against
+itself. Breaking the fix — `assist_catch_deg` hard-wired to return its maximum — left it
+**green**, while the `--lib` unit test next door went red. The repair is to compute the expected
+number in the test out of the two constants (`ASSIST_STEP_PCT / 100 * ASSIST_CATCH_MAX_DEG`),
+after which the same break produces:
+
+```
+one notch is 1.0 deg off the crosshair, and the row does not say so:
+[..., "0 - 100, 0 = free aim — now 20.0 deg off the crosshair (max 20)", ...]
+```
+
+**The general shape, and it is not specific to settings screens:** any assertion of the form
+"the view shows `f(state)`" is vacuous when the view is *rendered* from `f(state)`. It only
+tests the plumbing between them, which is the part that rarely breaks. Either recompute the
+expectation from constants, or assert a literal.
+
+This is the whole argument for CLAUDE.md rule 5's *third* step. The test was written first and
+it was green first; only "break the fix and watch it go red" found that it could not fail.

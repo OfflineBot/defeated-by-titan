@@ -1,0 +1,30 @@
+# F-028 — a pull that finds nothing now says WHY, and the reasons differ.
+#
+#   ./target/debug/defeated_by_titan --headless --script <this> --ticks 600
+#   ./target/debug/defeated_by_titan --headless --script <this> --ticks 600 >/dev/null 2>&1; echo $?
+#
+# 1. Straight up from 400 m: nothing within `vector.hook_range_m` on that line, and the probe
+#    finds nothing beyond it either. NothingInRange — "turn".
+# 2. Six metres in front of a husk, out on the open ground east of Ashgate so that HE is the
+#    only thing the ray can end on. B-007 exactly: a titan carries no `shared::Body`, so the
+#    ray ends on a surface that holds nothing — and he hides whatever is behind him.
+#    SurfaceHoldsNothing — "aim past him".
+wait 1.5
+warp 17.5 400 0
+look 0 60
+wait 0.4
+mark f028-sky
+hook left 0.2
+wait 0.6
+
+spawn titan husk 400 0 400
+wait 0.6
+warp 400 0.05 406
+look 0 40
+wait 0.4
+mark f028-titan
+hook left 0.2
+wait 0.6
+hook right 0.2
+wait 0.8
+mark f028-done

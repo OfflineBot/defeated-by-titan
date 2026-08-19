@@ -164,7 +164,10 @@ use bevy::text::FontSize;
 use crate::data::GameData;
 use crate::hud::crosshair::NEUTRAL;
 use crate::hud::{signal, HudElement, KEEP_OUT_HIGH_PCT, KEEP_OUT_LOW_PCT};
-use crate::shared::{AimPoint, ArmAim, Hook, HookState, LocalPlayer, Side};
+use crate::shared::{
+    AimPoint, ArmAim, Hook, HookReleased, HookState, LocalPlayer, MissReason, PlayerId,
+    ReleaseReason, Side,
+};
 
 /// Which arm this node belongs to, and which of its two nodes it is.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -218,6 +221,61 @@ pub fn state_for(hook: &HookState, anchorable: bool) -> ArmAimState {
         }
         HookState::Flying { .. } | HookState::Retracting => ArmAimState::Busy,
         HookState::Anchored { .. } => ArmAimState::Anchored,
+    }
+}
+
+/// **Why the last pull of this arm found nothing, while it is still worth saying** (`F-028`).
+///
+/// The user, 2026-08-18: *„teilweise kann man gar nicht usen weil keine ahnung wieso."* Before
+/// today a pull that found nothing wrote one `info!` line into a log he never reads and left the
+/// marker exactly as it was — the same dash, the same grey, no sound. `F-028`'s acceptance is
+/// his sentence turned around: *"Kein Tastendruck bleibt ohne Rueckmeldung."*
+///
+/// **A countdown and not a flag**, because the thing being reported is an *event* and the marker
+/// is a *state*: the word has to appear at the moment the key goes down and then get out of the
+/// way, or the HUD ends up asserting something about the world that stopped being true. It lives
+/// on all three nodes of an arm so that [`paint_arm_aim`] can colour the glyph and
+/// [`show_arm_miss`] can write the letter without either of them reading the other's field.
+///
+/// **One writer:** [`sense_arm_miss`].
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct ArmMiss {
+    /// `None` = this arm has not missed recently, and the marker says what it always said.
+    pub reason: Option<MissReason>,
+    /// Seconds of hint left. Counted down on the **generic** `Time`, not `Time<Fixed>`: this is
+    /// view state on a frame-rate clock, and a hint that lived in fixed ticks would flicker at a
+    /// frame rate the simulation does not share.
+    pub left_s: f32,
+}
+
+/// How long the word stays. A legibility constant and not a game value — the same argument
+/// [`ArmShape`] makes: `CLAUDE.md` rule 2 names "a titan kind, a blade tier, a gas cost", and
+/// how long a caption is readable is none of the three.
+///
+/// 1.6 s is two comfortable reads of two words at arm's length, and it is under the time a
+/// player takes to line up a second shot — so the hint never outlives the situation it
+/// describes.
+pub const MISS_HINT_S: f32 = 1.6;
+
+/// **The four words**, one per [`MissReason`], and each of them tells the player to do a
+/// different thing.
+///
+/// Short on purpose: this sits next to a 20 px glyph in the corner of his eye while he is
+/// falling, and a sentence there is a sentence nobody reads. The long form is in the log
+/// ([`MissReason::explains`]) and that is where a run's evidence comes from.
+///
+/// | word | what he should do |
+/// |---|---|
+/// | `NO TARGET` | turn — that line is empty all the way out |
+/// | `TOO FAR` | come closer — there is something, past your reach |
+/// | `WONT HOLD` | aim past it — including past a titan (`B-007`) |
+/// | `NO ANCHOR` | nothing he can do; the world is at fault (`B-001`) |
+pub const fn miss_label(reason: MissReason) -> &'static str {
+    match reason {
+        MissReason::NothingInRange => "NO TARGET",
+        MissReason::OutOfReach => "TOO FAR",
+        MissReason::SurfaceHoldsNothing => "WONT HOLD",
+        MissReason::NoCarrier => "NO ANCHOR",
     }
 }
 
@@ -626,6 +684,7 @@ pub fn spawn_arm_aim(mut commands: Commands, data: Res<GameData>) {
             Name::new(format!("hud_arm_marker_{side:?}")),
             ArmMarker { side, part: MarkerPart::Glyph },
             ArmAimState::default(),
+            ArmMiss::default(),
             HudElement,
             BackgroundColor(NEUTRAL),
             BorderColor::all(Color::NONE),
@@ -635,6 +694,7 @@ pub fn spawn_arm_aim(mut commands: Commands, data: Res<GameData>) {
             Name::new(format!("hud_arm_tether_{side:?}")),
             ArmMarker { side, part: MarkerPart::Tether },
             ArmAimState::default(),
+            ArmMiss::default(),
             HudElement,
             BackgroundColor(NEUTRAL),
             BorderColor::all(Color::NONE),
@@ -643,6 +703,7 @@ pub fn spawn_arm_aim(mut commands: Commands, data: Res<GameData>) {
         commands.spawn((
             Name::new(format!("hud_arm_label_{side:?}")),
             ArmMarkerLabel(side),
+            ArmMiss::default(),
             HudElement,
             Text::new(key_label(side)),
             TextFont { font_size: FontSize::Px(LABEL_PX), ..default() },
@@ -667,8 +728,11 @@ fn placeholder(mut node: Node, x: Val) -> Node {
 
 /// The `Q` / `E` letter.
 ///
-/// It names a key binding, so its **text** is written once at startup and never again; only its
-/// position follows the glyph.
+/// It names a key binding, and until `F-028` its **text** was written once at startup and never
+/// again. It is now also the one place a *failed* pull can say something in words
+/// ([`show_arm_miss`]): for [`MISS_HINT_S`] seconds after a trigger that found nothing the
+/// letter is followed by [`miss_label`], and then it goes back to being the key and nothing
+/// else. Its position always follows the glyph.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ArmMarkerLabel(pub Side);
 
@@ -716,6 +780,110 @@ pub fn sense_arm_aim(
     for (marker, mut state) in &mut markers {
         let side = marker.side;
         state.set_if_neq(state_for(&hook.arm(side).state, aim.side(side).anchorable));
+    }
+}
+
+/// **`F-028` — reads every failed pull of the local player and starts the hint.**
+///
+/// The message is [`HookReleased`] with [`ReleaseReason::NoAnchor`], which `vector::hook` has
+/// written in the same tick the trigger went down. No new channel: the reason travels **on** the
+/// message every consumer already reads, so there is no way for the HUD and the log to disagree
+/// about why a shot did not leave.
+///
+/// **Filtered by [`PlayerId`]** and not by "the only player there is": in a session with a team
+/// mate his misses arrive here too, and a marker that flashed for someone else's trigger would
+/// be a lie about the local player's own gear (`docs/multiplayer.md` rule 1).
+///
+/// The countdown runs even in a frame with no message, so the hint clears itself — and once it
+/// has cleared, the `set_if_neq` stops writing at all and change detection goes quiet
+/// (`docs/lessons/performance.md` rule 1).
+///
+/// **One writer of [`ArmMiss`].**
+pub fn sense_arm_miss(
+    time: Res<Time>,
+    mut released: MessageReader<HookReleased>,
+    players: Query<&PlayerId, With<LocalPlayer>>,
+    mut glyphs: Query<(&ArmMarker, &mut ArmMiss), Without<ArmMarkerLabel>>,
+    mut labels: Query<(&ArmMarkerLabel, &mut ArmMiss), Without<ArmMarker>>,
+) {
+    let dt = time.delta_secs();
+    // The freshest miss per side this frame. An array and not a lookup: two sides, and the
+    // second pull of the same arm in one frame is the one the player is asking about.
+    let mut fresh: [Option<MissReason>; 2] = [None; 2];
+    if let Some(me) = players.iter().next() {
+        for message in released.read() {
+            if message.player != *me {
+                continue;
+            }
+            if let ReleaseReason::NoAnchor(why) = message.reason {
+                fresh[message.side.index()] = Some(why);
+            }
+        }
+    } else {
+        // No local player (the menu before a sortie): drain the cursor anyway, or the first
+        // frame after a spawn replays a backlog of somebody else's misses.
+        released.clear();
+    }
+
+    for (side, mut miss) in glyphs
+        .iter_mut()
+        .map(|(m, miss)| (m.side, miss))
+        .chain(labels.iter_mut().map(|(l, miss)| (l.0, miss)))
+    {
+        miss.set_if_neq(step_miss(*miss, fresh[side.index()], dt));
+    }
+}
+
+/// One step of the hint: a fresh miss restarts it, anything else lets it run out.
+///
+/// A free function so the rule is testable without a message writer, a local player and a
+/// clock having to be arranged first — the same reason [`state_for`] is one.
+///
+/// **A fresh miss always wins, including over a hint that is already running**: the second
+/// press is the one the player is asking about, and a hint that kept showing the first reason
+/// would answer the wrong question. It resets even when the reason is *the same*, so the word
+/// visibly reappears instead of quietly ageing out mid-press.
+pub fn step_miss(miss: ArmMiss, fresh: Option<MissReason>, dt_s: f32) -> ArmMiss {
+    match fresh {
+        Some(why) => ArmMiss { reason: Some(why), left_s: MISS_HINT_S },
+        None => {
+            let left_s = miss.left_s - dt_s.max(0.0);
+            // Cleared to the exact default and not to a small remainder: `set_if_neq` then
+            // stops writing entirely once the hint is over (§6 rule 6).
+            if left_s > 0.0 && miss.reason.is_some() {
+                ArmMiss { reason: miss.reason, left_s }
+            } else {
+                ArmMiss::default()
+            }
+        }
+    }
+}
+
+/// **`F-028` — puts the word under the marker**, and takes it away again.
+///
+/// Writes `Text` and `TextColor` on the two label nodes and nothing else; the letter itself
+/// still comes from [`key_label`], so a rebind cannot leave a stale key on screen
+/// (`tests/hud.rs::f171_the_marker_letters_are_the_keys_that_fire_the_arms`).
+///
+/// Both writes are guarded by a comparison: outside a hint this system does nothing at all, and
+/// a standing player produces no write (§6 rule 6).
+pub fn show_arm_miss(
+    data: Res<GameData>,
+    mut labels: Query<(&ArmMarkerLabel, &ArmMiss, &mut Text, &mut TextColor)>,
+) {
+    let cyan = signal(&data, "cyan");
+    let crimson = signal(&data, "crimson");
+    for (label, miss, mut text, mut colour) in &mut labels {
+        let (wanted, ink) = match miss.reason {
+            Some(why) => (format!("{}  {}", key_label(label.0), miss_label(why)), crimson),
+            None => (key_label(label.0).to_string(), cyan),
+        };
+        if text.0 != wanted {
+            text.0 = wanted;
+        }
+        if colour.0 != ink {
+            colour.0 = ink;
+        }
     }
 }
 
@@ -834,19 +1002,25 @@ pub fn place_arm_aim(
 pub fn paint_arm_aim(
     data: Res<GameData>,
     mut markers: Query<
-        (&ArmAimState, &mut BackgroundColor, &mut BorderColor),
+        (&ArmAimState, &ArmMiss, &mut BackgroundColor, &mut BorderColor),
         With<ArmMarker>,
     >,
 ) {
     let cyan = signal(&data, "cyan");
-    for (state, mut fill, mut border) in &mut markers {
+    // `F-028`: the one thing colour is allowed to carry, and it carries it for [`MISS_HINT_S`]
+    // and not a frame longer. It is an **event** colour, not a state colour — the shape still
+    // says everything about the state, so `F-171`'s rule ("the colour carries nothing the shape
+    // does not") holds for every state the marker can sit in.
+    let crimson = signal(&data, "crimson");
+    for (state, miss, mut fill, mut border) in &mut markers {
         // An outline glyph is transparent inside and coloured at the edge; a filled one is the
         // other way round. Which of the two it is comes out of the shape table, so the colour
         // cannot disagree with the geometry.
         let shape = shape_of(*state);
-        let ink = match state {
-            ArmAimState::Free => NEUTRAL,
-            ArmAimState::Ready | ArmAimState::Busy | ArmAimState::Anchored => cyan,
+        let ink = match (miss.reason, state) {
+            (Some(_), _) => crimson,
+            (None, ArmAimState::Free) => NEUTRAL,
+            (None, ArmAimState::Ready | ArmAimState::Busy | ArmAimState::Anchored) => cyan,
         };
         let (wanted_fill, wanted_border) = if shape.border_px > 0.0 {
             (Color::NONE, ink)
@@ -868,6 +1042,60 @@ mod tests {
     use crate::shared::{AimPoint, BodyId, HookArm};
 
     const SCREEN: Vec2 = Vec2::new(1280.0, 720.0);
+
+    /// `F-028` — the four reasons are four different words, and each of them asks the player
+    /// for a different move. Two rows that read the same are a table that explains nothing.
+    #[test]
+    fn f028_every_reason_gets_its_own_word_under_the_marker() {
+        let all = [
+            MissReason::NothingInRange,
+            MissReason::OutOfReach,
+            MissReason::SurfaceHoldsNothing,
+            MissReason::NoCarrier,
+        ];
+        for (i, a) in all.iter().enumerate() {
+            assert!(!miss_label(*a).is_empty(), "{a:?} has no word");
+            // Short enough to be read out of the corner of the eye mid-swing.
+            assert!(miss_label(*a).len() <= 12, "{a:?} says {:?}, too long", miss_label(*a));
+            for b in &all[i + 1..] {
+                assert_ne!(miss_label(*a), miss_label(*b), "{a:?} and {b:?} say the same word");
+            }
+        }
+    }
+
+    /// `F-028` — the hint appears on the press, survives long enough to be read, and then
+    /// **goes away by itself**.
+    ///
+    /// The last part is the one that matters: the marker is a statement about the world right
+    /// now, and a caption that outlived its cause would make it lie.
+    #[test]
+    fn f028_the_miss_hint_starts_on_the_press_and_clears_itself() {
+        let quiet = ArmMiss::default();
+        assert_eq!(quiet.reason, None, "a fresh marker says nothing");
+
+        // The press.
+        let hinting = step_miss(quiet, Some(MissReason::SurfaceHoldsNothing), 1.0 / 60.0);
+        assert_eq!(hinting.reason, Some(MissReason::SurfaceHoldsNothing));
+        assert_eq!(hinting.left_s, MISS_HINT_S);
+
+        // It survives a full second of frames — long enough to read two words.
+        let mut running = hinting;
+        for _ in 0..60 {
+            running = step_miss(running, None, 1.0 / 60.0);
+        }
+        assert_eq!(running.reason, Some(MissReason::SurfaceHoldsNothing), "it vanished too fast");
+
+        // And it is gone before two seconds, back to the exact default so that `set_if_neq`
+        // stops writing.
+        for _ in 0..60 {
+            running = step_miss(running, None, 1.0 / 60.0);
+        }
+        assert_eq!(running, ArmMiss::default(), "the hint outlived the situation it described");
+
+        // A second press wins over a hint that is still running, even for the same reason.
+        let second = step_miss(hinting, Some(MissReason::OutOfReach), 1.0 / 60.0);
+        assert_eq!(second, ArmMiss { reason: Some(MissReason::OutOfReach), left_s: MISS_HINT_S });
+    }
 
     #[test]
     fn f171_a_busy_arm_is_not_a_ready_one() {

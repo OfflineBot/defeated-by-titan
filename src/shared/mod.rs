@@ -38,7 +38,7 @@ pub use gear::{
 pub use ids::{IdCounter, BodyId, LocalPlayer, PlayerId, TitanId, TitanKindName};
 pub use intent::{LookOverride, Intent, Buttons};
 pub use message::{
-    Impact, HookReleased, HookAnchored, BodyGone, HitZone, ReleaseReason, Mark,
+    Impact, HookReleased, HookAnchored, BodyGone, HitZone, ReleaseReason, MissReason, Mark,
     BladeRestockRequest, RefuelRequest, WarpPlayer, TitanHit, SpawnTitan,
     AbandonSortie, DeployRequest,
 };

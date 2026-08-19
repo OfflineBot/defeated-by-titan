@@ -1,4 +1,4 @@
-//! The settings screen — **four things a person may change about his own game.**
+//! The settings screen — **six things a person may change about his own game.**
 //!
 //! > *„zudem fehlen settings."* — the user, 2026-08-13 (`docs/NEXT.md` §1D req 6).
 //!
@@ -8,6 +8,25 @@
 //! | Invert Y | `invert_y` | on / off | nothing — it is a preference, not a game value |
 //! | Field of view | `fov_deg` | 55 – 110°, step 5 | `game.ron: camera.fov_deg` (60) |
 //! | Aim spread | `aim_spread_deg` | `game.ron: vector.aim_spread_min_deg … _max_deg` | `game.ron: vector.aim_spread_deg` (28) |
+//! | Aim assist reach | `assist_catch_pct` | 0 – 100 %, step 5 | nothing — `F-016` defines 0 % as free aim |
+//! | Aim assist strength | `assist_strength_pct` | 0 – 100 %, step 5 | the same |
+//!
+//! ## The last two rows are the ones he asked for by name
+//!
+//! > *„die accuracy von anzeige zu wo seil landet ist nicht immer korrekt … es sollte best match
+//! > sein. und seinstellen können wie weit ca es sein sollte und wie aggressive (damit ich testen
+//! > kann was am besten wäre mach debug einstellungen dafür)"* — the user, 2026-08-18.
+//!
+//! `F-016` is the feature and it specifies the shape exactly: a **stepless 0–100 % snap catch
+//! angle where 0 % is today's pure free aim**. So both rows start at 0, and at 0 the game aims
+//! precisely as it did before they existed — which is what makes them safe to ship a round
+//! before `F-024`/`F-025` build the candidate scoring that will read them.
+//!
+//! ⚠️ **Today they are knobs with no consumer yet, and the screen says so** rather than
+//! implying an effect that is not there. What they already do is the thing he actually asked
+//! for: they are live, they need no restart (`F-024`), and every change **prints its own value
+//! into the log** so he can tell us the number he liked. A knob whose setting he cannot report
+//! back is half a knob.
 //!
 //! ## The aim-spread row is the one that matters, and it is the one that could have been a bug
 //!
@@ -34,7 +53,8 @@ use bevy::prelude::*;
 use super::{plate, PauseElement, Screen};
 use crate::data::GameData;
 use crate::shared::settings::{
-    FOV_MAX_DEG, FOV_MIN_DEG, MOUSE_MAX_DEG_PER_PX, MOUSE_MIN_DEG_PER_PX,
+    ASSIST_CATCH_MAX_DEG, ASSIST_MAX_PCT, ASSIST_MIN_PCT, FOV_MAX_DEG, FOV_MIN_DEG,
+    MOUSE_MAX_DEG_PER_PX, MOUSE_MIN_DEG_PER_PX,
 };
 use crate::shared::PlayerSettings;
 
@@ -68,6 +88,10 @@ pub enum SettingsAction {
     InvertY,
     Fov(Nudge),
     Spread(Nudge),
+    /// `F-016` — how far off the crosshair the assist may catch. 0 % is free aim.
+    AssistCatch(Nudge),
+    /// `F-016` / `F-024` — how hard it pulls once it has a candidate. 0 % is free aim.
+    AssistStrength(Nudge),
     /// Back to the pause screen — the same place `Esc` goes.
     Back,
 }
@@ -96,7 +120,11 @@ pub fn spawn_settings_screen(commands: &mut Commands, data: &GameData, s: &Playe
         row(
             screen,
             "Aim spread",
-            &format!("{:.1} deg max", s.aim_spread_deg),
+            // ⚠️ "deg apart max" and not "deg max": since 2026-08-18 the number is the angle
+            // **between** the two rays and it is a ceiling, not the angle they take
+            // (`vector::aim::wheel_half_rad`, FIND-096). The old caption read as a per-ray
+            // half-angle and was off by a factor of two (`docs/NEXT.md` §2D).
+            &format!("{:.1} deg apart max", s.aim_spread_deg),
             // Named, because a player who has already found the wheel has to see that this is
             // the same number and not a second one — and since 2026-08-18 it is a CEILING, so
             // the row says what the ropes actually do at that setting instead of a degree the
@@ -110,6 +138,32 @@ pub fn spawn_settings_screen(commands: &mut Commands, data: &GameData, s: &Playe
                     .max(v.aim_sep_floor_m)
             ),
             SettingsAction::Spread,
+        );
+        // `F-016`, the two the user asked for. Their hint lines carry two things a slider
+        // cannot: what 0 means, and — for the reach — what the percentage is in degrees, so
+        // the number he reports back to us is one we can act on.
+        row(
+            screen,
+            "Aim assist reach",
+            &format!("{:.0} %", s.assist_catch_pct),
+            &format!(
+                "{ASSIST_MIN_PCT:.0} - {ASSIST_MAX_PCT:.0}, 0 = free aim — now {:.1} deg off \
+                 the crosshair (max {ASSIST_CATCH_MAX_DEG:.0})",
+                s.assist_catch_deg()
+            ),
+            SettingsAction::AssistCatch,
+        );
+        row(
+            screen,
+            "Aim assist strength",
+            &format!("{:.0} %", s.assist_strength_pct),
+            // It says "not wired up yet" in so many words. An honest empty corner beats a
+            // control that pretends to do something — the same rule `hud` is built on.
+            &format!(
+                "{ASSIST_MIN_PCT:.0} - {ASSIST_MAX_PCT:.0}, 0 = free aim — how hard it snaps \
+                 (F-025 is not built yet, so this is off)"
+            ),
+            SettingsAction::AssistStrength,
         );
 
         screen
@@ -225,6 +279,22 @@ pub fn settings_buttons(
                 v.aim_spread_min_deg,
                 v.aim_spread_max_deg,
             ),
+            // ⚠️ **Both print.** `F-024`'s acceptance is that a change is live without a
+            // restart, and the user's own reason for asking is that he wants to *test* and
+            // tell us what felt best — so the value goes into the log the moment it moves.
+            // One line per click, never per frame: this branch only runs on `Pressed`.
+            SettingsAction::AssistCatch(n) => {
+                settings.nudge_assist_catch(n.steps());
+                info!(
+                    "aim assist reach = {:.0} % ({:.1} deg off the crosshair)",
+                    settings.assist_catch_pct,
+                    settings.assist_catch_deg()
+                );
+            }
+            SettingsAction::AssistStrength(n) => {
+                settings.nudge_assist_strength(n.steps());
+                info!("aim assist strength = {:.0} %", settings.assist_strength_pct);
+            }
             SettingsAction::Back => *screen = Screen::Paused,
         }
     }

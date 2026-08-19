@@ -40,8 +40,8 @@ use defeated_by_titan::net::Inbox;
 use defeated_by_titan::player::spawn_player;
 use defeated_by_titan::shared::{
     AimPoint, ArmAim, BodyGone, BodyId, BodyMask, Buttons, Cli, Hook, HookAnchored, HookReleased,
-    HookState, IdCounter, IndexEntry, Intent, LocalPlayer, PlayerId, PrevButtons, ReleaseReason,
-    RopeLength, Side, SimulationSystems, SpatialIndex, Tick,
+    HookState, IdCounter, IndexEntry, Intent, LocalPlayer, MissReason, PlayerId, PrevButtons,
+    ReleaseReason, RopeLength, Side, SimulationSystems, SpatialIndex, Tick,
 };
 use defeated_by_titan::vector::aim::aim;
 
@@ -624,7 +624,13 @@ fn f001_a_shot_at_nothing_anchorable_reports_no_anchor() {
     assert_eq!(arm_state(&app, e, Side::Left), HookState::Idle, "a miss must not fly");
     let released = app.world().resource::<HookLog>().released.clone();
     assert_eq!(released.len(), 1, "{released:?}");
-    assert_eq!(released[0].reason, ReleaseReason::NoAnchor);
+    // Since `F-028` the reason carries **why**; which of the four it is has its own test
+    // below, and this one stays about the state machine.
+    assert!(
+        matches!(released[0].reason, ReleaseReason::NoAnchor(_)),
+        "{:?}",
+        released[0].reason
+    );
 
     // 2. A hit on a body that is not tagged as an anchor surface.
     let_go(&mut app, Side::Left);
@@ -636,7 +642,11 @@ fn f001_a_shot_at_nothing_anchorable_reports_no_anchor() {
     assert_eq!(arm_state(&app, e, Side::Right), HookState::Idle);
     let released = app.world().resource::<HookLog>().released.clone();
     assert_eq!(released.len(), 2, "{released:?}");
-    assert_eq!(released[1].reason, ReleaseReason::NoAnchor);
+    assert_eq!(
+        released[1].reason,
+        ReleaseReason::NoAnchor(MissReason::SurfaceHoldsNothing),
+        "an untagged wall is a hit that holds nothing, and the player has to be told which"
+    );
     assert_eq!(released[1].side, Side::Right);
     assert!(
         app.world().resource::<HookLog>().anchored.is_empty(),
@@ -764,7 +774,115 @@ fn f002_a_refire_during_retract_flies_again_within_one_tick() {
     );
     let released = app.world().resource::<HookLog>().released.clone();
     assert_eq!(released.len(), before + 1, "{released:?}");
-    assert_eq!(released[before].reason, ReleaseReason::NoAnchor);
+    assert!(
+        matches!(released[before].reason, ReleaseReason::NoAnchor(_)),
+        "{:?}",
+        released[before].reason
+    );
+}
+
+/// `F-028` — **the four failures are four different answers, in the running game.**
+///
+/// The user, 2026-08-18: *„teilweise kann man gar nicht usen weil keine ahnung wieso."*
+/// `B-007` is why: a titan carries no `Body`, so a ray that ends on him is a hit that holds
+/// nothing — and because he is solid, the wall behind him is unreachable too. Both used to
+/// arrive as the same silent `NoAnchor` with the arm sitting in `Idle`.
+///
+/// The three cases the acceptance names are driven here through the real message path, and
+/// the pair that had no way of being told apart at all — *open sky* against *too far* — is
+/// driven with a real avian collider 900 m out, against a `hook_range_m` of 500.
+#[test]
+fn f028_a_failed_pull_says_which_of_the_four_it_was() {
+    use avian3d::prelude::{Collider, RigidBody};
+    use defeated_by_titan::shared::Body;
+
+    let mut app = app();
+    let e = me(&mut app);
+    settle(&mut app);
+    let range_m = data(&app).game.vector.hook_range_m;
+
+    // ---- 1. A hit on a surface that carries no anchor. `B-007`'s titan, and every untagged
+    // wall. The probe is deliberately irrelevant here: a near hit may never be talked over by
+    // something further out, or "aim past him" turns into "come closer".
+    let wall = put_body(&mut app, 91_001, Vec3::new(0.0, 1.6, -32.0), Vec3::splat(4.0));
+    aim_at(&mut app, e, Vec3::new(0.0, 1.6, -28.0), wall, false);
+    ticks(&mut app, 2);
+    press(&mut app, Side::Left);
+    app.update();
+    let released = app.world().resource::<HookLog>().released.clone();
+    assert_eq!(
+        released.last().map(|m| m.reason),
+        Some(ReleaseReason::NoAnchor(MissReason::SurfaceHoldsNothing)),
+        "{released:?}"
+    );
+    let_go(&mut app, Side::Left);
+
+    // ---- 2. A surface that holds, with no carrier to hang it on. `B-001` was exactly this,
+    // and it is a world fault, not a player error — so it may not read as one.
+    app.world_mut().entity_mut(e).insert(ForcedAim(AimPoint {
+        point_m: Some(Vec3::new(0.0, 1.6, -28.0)),
+        body: None,
+        anchorable: true,
+    }));
+    ticks(&mut app, 2);
+    press(&mut app, Side::Left);
+    app.update();
+    let released = app.world().resource::<HookLog>().released.clone();
+    assert_eq!(
+        released.last().map(|m| m.reason),
+        Some(ReleaseReason::NoAnchor(MissReason::NoCarrier)),
+        "{released:?}"
+    );
+    let_go(&mut app, Side::Left);
+
+    // ---- 3. Nothing at all on that line. High over the district, so the city is not under
+    // the probe: the answer has to be "turn", not "come closer".
+    app.world_mut().entity_mut(e).get_mut::<Transform>().expect("a player has a transform")
+        .translation = Vec3::new(0.0, 400.0, 0.0);
+    aim_at_nothing(&mut app, e);
+    ticks(&mut app, 2);
+    press(&mut app, Side::Left);
+    app.update();
+    let released = app.world().resource::<HookLog>().released.clone();
+    assert_eq!(
+        released.last().map(|m| m.reason),
+        Some(ReleaseReason::NoAnchor(MissReason::NothingInRange)),
+        "400 m over Ashgate with nothing on the line the answer has to be open sky: {released:?}"
+    );
+    let_go(&mut app, Side::Left);
+
+    // ---- 4. The same empty aim, with a real anchorable wall 900 m out — beyond the file's
+    // own `hook_range_m`. **This is the pair that had no way of being told apart**, and it is
+    // the difference between "turn around" and "get closer".
+    assert!(range_m < 900.0, "hook_range_m is {range_m} m — this test needs it under 900");
+    let dir = app.world().get::<Intent>(e).expect("a player has an intent").look_dir();
+    let far_m = hand(&app, e) + dir * 900.0;
+    app.world_mut().spawn((
+        Name::new("f028_far_wall"),
+        Body { half_size_m: Vec3::splat(30.0), mask: BodyMask::SOLID.with(BodyMask::ANCHORABLE) },
+        BodyId(91_002),
+        RigidBody::Static,
+        Collider::cuboid(60.0, 60.0, 60.0),
+        Transform::from_translation(far_m),
+    ));
+    ticks(&mut app, 4); // avian rebuilds its static tree inside the physics step
+    press(&mut app, Side::Left);
+    app.update();
+    let released = app.world().resource::<HookLog>().released.clone();
+    assert_eq!(
+        released.last().map(|m| m.reason),
+        Some(ReleaseReason::NoAnchor(MissReason::OutOfReach)),
+        "an anchorable wall 900 m out against a {range_m} m reach has to read as OUT OF \
+         REACH, not as open sky: {released:?}"
+    );
+
+    // And through all four the arm never left `Idle` — the feedback is the whole change, the
+    // state machine is untouched (`F-029` is what would make a titan hold, and it is unbuilt).
+    assert_eq!(arm_state(&app, e, Side::Left), HookState::Idle);
+    assert!(
+        app.world().resource::<HookLog>().anchored.is_empty(),
+        "something anchored although nothing was anchorable"
+    );
 }
 
 // ---------------------------------------------------------------------------------------

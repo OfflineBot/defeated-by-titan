@@ -42,6 +42,14 @@
 //!    `ReleaseReason::NoAnchor` **in the same tick** and the arm stays `Idle`. What that costs
 //!    is the flight time of a miss — a miss is free today. The fix is not ours to make: it is
 //!    a field in `shared/gear.rs` and stands in the report as a finding.
+//! 7. **A miss says why** (`F-028`, 2026-08-19). *„teilweise kann man gar nicht usen weil keine
+//!    ahnung wieso"* — until today all four ways a pull can fail came out as the same silent
+//!    `NoAnchor` and the arm just stayed `Idle`. [`ReleaseReason::NoAnchor`] now carries a
+//!    [`MissReason`], decided by [`miss_reason`] out of exactly the fields
+//!    [`anchor_target`] read, plus one probe ray ([`anchorable_beyond_reach`]) that is cast
+//!    **only in the tick a pull failed** and tells "open sky" from "further than
+//!    `hook_range_m`". Nothing about where a rope goes changed; what changed is that the
+//!    failure has a name in the log and a word on the HUD (`hud::arm_aim`).
 //! 3. **The tip starts and comes home at eye height** (`player.eye_height_m`), the same point
 //!    `vector::aim` shoots its ray from. Not because the gear sits at the eye, but because the
 //!    flight distance has to be the distance the aim ray measured — otherwise the flight time
@@ -64,12 +72,14 @@
 //! The picture and the run that belong to this file: `scripts/f-001-hooks.txt` and
 //! `docs/images/f-001-hooks.png`; the tests are in `tests/vector_hooks.rs`.
 
+use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
 use bevy::prelude::*;
 
 use crate::data::GameData;
 use crate::shared::{
-    AimPoint, ArmAim, BodyGone, BodyId, Buttons, Hook, HookAnchored, HookArm, HookReleased,
-    HookState, Intent, PlayerId, PrevButtons, ReleaseReason, RopeLength, Side, SpatialIndex, Tick,
+    AimPoint, ArmAim, Body, BodyGone, BodyId, BodyMask, Buttons, Hook, HookAnchored, HookArm,
+    HookReleased, HookState, Intent, MissReason, PlayerId, PrevButtons, ReleaseReason, RopeLength,
+    Side, SpatialIndex, Tick,
 };
 
 /// Which button belongs to which arm. One place, so that left and right cannot drift apart.
@@ -99,6 +109,82 @@ pub fn anchor_target(aim: &AimPoint) -> Option<(Vec3, BodyId)> {
     Some((aim.point_m?, aim.body?))
 }
 
+/// **Why that pull found nothing** (`F-028`) — the inverse of [`anchor_target`], and the only
+/// place the three failures are told apart.
+///
+/// The user, 2026-08-18: *„teilweise kann man gar nicht usen weil keine ahnung wieso."* Until
+/// today every one of these came out as the same silent `None`, the arm stayed [`HookState::
+/// Idle`] and nothing on screen moved. `B-007` is the measurement: a titan carries no
+/// [`Body`], so aiming at one is a *hit* that holds nothing — and because he is solid he also
+/// blocks the wall behind him. Those are two different sentences to the player ("aim past
+/// him") and one of them used to be indistinguishable from "you are pointing at the sky".
+///
+/// **A pure function on exactly what [`anchor_target`] read**, plus one boolean the caller
+/// paid a ray for. The order of the arms is the order the world answers in — no hit at all
+/// first, then a hit that does not hold, then the carrier — so that a case can never be
+/// swallowed by an earlier one that is also true.
+///
+/// ⚠️ It is only ever called where `anchor_target` said `None`; for an aim that *does* hold it
+/// still returns the last arm, and that is deliberate — a reason for a shot that left is
+/// nonsense, and a `panic!` in the fire path would be worse than a nonsense word in a log.
+pub fn miss_reason(aim: &AimPoint, anchorable_beyond_reach: bool) -> MissReason {
+    match (aim.point_m, aim.anchorable) {
+        (None, _) if anchorable_beyond_reach => MissReason::OutOfReach,
+        (None, _) => MissReason::NothingInRange,
+        (Some(_), false) => MissReason::SurfaceHoldsNothing,
+        (Some(_), true) => MissReason::NoCarrier,
+    }
+}
+
+/// One probe ray, **cast only in the tick a pull found nothing at all**, to tell "open sky"
+/// from "too far".
+///
+/// ## Why this does not break decision 6, and cannot
+///
+/// Decision 6 says this file re-casts nothing at fire time, so that the marker and the rope
+/// are one number. That holds: this ray is asked **only** where `anchor_target` already
+/// returned `None`, i.e. where there is no target for anything to disagree about. Its answer
+/// goes into a log line and a HUD word and touches no [`Hook`] field.
+///
+/// ## Why the look direction is the right line
+///
+/// `vector::aim` falls the arm back to the **centre** ray whenever the side ray found nothing
+/// hookable (`if anchor_target(&found).is_some() { found } else { centre }`), so an
+/// [`ArmAim`] that misses *is* the centre ray — and the centre ray is `intent.look_dir()`.
+/// Recomputing the side direction here would be a second spelling of the fan for no gain.
+///
+/// ## What it costs
+///
+/// One BVH walk (measured 0.21 us against 4000 blocks, `vector::aim`'s header), on a trigger
+/// edge that failed — never per frame and never per entity (§6 rule 6). `reach_m` is **twice
+/// `world.half_extent_m`**: the whole world and not a new tuning number, because the question
+/// is "is there anything at all out there", not "how far may an assist look".
+fn anchorable_beyond_reach(
+    space: &SpatialQuery,
+    bodies: &Query<(&Body, Option<&BodyId>)>,
+    player: Entity,
+    from_m: Vec3,
+    look: Vec3,
+    reach_m: f32,
+) -> bool {
+    if !from_m.is_finite() || !(reach_m.is_finite() && reach_m > 0.0) {
+        return false;
+    }
+    let Ok(direction) = Dir3::new(look) else {
+        return false;
+    };
+    let filter = SpatialQueryFilter::from_excluded_entities([player]);
+    let Some(hit) = space.cast_ray(from_m, direction, reach_m, true, &filter) else {
+        return false;
+    };
+    // Anchorable **and** carried: exactly what `anchor_target` would have accepted, so the
+    // word "out of reach" is only ever said about a point that reach alone was in the way of.
+    match bodies.get(hit.entity) {
+        Ok((body, Some(_))) => body.mask.contains(BodyMask::ANCHORABLE),
+        _ => false,
+    }
+}
+
 /// Sends an arm out, if the trigger found something that holds. Reports whether it left.
 ///
 /// The **one** place a shot starts, called from `Idle` and from `Retracting` — two call sites
@@ -122,10 +208,13 @@ pub fn update_hooks(
     time: Res<Time<Fixed>>,
     data: Res<GameData>,
     index: Res<SpatialIndex>,
+    space: SpatialQuery,
+    bodies: Query<(&Body, Option<&BodyId>)>,
     mut gone_messages: MessageReader<BodyGone>,
     mut anchored: MessageWriter<HookAnchored>,
     mut released: MessageWriter<HookReleased>,
     mut players: Query<(
+        Entity,
         &PlayerId,
         &Intent,
         &PrevButtons,
@@ -148,8 +237,10 @@ pub fn update_hooks(
     let v = &data.game.vector;
     let flight_per_tick_m = v.hook_speed_m_s * dt;
     let retract_per_tick_m = v.hook_retract_speed_m_s * dt;
+    // The whole world, so "too far" is answered without a second tuning number of its own.
+    let probe_m = 2.0 * data.game.world.half_extent_m;
 
-    for (id, intent, prev, transform, arm_aim, rope, mut hook) in &mut players {
+    for (entity, id, intent, prev, transform, arm_aim, rope, mut hook) in &mut players {
         // The hand is the eye — see decision 3 in the module header.
         let hand_m = transform.translation + Vec3::Y * data.game.player.eye_height_m;
         let fresh = intent.buttons.just_pressed(prev.0);
@@ -171,16 +262,31 @@ pub fn update_hooks(
                     if just_pressed && !fire(&mut next, aim, hand_m) {
                         // The trigger was pulled and nothing caught. The arm stays
                         // `Idle` (decision 2), but `hud` and `sound` still learn that
-                        // a shot happened — that is what the reason is for.
+                        // a shot happened — **and since `F-028` they learn why**. One
+                        // probe ray, on a failed edge only, tells open sky from too far.
+                        let why = miss_reason(
+                            aim,
+                            aim.point_m.is_none()
+                                && anchorable_beyond_reach(
+                                    &space,
+                                    &bodies,
+                                    entity,
+                                    hand_m,
+                                    intent.look_dir(),
+                                    probe_m,
+                                ),
+                        );
                         released.write(HookReleased {
                             player: *id,
                             side,
-                            reason: ReleaseReason::NoAnchor,
+                            reason: ReleaseReason::NoAnchor(why),
                             tick: tick.0,
                         });
                         info!(
-                            "hook {side:?} of player {} found nothing anchorable (t={})",
-                            id.0, tick.0
+                            "hook {side:?} of player {} found no anchor: {why:?} — {} (t={})",
+                            id.0,
+                            why.explains(),
+                            tick.0
                         );
                     }
                 }
@@ -301,13 +407,33 @@ pub fn update_hooks(
                             );
                         } else {
                             // A refire at nothing anchorable. Reported like any other miss —
-                            // and the arm keeps coming home instead of stranding halfway.
+                            // with the same reason, through the same function, so a refire can
+                            // never explain itself differently from a first shot.
+                            let why = miss_reason(
+                                aim,
+                                aim.point_m.is_none()
+                                    && anchorable_beyond_reach(
+                                        &space,
+                                        &bodies,
+                                        entity,
+                                        hand_m,
+                                        intent.look_dir(),
+                                        probe_m,
+                                    ),
+                            );
                             released.write(HookReleased {
                                 player: *id,
                                 side,
-                                reason: ReleaseReason::NoAnchor,
+                                reason: ReleaseReason::NoAnchor(why),
                                 tick: tick.0,
                             });
+                            info!(
+                                "hook {side:?} of player {} found no anchor on a refire: \
+                                 {why:?} — {} (t={})",
+                                id.0,
+                                why.explains(),
+                                tick.0
+                            );
                         }
                     }
                     if next.state == HookState::Retracting {
@@ -359,6 +485,60 @@ mod tests {
         assert_eq!(button(Side::Left), Buttons::HOOK_LEFT);
         assert_eq!(button(Side::Right), Buttons::HOOK_RIGHT);
         assert_ne!(button(Side::Left), button(Side::Right));
+    }
+
+    /// `F-028` — the four ways a pull fails are four different sentences to the player, and
+    /// they were one silent `None` until 2026-08-19 (`B-007`, the user's *„keine ahnung
+    /// wieso"*).
+    ///
+    /// The pairing with [`anchor_target`] is the point: **every** aim this function is asked
+    /// about is one `anchor_target` rejected, so the two can never disagree about whether a
+    /// shot left.
+    #[test]
+    fn f028_a_pull_that_finds_nothing_says_which_of_the_four_it_was() {
+        let holds = AimPoint {
+            point_m: Some(Vec3::new(0.0, 8.0, -20.0)),
+            body: Some(BodyId(4)),
+            anchorable: true,
+        };
+        // Nothing on that line at all, and nothing beyond reach either: open sky. Turn.
+        let sky = AimPoint::default();
+        assert_eq!(miss_reason(&sky, false), MissReason::NothingInRange);
+        // The same empty aim, but the probe found an anchor further out: come closer. This is
+        // the pair that used to be indistinguishable, and it is the whole reason the probe
+        // exists.
+        assert_eq!(miss_reason(&sky, true), MissReason::OutOfReach);
+        // `B-007`: a titan is a solid hit that carries no `Body` — a surface that holds
+        // nothing, and it hides the wall behind it. Aim past him.
+        let titan = AimPoint { anchorable: false, body: None, ..holds };
+        assert_eq!(miss_reason(&titan, false), MissReason::SurfaceHoldsNothing);
+        // A hit surface stays a hit surface even when something anchorable stands behind it —
+        // the probe may not talk over the near hit, or "aim past him" turns into "come
+        // closer" and the player walks the wrong way.
+        assert_eq!(miss_reason(&titan, true), MissReason::SurfaceHoldsNothing);
+        // Anchorable, but no stable carrier — `B-001`'s failure, and a world fault rather
+        // than a player error.
+        assert_eq!(
+            miss_reason(&AimPoint { body: None, ..holds }, false),
+            MissReason::NoCarrier
+        );
+        // And every one of them is a reason `anchor_target` really did reject.
+        for aim in [sky, titan, AimPoint { body: None, ..holds }] {
+            assert_eq!(anchor_target(&aim), None);
+        }
+        // Four variants, four different sentences — a table where two rows read the same is a
+        // table that explains nothing.
+        let all = [
+            MissReason::NothingInRange,
+            MissReason::OutOfReach,
+            MissReason::SurfaceHoldsNothing,
+            MissReason::NoCarrier,
+        ];
+        for (i, a) in all.iter().enumerate() {
+            for b in &all[i + 1..] {
+                assert_ne!(a.explains(), b.explains(), "{a:?} and {b:?} say the same thing");
+            }
+        }
     }
 
     #[test]

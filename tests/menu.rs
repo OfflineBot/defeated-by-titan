@@ -60,6 +60,16 @@ fn press<A: Component + PartialEq + std::fmt::Debug>(app: &mut App, want: &A) {
     click(app, e);
 }
 
+/// Every line of text on the screen, in no particular order.
+///
+/// A plain query over `Text` and not a walk down the plate's children: what is being asserted
+/// is "the player can read this number", and where in the tree it hangs is not part of that
+/// claim.
+fn plate_text(app: &mut App) -> Vec<String> {
+    let mut q = app.world_mut().query::<&Text>();
+    q.iter(app.world()).map(|t| t.0.clone()).collect()
+}
+
 fn cursor(app: &App, window: Entity) -> CursorOptions {
     app.world()
         .get::<CursorOptions>(window)
@@ -549,6 +559,77 @@ fn f175_the_settings_are_seeded_out_of_the_file() {
     assert_eq!(s.pitch_limit_deg, camera.pitch_limit_deg);
     assert_eq!(s.aim_spread_deg, spread);
     assert!(!s.invert_y, "inverted has to be off until somebody asks for it");
+    // `F-016`, and this is the guarantee that lets the two knobs ship before the scoring that
+    // will read them: **0 % is exactly today's pure free aim**, so a fresh game aims as it did
+    // yesterday. `F-002` says the free ray "stays ALWAYS active and is never replaceable by
+    // the snap system", and until he moves one of these it is the whole answer.
+    assert_eq!(s.assist_catch_pct, 0.0, "the assist may not be on before he turns it on");
+    assert_eq!(s.assist_strength_pct, 0.0);
+}
+
+/// `F-016` — **the two knobs he asked for, live, with no restart, and readable back.**
+///
+/// > *„und seinstellen können wie weit ca es sein sollte und wie aggressive (damit ich testen
+/// > kann was am besten wäre mach debug einstellungen dafür)"* — the user, 2026-08-18.
+///
+/// The three properties that make them worth anything to him: a click moves the number, the
+/// number is on the screen so he can read it back, and it is still there when he leaves the
+/// menu — `F-024`'s own acceptance, *"Moduswechsel ist ohne Neustart wirksam"*.
+#[test]
+fn f016_the_two_assist_knobs_are_live_and_readable() {
+    use defeated_by_titan::shared::settings::{
+        ASSIST_CATCH_MAX_DEG, ASSIST_MIN_PCT, ASSIST_STEP_PCT,
+    };
+
+    let (mut app, window) = windowed(Cli { headless: true, hub: true, ..default() });
+    app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    press_esc(&mut app, window);
+    press(&mut app, &PauseAction::Settings);
+    app.update();
+
+    // One click each, and the effect is immediate — no apply button, no restart.
+    press(&mut app, &SettingsAction::AssistCatch(Nudge::Up));
+    app.update();
+    press(&mut app, &SettingsAction::AssistStrength(Nudge::Up));
+    app.update();
+    let s = *app.world().resource::<PlayerSettings>();
+    assert_eq!(s.assist_catch_pct, ASSIST_MIN_PCT + ASSIST_STEP_PCT);
+    assert_eq!(s.assist_strength_pct, ASSIST_MIN_PCT + ASSIST_STEP_PCT);
+
+    // **He can read the number off the screen**, which is what makes "tell us what felt best"
+    // possible at all. The value sits in the row, and the degrees it means sit under it.
+    let shown = plate_text(&mut app);
+    assert!(
+        shown.iter().any(|t| t.contains("Aim assist reach")),
+        "the reach row is not on the screen: {shown:?}"
+    );
+    assert!(
+        shown.iter().any(|t| t.contains("Aim assist strength")),
+        "the strength row is not on the screen: {shown:?}"
+    );
+    let wanted = format!("{:.0} %", s.assist_catch_pct);
+    assert!(
+        shown.iter().any(|t| *t == wanted),
+        "the screen does not show the value {wanted:?} it just set: {shown:?}"
+    );
+    // The degrees are computed **here** and not read back out of `assist_catch_deg`: a test
+    // that asks the screen and the function the same question in the same words passes even
+    // when both are wrong together, which is exactly what happened when this line was first
+    // written (rule 5, and it took breaking the function to notice).
+    let expected_deg = ASSIST_STEP_PCT / 100.0 * ASSIST_CATCH_MAX_DEG;
+    assert!(
+        shown.iter().any(|t| t.contains(&format!("{expected_deg:.1} deg"))),
+        "one notch is {expected_deg:.1} deg off the crosshair, and the row does not say so: \
+         {shown:?}"
+    );
+
+    // And it survives leaving the menu — the setting is the player's, not the screen's.
+    press_esc(&mut app, window);
+    press_esc(&mut app, window);
+    app.update();
+    let after = *app.world().resource::<PlayerSettings>();
+    assert_eq!(after.assist_catch_pct, s.assist_catch_pct, "the knob was lost on the way out");
+    assert_eq!(after.assist_strength_pct, s.assist_strength_pct);
 }
 
 /// Drives one tick with a mouse push and reports the `Intent` the simulation would have read.
@@ -1063,7 +1144,7 @@ fn f175_every_settings_row_is_the_same_width() {
 
     let rows = settings_rows(&mut app);
     println!("settings rows: {rows:?}");
-    assert_eq!(rows.len(), 4, "the settings screen has four adjustable rows");
+    assert_eq!(rows.len(), 6, "the settings screen has six adjustable rows");
     let (first, _) = rows[0];
     for (total, widths) in &rows {
         assert!(
