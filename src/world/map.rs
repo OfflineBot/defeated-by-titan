@@ -76,8 +76,8 @@
 use avian3d::prelude::{Collider, RigidBody};
 use bevy::prelude::*;
 
-use crate::data::{GameData, Map, ModelSource, Perimeter};
-use crate::shared::{AnchorSurface, Block, Body, Rng, TerrainField};
+use crate::data::{Damage, GameData, Map, ModelSource, Perimeter};
+use crate::shared::{AnchorSurface, Block, Body, ModelName, Rng, TerrainField};
 
 use super::index::mask_from;
 
@@ -110,6 +110,14 @@ const STREAM_RISE: u64 = 0xF003_000C;
 const STREAM_TALL: u64 = 0xF003_000D;
 /// Per **terrain cell**: the notch [`TerrainField`] starts that cell at.
 const STREAM_TERRAIN: u64 = 0xF003_000E;
+/// Per **cell** and per **house**: how far this block, and this house in it, sit off the
+/// damage gradient (`maps.ron: layout.damage`). Two streams and not one, because the whole
+/// point of the block draw is that a street front falls as a piece.
+const STREAM_DAMAGE_BLOCK: u64 = 0xF003_000F;
+const STREAM_DAMAGE_HOUSE: u64 = 0xF003_0010;
+/// Per **house**: which remnant of the kit this fallen house wears, and how tall its mound is.
+const STREAM_REMNANT: u64 = 0xF003_0011;
+const STREAM_MOUND: u64 = 0xF003_0012;
 
 /// How many rng ticks one grid cell owns.
 ///
@@ -146,6 +154,59 @@ pub const DRESSING: [(&str, [f32; 3]); 3] = [
     ("house_town", [9.10, 8.00, 7.90]),
     // a-083-fachwerkhaus-gross
     ("house_large", [8.30, 11.50, 9.90]),
+];
+
+/// **The fallen ring, as a shape** — the eight remnants a house that did not survive can wear.
+///
+/// Same form as [`DRESSING`] and read the same way: one row per logical name in `art.ron`,
+/// with the full extent of that file's own `hit.min`/`hit.max` pair in metres, x / y / z. The
+/// front is the ±z face, so `x` is the frontage and `z` the depth.
+///
+/// ⚠️ **Measurements of files, not tuning numbers** (§4) — which is why they stand here and
+/// the *distribution* stands in `maps.ron: layout.damage`.
+/// `tests/world.rs::f003_the_ruin_catalogue_is_what_the_glb_files_really_measure` parses all
+/// fourteen files and falls over on a re-export that moves them. ⚠️ The `hit` pair is a
+/// **corner pair** and not a min/max pair (`hit.max.z < hit.min.z` on all 278 files of the
+/// drop), so the extent is taken with `abs`.
+///
+/// The order is the order they are drawn from and it is not meaningful; what a house wears is
+/// `rng.index(.., STREAM_REMNANT, ..)` over everything that fits its lot.
+pub const RUIN_KIT: [(&str, [f32; 3]); 8] = [
+    // a-089-ruine-dach-eingestuerzt
+    ("ruin_roof_collapsed", [7.04, 2.62, 5.16]),
+    // a-089-ruine-dach-haelfte
+    ("ruin_roof_half", [6.72, 4.74, 4.93]),
+    // a-089-ruine-giebel — the tallest of the kit
+    ("ruin_gable", [6.47, 8.49, 4.01]),
+    // a-089-ruine-haufen
+    ("ruin_heap", [7.49, 2.40, 5.81]),
+    // a-089-ruine-obergeschoss
+    ("ruin_upper_floor", [6.95, 5.55, 4.93]),
+    // a-089-ruine-pfeiler
+    ("ruin_pillar", [5.86, 9.00, 4.87]),
+    // a-089-ruine-wand-ecke
+    ("ruin_wall_corner", [6.47, 5.60, 6.80]),
+    // a-089-ruine-wand-hoch
+    ("ruin_wall_high", [6.22, 6.94, 3.96]),
+];
+
+/// **The mounds** — what is left where the walls went. Same contract as [`RUIN_KIT`].
+///
+/// Nothing in this group is over 3 m authored, and that is the design and not the pack's
+/// accident: a mound takes the **ground** away and leaves the swing lane alone.
+pub const RUBBLE_KIT: [(&str, [f32; 3]); 6] = [
+    // a-090-schutt-balken
+    ("rubble_beams", [4.10, 2.10, 3.70]),
+    // a-090-schutt-deckung
+    ("rubble_cover", [3.70, 1.20, 3.31]),
+    // a-090-schutt-flach
+    ("rubble_flat", [3.94, 0.90, 2.95]),
+    // a-090-schutt-haufen-gross
+    ("rubble_heap_large", [6.20, 3.00, 4.80]),
+    // a-090-schutt-hoch
+    ("rubble_high", [4.20, 1.80, 3.50]),
+    // a-090-schutt-wandstueck
+    ("rubble_wall_piece", [4.33, 2.40, 2.80]),
 ];
 
 /// How far a house's drawn footprint may be moved to make it **be** the model that dresses it.
@@ -223,6 +284,24 @@ impl BlockPlan {
         ));
         if self.anchorable {
             e.insert(AnchorSurface);
+        }
+        // **And the model, if this box wears one** — the hop the district waited a day for.
+        //
+        // `ModelName` lives in `shared/` since 2026-08-19 for exactly this: `render` reads it
+        // and spawns the glTF scene, `world` writes it, and neither needs an edge to the
+        // other (`docs/architecture.md`, and `src/shared/anchors.rs` carries the argument).
+        //
+        // `height_m` is the box's **own** height and not a class figure out of `scale.ron`:
+        // a house is planned at the size its model has (`dress_for`), a remnant is planned at
+        // the size its remnant has (`remnant_for`), so `render::model::fit_to_class` brings
+        // the file to exactly the collider it is standing in. `cortex_height_m` stays `None`
+        // — a house does not die.
+        if let Some(model) = self.model {
+            e.insert(ModelName {
+                name: model.to_string(),
+                cortex_height_m: None,
+                height_m: Some(self.size_m.y),
+            });
         }
     }
 }
@@ -362,6 +441,8 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                 }
             };
             let roof = r.perimeter.as_ref().and_then(|p| p.roof.as_ref());
+            // How far this district has fallen. `None` is a district that still stands.
+            let damage = r.damage.as_ref();
 
             for (i, f) in footprints.iter().enumerate() {
                 // `lot` itself for the single box, so the graybox draws exactly what it drew
@@ -401,7 +482,18 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                 // every row as `Primitive`, and [`dress_for`] refuses to dress a name that
                 // resolves to no file. Flipping those three rows to `Gltf(...)` is what
                 // turns this district into half-timbered houses — one line each, no code.
-                let dress = dress_for(data, f, ridge_m);
+                // **Did this house survive the fall of Ashgate?**
+                //
+                // Asked BEFORE the dressing, and that order is the whole reason the ruin and
+                // the house landed in one round: a fallen house wears a different kit, keeps
+                // a different footprint and grows no roof, so dressing it first would be work
+                // thrown away twice (`docs/NEXT.md` §2C).
+                //
+                // `None` — from `maps.ron: layout.damage` — is a district that still stands,
+                // and it is what the graybox fixture says.
+                let remnant =
+                    damage.and_then(|k| remnant_for(data, k, map, f, ridge_m, &rng, lot, tick));
+                let dress = if remnant.is_some() { None } else { dress_for(data, f, ridge_m) };
                 let rise_m = match dress {
                     // The model is the whole house, ridge included, so nothing is cut out of
                     // it downward — `fit_to_class` scales the file to `ridge_m` and its own
@@ -412,12 +504,19 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                             * rng.range(tick, STREAM_RISE, k.min_rise_fraction, k.max_rise_fraction)
                     }),
                 };
-                let height_m = ridge_m - rise_m;
+                let height_m = match &remnant {
+                    // A remnant is what is LEFT of the house, so its height is its own and
+                    // never the ridge the intact house would have had.
+                    Some(k) => k.height_m,
+                    None => ridge_m - rise_m,
+                };
                 // The footprint the block finally gets. Undressed it is what was drawn;
                 // dressed it is the model's own, **and the street-facing face stays where it
                 // was** — the frontage line is what two rounds of work went into, and a house
                 // that gives back depth gives it back to its courtyard.
-                let (size_x, size_z, center_x, center_z) = match dress {
+                let (size_x, size_z, center_x, center_z) = match &remnant {
+                    Some(k) => (k.size_x, k.size_z, k.center_x, k.center_z),
+                    None => match dress {
                     None => (f.size_x, f.size_z, f.center_x, f.center_z),
                     Some((_, front_m, depth_m)) => {
                         let (drawn_depth, center_depth) = if f.frontage_along_x {
@@ -433,6 +532,7 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                             (depth_m, front_m, moved, f.center_z)
                         }
                     }
+                    },
                 };
                 // A house stands ON the ground — and since 2026-08-13 the ground has a height:
                 // the terrace of the cell this lot belongs to. `base_m` is the only line in
@@ -468,7 +568,10 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                 // the drawn one. A dressing may move a wall out by up to `DRESS_TOLERANCE`,
                 // and a veto taken before that would let a house grow into an apron it was
                 // just measured clear of.
-                let veto_m = base_m + ridge_m;
+                // ⚠️ And over the remnant's own height when the house has fallen: a 3 m
+                // stump vetoed against the 11 m box it used to be would delete a mound the
+                // aprons never touch.
+                let veto_m = base_m + if remnant.is_some() { height_m } else { ridge_m };
                 let ridge_center = Vec3::new(center_x, veto_m * 0.5, center_z);
                 let ridge_half = Vec3::new(size_x * 0.5, veto_m * 0.5, size_z * 0.5);
                 let blocked = plan[..placed]
@@ -479,18 +582,36 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                 }
 
                 let colors = &r.colors;
-                let color = colors
-                    .get(rng.index(tick, STREAM_COLOR, colors.len()))
-                    .unwrap_or_else(|| {
-                        panic!("maps.ron: layout.colors is empty — every house would be colorless")
-                    });
+                let color = match &remnant {
+                    // A remnant is ash, not brick. Only ever seen where the ruin kit is
+                    // switched off in `art.ron` — the mesh covers the box otherwise — but
+                    // that is exactly the build a model-less screenshot shows.
+                    Some(k) => &k.color,
+                    None => colors
+                        .get(rng.index(tick, STREAM_COLOR, colors.len()))
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "maps.ron: layout.colors is empty — every house would be \
+                                 colorless"
+                            )
+                        }),
+                };
                 // **The roof carries the same bit as its house.** Two different answers for
                 // one building is the FIND-059 bug from the other side: the player aims at
                 // the highest thing he sees, and that is the cap.
                 let anchorable = rng.chance(tick, STREAM_ANCHORABLE, r.anchorable_fraction);
 
                 plan.push(BlockPlan {
-                    name: if single { format!("house_{lot}") } else { format!("house_{lot}_{i}") },
+                    // **The name says what it is**, and six tests in `tests/world.rs` read
+                    // it: the residential band, the skyline, the street width and the roof
+                    // rule are all about houses that still stand, and a stump measured as a
+                    // house would fail every one of them for the right reason at the wrong
+                    // address.
+                    name: match &remnant {
+                        Some(k) => format!("{}_{lot}_{i}", k.prefix),
+                        None if single => format!("house_{lot}"),
+                        None => format!("house_{lot}_{i}"),
+                    },
                     center_m,
                     size_m,
                     color: color_of(data, color),
@@ -498,13 +619,16 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                     // A house stops you. That is mechanics and not a tuning question — there
                     // is deliberately no `solid_fraction` in `maps.ron`.
                     solid: true,
-                    model: dress.map(|(name, _, _)| name),
+                    model: match &remnant {
+                        Some(k) => k.model,
+                        None => dress.map(|(name, _, _)| name),
+                    },
                 });
 
                 // **A dressed house grows no cap.** Two roofs on one building is the FIND-059
                 // bug in its loudest form: the model's own ridge and a stack of stone lids
                 // through it.
-                if let (Some(k), None) = (roof, dress) {
+                if let (Some(k), None, None) = (roof, dress, &remnant) {
                     // The cap is pulled in on all four sides; what is left over is the ledge
                     // the roof reads by and the strip you can still stand on.
                     //
@@ -1054,6 +1178,161 @@ fn dress_for(data: &GameData, f: &Footprint, ridge_m: f32) -> Option<(&'static s
         }
     }
     best
+}
+
+/// **What is left of a house that did not survive** — the plan of one remnant, before it is a
+/// [`BlockPlan`].
+///
+/// It is a separate type and not four loose returns because all five numbers have to be
+/// decided together: the model is picked by what fits the lot, and the box that is finally
+/// built **is** that model's silhouette (the same invariant a dressed house has — collider,
+/// anchor surface and mesh are one box and not three).
+#[derive(Clone, Debug, PartialEq)]
+struct Remnant {
+    /// `ruin` or `rubble` — the first half of the block's name, and what six tests in
+    /// `tests/world.rs` tell a stump from a house by.
+    prefix: &'static str,
+    size_x: f32,
+    size_z: f32,
+    center_x: f32,
+    center_z: f32,
+    height_m: f32,
+    model: Option<&'static str>,
+    color: String,
+}
+
+/// **How far gone this one house is**, 0..1 — the gradient plus two draws
+/// (`maps.ron: layout.damage`, and the argument for the shape is written there).
+///
+/// The radial term is taken from the map's own half extent, so a district that is made bigger
+/// keeps its core and its edge rather than becoming uniformly ruined.
+fn severity_at(k: &Damage, map: &Map, rng: &Rng, lot: u64, tick: u64, x: f32, z: f32) -> f32 {
+    let half = map.size_m.0.max(map.size_m.1) * 0.5;
+    let radial = if half > f32::EPSILON {
+        ((x * x + z * z).sqrt() / half).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let gradient = k.core_severity + (k.edge_severity - k.core_severity) * radial;
+    let block = rng.range(lot, STREAM_DAMAGE_BLOCK, -k.block_spread, k.block_spread);
+    let house = rng.range(tick, STREAM_DAMAGE_HOUSE, -k.house_spread, k.house_spread);
+    (gradient + block + house).clamp(0.0, 1.0)
+}
+
+/// **Which remnant this house wears, and at what size** — or `None`, which means it is still
+/// standing.
+///
+/// Three rules, and they are deliberately *not* [`dress_for`]'s three:
+///
+/// 1. A remnant may be **smaller** than the house it was, and usually is. `dress_for` refuses
+///    a model that is more than [`DRESS_TOLERANCE`] off the drawn box because an intact house
+///    has to keep the frontage line closed; a ruin that only covers half its lot is the
+///    picture. So the model is scaled to the **largest** it can be inside the lot instead.
+/// 2. It is never **taller** than the house was — `damage.ruin_height_fraction` of the ridge,
+///    at most. Nothing in a fallen district got taller by falling.
+/// 3. **The street-facing face stays where it was**, exactly as a dressed house's does, so a
+///    ruined stretch still measures as the street it is. A mound is the one exception and it
+///    is the point of `damage.spill_m`: it is pushed past that line into the road.
+///
+/// Among everything that fits, one is **drawn** rather than the largest taken (`dress_for`
+/// takes the largest): eight remnants that all look like the biggest fragment that fits is a
+/// row of identical stumps, and this kit exists to be irregular.
+///
+/// `None` for the model — with `art.ron` on `Primitive` — is a legal answer and not a
+/// failure: the box is still built, at the remnant's height and in ash, and the district is
+/// still fallen. That is what keeps the whole kit one line of RON per row.
+#[allow(clippy::too_many_arguments)]
+fn remnant_for(
+    data: &GameData,
+    k: &Damage,
+    map: &Map,
+    f: &Footprint,
+    ridge_m: f32,
+    rng: &Rng,
+    lot: u64,
+    tick: u64,
+) -> Option<Remnant> {
+    let severity = severity_at(k, map, rng, lot, tick, f.center_x, f.center_z);
+    if severity < k.ruin_at {
+        return None;
+    }
+    let collapsed = severity >= k.rubble_at;
+
+    let (front_m, depth_m) = if f.frontage_along_x {
+        (f.size_x, f.size_z)
+    } else {
+        (f.size_z, f.size_x)
+    };
+    // What the remnant is allowed to be. A ruin is capped by the ridge it was; a mound is
+    // capped by the window `maps.ron` draws mounds out of.
+    let ceiling_m = if collapsed {
+        rng.range(tick, STREAM_MOUND, k.rubble_height_m.0, k.rubble_height_m.1)
+    } else {
+        ridge_m * k.ruin_height_fraction
+    };
+    let floor_m = if collapsed { 0.0 } else { k.ruin_min_height_m };
+    let kit: &[(&'static str, [f32; 3])] = if collapsed { &RUBBLE_KIT } else { &RUIN_KIT };
+
+    // Everything in the kit that fits this lot at a size worth building.
+    let mut fits: Vec<(&'static str, f32, f32, f32)> = Vec::new();
+    for (name, authored_m) in kit {
+        let [ax, ay, az] = *authored_m;
+        if ax <= f32::EPSILON || ay <= f32::EPSILON || az <= f32::EPSILON {
+            continue;
+        }
+        if !matches!(data.model(name).map(|m| &m.source), Some(ModelSource::Gltf(_))) {
+            continue;
+        }
+        // **Uniform, always** — a ruin stretched on one axis has fat timbers exactly the way
+        // a stretched house does, and the ruin kit is the same pack.
+        let scale = (front_m / ax).min(depth_m / az).min(ceiling_m / ay);
+        let height_m = ay * scale;
+        if height_m < floor_m || height_m <= 0.0 {
+            continue;
+        }
+        fits.push((name, ax * scale, az * scale, height_m));
+    }
+
+    // Nothing in the kit fits, or `art.ron` has the kit switched off. The house has still
+    // fallen — it is a box in ash at the remnant's height, and it grows no roof.
+    let (model, front, depth, height_m) = if fits.is_empty() {
+        let height_m = if collapsed {
+            ceiling_m
+        } else {
+            // Half of what it was, floor respected: a stump, not a house.
+            (ridge_m * k.ruin_height_fraction * 0.5).max(k.ruin_min_height_m).min(ridge_m)
+        };
+        (None, front_m, depth_m, height_m)
+    } else {
+        let (name, front, depth, height_m) = fits[rng.index(tick, STREAM_REMNANT, fits.len())];
+        (Some(name), front, depth, height_m)
+    };
+
+    // The facade line, and what a mound does to it.
+    let (drawn_depth, center_depth) = if f.frontage_along_x {
+        (f.size_z, f.center_z)
+    } else {
+        (f.size_x, f.center_x)
+    };
+    let facade = center_depth + f.facade_dir * drawn_depth * 0.5;
+    let spill = if collapsed { k.spill_m } else { 0.0 };
+    let moved = facade - f.facade_dir * depth * 0.5 + f.facade_dir * spill;
+    let (size_x, size_z, center_x, center_z) = if f.frontage_along_x {
+        (front, depth, f.center_x, moved)
+    } else {
+        (depth, front, moved, f.center_z)
+    };
+
+    Some(Remnant {
+        prefix: if collapsed { "rubble" } else { "ruin" },
+        size_x,
+        size_z,
+        center_x,
+        center_z,
+        height_m,
+        model,
+        color: if collapsed { k.rubble_color.clone() } else { k.ruin_color.clone() },
+    })
 }
 
 /// A closed block: the ring of houses around one cell's courtyard — **and no two of them the

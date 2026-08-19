@@ -76,6 +76,47 @@ impl ModelAnchors {
     }
 }
 
+/// "This entity is the logical model `name`." — **and since 2026-08-19 that includes a house.**
+///
+/// ## Why this type moved out of `render/` on 2026-08-19
+///
+/// `render` is still its only **reader** — [`ModelName`] is what `render::model::spawn_models`
+/// answers with a glTF scene. What changed is who **writes** it: `world::map` plans a model per
+/// generated house (`BlockPlan::model`), and a `render`-private component would have forced a
+/// `world -> render` edge into the allow list of `docs/architecture.md` for nothing but a
+/// string. That is exactly the trade this folder exists to refuse — the same argument that put
+/// [`ModelAnchors`] and every message type here (`shared`, module header). The district went
+/// undressed for a day because the type was on the wrong side of that line
+/// (`docs/NEXT.md` §2C).
+/// The component is written by `render::model::name_the_titans_model` out of `titan.ron`, and it may be put
+/// on any entity by hand. **It carries no file name** — the registry decides that.
+#[derive(Component, Debug, Clone, PartialEq)]
+pub struct ModelName {
+    /// The key into `art.ron: models`.
+    pub name: String,
+    /// Where `scale.ron` says the cortex sits for this entity, in meters above its origin.
+    /// `None` for everything that is not a titan.
+    ///
+    /// Only used to **check** a model that brings its own `cortex` empty. `scale.ron` stays
+    /// the one truth; this is the yardstick a swapped model is held against.
+    pub cortex_height_m: Option<f32>,
+    /// How tall `scale.ron` says this entity is, in meters. `None` for everything that is not
+    /// a titan.
+    ///
+    /// **This is what lets one logical name serve two size classes.** `titan.ron` gives
+    /// `titan_husk` to three medium kinds (10.0 m) *and* to two small ones (4.2 m), the way
+    /// the primitive rig has always been built — one shape at the class height. A `.glb` is
+    /// authored at exactly one height, so `render::model::fit_to_class` brings it to this one.
+    pub height_m: Option<f32>,
+}
+
+impl ModelName {
+    pub fn new(name: impl Into<String>) -> Self {
+        ModelName { name: name.into(), cortex_height_m: None, height_m: None }
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

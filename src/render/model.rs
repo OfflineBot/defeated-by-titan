@@ -48,38 +48,8 @@ use crate::shared::{MovementState, TitanKindName, TitanState};
 // The anchor contract lives in `shared/` and not here, because `titan` has to READ it: the
 // `cortex` empty out of the file is where the titan dies. See `shared::anchors`.
 pub use crate::shared::anchors::{
-    is_anchor_name, ModelAnchors, ANCHOR_NAMES, CORTEX_ANCHOR, HOOK_PREFIX,
+    is_anchor_name, ModelAnchors, ModelName, ANCHOR_NAMES, CORTEX_ANCHOR, HOOK_PREFIX,
 };
-
-/// "This entity is the logical model `name`."
-///
-/// The component is written by [`name_the_titans_model`] out of `titan.ron`, and it may be put
-/// on any entity by hand. **It carries no file name** — the registry decides that.
-#[derive(Component, Debug, Clone, PartialEq)]
-pub struct ModelName {
-    /// The key into `art.ron: models`.
-    pub name: String,
-    /// Where `scale.ron` says the cortex sits for this entity, in meters above its origin.
-    /// `None` for everything that is not a titan.
-    ///
-    /// Only used to **check** a model that brings its own `cortex` empty. `scale.ron` stays
-    /// the one truth; this is the yardstick a swapped model is held against.
-    pub cortex_height_m: Option<f32>,
-    /// How tall `scale.ron` says this entity is, in meters. `None` for everything that is not
-    /// a titan.
-    ///
-    /// **This is what lets one logical name serve two size classes.** `titan.ron` gives
-    /// `titan_husk` to three medium kinds (10.0 m) *and* to two small ones (4.2 m), the way
-    /// the primitive rig has always been built — one shape at the class height. A `.glb` is
-    /// authored at exactly one height, so [`fit_to_class`] brings it to this one.
-    pub height_m: Option<f32>,
-}
-
-impl ModelName {
-    pub fn new(name: impl Into<String>) -> Self {
-        ModelName { name: name.into(), cortex_height_m: None, height_m: None }
-    }
-}
 
 /// What [`spawn_models`] decided — and the whole point of the file: **both answers are
 /// normal.**
@@ -748,6 +718,12 @@ pub fn read_the_models_anchors(
     commands.entity(instance_root).insert(model_transform(scale));
 
     match found.get(CORTEX_ANCHOR) {
+        // ⚠️ **Only for something that is supposed to have one.** `cortex_height_m` is `Some`
+        // exactly for a titan (`name_the_titans_model`); a house, a ruin or a wall segment is
+        // `None`, and since 2026-08-19 there are ~790 of those in the district. Warning per
+        // instance turned one honest sentence about a titan into 790 lines of log per run —
+        // and a log nobody reads is a log that hides the next real one.
+        None if wanted.cortex_height_m.is_none() => {}
         None => warn!(
             "model {:?} carries no {CORTEX_ANCHOR:?} empty. The cortex therefore stays where \
              the rig computes it — the model does not decide where it dies (F-030). Name an \

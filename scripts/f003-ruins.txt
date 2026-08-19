@@ -1,0 +1,36 @@
+# f003-ruins — Ashgate has fallen, and the houses are dressed. 2026-08-19.
+#
+# Two complaints of the user's, one job (`docs/NEXT.md` §1F and §2C):
+#   *„das ist nicht die echte map!"*      — the place was wrong: an intact market town in a
+#                                            world whose design says this ring fell a century
+#                                            ago and is walked for salvage.
+#   *„zudem fehlen noch die häuser"*      — and not one model dressed a single building.
+#
+#   cargo run -- --headless  --script scripts/f003-ruins.txt --ticks 260
+#   cargo run -- --offscreen --screenshot docs/images/f003-ruins.png \
+#                --script scripts/f003-ruins.txt --ticks 260
+#
+# `--screenshot` together with `--script` swallows the verdict, so the two runs are two runs:
+# the first one is the exit code, the second one is the picture.
+#
+# ⚠️ This script deliberately asserts almost **nothing about geometry**. The district is
+# generated and half of it is now damaged out of the seed, so a pinned coordinate here would
+# be a test of one house — `tests/world.rs` measures the distribution (31 tests), and this
+# script exists for the one thing a test cannot produce: a picture.
+
+wait 1.5                 # world, camera, meshes and the render pipelines come up
+
+# ---------------------------------------------------------------------------------------
+# The vantage: north-east of the main street, 62 m up, looking south-west across the
+# roofscape at the wall — the SAME vantage as `scripts/f003-ashgate.txt`, on purpose, so that
+# `docs/images/f003-ashgate.png` is the **before** of this picture frame for frame: same eye,
+# same yaw, same pitch, a different town. (⚠️ `f003-roofscape.png` is NOT — it was taken from
+# the older, higher vantage and the two are not comparable; checked, 2026-08-19.)
+# ---------------------------------------------------------------------------------------
+warp 150 62 165
+look -28 -14
+wait 0.15
+mark f003-ruins-vantage  # ← the picture is taken here
+assert height > 55.0     # airborne at the vantage and not already on a roof
+assert gas == 300        # nothing has been spent: this is a look, not a flight
+wait 1.2

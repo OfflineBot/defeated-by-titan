@@ -218,13 +218,12 @@
         // are the switch for the whole district. Measured with the switch on: 602 of 937
         // houses dressed, 5155 -> 3393 blocks (-34 %), footprint moves a median 1.42 m.
         //
-        // 🔴 BLOCKER (all three, one cause): **`BlockPlan::spawn` does not insert the
-        // `ModelName`** — `ModelName` lives in `src/render/model.rs` and `world` has no
-        // allow-list edge to `render`, so it has to move to `shared` first (where
-        // `ModelAnchors` already sits) before a block can carry one. Flipping these rows
-        // TODAY would dress the plan — new footprints, and a dressed house emits no cuboid
-        // roof — while nothing renders: a district of flat-topped boxes in exchange for
-        // nothing on screen. **Do not flip them before an entity carries the name.**
+        // ✅ UNBLOCKED 2026-08-19, and the rows are switched **on**. The blocker was that
+        // **`BlockPlan::spawn` did not insert the `ModelName`** — the type lived in
+        // `src/render/model.rs` and `world` has no allow-list edge to `render`. It now lives
+        // in `src/shared/anchors.rs` beside `ModelAnchors`, for the reason that folder
+        // exists, and a planned block carries its name into the world. Switching them back to
+        // `Primitive` is still one line each and still costs no code.
         //
         // The heights are exact against `scale.ron: architecture.heights_m` under the same
         // key, and `tests/world.rs::f003_the_dressing_catalogue_is_what_the_glb_files_really_
@@ -233,12 +232,71 @@
         // ⚠️ `house_small` additionally can never be worn in Ashgate: the district's
         // `min_height_m` is 6.5 and the model is authored at 4.50, so its smallest fit is
         // 9.5 x 12.0 m — outside every slot. That is the height band, not the pack.
-        // WOULD BE: 3d/glb/a-083-fachwerkhaus-klein.glb — 6.56 x 4.50 x 8.32 m.
-        "house_small":    (source: Primitive, scale: 1.0, attribution: None, animations: {}),
-        // WOULD BE: 3d/glb/a-083-fachwerkhaus-stadthaus.glb — 9.10 x 8.00 x 7.90 m.
-        "house_town":     (source: Primitive, scale: 1.0, attribution: None, animations: {}),
-        // WOULD BE: 3d/glb/a-083-fachwerkhaus-gross.glb — 8.30 x 11.50 x 9.90 m.
-        "house_large":    (source: Primitive, scale: 1.0, attribution: None, animations: {}),
+        // 3d/glb/a-083-fachwerkhaus-klein.glb — 6.56 x 4.50 x 8.32 m.
+        "house_small":    (source: Gltf("3d/glb/a-083-fachwerkhaus-klein.glb"), scale: 1.0, attribution: None, animations: {}),
+        // 3d/glb/a-083-fachwerkhaus-stadthaus.glb — 9.10 x 8.00 x 7.90 m.
+        "house_town":     (source: Gltf("3d/glb/a-083-fachwerkhaus-stadthaus.glb"), scale: 1.0, attribution: None, animations: {}),
+        // 3d/glb/a-083-fachwerkhaus-gross.glb — 8.30 x 11.50 x 9.90 m.
+        "house_large":    (source: Gltf("3d/glb/a-083-fachwerkhaus-gross.glb"), scale: 1.0, attribution: None, animations: {}),
+
+        // ---- the fallen ring: eight ruins and six rubble mounds
+        //
+        // `docs/gameplay/world.md`: *"the war is already lost … **Ashgate has long since
+        // fallen**; the Vanguard runs **salvage missions into its own ruins**"* — and until
+        // 2026-08-19 the district built for that premise was an intact market town with a
+        // full roofscape. The user, 2026-08-18: *„das ist nicht die echte map!"*.
+        //
+        // These fourteen rows are the kit that answers it. They are worn by
+        // `world::map::plan_blocks` exactly the way the three house rows above are worn —
+        // `BlockPlan.model`, one name per box — and which house wears which is decided by
+        // `maps.ron: layout.damage`, not here.
+        //
+        // ⚠️ **The numbers in the comments are measured, not read off a spec sheet**: the
+        // full extent of each file's own `hit.min`/`hit.max` pair, x / y / z in metres, and
+        // `tests/world.rs::f003_the_ruin_catalogue_is_what_the_glb_files_really_measure`
+        // parses all fourteen files and falls over on a re-export that moves them. ⚠️ The
+        // pair is a CORNER pair and not a min/max pair — `hit.max.z < hit.min.z` on all 278
+        // files of the drop — so the extent is taken with `abs`.
+        //
+        // ✅ Every one of them carries `hook.*` empties (1 to 3 each, `hook.bruchkante` —
+        // "break edge" — on four of them), so the artist had a rope in mind. They are
+        // anchorable for the same reason every other surface in Ashgate is: *„überall! ohne
+        // ausnahmen!"*.
+
+        // 3d/glb/a-089-ruine-dach-eingestuerzt.glb — 7.04 x 2.62 x 5.16 m.
+        "ruin_roof_collapsed": (source: Gltf("3d/glb/a-089-ruine-dach-eingestuerzt.glb"), scale: 1.0, attribution: None, animations: {}),
+        // 3d/glb/a-089-ruine-dach-haelfte.glb — 6.72 x 4.74 x 4.93 m.
+        "ruin_roof_half":      (source: Gltf("3d/glb/a-089-ruine-dach-haelfte.glb"), scale: 1.0, attribution: None, animations: {}),
+        // 3d/glb/a-089-ruine-giebel.glb — 6.47 x 8.49 x 4.01 m. The tallest of the kit: a
+        // gable wall still standing over a house that is not there any more.
+        "ruin_gable":          (source: Gltf("3d/glb/a-089-ruine-giebel.glb"), scale: 1.0, attribution: None, animations: {}),
+        // 3d/glb/a-089-ruine-haufen.glb — 7.49 x 2.40 x 5.81 m.
+        "ruin_heap":           (source: Gltf("3d/glb/a-089-ruine-haufen.glb"), scale: 1.0, attribution: None, animations: {}),
+        // 3d/glb/a-089-ruine-obergeschoss.glb — 6.95 x 5.55 x 4.93 m.
+        "ruin_upper_floor":    (source: Gltf("3d/glb/a-089-ruine-obergeschoss.glb"), scale: 1.0, attribution: None, animations: {}),
+        // 3d/glb/a-089-ruine-pfeiler.glb — 5.86 x 9.00 x 4.87 m.
+        "ruin_pillar":         (source: Gltf("3d/glb/a-089-ruine-pfeiler.glb"), scale: 1.0, attribution: None, animations: {}),
+        // 3d/glb/a-089-ruine-wand-ecke.glb — 6.47 x 5.60 x 6.80 m.
+        "ruin_wall_corner":    (source: Gltf("3d/glb/a-089-ruine-wand-ecke.glb"), scale: 1.0, attribution: None, animations: {}),
+        // 3d/glb/a-089-ruine-wand-hoch.glb — 6.22 x 6.94 x 3.96 m.
+        "ruin_wall_high":      (source: Gltf("3d/glb/a-089-ruine-wand-hoch.glb"), scale: 1.0, attribution: None, animations: {}),
+
+        // The mounds. Nothing in this group is over 3 m authored, and that is the whole point
+        // of it: rubble takes the **ground** away and leaves the air alone (see
+        // `maps.ron: layout.damage.spill_m`).
+        //
+        // 3d/glb/a-090-schutt-balken.glb — 4.10 x 2.10 x 3.70 m.
+        "rubble_beams":        (source: Gltf("3d/glb/a-090-schutt-balken.glb"), scale: 1.0, attribution: None, animations: {}),
+        // 3d/glb/a-090-schutt-deckung.glb — 3.70 x 1.20 x 3.31 m.
+        "rubble_cover":        (source: Gltf("3d/glb/a-090-schutt-deckung.glb"), scale: 1.0, attribution: None, animations: {}),
+        // 3d/glb/a-090-schutt-flach.glb — 3.94 x 0.90 x 2.95 m.
+        "rubble_flat":         (source: Gltf("3d/glb/a-090-schutt-flach.glb"), scale: 1.0, attribution: None, animations: {}),
+        // 3d/glb/a-090-schutt-haufen-gross.glb — 6.20 x 3.00 x 4.80 m.
+        "rubble_heap_large":   (source: Gltf("3d/glb/a-090-schutt-haufen-gross.glb"), scale: 1.0, attribution: None, animations: {}),
+        // 3d/glb/a-090-schutt-hoch.glb — 4.20 x 1.80 x 3.50 m.
+        "rubble_high":         (source: Gltf("3d/glb/a-090-schutt-hoch.glb"), scale: 1.0, attribution: None, animations: {}),
+        // 3d/glb/a-090-schutt-wandstueck.glb — 4.33 x 2.40 x 2.80 m.
+        "rubble_wall_piece":   (source: Gltf("3d/glb/a-090-schutt-wandstueck.glb"), scale: 1.0, attribution: None, animations: {}),
 
         // WOULD BE: nothing in the drop. `scale.ron heights_m.tree` is 12.0 and `maps.ron`
         // draws a 2.5 x 12.0 x 2.5 block; the drop's smallest giant tree

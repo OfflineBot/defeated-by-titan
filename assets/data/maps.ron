@@ -57,6 +57,14 @@
         // map is a key, and an amber lantern is the exact thing that rule was written
         // against. **Not amber** — amber is (1.0, 0.68, 0.10) and this is a warm white.
         "lamp_warm": (1.0, 0.90, 0.78),
+        // Added 2026-08-19 with the fall of Ashgate. A standing remnant and a rubble mound
+        // are darker and less saturated than the wall they were: a century of weather and
+        // one fire. They are only ever SEEN where the ruin kit is switched off in `art.ron`
+        // — the mesh covers the box otherwise — but the box is what a screenshot of a
+        // model-less build shows, and a ruin the colour of a house is a ruin nobody sees.
+        // **Not a signal colour**: those three are gameplay only and appear nowhere else.
+        "ash_gray": (0.30, 0.30, 0.29),
+        "ash_dark": (0.22, 0.21, 0.20),
     },
 
     // The three signal colors, linear RGB. Until 2026-08-09 they existed only as PROSE
@@ -140,6 +148,12 @@
                 roof_steps: 1,
                 tall_fraction: 0.0,
                 tall_height_key: "house_tall",
+                // **Nothing has fallen here, and that is a statement and not a default**
+                // (§4, no `serde(default)`). The fixture is the world eight tests in
+                // `tests/vector_aiming.rs` and four in `tests/player.rs` are pinned to; a
+                // ruin would move a box one of them aims at, and the test would stay green
+                // while measuring something else.
+                damage: None,
             ),
 
             // ⚠️ **PROVABLY FLAT, and that is not laziness.** `levels: 1` and `step_m: 0.0`
@@ -622,6 +636,99 @@
                 // deliberately does not want (`scale.ron: architecture`).
                 tall_fraction: 0.08,
                 tall_height_key: "house_tall",
+
+                // ================================================================================
+                // ASHGATE HAS FALLEN — 2026-08-19. The user, 2026-08-18:
+                //   *„hast du die map schon überarbeitet? weil aktuell ist das nicht die echte
+                //    map!"*
+                // ================================================================================
+                //
+                // He is right and it is checkable in one line. `docs/gameplay/world.md`:
+                // *"the war is already lost … **Ashgate has long since fallen**; the Vanguard
+                // runs **salvage missions into its own ruins**"* — and what stood here until
+                // this round was an intact, inhabited, tidy walled town with 926 houses, a
+                // full roofscape and not one collapsed wall. Every good thing the 2026-08-18
+                // session added (density, party walls, terrain, gabled roofs) answered the
+                // *other* complaint — *„lass es wie die echte stadt aussehen"* — and pushed
+                // this one further away.
+                //
+                // ## Why a gradient and not a rate
+                //
+                // A fallen ring is not uniformly destroyed. Three terms are added:
+                // the **gradient** below, a draw per **block** and a draw per **house**. The
+                // middle one is the one that matters most and it is the one a "damage
+                // percentage" cannot express: whole streets stand and whole streets are gone,
+                // so there are stretches worth salvaging and stretches that block a route.
+                // Pepper at one flat rate reads as a *texture* over a market town.
+                //
+                // ⚠️ **What this does to traversal**, because it is a traversal change and not
+                // a decoration change:
+                //   * a **ruin** is a 3..7 m stump where a 9..11 m wall stood. The rope still
+                //     holds — every remnant is anchorable, „überall! ohne ausnahmen!" — but it
+                //     holds *lower*, so a ruined stretch is a dip in the lane and not a wall.
+                //     That is the real change, and it is deliberate: the intact rows stay the
+                //     canyon the district was tuned for (street : ridge 0.61 : 1), the fallen
+                //     ones open the sky over them.
+                //   * a **mound** is under 3 m in a 6 m street and it spills `spill_m` past
+                //     the frontage. It takes the **ground** away and leaves the air alone: you
+                //     cannot run that lane, you can still fly it. A district where rubble
+                //     blocked the swing lanes would be a district that punishes the one verb
+                //     the game has.
+                damage: Some((
+                    // The gradient. The Vanguard held the middle longest — the player spawns
+                    // at the origin and the hub stands there — and the outer edge is where the
+                    // wall went. **0.40 at the core and not 0.10**, and that is the one
+                    // figure here that was set twice: at 0.10 the whole inner third came out
+                    // at 0 % damaged — the player spawns at the origin, so the first thing he
+                    // would see is the intact market town he already complained about. The
+                    // core is where the Vanguard held, not where nothing happened.
+                    core_severity: 0.45,
+                    edge_severity: 0.86,
+                    // Per BLOCK. This is the term that makes damage a history: at ±0.22 a
+                    // whole closed block sits a fifth of the scale off its neighbours, so a
+                    // street front is intact or gone as a piece.
+                    block_spread: 0.28,
+                    // Per HOUSE, and small on purpose. It is what leaves a gable standing in a
+                    // razed row and punches one hole into an intact one; any bigger and it
+                    // averages the block draw away again.
+                    house_spread: 0.12,
+                    // The two cuts, and they were set by measurement and not by taste.
+                    // On the shipped seed at exactly these figures
+                    // (`tests/world.rs::f003_ashgate_has_fallen_and_it_is_not_a_tidy_market_town`
+                    // prints every one of them):
+                    //
+                    //   946 buildings — 436 standing · 376 ruined · 134 collapsed (54 % gone)
+                    //   139 blocks    —  39 wholly intact ·  62 more than half razed
+                    //   damaged: 18 % within a third of the map, 71 % beyond three quarters
+                    //
+                    // ⚠️ **The upper bound is not a matter of taste either.** At
+                    // `core_severity: 0.52` the district came out 60 % damaged and only 92
+                    // street samples still stood between two intact houses — the canyon the
+                    // whole movement is tuned for (street : ridge 0.61 : 1) had thinned to
+                    // nothing, and `f003_the_street_is_narrower_than_the_houses_are_tall`
+                    // said so. A ruin that eats the town takes the game with it.
+                    ruin_at: 0.72,
+                    rubble_at: 0.98,
+                    // A remnant is CUT OUT of the house it was, never added to it: at most
+                    // three quarters of the ridge the intact house would have had. Nothing in
+                    // a fallen district is taller than it was standing.
+                    ruin_height_fraction: 0.75,
+                    // Under 2.5 m it is not a standing wall any more, it is a heap — and a
+                    // heap is what the rubble kit is for. A ruin model that cannot reach this
+                    // inside the lot is not worn; the house collapses instead.
+                    ruin_min_height_m: 2.5,
+                    // The mounds. The kit is authored 0.90..3.00 m tall and this is the window
+                    // it is scaled into, so a mound is never a bunker.
+                    rubble_height_m: (1.2, 2.8),
+                    // 1.6 m of it lies in the road — about a quarter of the 6 m street, and
+                    // just over half of the narrowest street the jitter can draw
+                    // (`street_m 6.0 - 2 * cell_jitter_m 1.5 = 3.0 m`). So even the tightest
+                    // lane keeps 1.4 m of daylight beside a mound: **blocked is a decision,
+                    // sealed is a bug**, and nothing here may wall a street off completely.
+                    spill_m: 1.6,
+                    ruin_color: "ash_gray",
+                    rubble_color: "ash_dark",
+                )),
             ),
 
             // ================================================================================

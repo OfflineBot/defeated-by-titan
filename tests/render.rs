@@ -54,6 +54,7 @@ use defeated_by_titan::render::model::{
     PrimitiveFallback, CORTEX_ANCHOR,
 };
 use defeated_by_titan::render::rope::rope_color;
+use defeated_by_titan::world::map::{DRESSING, RUBBLE_KIT, RUIN_KIT};
 use defeated_by_titan::shared::{
     BodyId, Cli, Hook, HookArm, HookState, Intent, LocalPlayer, Side, TitanKindName, TitanState,
 };
@@ -2120,10 +2121,15 @@ fn f030_every_glb_art_ron_names_even_in_a_comment_is_a_file_that_exists() {
 
 /// **The shipped registry binds exactly the rows that have a home** — no more, no less.
 ///
-/// `render::model::name_the_titans_model` is the only writer of `ModelName` in the tree, so
-/// `titan.ron: kinds.*.model` is the whole list of logical names the running game ever asks
-/// for, and `art.ron` may only point those at a file. This pins the set in **both** directions,
-/// because both directions have already been wrong:
+/// ⚠️ **Rewritten 2026-08-19, because its premise stopped being true.** It read
+/// *"`render::model::name_the_titans_model` is the only writer of `ModelName` in the tree"* —
+/// and since the fall of Ashgate `world::map::BlockPlan::spawn` writes it too, for every
+/// dressed house and every remnant (`docs/NEXT.md` §1F and §2C). So the list is no longer
+/// `titan.ron` alone; it is **every name something in the running game asks for**, derived
+/// from the three places that ask, and a hard-coded row list would have to be re-typed every
+/// time the district learns a shape.
+///
+/// This pins the set in **both** directions, because both directions have already been wrong:
 ///
 /// * **Unbinding is silent.** With every titan row on `Primitive` no entity anywhere renders a
 ///   model, and every other model test in this file runs over an empty set while staying green.
@@ -2150,23 +2156,55 @@ fn f030_the_shipped_registry_binds_exactly_the_rows_that_have_a_home() {
         .filter(|(_, m)| matches!(m.source, ModelSource::Gltf(_)))
         .map(|(name, _)| name)
         .collect();
-    assert_eq!(
-        bound,
-        vec!["titan_husk"],
+
+    // Everything the running game can ask for, out of the three places that ask: the titan
+    // kinds, the house classes a lot may be dressed with, and the remnants a fallen one wears.
+    let mut asked: Vec<String> = data.titans.kinds.values().map(|k| k.model.clone()).collect();
+    asked.extend(DRESSING.iter().map(|(n, _)| n.to_string()));
+    asked.extend(RUIN_KIT.iter().chain(RUBBLE_KIT.iter()).map(|(n, _)| n.to_string()));
+    let orphans: Vec<&&String> = bound.iter().filter(|n| !asked.contains(n)).collect();
+    assert!(
+        orphans.is_empty(),
+        "the shipped art.ron binds {orphans:?} to a file, and nothing in the running game ever \
+         asks for that name — that is a glTF loaded for an empty screen (art.ron's header). \
+         The three askers are `titan.ron: kinds.*.model`, `world::map::DRESSING` and the ruin \
+         kit"
+    );
+    assert!(
+        bound.iter().any(|n| n.as_str() == "titan_husk"),
         "the shipped art.ron binds {bound:?}. `titan_husk` has to be there — it is the body \
-         husk, errant, chorus, scuttler and weaver wear, and it is the only thing in the running \
-         game that is not a grey cuboid. Nothing else may be there: `titan_large` takes \
-         tests/titan.rs::q031 red (see this test's comment), and every other row is a name no \
-         entity carries, i.e. glTF loaded for an empty screen (art.ron's header)"
+         husk, errant, chorus, scuttler and weaver wear, and it is the only titan in the \
+         running game that is not a grey cuboid"
+    );
+    // And the district really is dressed, which is the other half of *„zudem fehlen noch die
+    // häuser"*: the whole ruin kit and at least two of the three house classes are bound.
+    let missing: Vec<&str> = RUIN_KIT
+        .iter()
+        .chain(RUBBLE_KIT.iter())
+        .map(|(n, _)| *n)
+        .filter(|n| !bound.iter().any(|b| b.as_str() == *n))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the ruin kit is only half bound — {missing:?} name no file, and a district that falls \
+         with half a kit falls in two different styles"
+    );
+    assert!(
+        !bound.iter().any(|n| n.as_str() == "titan_large"),
+        "art.ron binds `titan_large` — it takes tests/titan.rs::q031 red (see this test's \
+         comment), and the blocker is written out at the row"
     );
 
     // …and the loader really asked for it. The registry naming a file and the asset server
     // never being told is exactly the shape of the 2026-08-18 asset-root bug.
-    let asked = &app.world().resource::<ModelAssets>().gltf;
+    let loaded = &app.world().resource::<ModelAssets>().gltf;
+    let unasked: Vec<&String> = bound.iter().filter(|n| !loaded.contains_key(**n)).copied().collect();
     assert!(
-        asked.contains_key("titan_husk") && asked.len() == 1,
-        "art.ron binds one row and the loader asked for {:?}",
-        asked.keys().collect::<Vec<_>>()
+        unasked.is_empty() && loaded.len() == bound.len(),
+        "art.ron binds {} row(s) and the loader asked for {:?} — {unasked:?} were never \
+         requested",
+        bound.len(),
+        loaded.keys().collect::<Vec<_>>()
     );
 
     // The kinds that consequently still render the cuboid rig, named so that the count in
@@ -2247,4 +2285,100 @@ fn f030_a_bound_row_names_no_clip_because_its_file_carries_none() {
         checked += 1;
     }
     assert!(checked > 0, "no bound row to check — see f030_the_shipped_registry_binds_the_bodies_the_titans_wear");
+}
+
+// ---------------------------------------------------------------------------
+// F-030 · **the cost claim: a bound model is a handful of primitives, not a hundred**
+//
+// FIND-105 measured Ashgate's headless tick at 29.6 ms against a 16.7 ms budget and found the
+// cause in the pack, not in the code: `a-083-fachwerkhaus-gross.glb` was **115 separate meshes
+// that all share ONE material**. Bevy spawns a glTF scene as an entity hierarchy — one entity
+// per node — so 278 dressed houses were ~33 000 entities whose transforms propagate every
+// tick, and the cost tracked glTF node count rather than block or instance count.
+//
+// `tools/glb_merge.py` concatenated every group of primitives sharing a material into one
+// primitive. The visual result is identical by construction (same triangles, same texture);
+// what changed is the node count. This test is the ratchet: an art drop that reintroduces an
+// unmerged export goes red here instead of costing a day of measurement.
+// ---------------------------------------------------------------------------
+
+/// How many mesh primitives a `.glb` carries, counted out of its JSON chunk.
+///
+/// One `"POSITION"` per primitive — the attribute is mandatory on every one of them (glTF 2.0
+/// §3.7.2.1) and appears nowhere else in these documents. Counted as text for the same reason
+/// the rest of this section is: no JSON crate in the tree, and `Cargo.toml` is not this test's
+/// to change.
+fn glb_primitive_count(json: &str) -> usize {
+    json.matches("\"POSITION\"").count()
+}
+
+/// The ceiling, and where the number comes from.
+///
+/// **3.** It is not a round number and it is not a budget — it is the pack's own maximum after
+/// the merge, measured over all 278 files on 2026-08-19: a file ends up with exactly one
+/// primitive per distinct material, 238 files carry one material, 36 carry two, one carries
+/// three. So 3 is "every material group is merged", stated as a number a test can read. A file
+/// that comes in above it is either unmerged or has grown a fourth material — both are things
+/// somebody has to look at, and both are cheap to fix (`python3 tools/glb_merge.py`).
+const MAX_PRIMITIVES_PER_MODEL: usize = 3;
+
+#[test]
+fn f030_a_bound_model_is_merged_and_cannot_bring_a_hundred_primitives_back() {
+    let app = app();
+    let data = app.world().resource::<GameData>();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    let mut checked = 0;
+    for (name, model) in &data.art.models {
+        let ModelSource::Gltf(path) = &model.source else {
+            continue;
+        };
+        let file = root.join(path);
+        if !file.is_file() {
+            continue; // f030_every_configured_model_names_a_file_that_is_on_disk owns that one
+        }
+        let primitives = glb_primitive_count(&gltf_json(&file));
+        assert!(
+            primitives <= MAX_PRIMITIVES_PER_MODEL,
+            "{path} carries {primitives} mesh primitives, and a bound model may carry at most \
+             {MAX_PRIMITIVES_PER_MODEL} (one per material). Bevy spawns one ENTITY per glTF \
+             node, so an unmerged export multiplies straight into the tick: FIND-105 measured \
+             115 primitives per house and +126 % on the frame. Run \
+             `python3 tools/glb_merge.py` — it concatenates primitives that share a material \
+             and asserts the geometry is identical before it writes. Model {name:?}"
+        );
+        checked += 1;
+    }
+    assert!(
+        checked > 0,
+        "no bound row to check — see f030_the_shipped_registry_binds_the_bodies_the_titans_wear"
+    );
+}
+
+#[test]
+fn f030_the_whole_drop_is_merged_and_not_only_the_rows_that_ship_today() {
+    // The wider net, and the reason it is separate: the test above guards what the game loads
+    // TODAY, which is 18 rows. `art.ron` is one line per class — the day somebody dresses
+    // another building the file is already bound, and the tick cost arrives with it. So the
+    // ratchet is held over the whole tracked pack, where an unmerged file can be found on the
+    // day it lands rather than on the day it is used.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/3d/glb");
+    let mut worst: Vec<(String, usize)> = std::fs::read_dir(&dir)
+        .expect("assets/3d/glb is tracked")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "glb"))
+        .map(|p| {
+            let n = glb_primitive_count(&gltf_json(&p));
+            (p.file_name().unwrap().to_string_lossy().into_owned(), n)
+        })
+        .filter(|(_, n)| *n > MAX_PRIMITIVES_PER_MODEL)
+        .collect();
+    worst.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+    assert!(
+        worst.is_empty(),
+        "{} of the drop's .glb files carry more than {MAX_PRIMITIVES_PER_MODEL} mesh \
+         primitives — worst first: {:?}. Run `python3 tools/glb_merge.py` (docs/models.md, \
+         FIND-105/FIND-107); `--check` first if you want to see what it would do.",
+        worst.len(),
+        &worst[..worst.len().min(6)]
+    );
 }

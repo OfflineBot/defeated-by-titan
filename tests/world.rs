@@ -45,7 +45,8 @@ use defeated_by_titan::shared::{
 };
 use defeated_by_titan::world::index::mask_from;
 use defeated_by_titan::data::{Model, ModelSource};
-use defeated_by_titan::world::map::{plan_blocks, BlockPlan, DRESSING};
+use defeated_by_titan::shared::ModelName;
+use defeated_by_titan::world::map::{plan_blocks, BlockPlan, DRESSING, RUBBLE_KIT, RUIN_KIT};
 use std::path::PathBuf;
 
 /// Builds the **real** app, headless, and runs `Startup` once.
@@ -172,7 +173,12 @@ fn ridge_m(plan: &[BlockPlan], wall: &BlockPlan) -> f32 {
 /// alley; two houses of different lots face each other across a street. The distinction is
 /// the whole point of the layout, so it is read off the name and not guessed from a width.
 fn lot_of(house: &BlockPlan) -> &str {
-    house.name.trim_start_matches("house_").split('_').next().unwrap_or("")
+    // ⚠️ Read as "the second field of the name", not as "what follows `house_`". Since
+    // 2026-08-19 a generated building is `house_`, `ruin_` or `rubble_` (`maps.ron:
+    // layout.damage`), and the old `trim_start_matches("house_")` returned the *prefix* for
+    // the other two — every ruin in the district then counted as one lot called „ruin", and a
+    // test that groups by block silently measured three buckets instead of two hundred.
+    house.name.split('_').nth(1).unwrap_or("")
 }
 
 /// Every built cuboid as `(name, center, full size, anchorable)`, sorted by name.
@@ -923,18 +929,32 @@ fn f003_the_street_is_narrower_than_the_houses_are_tall() {
     // 2 m "street" — a number that passes this test while saying nothing about it. So:
     // 1..4 m is an alley and gets its own count, 4..25 m is a street and carries the
     // assertion, above 25 m is a field and is a hole in the frontage.
+    // ⚠️ Since 2026-08-19 the sample is taken over [`facades`] and not over [`walls`], and the
+    // **ratio** is taken over intact pairs only. Both halves are the fall of Ashgate arriving
+    // in this measurement, and getting either one wrong makes the number a lie:
+    //   * a **ruin** keeps its street-facing face exactly where the house's was, so it is
+    //     still a facade and the gap to it is still a street width. Left out, every ruined
+    //     house turned into a 43 m hole in the frontage — measured on the first run of the
+    //     damage round: 201 of 486 samples „look at open ground", against 165 of 507 on
+    //     the same district before it fell.
+    //   * a **mound** is deliberately pushed past that line into the road, so counting it
+    //     would report a street narrower than the one you can fly down.
+    //   * the **canyon** (street : ridge) is a statement about the standing town: a 3 m stump
+    //     across a 7 m street is a 2.3 : 1 clearing and it is *supposed* to be. Pooled in, the
+    //     median would fail this test for the one thing the round was asked to build.
     let plan = plan();
-    let houses = walls(&plan);
+    let houses = facades(&plan);
     assert!(houses.len() > 100, "only {} generated houses — is this the district?", houses.len());
 
     let span = |c: f32, s: f32| (c - s * 0.5, c + s * 0.5);
+    let mounds = rubble(&plan);
     let mut gaps: Vec<f32> = Vec::new();
     let mut ratios: Vec<f32> = Vec::new();
     let mut alleys: Vec<f32> = Vec::new();
     let mut broken = 0usize;
     for a in &houses {
         for axis in 0..2 {
-            let (a_lo, a_hi) = if axis == 0 {
+            let (_a_lo, a_hi) = if axis == 0 {
                 span(a.center_m.x, a.size_m.x)
             } else {
                 span(a.center_m.z, a.size_m.z)
@@ -945,7 +965,7 @@ fn f003_the_street_is_narrower_than_the_houses_are_tall() {
                 span(a.center_m.x, a.size_m.x)
             };
             let mut best: Option<&BlockPlan> = None;
-            for b in &houses {
+            for b in houses.iter().chain(mounds.iter()) {
                 let b = *b;
                 let (b_lo, _) = if axis == 0 {
                     span(b.center_m.x, b.size_m.x)
@@ -978,6 +998,14 @@ fn f003_the_street_is_narrower_than_the_houses_are_tall() {
                 }
             }
             let Some(b) = best else { continue };
+            // **A mound is neither a street nor a hole.** It is the nearest thing opposite, so
+            // this facade does not look at open ground — but it stands *in* the road
+            // (`maps.ron: layout.damage.spill_m`), so the gap to it is not a street width
+            // either. Counting it as a street would report a road narrower than the one you
+            // can fly down; counting it as a hole would call a collapsed house an empty field.
+            if b.name.starts_with("rubble_") {
+                continue;
+            }
             let (b_lo, _) = if axis == 0 {
                 span(b.center_m.x, b.size_m.x)
             } else {
@@ -1019,8 +1047,11 @@ fn f003_the_street_is_narrower_than_the_houses_are_tall() {
             }
             gaps.push(gap);
             // Against the RIDGE, not against the wall: the roof cap carries the same anchor
-            // bit as its house, so `d < H` (FIND-041) hangs from the cap.
-            ratios.push(gap / ridge_m(&plan, a).min(ridge_m(&plan, b)));
+            // bit as its house, so `d < H` (FIND-041) hangs from the cap. And only where both
+            // sides still stand — see the header.
+            if a.name.starts_with("house_") && b.name.starts_with("house_") {
+                ratios.push(gap / ridge_m(&plan, a).min(ridge_m(&plan, b)));
+            }
         }
     }
 
@@ -1029,6 +1060,7 @@ fn f003_the_street_is_narrower_than_the_houses_are_tall() {
         v[v.len() / 2]
     };
     assert!(gaps.len() > 200, "only {} street samples", gaps.len());
+    assert!(ratios.len() > 100, "only {} of them stand between two intact houses", ratios.len());
     let n = gaps.len();
     let gap_m = median(&mut gaps);
     let ratio = median(&mut ratios);
@@ -1049,10 +1081,27 @@ fn f003_the_street_is_narrower_than_the_houses_are_tall() {
         houses.len(),
         alleys.len()
     );
+    // ⚠️ **The ceiling moved from a third to two fifths on 2026-08-19, and only because the
+    // district fell.** Measured on the same seed, the same test, three states:
+    //
+    // | district | facades | street samples | holes |
+    // |---|---|---|---|
+    // | cuboids, intact | 926 | 507 | 165 (32.5 %) |
+    // | dressed, intact | 937 | 514 | 165 (32.1 %) |
+    // | dressed, fallen | 898 | 498 | 187 (37.6 %) |
+    //
+    // Dressing changed nothing here; the fall did, and it had to: 45 houses are a mound now
+    // and 290 are a stump narrower than the house it replaced, so the frontage really does
+    // have more gaps in it. That is the deliverable, not a regression. What must not happen
+    // is the *rest* of the frontage quietly going with it, which is what this still catches —
+    // and the number that moved is written down rather than the assertion being widened until
+    // it goes green.
     assert!(
-        broken * 3 < n,
+        broken * 5 < n * 2,
         "{broken} of {} samples are a facade with no facade opposite — a frontage with that \
-         many holes in it is not a street, and the arc has nothing to run between",
+         many holes in it is not a street, and the arc has nothing to run between. A fallen \
+         ring is allowed 40 % of them (measured 37.6 % on 2026-08-19); above that the ruin \
+         has eaten the town instead of standing in it",
         broken + n
     );
 
@@ -1784,25 +1833,59 @@ fn data_with_house_models() -> GameData {
     d
 }
 
+/// `assets/data` with the three house rows put **back** on `Primitive` — the other direction
+/// of the same one-line switch, and the half that says it is a switch and not a wire.
+fn data_without_house_models() -> GameData {
+    let mut d = data();
+    for (name, _) in DRESSING {
+        match d.art.models.get_mut(name) {
+            Some(row) => row.source = ModelSource::Primitive,
+            None => panic!("art.ron has lost its {name:?} row — the house registry is gone"),
+        }
+    }
+    d
+}
+
 #[test]
 fn f003_art_ron_is_the_only_switch_that_dresses_the_district() {
-    // ★ The whole feature has to be one line of RON, and it has to be OFF today.
+    // ★ The whole feature has to be one line of RON, and since 2026-08-19 it is **on**.
     //
-    // Off, because `art.ron` ships all three rows as `Primitive`: a name with no file behind
-    // it is a name with no model, and dressing against one would cost every house its cuboid
-    // roof — a district of flat-topped boxes — in exchange for nothing on screen. So the
-    // shipped plan must be exactly the district it was before this feature existed.
+    // On, because the user asked for it: *„zudem fehlen noch die häuser"* (2026-08-18). The
+    // three house rows in `art.ron` name their files and the generator dresses itself with no
+    // code touched — that is what `art.ron`'s own header promises ("ONE line to swap it") and
+    // this is the only place it is measured on something that is not a titan.
     //
-    // On, because the moment those three rows name their files the generator has to dress
-    // itself with no code touched. That is what `art.ron`'s own header promises ("ONE line to
-    // swap it") and this is the only place it is measured on something that is not a titan.
+    // ⚠️ Until this day the assertion was the **opposite** one (`dressed == 0`), because the
+    // rows were `Primitive` on purpose: `BlockPlan::spawn` did not insert the `ModelName`, so
+    // flipping them would have cost every house its cuboid roof in exchange for nothing on
+    // screen. That blocker is gone (`src/shared/anchors.rs`), so the guard turns around with
+    // it — and the **off** direction is measured below, on data with the rows put back.
     let shipped = plan();
     let dressed_today = shipped.iter().filter(|k| k.model.is_some()).count();
-    assert_eq!(
-        dressed_today, 0,
-        "{dressed_today} block(s) of the shipped district wear a model, and art.ron ships \
-         every house row as `Primitive` — a name with no file behind it must never take a \
-         cuboid roof away"
+    assert!(
+        dressed_today > 300,
+        "only {dressed_today} block(s) of the shipped district wear a model — `art.ron` is \
+         the switch and it is supposed to be on. „zudem fehlen noch die häuser\""
+    );
+
+    // And the converse, which is what keeps it a *switch*: with the three rows back on
+    // `Primitive` not one house is dressed, and every one of them has its stepped gable
+    // again. Without this half, "one line of RON" is a claim in a comment.
+    let off = data_without_house_models();
+    let off_map = off.current_map().expect("current map");
+    let off_plan = plan_blocks(&off, off_map);
+    let still_dressed: Vec<&str> = off_plan
+        .iter()
+        .filter(|k| k.model.is_some_and(|m| DRESSING.iter().any(|(n, _)| *n == m)))
+        .map(|k| k.name.as_str())
+        .collect();
+    assert!(
+        still_dressed.is_empty(),
+        "{} house(s) wear a model although all three rows are `Primitive` again: {:?} — then \
+         `art.ron` is not the switch and a name with no file behind it takes a cuboid roof \
+         away for nothing",
+        still_dressed.len(),
+        &still_dressed[..still_dressed.len().min(5)]
     );
 
     let d = data_with_house_models();
@@ -2087,5 +2170,418 @@ fn f003_the_districts_ground_comes_from_the_map_and_barely_from_the_seed() {
          the distance transform",
         nx * nz,
         100.0 * worst as f32 / cells
+    );
+}
+
+// ===========================================================================================
+// §1F — Ashgate has fallen. `docs/gameplay/world.md`: *"the war is already lost … Ashgate has
+// long since fallen; the Vanguard runs salvage missions into its own ruins"*.
+//
+// The user, 2026-08-18: *„das ist nicht die echte map!"* — a setting complaint, not a look
+// complaint. What was built until this round is an intact, inhabited, tidy market town, and
+// `grep -ci 'ruin|rubble|collapse' assets/data/maps.ron` answered **0**.
+// ===========================================================================================
+
+/// Every standing remnant of a fallen house — `ruin_<lot>_<i>`.
+fn ruins(plan: &[BlockPlan]) -> Vec<&BlockPlan> {
+    plan.iter().filter(|k| k.name.starts_with("ruin_")).collect()
+}
+
+/// Every collapsed house — `rubble_<lot>_<i>`, the mound that is left where the walls went.
+fn rubble(plan: &[BlockPlan]) -> Vec<&BlockPlan> {
+    plan.iter().filter(|k| k.name.starts_with("rubble_")).collect()
+}
+
+/// What a **street** is measured between: a house that still stands, and a ruin that still
+/// stands on the same frontage line.
+///
+/// ⚠️ Ruins belong in this set and rubble does not, and both halves are load bearing. A
+/// half-standing gable keeps its street-facing face exactly where the intact house's was
+/// (`world::map`), so a gap measured to it is a real street width; a rubble mound is
+/// deliberately pushed **past** that line into the road (`maps.ron: layout.damage.spill_m`),
+/// so counting it would report a street that is narrower than the one you can fly down.
+fn facades(plan: &[BlockPlan]) -> Vec<&BlockPlan> {
+    plan.iter()
+        .filter(|k| k.name.starts_with("house_") || k.name.starts_with("ruin_"))
+        .collect()
+}
+
+#[test]
+fn f003_ashgate_has_fallen_and_it_is_not_a_tidy_market_town() {
+    // ★ The setting, as a measurement. Red on the district as it shipped until 2026-08-19:
+    // 926 intact houses, 0 ruins, 0 rubble — an inhabited walled town in a world whose own
+    // design says this ring fell a century ago and is now walked for salvage.
+    //
+    // Deliberately **not** "some percentage is damaged". Three separate things have to be
+    // true, and each of them is a different way of getting a ruin wrong:
+    //
+    // 1. Ruins and rubble exist at all.
+    // 2. Intact stretches survive — a uniformly flattened district has nothing to salvage,
+    //    no canyon left to fly down, and reads as a quarry rather than as a town that fell.
+    // 3. It is **designed and not sprinkled**: damage comes in stretches. A district where
+    //    every third house at random is a stump is noise, and noise reads as a texture, not
+    //    as a history.
+    let plan = plan();
+    let (standing, broken, gone) = (walls(&plan).len(), ruins(&plan).len(), rubble(&plan).len());
+    let built = standing + broken + gone;
+    assert!(built > 500, "only {built} generated buildings — is this the district?");
+
+    eprintln!(
+        "ashgate: {standing} standing, {broken} ruined, {gone} collapsed of {built} \
+         ({:.0} % damaged)",
+        100.0 * (broken + gone) as f32 / built as f32
+    );
+    assert!(
+        broken > 0 && gone > 0,
+        "{broken} ruins and {gone} rubble mounds in the whole district — `docs/gameplay/\
+         world.md`: „Ashgate has long since fallen; the Vanguard runs salvage missions into \
+         its own ruins\". What stands here is an intact market town, and the user said so: \
+         „das ist nicht die echte map!\""
+    );
+    let damaged = (broken + gone) as f32 / built as f32;
+    assert!(
+        (0.20..=0.75).contains(&damaged),
+        "{:.0} % of the district is damaged. Below 20 % it is a town with a few bad houses; \
+         above 75 % there is nothing left to salvage and no frontage left to fly between",
+        100.0 * damaged
+    );
+
+    // 3. Stretches, not pepper. Every lot is one closed block of row houses, so „a stretch"
+    // is measurable per lot: how many lots are wholly intact, and how many are wholly gone.
+    // Uniform independent draws at this rate would leave almost none of either.
+    let mut per_lot: std::collections::BTreeMap<String, (usize, usize)> =
+        std::collections::BTreeMap::new();
+    for b in walls(&plan).iter().chain(ruins(&plan).iter()).chain(rubble(&plan).iter()) {
+        let e = per_lot.entry(lot_of(b).to_string()).or_insert((0, 0));
+        e.0 += 1;
+        if !b.name.starts_with("house_") {
+            e.1 += 1;
+        }
+    }
+    let whole = per_lot.values().filter(|(n, d)| *n >= 4 && *d == 0).count();
+    let razed = per_lot.values().filter(|(n, d)| *n >= 4 && d * 2 > *n).count();
+    eprintln!(
+        "{} lots of {} are wholly intact, {razed} are more than half gone",
+        whole,
+        per_lot.len()
+    );
+    assert!(
+        whole >= 8 && razed >= 8,
+        "{whole} wholly intact blocks and {razed} mostly razed ones out of {} — damage that \
+         is neither of those is sprinkled, and sprinkled damage reads as a texture over a \
+         market town instead of as a district that fell. It wants intact stretches worth \
+         salvaging and collapsed ones that block a route",
+        per_lot.len()
+    );
+}
+
+#[test]
+fn f003_the_damage_is_a_gradient_and_the_core_is_what_is_left() {
+    // ★ The other half of „design the damage, do not sprinkle it": a fallen ring is not
+    // uniformly destroyed. The gradient is the story — the Vanguard held the middle longest
+    // and the outer edge is where the wall was breached — and without it the two thresholds
+    // above can be met by a coin flip per building.
+    //
+    // Red when `layout.damage.core_severity` and `edge_severity` are set to the same figure:
+    // then the district is damaged everywhere at one rate, and this ratio goes to 1.0.
+    let plan = plan();
+    let d = data();
+    let map = d.current_map().expect("current map");
+    let half = map.size_m.0.max(map.size_m.1) * 0.5;
+
+    let (mut near, mut near_bad, mut far, mut far_bad) = (0usize, 0usize, 0usize, 0usize);
+    for b in walls(&plan).iter().chain(ruins(&plan).iter()).chain(rubble(&plan).iter()) {
+        let r = b.center_m.xz().length() / half;
+        let bad = !b.name.starts_with("house_");
+        if r < 0.35 {
+            near += 1;
+            near_bad += bad as usize;
+        } else if r > 0.75 {
+            far += 1;
+            far_bad += bad as usize;
+        }
+    }
+    assert!(near > 40 && far > 40, "{near} buildings near the core, {far} out at the edge");
+    let (a, b) = (near_bad as f32 / near as f32, far_bad as f32 / far as f32);
+    eprintln!("damaged: {:.0} % near the core, {:.0} % out at the edge", 100.0 * a, 100.0 * b);
+    assert!(
+        b > a + 0.15,
+        "{:.0} % of the buildings near the core are damaged and {:.0} % out at the edge — \
+         that is one flat rate over the whole district, not a ring that was breached from \
+         outside. The gradient is what makes the damage a history instead of a texture",
+        100.0 * a,
+        100.0 * b
+    );
+}
+
+#[test]
+fn f003_a_fallen_facade_still_holds_a_rope() {
+    // ★ The constraint the ruin round could most easily have broken, and it is the user's
+    // own: *„es ist extrem wichtig dass man wirklich überall sein seil festmachen kann. also
+    // überall! ohne ausnahmen!"* (2026-08-13). A collapsed wall is still a wall.
+    //
+    // `f003_an_unanchorable_block_is_a_listed_exception_and_the_fixture_keeps_both_kinds`
+    // already forbids an *unlisted* untagged block anywhere on the shipped map. This one says
+    // the same thing about the ruins in particular and it says it by name, so that the day
+    // somebody adds `anchorable: false` to the damage table with a plausible reason
+    // („rubble is loose"), the failure names the rule it broke.
+    let plan = plan();
+    let broken: Vec<&str> = ruins(&plan)
+        .iter()
+        .chain(rubble(&plan).iter())
+        .filter(|b| !b.anchorable)
+        .map(|b| b.name.as_str())
+        .collect();
+    assert!(!ruins(&plan).is_empty(), "no ruins in the district at all");
+    assert!(
+        broken.is_empty(),
+        "{} of the district's ruins hold no rope: {:?}. „überall! ohne ausnahmen!\" — a \
+         collapsed facade is the most interesting thing in a salvage district to hang from",
+        broken.len(),
+        &broken[..broken.len().min(6)]
+    );
+}
+
+#[test]
+fn f003_the_houses_that_are_left_wear_a_model() {
+    // ★ *„zudem fehlen noch die häuser"* (the user, 2026-08-18). The generator has planned a
+    // model name per house since that day and **not one entity ever carried it**: `ModelName`
+    // lived in `src/render/model.rs`, `world` has no allow-list edge to `render`, and
+    // `BlockPlan::spawn` therefore dropped the one field that turns a grey box into a
+    // half-timbered house.
+    //
+    // Red twice over before 2026-08-19: `art.ron` had all three house rows on `Primitive`
+    // (so nothing was even planned), and nothing inserted the component (so flipping them
+    // would have changed the footprints and shown nothing).
+    let plan = plan();
+    let dressed = plan.iter().filter(|b| b.model.is_some()).count();
+    let houses = walls(&plan).len();
+    eprintln!("{dressed} of {} planned blocks wear a model ({houses} houses stand)", plan.len());
+    assert!(
+        dressed * 4 > houses,
+        "only {dressed} of {houses} standing houses are dressed — `art.ron` is the switch \
+         (`world::map::dress_for` refuses a row that is not `Gltf(...)`), and a district of \
+         grey boxes is what „zudem fehlen noch die häuser\" was about"
+    );
+}
+
+#[test]
+fn f003_the_ruin_catalogue_is_what_the_glb_files_really_measure() {
+    // ★ Fourteen files, forty-two numbers copied out of them, and a copied number rots
+    // silently: a re-export that makes the gable 20 cm wider leaves the generator building
+    // every ruin at the old width, and the mesh then stands a hand's breadth off the collider
+    // it is supposed to BE. Nothing about that has a picture — it is the same argument as
+    // `f003_the_dressing_catalogue_is_what_the_glb_files_really_measure`, one kit further on.
+    let files = [
+        ("ruin_roof_collapsed", "a-089-ruine-dach-eingestuerzt.glb"),
+        ("ruin_roof_half", "a-089-ruine-dach-haelfte.glb"),
+        ("ruin_gable", "a-089-ruine-giebel.glb"),
+        ("ruin_heap", "a-089-ruine-haufen.glb"),
+        ("ruin_upper_floor", "a-089-ruine-obergeschoss.glb"),
+        ("ruin_pillar", "a-089-ruine-pfeiler.glb"),
+        ("ruin_wall_corner", "a-089-ruine-wand-ecke.glb"),
+        ("ruin_wall_high", "a-089-ruine-wand-hoch.glb"),
+        ("rubble_beams", "a-090-schutt-balken.glb"),
+        ("rubble_cover", "a-090-schutt-deckung.glb"),
+        ("rubble_flat", "a-090-schutt-flach.glb"),
+        ("rubble_heap_large", "a-090-schutt-haufen-gross.glb"),
+        ("rubble_high", "a-090-schutt-hoch.glb"),
+        ("rubble_wall_piece", "a-090-schutt-wandstueck.glb"),
+    ];
+    let d = data();
+    let kit: Vec<(&str, [f32; 3])> =
+        RUIN_KIT.iter().chain(RUBBLE_KIT.iter()).map(|(n, e)| (*n, *e)).collect();
+    assert_eq!(kit.len(), files.len(), "a remnant was added without a file beside it");
+
+    for (i, (name, authored_m)) in kit.iter().enumerate() {
+        let (want_name, file) = files[i];
+        assert_eq!(*name, want_name, "kit row {i} is {name:?}, the file list says {want_name:?}");
+        let measured = glb_extent_m(file);
+        let claimed = Vec3::new(authored_m[0], authored_m[1], authored_m[2]);
+        assert!(
+            (measured - claimed).abs().max_element() < 0.011,
+            "{name}: {file} measures {measured:?} m, world::map says {claimed:?} — a remnant \
+             would be built to a size the model does not have"
+        );
+        // And `art.ron` really binds this name to this file. A kit row whose registry row
+        // points somewhere else is a ruin wearing another ruin.
+        match d.model(name).map(|m| &m.source) {
+            Some(ModelSource::Gltf(path)) => assert!(
+                path.ends_with(file),
+                "art.ron binds {name:?} to {path:?} and world::map measured {file}"
+            ),
+            other => panic!("art.ron: {name:?} is {other:?} — the ruin kit is switched off"),
+        }
+    }
+
+    // ⚠️ The mounds are the half of the kit that a traversal decision hangs on: „rubble takes
+    // the ground and leaves the air alone" is only true while nothing in this group is a
+    // building. Red the day somebody adds a 9 m ruin to the rubble list.
+    for (name, authored_m) in RUBBLE_KIT {
+        assert!(
+            authored_m[1] <= 3.0,
+            "{name} is authored {} m tall — a mound over 3 m in a 6 m street stops being \
+             something you can still fly over (maps.ron: layout.damage)",
+            authored_m[1]
+        );
+    }
+}
+
+#[test]
+fn f003_a_planned_model_reaches_the_entity_that_was_planned_for_it() {
+    // ★ *„zudem fehlen noch die häuser"*, on the spawning side. The generator has planned a
+    // model per house since 2026-08-18 and `BlockPlan::spawn` dropped it on the floor:
+    // `ModelName` lived in `render` and `world` may not reach into `render`. The type moved to
+    // `shared/` on 2026-08-19 and this is the test that says the name arrives — without it the
+    // plan can be perfect and the district still be grey boxes, which is exactly the state
+    // that shipped for a day.
+    //
+    // It goes through the **real** app, not through `plan_blocks`: what is measured here is
+    // the hop from plan to entity and nothing else.
+    let mut app = built_world();
+    let mut q = app.world_mut().query::<(&Name, &ModelName, &Block)>();
+    let worn: Vec<(String, String, f32)> = q
+        .iter(app.world())
+        .map(|(n, m, b)| (n.to_string(), m.name.clone(), b.size.y))
+        .collect();
+    let planned = plan().iter().filter(|k| k.model.is_some()).count();
+    eprintln!("{} entities carry a model name, {planned} were planned", worn.len());
+    assert_eq!(
+        worn.len(),
+        planned,
+        "{} of the {planned} planned models reached an entity — a name that stays in the plan \
+         renders nothing at all",
+        worn.len()
+    );
+    assert!(planned > 300, "only {planned} blocks were planned with a model");
+
+    // And it is the **box's own** height that is handed over, not a class figure: that is what
+    // `render::model::fit_to_class` scales the file by, so a house whose collider is 9.4 m
+    // tall has to ask for 9.4 m or the mesh and the collider are two different buildings.
+    let mut q = app.world_mut().query::<(&Name, &ModelName, &Block)>();
+    let off: Vec<String> = q
+        .iter(app.world())
+        .filter(|(_, m, b)| m.height_m.is_none_or(|h| (h - b.size.y).abs() > 1e-4))
+        .map(|(n, m, b)| format!("{n}: asks for {:?}, its box is {}", m.height_m, b.size.y))
+        .collect();
+    assert!(
+        off.is_empty(),
+        "{} block(s) ask the renderer for a height their collider has not got: {:?}",
+        off.len(),
+        &off[..off.len().min(4)]
+    );
+}
+
+#[test]
+fn f003_the_rubble_takes_the_ground_and_the_ruin_takes_the_lane() {
+    // ★ „Say what your rubble does to a swing lane" — as two measurements instead of a
+    // sentence, because this is the half of the fall of Ashgate that is not decoration.
+    //
+    // 1. **A mound really lies in the road.** It is pushed past its own frontage line
+    //    (`maps.ron: layout.damage.spill_m`), so a lane that used to be clear now has
+    //    something in it that you have to go over. Red the moment `spill_m` stops being
+    //    applied — and a mound that stays politely inside its lot is a decoration.
+    // 2. **And it leaves the air alone.** Nothing in the rubble kit reaches the height a rope
+    //    swings at; what changes the swing lane is the ruin beside it, which is a stump where
+    //    a wall used to hold the rope high.
+    let plan = plan();
+    let d = data();
+    let map = d.current_map().expect("current map");
+    let k = map
+        .layout
+        .damage
+        .as_ref()
+        .expect("the shipped district is the fallen one — maps.ron: layout.damage");
+
+    let mounds = rubble(&plan);
+    let stumps = ruins(&plan);
+    assert!(mounds.len() > 20 && stumps.len() > 100, "{} mounds, {} ruins", mounds.len(), stumps.len());
+
+    // 1. Height first, because it is the cheap half.
+    let tallest = mounds.iter().map(|b| b.size_m.y).fold(0.0_f32, f32::max);
+    assert!(
+        tallest <= k.rubble_height_m.1 + 1e-3,
+        "the tallest mound is {tallest:.2} m and maps.ron draws them out of {:?} — rubble \
+         that reaches the swing lane punishes the one verb this game has",
+        k.rubble_height_m
+    );
+
+    // 2. The mounds stand lower than the ruins, which stand lower than the houses. That
+    // ordering is the whole damage model in one line, and it is what a rope feels.
+    let median = |mut v: Vec<f32>| {
+        v.sort_by(f32::total_cmp);
+        v[v.len() / 2]
+    };
+    let top = |b: &BlockPlan| b.size_m.y;
+    let (h, r, m) = (
+        median(walls(&plan).iter().map(|b| top(b)).collect()),
+        median(stumps.iter().map(|b| top(b)).collect()),
+        median(mounds.iter().map(|b| top(b)).collect()),
+    );
+    eprintln!("median height: {h:.2} m standing · {r:.2} m ruined · {m:.2} m collapsed");
+    assert!(
+        h > r + 1.5 && r > m + 0.5,
+        "standing {h:.2} m, ruined {r:.2} m, collapsed {m:.2} m — a ruin that is as tall as \
+         the house it was is a re-skin, and the lane over a fallen row is supposed to DIP"
+    );
+
+    // 3. And the spill, measured against the same district with the spill turned off —
+    // which is the only way to ask "did it move INTO the road" without re-deriving the
+    // frontage line the generator drew. Every mound has to have moved by exactly `spill_m`,
+    // and it has to have moved **outward**: away from the middle of its own block, which is
+    // where the courtyard is and the street is not.
+    let mut without = d.clone();
+    without
+        .maps
+        .maps
+        .get_mut(&d.maps.current)
+        .expect("the shipped map")
+        .layout
+        .damage
+        .as_mut()
+        .expect("the shipped district is the fallen one")
+        .spill_m = 0.0;
+    let unspilled = plan_blocks(&without, without.current_map().expect("current map"));
+    let at: std::collections::BTreeMap<&str, Vec3> =
+        unspilled.iter().map(|b| (b.name.as_str(), b.center_m)).collect();
+
+    // The middle of a block, out of every building still standing on it.
+    let mut sum: std::collections::BTreeMap<&str, (Vec3, f32)> = std::collections::BTreeMap::new();
+    for b in &plan {
+        if b.name.starts_with("house_") || b.name.starts_with("ruin_") || b.name.starts_with("rubble_")
+        {
+            let e = sum.entry(lot_of(b)).or_insert((Vec3::ZERO, 0.0));
+            e.0 += b.center_m;
+            e.1 += 1.0;
+        }
+    }
+
+    let (mut moved, mut outward) = (0usize, 0usize);
+    for b in &mounds {
+        let Some(before) = at.get(b.name.as_str()) else {
+            panic!("{} is not in the unspilled plan — the two are supposed to be one seed", b.name)
+        };
+        let step = b.center_m - *before;
+        if (step.length() - k.spill_m).abs() < 1e-3 {
+            moved += 1;
+        }
+        let (middle, n) = sum[lot_of(b)];
+        if step.xz().dot((b.center_m - middle / n).xz()) > 0.0 {
+            outward += 1;
+        }
+    }
+    eprintln!(
+        "{moved} of {} mounds moved {} m when the spill was switched on, {outward} of them \
+         away from their courtyard",
+        mounds.len(),
+        k.spill_m
+    );
+    assert!(
+        moved == mounds.len() && outward * 10 > mounds.len() * 9,
+        "{moved} of {} mounds moved by `maps.ron: layout.damage.spill_m` = {} m and {outward} \
+         of them moved outward — a mound that stays inside its own lot changes nothing about \
+         how the district is crossed, and one that falls into the courtyard blocks nothing",
+        mounds.len(),
+        k.spill_m
     );
 }
