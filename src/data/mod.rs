@@ -37,28 +37,40 @@ impl Plugin for DataPlugin {
     }
 }
 
-/// Where `assets/` lives.
+/// Where `assets/` lives — **absolute**, and found from any working directory.
 ///
-/// **`cargo run`, never the bare binary**: the binary looks for `assets/` relative to the
-/// working directory and finds nothing — empty world, no error message, looks exactly like a
-/// render bug (`prompts/init.md` §3). So that a `cargo test` out of `tests/` finds it anyway,
-/// the crate directory is checked as well.
-fn assets_root() -> PathBuf {
-    let here = PathBuf::from("assets/data");
-    if here.is_dir() {
-        return here;
+/// **This is the one place that answers the question**, for the RON files *and* for Bevy's
+/// asset server (`crate::base_plugins` hands the result to `AssetPlugin::file_path`). Two
+/// answers to it is exactly how the repository spent 2026-08-18 with a game that read its
+/// numbers from the repository and looked for its models in `target/debug/assets/`.
+///
+/// The order is: **the working directory first** — that is what `cargo run` gives, and it is
+/// what a mirror asset root in a scratch directory relies on (`docs/lessons/workflow.md`) —
+/// and then **the crate the binary was built from**. That second one is the compile-time
+/// `CARGO_MANIFEST_DIR`, not the environment variable: it stands in the binary, so the bare
+/// `./target/debug/…` finds the repository no matter where it is started from and no matter
+/// where the executable has been copied to.
+pub fn assets_dir() -> PathBuf {
+    let here = PathBuf::from("assets");
+    if here.join("data").is_dir() {
+        return here.canonicalize().unwrap_or(here);
     }
-    let at_crate = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/data");
-    if at_crate.is_dir() {
+    let at_crate = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    if at_crate.join("data").is_dir() {
         return at_crate;
     }
     panic!(
         "assets/data/ not found — neither at {:?} nor at {:?}.\n\
-         Start with `cargo run`, not with the bare binary from target/debug/ \
-         (prompts/init.md §3).",
+         The binary carries the path of the crate it was built from; if the repository has \
+         moved, rebuild it (prompts/init.md §3).",
         here.canonicalize().unwrap_or(here.clone()),
         at_crate
     );
+}
+
+/// Where the RON files live. Derived from [`assets_dir`] — never resolved a second time.
+fn assets_root() -> PathBuf {
+    assets_dir().join("data")
 }
 
 /// Everything that comes out of `assets/data/`. One resource, many readers, **no writer**.
@@ -293,6 +305,53 @@ pub struct VectorTuning {
     /// One notch of the wheel, in degrees. `(max - min) / step` has to be at least 8 notches,
     /// or the wheel is a three-position switch a player reads as broken.
     pub aim_spread_step_deg: f32,
+    /// **The hard floor of the DYNAMIC angle, below the wheel's own floor** (`F-023`).
+    ///
+    /// The wheel's window is what the player is allowed to ask for; this is the narrowest the
+    /// game may resolve to on his behalf. Strictly above `0` — at 0 both arms fire along one
+    /// ray again, the state `F-023` exists to end (`docs/FINDINGS.md` FIND-039) — and strictly
+    /// **below** [`VectorTuning::aim_spread_min_deg`], or the model can never narrow past the
+    /// wheel and the whole feature is dead.
+    pub aim_spread_floor_deg: f32,
+    /// How fast the effective half-angle may change, in degrees per second — the outer safety
+    /// clamp on a single-tick depth blip, on top of the distance filter below.
+    pub aim_spread_slew_deg_s: f32,
+    /// Time constant of the low-pass on **log2 of the aim distance**, in seconds.
+    ///
+    /// Log space and not metres: the angle is a function of `1/d`, so a constant relative rate
+    /// behaves the same at 12 m and at 300 m, where a constant metric rate does not.
+    pub aim_spread_settle_s: f32,
+    /// The wheel notch at which the metre targets below apply **unscaled**, in degrees.
+    ///
+    /// Separate from [`VectorTuning::aim_spread_deg`] on purpose: that key has one job, the
+    /// value the wheel starts at. This one is the scale anchor, `k = wheel_deg / this`. They
+    /// happen to be the same number today and nothing requires them to stay so.
+    pub aim_sep_neutral_deg: f32,
+    /// The smallest separation that is still **two** anchors, in metres. Below one house
+    /// frontage both arms are on the same facade, which is FIND-039 again.
+    pub aim_sep_floor_m: f32,
+    /// Target separation while a rope holds, in metres. Mid-swing the second hook is a
+    /// **chain**, near your line — the bible's traversal tech is hook switching, not holding
+    /// two wide anchors (`docs/gameplay/references.md` §5).
+    pub aim_sep_tether_m: f32,
+    /// Target separation on the ground or on a wall, in metres: standing still and picking a
+    /// route, the two rays land on opposite edges of the block in front of you.
+    pub aim_sep_stand_m: f32,
+    /// Target separation airborne and untethered, in metres — one block **pitch**: falling
+    /// with nothing attached, the two rays may not both land on the same block.
+    pub aim_sep_search_m: f32,
+    /// **The distance at which the metre budget above is fully available, in metres.**
+    ///
+    /// Nearer than this the budget scales with `d / this`, which makes the near field a
+    /// constant angle per state instead of a block-scale nonsense the wheel's ceiling has to
+    /// catch. Without it the whole metre model is a measured no-op under ~38 m — the range at
+    /// which every flight's first hook is fired (`docs/FINDINGS.md` FIND-096).
+    pub aim_sep_full_reach_m: f32,
+    /// At or below this **horizontal** speed the state target applies in full, in m/s.
+    pub aim_sep_calm_speed_m_s: f32,
+    /// At or above this **horizontal** speed the target is pinned to
+    /// [`VectorTuning::aim_sep_floor_m`], in m/s.
+    pub aim_sep_fast_speed_m_s: f32,
     pub reel_speed_m_s: f32,
     pub min_rope_m: f32,
     /// Gauss-Seidel iterations over both rope constraints (`shared::rope::rope_step`).

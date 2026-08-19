@@ -42,14 +42,15 @@ use bevy::prelude::*;
 use bevy::ui::DefaultUiCamera;
 use bevy::window::PrimaryWindow;
 use bevy::world_serialization::{WorldAsset, WorldAssetRoot};
-use defeated_by_titan::data::{GameData, Model, ModelSource};
+use defeated_by_titan::data::{assets_dir, GameData, Model, ModelSource};
 use defeated_by_titan::debug::gizmo::GizmoToggle;
 use bevy::camera::Exposure;
 use bevy::light::NotShadowCaster;
 use bevy::mesh::VertexAttributeValues;
 use defeated_by_titan::render::light::{to_sun, InteriorLamp, SkyDome};
 use defeated_by_titan::render::model::{
-    load_configured_models, ModelAnchors, ModelAssets, ModelBody, ModelName, PendingScene,
+    fit_to_class, load_configured_models, ModelAnchors, ModelAssets, ModelBody, ModelName,
+    PendingScene, MODEL_FACES,
     PrimitiveFallback, CORTEX_ANCHOR,
 };
 use defeated_by_titan::render::rope::rope_color;
@@ -488,9 +489,10 @@ fn f004_a_rope_is_the_cyan_out_of_maps_ron() {
 //
 // The user, 2026-08-12: *„mach zudem, dass ich später einfach die 3d modelle austauschen kann
 // + eigene animationen adden kann!"* These tests are the half of that sentence that can be
-// checked without a single `.glb` in the repository — and "without a single `.glb`" is not a
-// limitation of the tests, it is the **requirement**: every visible thing in this game is a
-// primitive cuboid today, and it has to stay that way until somebody puts a file in.
+// checked on a synthetic scene. The requirement they used to state — "the repository runs with
+// not a single `.glb`" — is unchanged, but it is now a claim about the *fallback*, not about
+// the drop: since 2026-08-18 `assets/3d/glb/` holds 278 files, two of them are bound, and the
+// six unbound rows still have to render exactly as they did the day before.
 //
 // **Why they mutate `GameData` instead of adding a line to `art.ron`:** the swap has to be
 // provable while every shipped entry is still a placeholder. A test entry in the real registry
@@ -530,11 +532,14 @@ fn register(app: &mut App, name: &str, model: Model) {
 
 #[test]
 fn f030_a_model_without_a_file_stays_the_primitive_it_is_today() {
-    // **The non-negotiable.** `titan_husk` is `source: Primitive` in the shipped `art.ron`, and
-    // every titan in the game points at it. If this goes red the game has started demanding a
-    // file that is not in the repository — and the symptom is an empty world, not an error.
+    // **The non-negotiable.** `vanguard` is `source: Primitive` in the shipped `art.ron` —
+    // there IS a matching file in the drop (`a-136-npc-vanguard`, 1.81 m against scale.ron's
+    // 1.8), and the row deliberately does not point at it because nothing in the game puts a
+    // `ModelName` on the player yet. If this goes red the registry has started demanding a
+    // file for an entity that has no way to show it, and the symptom is a silent asset load,
+    // not an error.
     let mut app = app();
-    let entity = app.world_mut().spawn(ModelName::new("titan_husk")).id();
+    let entity = app.world_mut().spawn(ModelName::new("vanguard")).id();
     app.world_mut().run_schedule(Update);
 
     assert_eq!(
@@ -610,9 +615,11 @@ fn f030_an_unknown_model_name_never_takes_the_geometry_away() {
 }
 
 #[test]
-fn f030_the_repository_runs_with_not_a_single_glb() {
+fn f030_every_configured_model_names_a_file_that_is_on_disk() {
     // **The requirement, checked on the file that ships** — not on a fixture. The day somebody
-    // sets a row to `Gltf(..)` without committing the file, this is what says so.
+    // sets a row to `Gltf(..)` without committing the file, this is what says so. It is the
+    // cheapest guard in the repository and the one that would have caught every typo in a path
+    // during the 2026-08-18 wiring: it goes red on a wrong file name, not merely loud at load.
     let app = app();
     let data = app.world().resource::<GameData>();
     let configured: Vec<&String> = data
@@ -638,6 +645,364 @@ fn f030_the_repository_runs_with_not_a_single_glb() {
         app.world().resource::<ModelAssets>().gltf.len(),
         configured.len(),
         "the loader asked for a different number of files than art.ron configures"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F-030 · **the size claim, checked against the file's own hit box**
+//
+// The 2026-08-18 drop authors every model in the game's metres and states its own size as two
+// named empties, `hit.min` and `hit.max`, in 278 of 278 files. That is a claim a test can read,
+// so the registry's promise — art.ron's header, "the same size, hit zone and scale" — stops
+// being prose the moment a row points at a file.
+//
+// **Why the glTF is parsed by hand here:** this repository has no JSON crate, and `Cargo.toml`
+// belongs to the main head. One field of one node is not worth a dependency, and the parse is
+// ten lines against a format whose chunk layout is fixed.
+// ---------------------------------------------------------------------------
+
+/// The JSON chunk of a `.glb`, as text.
+///
+/// A GLB is a 12-byte header and then chunks of `(u32 length, u32 type, payload)`; chunk type
+/// `0x4E4F534A` is `JSON` (glTF 2.0 §4.4.3).
+fn gltf_json(path: &std::path::Path) -> String {
+    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    assert_eq!(&bytes[0..4], b"glTF", "{} is not a GLB", path.display());
+    let mut at = 12;
+    while at + 8 <= bytes.len() {
+        let len = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+        let kind = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap());
+        at += 8;
+        if kind == 0x4E4F_534A {
+            return String::from_utf8_lossy(&bytes[at..at + len]).into_owned();
+        }
+        at += len;
+    }
+    panic!("{} carries no JSON chunk", path.display())
+}
+
+/// The `"nodes":[ ... ]` array of that JSON, as text — bracket-matched, and strings skipped so
+/// a `]` inside a node name cannot end the array early.
+fn nodes_array(json: &str) -> &str {
+    let at = json.find("\"nodes\":[{").expect("a glTF with named empties has a nodes array");
+    let start = at + "\"nodes\":".len();
+    let (mut depth, mut in_string, mut escaped) = (0i32, false, false);
+    for (i, b) in json.as_bytes()[start..].iter().enumerate() {
+        if in_string {
+            match (escaped, b) {
+                (true, _) => escaped = false,
+                (false, b'\\') => escaped = true,
+                (false, b'"') => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'[' => depth += 1,
+            b']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &json[start..start + i + 1];
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("the nodes array is not closed")
+}
+
+/// The local translation of the glTF node called `name`, or `None` if the file has no such
+/// node. The name has to match whole — `cortex` must not find `cortex_glow`.
+fn node_translation(nodes: &str, name: &str) -> Option<Vec3> {
+    let needle = format!("\"name\":\"{name}\"");
+    for (at, _) in nodes.match_indices(&needle) {
+        match nodes.as_bytes().get(at + needle.len()) {
+            Some(b',') | Some(b'}') => {}
+            _ => continue,
+        }
+        let obj_end = nodes[at..].find('}')? + at;
+        let obj = &nodes[at..obj_end];
+        let head = "\"translation\":[";
+        let Some(t) = obj.find(head).map(|i| i + head.len()) else {
+            continue;
+        };
+        let end = obj[t..].find(']')?;
+        let mut it = obj[t..t + end].split(',').map(|v| v.trim().parse::<f32>().ok());
+        return Some(Vec3::new(it.next()??, it.next()??, it.next()??));
+    }
+    None
+}
+
+/// Every model in the drop states its own height as `|hit.max.y - hit.min.y|`.
+///
+/// ⚠️ The pair is a **corner pair, not an ordered AABB**: on all 278 files
+/// `hit.max.z < hit.min.z`, from Blender's +Y-forward to glTF's -Z-forward flip. Hence the
+/// absolute value, here and in `render::model::fit_to_class`.
+fn glb_height_m(nodes: &str) -> f32 {
+    let lo = node_translation(nodes, "hit.min").expect("every model in the drop carries hit.min");
+    let hi = node_translation(nodes, "hit.max").expect("every model in the drop carries hit.max");
+    (hi.y - lo.y).abs()
+}
+
+#[test]
+fn f030_every_configured_row_is_drawn_at_the_scale_it_was_authored_in() {
+    // **`scale:` is an emergency brake and it is currently broken glass.** The drop is authored
+    // in the game's exact metres, so 1.0 is the measurement and not a default — and until
+    // 2026-08-18 any other value moved the mesh without moving the anchors, i.e. it put the
+    // kill zone off the silhouette by exactly that factor. The anchors are scaled with the
+    // mesh now, and this line still holds: per-entity sizing is `fit_to_class`'s job, out of
+    // the model's own hit box, not a number typed into a row.
+    let app = app();
+    let data = app.world().resource::<GameData>();
+    for (name, model) in &data.art.models {
+        if matches!(model.source, ModelSource::Primitive) {
+            continue;
+        }
+        assert_eq!(
+            model.scale, 1.0,
+            "art.ron: model {name:?} sets scale {} — the drop is authored in metres, so any \
+             other value is either a wrong model or a size decision that belongs in scale.ron \
+             (docs/models.md)",
+            model.scale
+        );
+    }
+}
+
+#[test]
+fn f030_a_bound_glb_agrees_with_scale_ron_about_the_body_it_dresses() {
+    // **The test the wiring exists for.** A titan dies at its cortex and nowhere else, so the
+    // renderer brings a bound model to exactly the cortex height `scale.ron` names for the
+    // kind wearing it (`render::model::fit_to_class`) — which means the cortex can no longer
+    // report a badly authored model, and the HEIGHT has to.
+    //
+    // So this checks the axis the fit does not touch: brought to its kind's cortex, the body
+    // has to stand within `cortex_tolerance_m` of its class height. It goes red on all four
+    // ways to get the binding wrong — a file that is not there, a file with no hit box, a file
+    // with no cortex empty, and a body whose cortex sits at the wrong fraction of itself (an
+    // `a-045` head part is 1.32 m tall and carries its parent rig's cortex at 8.92 m: it would
+    // pass any cortex check and render as a 10 m titan made of one head).
+    let app = app();
+    let data = app.world().resource::<GameData>();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    let mut checked = 0;
+
+    for (kind_name, kind) in &data.titans.kinds {
+        let model = data.model(&kind.model).unwrap_or_else(|| {
+            panic!("titan.ron: kind {kind_name:?} wears {:?}, which is not in art.ron", kind.model)
+        });
+        let ModelSource::Gltf(path) = &model.source else {
+            continue;
+        };
+        let wanted_height = data.titan_height_m(kind).expect("a kind has a size class");
+        let wanted_cortex = data.titan_cortex_height_m(kind).expect("a kind has a size class");
+
+        let json = gltf_json(&root.join(path));
+        let nodes = nodes_array(&json);
+        let authored = glb_height_m(nodes);
+        assert!(
+            authored > 0.0,
+            "{path}: hit.min and hit.max sit at the same height — the model states no size"
+        );
+        let cortex = node_translation(nodes, "cortex").unwrap_or_else(|| {
+            panic!(
+                "{path} is bound to the titan kind {kind_name:?} and carries no `cortex` empty \
+                 — the model would not decide where it dies (F-030)"
+            )
+        });
+
+        let fit = (wanted_cortex / cortex.y) * model.scale;
+        let stands = authored * fit;
+        let off = (stands - wanted_height).abs();
+        assert!(
+            off <= data.art.cortex_tolerance_m,
+            "titan kind {kind_name:?} (class {:?}) wears {path}, which is authored \
+             {authored:.4} m tall with its cortex at {:.4} m. Brought to the cortex scale.ron \
+             names for that class ({wanted_cortex:.2} m) it stands {stands:.4} m tall, and the \
+             class is {wanted_height:.2} m — {off:.4} m out, past art.ron's \
+             cortex_tolerance_m of {:.2}",
+            kind.size_class, cortex.y, data.art.cortex_tolerance_m
+        );
+        checked += 1;
+    }
+
+    // **The loop is no longer allowed to be empty.** Until 2026-08-18 every titan row in the
+    // shipped `art.ron` was `Primitive` (the drop authors its nape 0.14 m behind the neck where
+    // `titan::rig` builds the kill zone 0.55 m behind it), so this ran over nothing and stayed
+    // green by having no work. The clamp in `titan::rig::cortex_in_head_from_model` cleared
+    // that, both rows are bound, and a test that measures nothing is worth nothing — so a
+    // silent revert to `Primitive` now has to go red here as well.
+    //
+    // Proven red twice, both with no rebuild, because `art.ron` is data and not code:
+    //   sed -i 's|a-042-koerpertyp-a-hager-mittel|a-045-kopf-hoch-kahl|' assets/data/art.ron
+    //     -> "titan kind \"husk\" ... stands 1.4900 m tall, and the class is 10.00 m"
+    //   putting both rows back to `source: Primitive`
+    //     -> the assertion below, "not one titan kind ... is bound to a file"
+    assert!(
+        checked > 0,
+        "not one titan kind in titan.ron is bound to a file — every row that wears a model is \
+         `Primitive` again. That is allowed as a decision, but it is not allowed silently: the \
+         size claim in art.ron's header stops being checked by anything the moment this loop \
+         runs over nothing (docs/models.md)"
+    );
+}
+
+#[test]
+fn f030_a_model_arrives_turned_into_the_games_own_frame() {
+    // **The drop faces the other way.** `docs/conventions.md` and `titan::rig` put a body's
+    // forward at -Z; the 2026-08-18 drop authors its faces at +Z and says so twice per file
+    // (`a-042-koerpertyp-a-hager-mittel` puts `eye` at z = +0.92 and the nape `cortex` at
+    // z = -0.139). Measured with the row bound: an aggroed husk walking at the player rendered
+    // its BACK to him, and the nape anchor landed on the front of the neck.
+    //
+    // So the mesh is turned — and the anchors have to be turned with it, or the picture and
+    // the hit zone disagree by the whole depth of the body. That second half is the one that
+    // has no visual symptom, which is why it is a test and not a screenshot.
+    let mut app = app();
+    register_loaded(
+        &mut app,
+        "turned",
+        &[],
+        &[("cortex", Vec3::new(0.0, 2.0, -1.0)), ("eye", Vec3::new(0.0, 2.2, 1.0))],
+        &[],
+    );
+    let body = app.world_mut().spawn((ModelName::new("turned"), Transform::default())).id();
+    for _ in 0..4 {
+        app.update();
+    }
+
+    let anchors = app.world().get::<ModelAnchors>(body).cloned().expect("anchors are read");
+    let cortex = anchors.get("cortex").expect("the synthetic model carries a cortex");
+    assert!(
+        cortex.z > 0.9,
+        "the nape came back at z = {:.3}. The file puts it at -1.0 and the game's forward is \
+         -Z, so in the game's frame the nape is BEHIND the head at +1.0 — an anchor handed \
+         over unturned puts the kill zone on the titan's face",
+        cortex.z
+    );
+
+    let ModelBody::Scene(scene) = *app.world().get::<ModelBody>(body).expect("a scene child")
+    else {
+        panic!("a configured row has to produce a scene child");
+    };
+    let drawn = app.world().get::<Transform>(scene).expect("the scene child carries a transform");
+    let turned = drawn.rotation * Vec3::NEG_Z;
+    assert!(
+        turned.z > 0.9,
+        "the mesh is not turned with its anchors: the model's own forward points at {turned:?} \
+         in the game's frame. MODEL_FACES is {MODEL_FACES} rad"
+    );
+}
+
+#[test]
+fn f030_fit_to_class_puts_the_cortex_first_and_the_hit_box_second() {
+    // The arithmetic on its own: which yardstick wins, and the two ways it must refuse to act.
+    // An entity whose size nobody wrote down and a model that states no size both mean "draw
+    // it as it was authored" — never "guess".
+    let mut model = BTreeMap::new();
+    // A corner pair the way the drop authors it: Z inverted, Y not.
+    model.insert("hit.min".to_string(), Vec3::new(-1.35, 0.0, 1.99));
+    model.insert("hit.max".to_string(), Vec3::new(1.34, 10.0566, -1.39));
+
+    // No cortex yet: the hit box decides.
+    assert!(
+        (fit_to_class(&model, Some(4.2), None) - 0.417_64).abs() < 1e-4,
+        "a 10.0566 m body asked to be 4.2 m has to shrink by 4.2/10.0566"
+    );
+    assert_eq!(
+        fit_to_class(&model, Some(10.0566), None),
+        1.0,
+        "a model already at its own height is not touched"
+    );
+    assert_eq!(
+        fit_to_class(&model, None, None),
+        1.0,
+        "an entity that claims no size gets the model exactly as it was authored"
+    );
+    assert_eq!(
+        fit_to_class(&BTreeMap::new(), Some(4.2), None),
+        1.0,
+        "a model that states no size is not resized on a guess"
+    );
+
+    // Now the cortex — and it BEATS the hit box, because that is the number a titan dies at.
+    model.insert("cortex".to_string(), Vec3::new(0.0, 8.9, 0.0));
+    assert!(
+        (fit_to_class(&model, Some(4.2), Some(3.7)) - 0.415_73).abs() < 1e-4,
+        "with a cortex present the fit is 3.7/8.9 and not 4.2/10.0566 — the kill zone is what \
+         has to land exactly, the silhouette is what may give (docs/models.md)"
+    );
+
+    // And the corner-pair trap: taking `max - min` on Z would be negative. Y must not care.
+    let mut flat = BTreeMap::new();
+    flat.insert("hit.min".to_string(), Vec3::new(0.0, 10.0, 0.0));
+    flat.insert("hit.max".to_string(), Vec3::new(0.0, 0.0, 0.0));
+    assert_eq!(
+        fit_to_class(&flat, Some(5.0), None),
+        0.5,
+        "the height is an absolute difference — a min/max pair is a corner pair, not an \
+         ordered AABB (all 278 models of the drop have hit.max.z < hit.min.z)"
+    );
+}
+
+#[test]
+fn f030_the_fit_reaches_the_anchors_and_not_only_the_mesh() {
+    // **The defect this closes, spelled out:** `position_in` composes the chain up to but not
+    // including the scene child, and the scene child is the entity that carries the scale. So
+    // before 2026-08-18 the mesh was drawn scaled and the anchors were returned unscaled — a
+    // model at scale 0.5 rendered at half size with its kill zone at the full height, and
+    // nothing said so. Here the model is 10 m and the entity is a 4.2 m kind.
+    let mut app = app();
+    register_loaded(
+        &mut app,
+        "husk_stand_in",
+        &[],
+        &[
+            ("hit.min", Vec3::new(-1.35, 0.0, 1.99)),
+            ("hit.max", Vec3::new(1.34, 10.0, -1.39)),
+            ("cortex", Vec3::new(0.0, 8.9, 0.0)),
+        ],
+        &[],
+    );
+    let body = app
+        .world_mut()
+        .spawn((
+            ModelName {
+                name: "husk_stand_in".to_string(),
+                cortex_height_m: Some(3.7),
+                height_m: Some(4.2),
+            },
+            Transform::default(),
+        ))
+        .id();
+    for _ in 0..4 {
+        app.update();
+    }
+
+    let anchors = app
+        .world()
+        .get::<ModelAnchors>(body)
+        .cloned()
+        .expect("the instance is ready and its anchors are read");
+    let cortex = anchors.get("cortex").expect("the synthetic model carries a cortex empty");
+    assert!(
+        (cortex.y - 3.7).abs() < 1e-3,
+        "the cortex anchor came back at {:.3} m — unscaled model units. It has to arrive in \
+         the owner's own space, where 3.7 m is what scale.ron says for this class, or the \
+         kill zone sits metres above the head",
+        cortex.y
+    );
+
+    let ModelBody::Scene(scene) = *app.world().get::<ModelBody>(body).expect("a scene child")
+    else {
+        panic!("a configured row has to produce a scene child");
+    };
+    let drawn = app.world().get::<Transform>(scene).expect("the scene child carries a scale");
+    assert!(
+        (drawn.scale.x - 0.415_73).abs() < 1e-3,
+        "the mesh is drawn at scale {:.3} and the anchors were computed for 3.7/8.9 — the \
+         picture and the hit zone must not be able to disagree",
+        drawn.scale.x
     );
 }
 
@@ -697,10 +1062,12 @@ fn f030_a_named_clip_that_is_not_in_the_file_leaves_the_state_without_one() {
 }
 
 // ---------------------------------------------------------------------------
-// F-030 · the swap, end to end — **on a synthetic scene, because there is no `.glb`**
+// F-030 · the swap, end to end — **on a synthetic scene, so it is the mechanism under test**
 //
-// `assets/3d/glb/` is empty on purpose and must stay empty (`f030_the_repository_runs_with_not
-// _a_single_glb` above). So these tests build the thing a `.glb` would have become: a
+// The two bound rows are checked against the real files above
+// (`f030_every_configured_model_names_a_file_that_is_on_disk`,
+// `f030_a_bound_glb_puts_its_cortex_where_scale_ron_puts_it`). These tests build the thing a
+// `.glb` would have become: a
 // `WorldAsset` with named empties in it, handed to the registry the way the loader would hand
 // it over. The types are the real ones, the spawner is Bevy's own, the observer is the real
 // one — what is synthetic is the file, and only the file.
@@ -815,7 +1182,9 @@ fn f030_a_model_that_arrived_hides_the_cuboid_it_replaces() {
     );
 
     // And the other direction, in the same app: a primitive row leaves its cuboids alone.
-    let (_, untouched) = body_with_a_cuboid(&mut app, "titan_husk");
+    // `vanguard` and not `titan_husk` since 2026-08-18 — the husk points at a real file now,
+    // and the day this line was written every row in `art.ron` was a placeholder.
+    let (_, untouched) = body_with_a_cuboid(&mut app, "vanguard");
     for _ in 0..4 {
         app.update();
     }
@@ -998,13 +1367,22 @@ fn f030_the_anchors_come_out_of_a_spawned_instance() {
         .get::<ModelAnchors>(body)
         .expect("every entity with a ModelName carries anchors")
         .clone();
-    assert_eq!(
-        anchors.get(CORTEX_ANCHOR),
-        Some(Vec3::new(0.0, 9.4, 0.5)),
+    // **Turned, not verbatim** — since 2026-08-18. The file's frame is 180 deg about Y from
+    // the game's (`render::model::MODEL_FACES`), so an empty at z = +0.5 in the file is at
+    // z = -0.5 in the game, and the height is the one component the turn does not touch.
+    // Comparing against the raw numbers is what this test did until the first real `.glb`
+    // arrived facing the wrong way.
+    let cortex = anchors.get(CORTEX_ANCHOR).expect(
         "the `cortex` empty out of the file did not arrive — then a swapped model renders in \
-         one place and dies in another (F-030)"
+         one place and dies in another (F-030)",
     );
-    assert_eq!(anchors.get("hook.l"), Some(Vec3::new(-0.8, 6.0, 0.0)));
+    assert!(
+        (cortex - Vec3::new(0.0, 9.4, -0.5)).length() < 1e-5,
+        "the cortex arrived at {cortex:?}, and the file puts it at (0, 9.4, 0.5) in a frame \
+         that is turned 180 deg from the game's"
+    );
+    let hook = anchors.get("hook.l").expect("hook.l is one of the eight names");
+    assert!((hook - Vec3::new(0.8, 6.0, 0.0)).length() < 1e-5, "hook.l arrived at {hook:?}");
     assert_eq!(
         anchors.get("hand.r"),
         None,
@@ -1552,4 +1930,321 @@ fn app_on(map: &str) -> App {
     app.update();
     app.update();
     app
+}
+
+/// Every `hook.*` empty the pack carries has to arrive on the entity — read out of the real
+/// file, not out of a name I typed.
+///
+/// **The measurement this test exists for** (2026-08-18, `python3` over the glTF JSON of all
+/// 278 files): the drop carries **565** `hook.*` nodes across **207** files. `ANCHOR_NAMES`
+/// admits exactly two of the names — `hook.l` and `hook.r`, 126 nodes in 63 rig files — so
+/// **439 of them across 144 files are dropped at load**, and that is the entire anchorable
+/// surface of the architecture kit in a game whose one verb is a grappling hook.
+///
+/// **Why a whitelist cannot be the rule here.** The 439 are not eight forgotten names: they
+/// are **212 distinct ones**, and 130 of those occur in a single file (`hook.wurzelbogen_quer`,
+/// `hook.leittrieb_ost`, `hook.pfeilerkopf`). A modeller naming the next eaves cannot be
+/// expected to petition `shared/anchors.rs` first — `hook.` is an **open family**, the way
+/// `cortex` is a closed name.
+///
+/// The wall segment is the cheapest proof: 9 empties, and 7 of them are the cornice ladder
+/// `hook.gesims_15..105` that gives a rope a rung every 15 m up a 120 m wall. The loader used
+/// to keep **0** of them.
+#[test]
+fn f030_every_hook_empty_the_wall_segment_carries_survives_the_loader() {
+    // Out of the shipped file. A name I hard-code here is a name that stops being true the
+    // moment the pack is re-exported — this breaks instead.
+    let file = assets_dir().join("3d/glb/a-095-mauersegment-regel.glb");
+    let carried = hook_empties_in(&file);
+    assert_eq!(
+        carried.len(),
+        9,
+        "a-095-mauersegment-regel.glb is the wall segment this test is about and it carries \
+         9 `hook.*` empties. Got {:?} — if the pack was re-exported, re-measure before \
+         relaxing the number",
+        carried.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>()
+    );
+
+    let mut app = app();
+    let handed: Vec<(&str, Vec3)> = carried.iter().map(|(n, at)| (n.as_str(), *at)).collect();
+    register_loaded(&mut app, "wall_segment", &[], &handed, &[]);
+    let body = app.world_mut().spawn((ModelName::new("wall_segment"), Transform::default())).id();
+    for _ in 0..8 {
+        app.update();
+    }
+
+    let anchors = app
+        .world()
+        .get::<ModelAnchors>(body)
+        .cloned()
+        .expect("every entity with a ModelName carries anchors");
+    let missing: Vec<&str> = carried
+        .iter()
+        .map(|(n, _)| n.as_str())
+        .filter(|n| anchors.get(n).is_none())
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the loader threw away {} of the wall's 9 hook points: {missing:?}. A `hook.` empty is \
+         an anchorable point the modeller placed by hand; dropped at load it can never become \
+         a rope target, and the whole architecture kit is behind that filter (439 across 144 \
+         files)",
+        missing.len()
+    );
+
+    // …and they arrive turned into the game's frame like every other anchor, not verbatim.
+    // The file authors +Z forward, the game -Z (`MODEL_FACES`), and `art.ron: scale` is 1.0
+    // here, so the only change is the turn: x -> -x, z -> -z, y untouched.
+    let (_, authored) = carried
+        .iter()
+        .find(|(n, _)| n == "hook.gesims_45")
+        .expect("the cornice ladder is what makes this wall climbable");
+    let read = anchors.get("hook.gesims_45").expect("checked present above");
+    assert!(
+        (read.y - authored.y).abs() < 1e-4 && (read.z + authored.z).abs() < 1e-4,
+        "hook.gesims_45 is authored at {authored:?} and arrived at {read:?} — a hook point \
+         that is not turned with the mesh hangs a rope off the far side of the wall"
+    );
+}
+
+/// The `hook.*` empties of a `.glb`, read straight out of its JSON chunk.
+///
+/// **By hand, without a glTF crate**, because the claim is about the bytes that shipped: a
+/// parser that normalises would hide exactly the kind of naming drift this test is watching
+/// for. A `.glb` is `"glTF"`, a version, a length, then chunks of `[len][type][payload]`;
+/// chunk type `JSON` is `0x4E4F534A`. Blender's exporter writes compact JSON, so a node is
+/// literally `{"name":"hook.fuss","translation":[0.0,2.4,31.9]}`.
+fn hook_empties_in(path: &std::path::Path) -> Vec<(String, Vec3)> {
+    let bytes = std::fs::read(path)
+        .unwrap_or_else(|e| panic!("the pack is git-tracked, so {} has to be readable: {e}", path.display()));
+    assert_eq!(&bytes[0..4], b"glTF", "{} is not a .glb", path.display());
+    let mut at = 12;
+    let json = loop {
+        assert!(at + 8 <= bytes.len(), "{} has no JSON chunk", path.display());
+        let len = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+        let kind = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap());
+        if kind == 0x4E4F_534A {
+            break std::str::from_utf8(&bytes[at + 8..at + 8 + len]).expect("glTF JSON is UTF-8");
+        }
+        at += 8 + len;
+    };
+
+    let mut found = Vec::new();
+    let mut rest = json;
+    while let Some(hit) = rest.find("\"name\":\"hook.") {
+        let after_key = &rest[hit + "\"name\":\"".len()..];
+        let end = after_key.find('"').expect("a JSON string closes");
+        let name = after_key[..end].to_string();
+        let tail = &after_key[end + 1..];
+        let head = ",\"translation\":[";
+        assert!(
+            tail.starts_with(head),
+            "{name:?} in {} carries no translation right after its name — the exporter's \
+             layout changed and this reader has to change with it",
+            path.display()
+        );
+        let numbers = &tail[head.len()..];
+        let close = numbers.find(']').expect("a JSON array closes");
+        let xyz: Vec<f32> = numbers[..close]
+            .split(',')
+            .map(|n| n.trim().parse().expect("a glTF translation is three numbers"))
+            .collect();
+        assert_eq!(xyz.len(), 3, "{name:?} has {} components", xyz.len());
+        found.push((name, Vec3::new(xyz[0], xyz[1], xyz[2])));
+        rest = &tail[close..];
+    }
+    found
+}
+
+// ---------------------------------------------------------------------------
+// F-030 · **the shipped registry itself** — three claims art.ron makes in prose, as tests
+//
+// `assets/data/art.ron` is the one file in this repository whose failure mode is silence: a
+// wrong path, an invented clip name or a row quietly put back to `Primitive` all produce a
+// game that runs, exits 0 and shows a grey box. The three tests below turn the three claims
+// its header makes into things that go red.
+// ---------------------------------------------------------------------------
+
+/// Every `.glb` path art.ron writes down — in a `source:` **and in a comment** — is a real file.
+///
+/// The prose is where the next session starts, and a blocker note that names a file the pack
+/// has not got sends it looking for something that does not exist. `f030_every_configured_
+/// model_names_a_file_that_is_on_disk` covers the `source:` half; this covers the other eight
+/// paths, which no code path ever touches and which nothing else would ever notice was wrong.
+///
+/// The header's illustrative `Gltf("3d/glb/<file>.glb")` is deliberately written with angle
+/// brackets so that it does not match: a placeholder that has to be special-cased is a
+/// placeholder that will be forgotten.
+#[test]
+fn f030_every_glb_art_ron_names_even_in_a_comment_is_a_file_that_exists() {
+    let text = std::fs::read_to_string(assets_dir().join("data/art.ron"))
+        .expect("assets/data/art.ron is the registry — it has to be readable");
+    let root = assets_dir();
+
+    let mut named: BTreeMap<String, usize> = BTreeMap::new();
+    for (line_no, line) in text.lines().enumerate() {
+        let mut rest = line;
+        while let Some(at) = rest.find("3d/glb/") {
+            let tail = &rest[at..];
+            // The longest run of characters a pack file name is allowed to be made of. It
+            // stops at the closing quote, at a space and at the `**` of the .gitignore line
+            // the header quotes — which is why a run that does not END in `.glb` is skipped
+            // rather than reported: that one is prose about the folder, not a file.
+            let end = tail
+                .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || "/-._".contains(c)))
+                .unwrap_or(tail.len());
+            let path = &tail[..end];
+            if path.ends_with(".glb") {
+                named.entry(path.to_string()).or_insert(line_no + 1);
+            }
+            // Always advance past the marker itself, so the loop terminates on prose too.
+            rest = &tail["3d/glb/".len()..];
+        }
+    }
+
+    assert!(
+        named.len() >= 8,
+        "art.ron named only {} .glb files — the blocker notes are supposed to say which file \
+         WOULD dress each unbound row, and they have stopped doing it",
+        named.len()
+    );
+    for (path, line_no) in &named {
+        assert!(
+            root.join(path).is_file(),
+            "art.ron:{line_no} names {path:?} and assets/{path} is not in the pack. A path in a \
+             comment is read by the next session exactly like one in a `source:` — either fix \
+             the name or say that the drop has no such model (docs/models.md)"
+        );
+    }
+}
+
+/// **The shipped registry binds exactly the rows that have a home** — no more, no less.
+///
+/// `render::model::name_the_titans_model` is the only writer of `ModelName` in the tree, so
+/// `titan.ron: kinds.*.model` is the whole list of logical names the running game ever asks
+/// for, and `art.ron` may only point those at a file. This pins the set in **both** directions,
+/// because both directions have already been wrong:
+///
+/// * **Unbinding is silent.** With every titan row on `Primitive` no entity anywhere renders a
+///   model, and every other model test in this file runs over an empty set while staying green.
+///   That is the failure this project keeps paying for: a check that measures nothing.
+/// * **Binding too much is silent too.** `titan_large` is deliberately NOT bound: with the
+///   `a-042-…-gross` body on it, `tests/titan.rs::q031_the_nape_survives_a_titan_who_tracks_you`
+///   goes red — *"warden: the pass at 0.2 m of air lands again (blade -0.020 m)"*. The model's
+///   cortex is at the right height (12.50 m, the fit lands on it exactly) and at the right depth
+///   (clamped to the rig's 0.77 m); it is authored **1.39 cm off the centre line in x**, where
+///   `titan::rig` builds the computed Cortex at x = 0.0, and that centimetre flips Q-031's
+///   pinned 0.20 m margin. The blocker is written out at the row.
+///
+/// Either change is a legitimate decision — it just may not be taken by accident, and whoever
+/// takes it deliberately edits this test with the measurement that justified it.
+#[test]
+fn f030_the_shipped_registry_binds_exactly_the_rows_that_have_a_home() {
+    let app = app();
+    let data = app.world().resource::<GameData>();
+
+    let bound: Vec<&String> = data
+        .art
+        .models
+        .iter()
+        .filter(|(_, m)| matches!(m.source, ModelSource::Gltf(_)))
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(
+        bound,
+        vec!["titan_husk"],
+        "the shipped art.ron binds {bound:?}. `titan_husk` has to be there — it is the body \
+         husk, errant, chorus, scuttler and weaver wear, and it is the only thing in the running \
+         game that is not a grey cuboid. Nothing else may be there: `titan_large` takes \
+         tests/titan.rs::q031 red (see this test's comment), and every other row is a name no \
+         entity carries, i.e. glTF loaded for an empty screen (art.ron's header)"
+    );
+
+    // …and the loader really asked for it. The registry naming a file and the asset server
+    // never being told is exactly the shape of the 2026-08-18 asset-root bug.
+    let asked = &app.world().resource::<ModelAssets>().gltf;
+    assert!(
+        asked.contains_key("titan_husk") && asked.len() == 1,
+        "art.ron binds one row and the loader asked for {:?}",
+        asked.keys().collect::<Vec<_>>()
+    );
+
+    // The kinds that consequently still render the cuboid rig, named so that the count in
+    // art.ron's header ("five of the eight titan kinds") cannot quietly stop being true.
+    let primitive: Vec<&String> = data
+        .titans
+        .kinds
+        .iter()
+        .filter(|(_, k)| matches!(data.model(&k.model).map(|m| &m.source), Some(ModelSource::Primitive)))
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(
+        primitive,
+        vec!["bellower", "lurker", "warden"],
+        "these titan kinds render a grey cuboid rig, and art.ron's header claims it is exactly \
+         the three `large`/`huge` ones that wear `titan_large`"
+    );
+}
+
+/// `animations: {}` on every bound row, because **the drop has not one clip**.
+///
+/// This is not a style rule. `render::model::resolve_animation_clips` warns on a name that is
+/// not in the file *and* leaves that game state without a clip, which puts `PrimitiveFallback`
+/// — the grey cuboid — back on screen the moment the titan enters it. So an invented clip name
+/// does not degrade to "unanimated model", it degrades to "no model", and it does it only in
+/// one state, which is the hardest kind of bug to see.
+///
+/// Checked against the file's own JSON chunk rather than against the prose: the day somebody
+/// authors a walk cycle, this test is what says the map may now be filled in.
+#[test]
+fn f030_a_bound_row_names_no_clip_because_its_file_carries_none() {
+    let app = app();
+    let data = app.world().resource::<GameData>();
+    let root = assets_dir();
+    let mut checked = 0;
+
+    for (name, model) in &data.art.models {
+        let ModelSource::Gltf(path) = &model.source else {
+            continue;
+        };
+        let json = gltf_json(&root.join(path));
+        // glTF 2.0 §5.5: `animations` is a top-level array, and Blender's exporter omits it
+        // entirely when there is nothing to write. Either shape means "no clips".
+        let clips: Vec<String> = match json.find("\"animations\":[") {
+            None => Vec::new(),
+            Some(at) => {
+                let tail = &json[at + "\"animations\":[".len()..];
+                let end = tail.find(']').expect("a JSON array closes");
+                let body = &tail[..end];
+                let mut names = Vec::new();
+                let mut rest = body;
+                while let Some(hit) = rest.find("\"name\":\"") {
+                    let after = &rest[hit + "\"name\":\"".len()..];
+                    let stop = after.find('"').expect("a JSON string closes");
+                    names.push(after[..stop].to_string());
+                    rest = &after[stop..];
+                }
+                names
+            }
+        };
+
+        for (state, clip) in &model.animations {
+            assert!(
+                clips.contains(clip),
+                "art.ron: model {name:?} maps the state {state:?} to the clip {clip:?}, and \
+                 {path} carries {clips:?}. A clip name that is not in the file is a warning at \
+                 load AND brings the cuboid back on screen in exactly that state \
+                 (`PrimitiveFallback`, src/render/model.rs)"
+            );
+        }
+        if clips.is_empty() {
+            assert!(
+                model.animations.is_empty(),
+                "art.ron: model {name:?} names {} animation(s) and {path} has none at all",
+                model.animations.len()
+            );
+        }
+        checked += 1;
+    }
+    assert!(checked > 0, "no bound row to check — see f030_the_shipped_registry_binds_the_bodies_the_titans_wear");
 }

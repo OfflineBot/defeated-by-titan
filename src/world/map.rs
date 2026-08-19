@@ -76,7 +76,7 @@
 use avian3d::prelude::{Collider, RigidBody};
 use bevy::prelude::*;
 
-use crate::data::{GameData, Map, Perimeter};
+use crate::data::{GameData, Map, ModelSource, Perimeter};
 use crate::shared::{AnchorSurface, Block, Body, Rng, TerrainField};
 
 use super::index::mask_from;
@@ -122,6 +122,57 @@ const STREAM_TERRAIN: u64 = 0xF003_000E;
 /// This is a name, not a tuning number (§4): it says how the rng stream is partitioned.
 const TICKS_PER_LOT: u64 = 64;
 
+/// **The pack's architecture, as a shape — the catalogue a generated house is dressed from.**
+///
+/// One row per logical name in `art.ron` that a row house can wear, with the size the shipped
+/// `.glb` behind that name is authored at: the full extent of its own `hit.min`/`hit.max`
+/// pair, in metres, x / y / z. The model's front is its **±z face** (`fenster_..._vorn`,
+/// `tuer_blatt`, `giebel_v` all sit on it), so `z` is the house's depth and `x` its frontage.
+///
+/// ⚠️ **These are measurements of a file, not tuning numbers** (§4). Every one of them is
+/// verified against the file it claims to describe by
+/// `tests/world.rs::f003_the_dressing_catalogue_is_what_the_glb_files_really_measure`, which
+/// parses `assets/3d/glb/a-083-fachwerkhaus-*.glb` and falls over on a re-export that moves
+/// them. The `y` column is additionally checked against `scale.ron: architecture.heights_m`
+/// under the **same key** — that the pack was authored to our own height bands is a claim
+/// `art.ron` makes in prose, and this is where it becomes a test.
+///
+/// They stand in Rust and not in RON for one reason and it is not a good one: the schema of a
+/// map lives in `src/data/`, which this round did not own. `art.ron` is where they belong.
+pub const DRESSING: [(&str, [f32; 3]); 3] = [
+    // a-083-fachwerkhaus-klein
+    ("house_small", [6.56, 4.50, 8.32]),
+    // a-083-fachwerkhaus-stadthaus
+    ("house_town", [9.10, 8.00, 7.90]),
+    // a-083-fachwerkhaus-gross
+    ("house_large", [8.30, 11.50, 9.90]),
+];
+
+/// How far a house's drawn footprint may be moved to make it **be** the model that dresses it.
+///
+/// A model is scaled **uniformly** — a half-timbered house stretched on one axis has fat
+/// timbers and reads as a mistake — so it has one degree of freedom against a box that has
+/// three, and the box is the side that gives way. This is how much it may give.
+///
+/// Measured on the shipped district, 926 generated houses, three policies (2026-08-18):
+///
+/// | rule | dressed | fill (model area / box area) | median street |
+/// |---|---|---|---|
+/// | the model must fit **inside** the box | 780 | **0.66** | 8.55 m |
+/// | box may move ±12 % | 291 | 0.97 | 7.43 m |
+/// | box may move ±25 % | **766** | 0.96 | **7.39 m** |
+///
+/// The first rule is the tempting one and it is the wrong one: a model that merely *fits* is
+/// on average a third smaller than the collider it stands in, so the hook catches on air and
+/// the street widens by 1.2 m. `0.25` keeps the box within a quarter of what was drawn, and
+/// the district's median street moves by **0.01 m** — the base is 7.38 m against a ceiling of
+/// 9.0 (`tests/world.rs::f003_the_street_is_narrower_than_the_houses_are_tall`).
+///
+/// It is also what keeps the graybox fixture out: a 28 m lot is nowhere near a quarter of a
+/// 9 m house, so no fixture box is ever dressed and the eight aim tests pinned to it do not
+/// move.
+const DRESS_TOLERANCE: f32 = 0.25;
+
 /// A planned cuboid, **before** it is an entity.
 ///
 /// The plan is separate from the spawning so that `tests/world.rs` can generate the city
@@ -140,6 +191,16 @@ pub struct BlockPlan {
     pub color: [f32; 3],
     pub anchorable: bool,
     pub solid: bool,
+    /// **Which logical model dresses this cuboid** — a key into `art.ron: models`, or `None`
+    /// for a block that is nothing but its box.
+    ///
+    /// The plan carries the *name* and never a file (`art.ron` is the only place a file name
+    /// is written down), and it carries it because there is otherwise no entity to hang one
+    /// on: six of the eight registry rows have a model in the pack and nothing in the game
+    /// that spawns them. `size_m` of a dressed block **is** the model's own silhouette at the
+    /// scale it is drawn at, so the collider, the anchor surface and the mesh are one box and
+    /// not three.
+    pub model: Option<&'static str>,
 }
 
 impl BlockPlan {
@@ -269,6 +330,14 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                     center_z,
                     size_x: r.lot_m,
                     size_z: r.lot_m,
+                    // A graybox lot is not a row house: it is one box in the middle of its
+                    // cell with street on all four sides. `-z` is named as its front so the
+                    // field has a value, and nothing hangs on it — a 28 m box is nowhere near
+                    // a quarter of a 9 m model, so `dress_for` never dresses one.
+                    frontage_along_x: true,
+                    facade_dir: -1.0,
+                    slot_m: r.lot_m,
+                    depth_room_m: r.lot_m,
                 }],
                 Some(p) => perimeter_houses(center_x, center_z, r.lot_m, p, &rng, lot),
             };
@@ -322,16 +391,55 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                 } else {
                     level_m + rng.range(tick, STREAM_HEIGHT, 0.0, spread_m)
                 };
-                let rise_m = roof.map_or(0.0, |k| {
-                    ridge_m * rng.range(tick, STREAM_RISE, k.min_rise_fraction, k.max_rise_fraction)
-                });
+                // **Is there a model for this house, and does it fit?** The answer decides
+                // the box, not the other way round: a dressed house *is* its model's
+                // silhouette, and it grows no cuboid roof because the model brings a roof,
+                // a chimney and a gable of its own (`dach_first`, `schornstein_kopf`,
+                // `giebel_v` — the node list of `a-083-fachwerkhaus-*`).
+                //
+                // `None` here is the normal answer today and not a failure: `art.ron` ships
+                // every row as `Primitive`, and [`dress_for`] refuses to dress a name that
+                // resolves to no file. Flipping those three rows to `Gltf(...)` is what
+                // turns this district into half-timbered houses — one line each, no code.
+                let dress = dress_for(data, f, ridge_m);
+                let rise_m = match dress {
+                    // The model is the whole house, ridge included, so nothing is cut out of
+                    // it downward — `fit_to_class` scales the file to `ridge_m` and its own
+                    // roof lands where the cuboid roof would have ended.
+                    Some(_) => 0.0,
+                    None => roof.map_or(0.0, |k| {
+                        ridge_m
+                            * rng.range(tick, STREAM_RISE, k.min_rise_fraction, k.max_rise_fraction)
+                    }),
+                };
                 let height_m = ridge_m - rise_m;
+                // The footprint the block finally gets. Undressed it is what was drawn;
+                // dressed it is the model's own, **and the street-facing face stays where it
+                // was** — the frontage line is what two rounds of work went into, and a house
+                // that gives back depth gives it back to its courtyard.
+                let (size_x, size_z, center_x, center_z) = match dress {
+                    None => (f.size_x, f.size_z, f.center_x, f.center_z),
+                    Some((_, front_m, depth_m)) => {
+                        let (drawn_depth, center_depth) = if f.frontage_along_x {
+                            (f.size_z, f.center_z)
+                        } else {
+                            (f.size_x, f.center_x)
+                        };
+                        let facade = center_depth + f.facade_dir * drawn_depth * 0.5;
+                        let moved = facade - f.facade_dir * depth_m * 0.5;
+                        if f.frontage_along_x {
+                            (front_m, depth_m, f.center_x, moved)
+                        } else {
+                            (depth_m, front_m, moved, f.center_z)
+                        }
+                    }
+                };
                 // A house stands ON the ground — and since 2026-08-13 the ground has a height:
                 // the terrace of the cell this lot belongs to. `base_m` is the only line in
                 // this loop the terrain touches; everything below it is measured from there.
                 let base_m = field.height_at((ix / cells) as i32, (iz / cells) as i32);
-                let center_m = Vec3::new(f.center_x, base_m + height_m * 0.5, f.center_z);
-                let size_m = Vec3::new(f.size_x, height_m, f.size_z);
+                let center_m = Vec3::new(center_x, base_m + height_m * 0.5, center_z);
+                let size_m = Vec3::new(size_x, height_m, size_z);
 
                 // What is explicitly placed wins (`maps.ron`). Only the placed blocks are
                 // tested against: two layout houses can never overlap, the ring geometry
@@ -355,9 +463,14 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                 // back. Reaching up to the raised ridge is the other direction, and it costs
                 // nothing today because everything a house could grow into up there (the 56 m
                 // gantry beams, the 60 m gallery) starts far above 11.5 + 3.6 m.
+                //
+                // ⚠️ And it is taken over the **dressed** footprint since 2026-08-18, not over
+                // the drawn one. A dressing may move a wall out by up to `DRESS_TOLERANCE`,
+                // and a veto taken before that would let a house grow into an apron it was
+                // just measured clear of.
                 let veto_m = base_m + ridge_m;
-                let ridge_center = Vec3::new(f.center_x, veto_m * 0.5, f.center_z);
-                let ridge_half = Vec3::new(f.size_x * 0.5, veto_m * 0.5, f.size_z * 0.5);
+                let ridge_center = Vec3::new(center_x, veto_m * 0.5, center_z);
+                let ridge_half = Vec3::new(size_x * 0.5, veto_m * 0.5, size_z * 0.5);
                 let blocked = plan[..placed]
                     .iter()
                     .any(|g| overlaps(ridge_center, ridge_half, g.center_m, g.half_size_m()));
@@ -385,9 +498,13 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                     // A house stops you. That is mechanics and not a tuning question — there
                     // is deliberately no `solid_fraction` in `maps.ron`.
                     solid: true,
+                    model: dress.map(|(name, _, _)| name),
                 });
 
-                if let Some(k) = roof {
+                // **A dressed house grows no cap.** Two roofs on one building is the FIND-059
+                // bug in its loudest form: the model's own ridge and a stack of stone lids
+                // through it.
+                if let (Some(k), None) = (roof, dress) {
                     // The cap is pulled in on all four sides; what is left over is the ledge
                     // the roof reads by and the strip you can still stand on.
                     //
@@ -438,6 +555,7 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                             color: color_of(data, &k.color),
                             anchorable,
                             solid: true,
+                            model: None,
                         });
                     }
                 }
@@ -460,6 +578,10 @@ fn placed_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
             color: color_of(data, &k.color),
             anchorable: k.anchorable,
             solid: k.solid,
+            // A hand-placed cuboid names no model **yet**: `maps.ron: blocks` has no field for
+            // it, and that field belongs in `src/data/`, which this round did not own. The wall
+            // segments, the city gates and the headquarters are what wants it next.
+            model: None,
         })
         .collect()
 }
@@ -816,6 +938,10 @@ pub fn plan_terrain(
                         // would say so.
                         anchorable: true,
                         solid: true,
+                        // The ground wears no model. The pack has street and stair pieces
+                        // (`a-085-strasse-*`), and a terrace is not one of them: it is a slab
+                        // of arbitrary extent cut around whatever stands on it.
+                        model: None,
                     });
                 }
             };
@@ -860,6 +986,74 @@ struct Footprint {
     center_z: f32,
     size_x: f32,
     size_z: f32,
+    /// Does the **frontage** run along x? Then z is the depth. The four wings of a ring
+    /// alternate, and a model has a front — so this is not derivable from `size_x >= size_z`,
+    /// which is false for every house in a 9 m slot that is 11 m deep.
+    frontage_along_x: bool,
+    /// Which way the **street** lies along the depth axis, `-1.0` or `+1.0`. The facade is
+    /// `center + facade_dir * size * 0.5` on that axis, and it is the one edge of a house that
+    /// may not move: everything about a street is measured facade to facade.
+    facade_dir: f32,
+    /// The house's own share of its run, across the frontage axis — gap included.
+    ///
+    /// **The envelope a dressing may never leave.** Two neighbours in a run are centred in
+    /// adjacent slots, so a box inside its own slot cannot reach into the next one however
+    /// wide the model turns out to be. Without this the ±`DRESS_TOLERANCE` window would let a
+    /// house eat the alley beside it and stand inside its neighbour.
+    slot_m: f32,
+    /// How far back from the facade the house may reach before it is in the courtyard.
+    depth_room_m: f32,
+}
+
+/// **Which model dresses this house, and at what footprint** — or `None`, which is the normal
+/// answer.
+///
+/// Three things have to be true at once, and each of them removes a whole class of wrong:
+///
+/// 1. **`art.ron` has to say the name comes out of a file.** A row that is `Primitive` is a
+///    name with no model behind it, and dressing a house against one would cost it its cuboid
+///    roof and rewrite its footprint in exchange for nothing. This is what makes the whole
+///    feature *one line of RON*: flip `house_small`/`house_town`/`house_large` to `Gltf(...)`
+///    and the district dresses itself; flip them back and it is cuboids again, no code moved.
+/// 2. **The model may only be scaled uniformly**, so the box gives way instead — but by at
+///    most `DRESS_TOLERANCE`. The alternative, "take the model that fits inside the box", was
+///    measured and is worse in the way that matters: the model then averages 0.66 of the
+///    collider it stands in, the hook catches on air a metre off the wall, and the district's
+///    median street opens from 7.38 m to 8.55.
+/// 3. **The result has to stay inside the house's own slot and its own depth**, so no dressing
+///    can reach a neighbour or cross the frontage line.
+///
+/// Among everything that passes, the **largest** is taken: two classes that both fit differ
+/// only in how much of the lot the town actually covers.
+fn dress_for(data: &GameData, f: &Footprint, ridge_m: f32) -> Option<(&'static str, f32, f32)> {
+    let (front_m, depth_m) = if f.frontage_along_x {
+        (f.size_x, f.size_z)
+    } else {
+        (f.size_z, f.size_x)
+    };
+    let mut best: Option<(&'static str, f32, f32)> = None;
+    for (name, authored_m) in DRESSING {
+        if authored_m[1] <= f32::EPSILON || ridge_m <= 0.0 {
+            continue;
+        }
+        if !matches!(data.model(name).map(|m| &m.source), Some(ModelSource::Gltf(_))) {
+            continue;
+        }
+        let scale = ridge_m / authored_m[1];
+        let (fit_front_m, fit_depth_m) = (authored_m[0] * scale, authored_m[2] * scale);
+        if (fit_front_m - front_m).abs() > DRESS_TOLERANCE * front_m
+            || (fit_depth_m - depth_m).abs() > DRESS_TOLERANCE * depth_m
+        {
+            continue;
+        }
+        if fit_front_m > f.slot_m || fit_depth_m > f.depth_room_m {
+            continue;
+        }
+        if best.is_none_or(|(_, bf, bd)| fit_front_m * fit_depth_m > bf * bd) {
+            best = Some((name, fit_front_m, fit_depth_m));
+        }
+    }
+    best
 }
 
 /// A closed block: the ring of houses around one cell's courtyard — **and no two of them the
@@ -952,11 +1146,20 @@ fn perimeter_houses(
             let along = (k as f32 + 0.5) * slot_m - run_m * 0.5;
             // Measured from the street edge inward, never from the courtyard outward.
             let inset = lot_m * 0.5 - setback_m - depth_m * 0.5;
+            // `frontage_along_x` and `facade_dir` are what a model needs and a cuboid did
+            // not: which axis the street front runs along, and which side of the box it is.
+            // Wing 0 looks north (-z), 1 south (+z), 2 west (-x), 3 east (+x) — the street is
+            // always outward, the courtyard always inward.
+            let room_m = w - setback_m;
             out.push(match wing {
-                0 => Footprint { center_x: cx + along, center_z: cz - inset, size_x: width_m, size_z: depth_m },
-                1 => Footprint { center_x: cx + along, center_z: cz + inset, size_x: width_m, size_z: depth_m },
-                2 => Footprint { center_x: cx - inset, center_z: cz + along, size_x: depth_m, size_z: width_m },
-                _ => Footprint { center_x: cx + inset, center_z: cz + along, size_x: depth_m, size_z: width_m },
+                0 => Footprint { center_x: cx + along, center_z: cz - inset, size_x: width_m, size_z: depth_m,
+                                 frontage_along_x: true, facade_dir: -1.0, slot_m, depth_room_m: room_m },
+                1 => Footprint { center_x: cx + along, center_z: cz + inset, size_x: width_m, size_z: depth_m,
+                                 frontage_along_x: true, facade_dir: 1.0, slot_m, depth_room_m: room_m },
+                2 => Footprint { center_x: cx - inset, center_z: cz + along, size_x: depth_m, size_z: width_m,
+                                 frontage_along_x: false, facade_dir: -1.0, slot_m, depth_room_m: room_m },
+                _ => Footprint { center_x: cx + inset, center_z: cz + along, size_x: depth_m, size_z: width_m,
+                                 frontage_along_x: false, facade_dir: 1.0, slot_m, depth_room_m: room_m },
             });
         }
     }

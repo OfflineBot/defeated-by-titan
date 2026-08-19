@@ -168,10 +168,17 @@ With them the modeler decides **where**, the RON decides **how strong**:
 | `hook.l` / `hook.r` | where the hooks of the Vector Gear bite |
 | `hand.l` / `hand.r` | grabbing, throwing |
 | `eye` | look direction, blinding |
+| `hook.<anything>` | **an OPEN family, since 2026-08-18** — every rope point the architecture kit carries: `hook.traufe` (eaves), `hook.first` (ridge), `hook.krone` (crown), `hook.gesims_15..105` (the wall's cornice ladder) |
+
+The eight names above `hook.<anything>` are a **closed** list and stay one: a Blender typo in
+`cortx` has to read as *missing*, not as *new*. The `hook.` prefix cannot be a list, and that
+is measured rather than assumed — the pack's 565 hook empties carry **212 distinct names, 130
+of them appearing in exactly one file**. `shared::anchors::is_anchor_name` is the one place
+both halves live: `ANCHOR_NAMES.contains(name) || name.starts_with("hook.")`.
 
 **How they are read (since 2026-08-12):** a glTF node arrives in Bevy as an entity with a
 `Name`. When a model's scene instance is ready, `render::model::read_the_models_anchors` walks
-it, picks up every empty out of the eight names above, converts it into the model root's own
+it, picks up every empty the table above names, converts it into the model root's own
 space and puts it on the entity as `ModelAnchors` — **in meters, relative to the origin between
 the feet.** The list of names is in `src/shared/anchors.rs::ANCHOR_NAMES`, and it is this table.
 (The type lives in `shared/` and not in `render/` because `titan` has to **read** it: `render`
@@ -421,9 +428,10 @@ blender --background --factory-startup <file>.blend \
 ```ron
 (
     models: {
-        "vanguard":   (source: Gltf("3d/glb/vanguard.glb"), scale: 1.0, attribution: None,
-                       animations: {"idle": "Idle"}),
-        "titan_husk": (source: Primitive, scale: 1.0, attribution: None, animations: {}),
+        // the row that ships bound, verbatim
+        "titan_husk":  (source: Gltf("3d/glb/a-042-koerpertyp-a-hager-mittel.glb"),
+                        scale: 1.0, attribution: None, animations: {}),
+        "titan_large": (source: Primitive, scale: 1.0, attribution: None, animations: {}),
     },
     cortex_tolerance_m: 0.15,
 )
@@ -446,11 +454,171 @@ and they were seen red first with the systems unregistered:
 `f030_a_model_without_a_file_stays_the_primitive_it_is_today`,
 `f030_a_configured_model_spawns_a_scene_instead_of_the_primitive`,
 `f030_an_unknown_model_name_never_takes_the_geometry_away`,
-`f030_the_repository_runs_with_not_a_single_glb`.
+`f030_every_configured_model_names_a_file_that_is_on_disk`.
 
 **No file name in Rust code.** An `asset_server.load("titan.glb")` in the middle of a system is
 a bug; there is **one** place that reads the registry (`data/`), everybody else asks for the
 logical name. `tools/norms.py` checks it.
+
+## The drop of 2026-08-18 — 278 models, and what it taught the loader
+
+`assets/3d/glb/` holds **278 .glb (26 MB)** and `assets/texturen/` **17 atlases (16 MB)**, both
+tracked. The registry's own header carries the inventory; this section carries what had to
+change in the code and what is still open.
+
+⚠️ **`assets/texturen/` must not be renamed.** Every model references its atlas from the inside
+by the relative URI `../../texturen/TEX-*.png`. The German folder name is the pack's internal
+contract, like the German node names inside the files, and is one of the places
+`CLAUDE.md` rule 2 does not reach.
+
+### What the pack is authored in, measured
+
+The drop is in the game's exact metres. Confirmed on anchors nobody had used: the door leaf
+`tuer_blatt` is 2.100 m against `scale.ron reference.door_height_m 2.1`, the three half-timbered
+houses 4.500 / 8.000 / 11.500 against `heights_m`, seven wall pieces exactly 120.000 against
+`wall.height_m`, `a-001-basis-rig-vanguard` 1.800 against `human_height_m`. **`scale: 1.0` is
+therefore the measurement and not a default**, and
+`tests/render.rs::f030_every_configured_row_is_drawn_at_the_scale_it_was_authored_in` holds it
+down.
+
+### Three things the first real `.glb` broke, and where they are fixed
+
+1. **`scale:` moved the mesh and not the anchors.** `position_in` composes the chain up to but
+   not including the scene child, and the scene child is what carries the model's transform —
+   so a row at `scale: 2.0` rendered at double size with its kill zone at the single-size
+   height, silently. The anchors are now transformed with the mesh
+   (`read_the_models_anchors`), and `f030_the_fit_reaches_the_anchors_and_not_only_the_mesh`
+   goes red if that is undone.
+2. **The pack faces the other way.** `docs/conventions.md` and `titan::rig` put a body's
+   forward at **-Z**; the drop authors its faces at **+Z**, and says so twice in every file
+   with a front (`a-042-koerpertyp-a-hager-mittel`: `eye` at z = +0.92, nape `cortex` at
+   z = -0.139; `a-136-npc-vanguard`: `eye` at z = +0.20). Unturned, an aggroed husk walking at
+   the player renders its **back** to him. `render::model::MODEL_FACES` turns the mesh **and**
+   the anchors into the game's frame; `f030_a_model_arrives_turned_into_the_games_own_frame`
+   pins both halves.
+3. **One logical name has to dress two size classes.** `titan.ron` gives `titan_husk` to three
+   medium kinds *and* two small ones, the way the cuboid rig has always been built — one shape
+   at the class height. `render::model::fit_to_class` brings a model to the entity's own size,
+   preferring the **cortex** as the yardstick and falling back to the `hit.min`/`hit.max` pair.
+   Measured, which of the two to give up: fitting by *height* instead moved the husk's kill
+   zone from 8.90 m to 8.85 m, and **five** tests in `tests/titan.rs` went red on those 5 cm.
+   Fitting by *cortex* moves the silhouette 0.6 % and moves no hit zone at all. The height then
+   carries the check the cortex can no longer carry — a model whose cortex sits at the wrong
+   fraction of itself now warns about its height instead.
+
+⚠️ **`hit.min`/`hit.max` is a corner pair, not an ordered AABB.** On all 278 files
+`hit.max.z < hit.min.z`, from Blender's +Y-forward to glTF's -Z-forward. Never `max - min`;
+`authored_height_m` takes an absolute value and the next consumer takes a componentwise
+min/max.
+
+### ✅ Closed: the nape is 0.14 m deep in the pack and 0.55 m in the game
+
+`titan::rig::cortex_in_head` builds the kill zone at `head_m * 0.5` — **0.55 m** behind the
+head's axis on a medium body, 0.77 m on a large one — and Q-030's whole lesson, *the nape is cut
+from behind, never from the front*, is that depth. The drop puts its `cortex` empty on the
+**skin** of the neck instead: **0.139 m** off the neck axis on the medium body, **0.194 m** on
+the large one, 0.07–0.30 m across all 26 full bodies. Taken literally that moved the kill zone
+~0.4 m forward and made a husk cuttable from the FRONT (measured: blade **-0.066 m** past the
+cortex on a front pass).
+
+**The fix that landed on 2026-08-18 is a clamp, not a drop:**
+
+```rust
+// src/titan/rig.rs
+pub fn cortex_in_head_from_model(&self, anchor: Vec3) -> Vec3 {
+    let local = anchor - Vec3::new(0.0, self.head_centre_m(), 0.0);
+    Vec3::new(local.x, local.y, local.z.max(self.head_m * 0.5))
+}
+```
+
+**The model decides the Cortex's height and its side; the rig decides the minimum depth.** A
+model that puts its nape *further back* is still believed — that direction can only sharpen the
+approach angle, and it is the only direction that cannot do damage. The obvious patch (hard-drop
+x and z, `Vec3::new(0.0, anchor.y - head_centre, head_m * 0.5)`) was rejected because it takes
+the existing 🟧 `f030_a_models_cortex_anchor_beats_the_computed_position` red: *the nape is a
+point, not a height.*
+
+It also could not have been "obey the model", because **the drop does not agree with itself**:
+`a-042-…-mittel` puts `cortex` at z = -0.139 (on its own `halswulst` mesh), while
+`a-040-titan-basis-rig` and `a-046-cortex-mesh` both put the same anchor at **-0.450**, the
+middle of the amber blob. There is no single "what the model says" to obey.
+
+> 📌 **For the asset pipeline:** the `cortex` empty belongs at the **centre of the amber blob**,
+> the way `a-046-cortex-mesh` already places it — not on the neck skin. If the 26 body files did
+> that, the clamp would never fire and the model would genuinely own all three components.
+
+### 🔴 The open one: 1.39 cm of x keeps `titan_large` on `Primitive`
+
+`titan_husk` ships **bound** (`a-042-koerpertyp-a-hager-mittel.glb`) and dresses five of the
+eight titan kinds — husk, errant, chorus, scuttler, weaver. `titan_large` does not, and the
+reason is one component:
+
+| component | computed by the rig | out of the model | equal? |
+|---|---|---|---|
+| height above the feet | 12.50 m | 12.50 m (`fit_to_class` fits **by the cortex**) | yes |
+| depth behind the neck | 0.77 m | 0.19 m → clamped to 0.77 m | yes |
+| **x, off the centre line** | **0.0** (`rig.rs:184`) | **-0.0139** (authored +0.0139, turned by `MODEL_FACES`) | **no** |
+
+Measured on a spawned warden with the row bound: *"the model's `cortex` empty moves the kill
+zone from 12.50 m to 12.50 m above the feet, and its depth of 0.19 m was held back to the rig's
+0.77 m"*. And that centimetre flips a pinned 🟧 measurement —
+`tests/titan.rs::q031_the_nape_survives_a_titan_who_tracks_you` goes red with
+*"warden: the pass at 0.2 m of air lands again (blade -0.020 m)"*. Q-031 pinned that a `large`
+titan who turns while you cross eats the 0.20 m pass and leaves 0.15 m; with the model bound the
+warden gets **easier**, silently, out of an art file.
+
+Two readings, and they point the same way. Q-031's margin at 0.20 m was about a centimetre wide,
+which is worth knowing on its own — and the drop's x is authoring noise rather than anatomy
+(+0.010 on the medium body, +0.0139 on the large, and a nape is on the centre line). So the
+likely one-line fix is in `cortex_in_head_from_model`: take the model's height and its depth,
+leave x at the rig's 0.0, exactly as the depth is already clamped. Until somebody makes that
+call the row waits — **a binding that takes a 🟧 test red is a wrong binding, not a red test.**
+
+The repro costs no rebuild, because `art.ron` is data:
+
+```bash
+sed -i 's|"titan_large":    (source: Primitive|"titan_large":    (source: Gltf("3d/glb/a-042-koerpertyp-a-hager-gross.glb")|' assets/data/art.ron
+cargo test --test titan 2>&1 | grep -E '^test result'
+```
+
+### Still not consumed
+
+- **439 `hook.*` empties across 144 files** — eaves (`hook.traufe`), ridges (`hook.first`),
+  crowns (`hook.krone`), the wall's cornice ladder (`hook.gesims_15..105`). **The loader keeps
+  them since 2026-08-18** (`hook.` is an open family, see the anchor table): a wall segment that
+  logged *"2 anchor(s) read"* now logs *"11 anchor(s) read out of the file, 9 of them hook.*
+  rope points"*. What is still missing is **two links, not one**, and neither is the loader's:
+  1. **No world block carries a `ModelName`**, so **0 of the 439 reach the loader in the running
+     game** — they all sit in the architecture kit. `ModelName` lives in `src/render/model.rs`
+     and `world` has no allow-list edge to `render`, so it has to move to `shared` (where
+     `ModelAnchors` already is) before `BlockPlan::spawn` can insert one.
+  2. **Nothing consumes a per-model anchor.** `vector::aim::cast` raycasts avian colliders and
+     `vector::hook::anchor_target` takes the ray's hit point; neither ever reads `ModelAnchors`.
+     The only consumer of any anchor in the tree is `titan::rig::cortex_from_the_model`, and it
+     reads `cortex` alone.
+- **`hit.min`/`hit.max`, `hand.l`/`hand.r`, `eye`** — read onto every entity, consumed by
+  nothing but `fit_to_class`. `eye` is a measured first-person camera height sitting unused
+  (1.69 m on `a-136-npc-vanguard` against a 1.8 m capsule).
+- **Zero animation clips in all 278 files.** `animations: {}` is the only honest value; a name
+  that is not in the file brings the cuboid rig back on screen through `PrimitiveFallback`.
+- **Nine of the ten logical names have nothing that spawns them.** Only
+  `render::model::name_the_titans_model` inserts a `ModelName`, so houses, walls, streets,
+  blades, gear and the player's own body cannot wear a model however good the match is. Two of
+  the nine are nearly there and two are not:
+  - `house_small` / `house_town` / `house_large` — `world::map` now **plans** a model name
+    (`BlockPlan.model`, `world::map::dress_for`) and `dress_for` refuses any name whose `art.ron`
+    row is not `Gltf(...)`, so these three rows are the switch for the whole district. With the
+    switch on: **602 of 937 houses dressed, 5155 → 3393 blocks (−34 %)**. They stay `Primitive`
+    because `BlockPlan::spawn` does not insert the `ModelName` yet — flipping them today would
+    rewrite the footprints and drop every cuboid roof while nothing renders.
+  - `vanguard` / `blade` — the match is measured (`a-136-npc-vanguard` is 1.814 m against
+    scale.ron's 1.8), but the camera is a **child** of the player at eye height, so a body model
+    on the local player is seen from inside. That is a first-person/third-person decision, not a
+    row.
+  - `tree_giant` — **a missing model, not a scale factor**: `heights_m.tree` is 12.0 and the
+    drop's smallest giant tree is 34 m.
+  - `crate_resupply` — `a-130-nachschubstation` (3.90 × 4.20 × 3.35) would replace a silhouette
+    that was hand-tuned on purpose (FIND-080) and needs its own before/after picture.
 
 ## The same chain three more times: atlas, sound, VFX
 
@@ -560,21 +728,34 @@ live, what is it supposed to become?*
 `f030_*` tests) and `cargo test --test titan` (one), and between them they answer everything
 that can be answered without a single file: a row without a model stays a primitive, a row with
 one produces a scene, the scene hides the cuboid, the state plays the clip, a clip that is
-missing says so and brings the cuboid back, and the `cortex` empty moves the kill zone. The
-scene under all of that is **built inside the test** — a `WorldAsset` with named empties in it,
-spawned by Bevy's own spawner. It is the file that is synthetic, nothing else.
+missing says so and brings the cuboid back, and the `cortex` empty moves the kill zone.
 
-| 2026-08-12 | state |
+**Since 2026-08-18 that is no longer only synthetic.** `cargo test --test render` is 38 tests,
+and three of them read the shipped registry itself rather than a fixture:
+
+| test | what a wrong `art.ron` costs, and what goes red |
 |---|---|
-| `assets/data/art.ron` as the one switch | 🟨 built, 11 tests, seen red first |
+| `f030_the_shipped_registry_binds_exactly_the_rows_that_have_a_home` | pins the bound set in **both** directions — unbinding is silent (every other model test then runs over an empty set and stays green), and binding too much is silent too |
+| `f030_every_glb_art_ron_names_even_in_a_comment_is_a_file_that_exists` | the eight `.glb` paths the registry writes down, **including the ones only a blocker note names**, are real files |
+| `f030_a_bound_row_names_no_clip_because_its_file_carries_none` | reads the `.glb`'s own JSON chunk: an invented clip name is not "an unanimated model", it is **no model at all in that one state** |
+
+plus `f030_a_bound_glb_agrees_with_scale_ron_about_the_body_it_dresses`, whose loop was allowed
+to be empty while everything was `Primitive` and no longer is. All four were seen red on data
+alone — `art.ron` is data, so a Rule-5 counter-check on it costs no rebuild at all.
+
+| 2026-08-18 | state |
+|---|---|
+| `assets/data/art.ron` as the one switch | 🟧 — one row bound in the SHIPPED file, `--headless --ticks 300` exit 0 with **zero** asset warnings, and the four headless lines are byte-identical to the all-`Primitive` baseline |
 | primitive fallback, in both directions | 🟨 |
 | the primitive hidden under an arrived model | 🟨 built, seen red first, **on a synthetic scene** |
-| `.glb` really loading, painted, upright | ⬜ — **there is no file to load** |
-| anchors read out of the model | 🟨 built and observed on a synthetic instance |
-| the `cortex` anchor moving the kill zone | 🟨 built, 8.90 m → 9.30 m measured |
-| the other seven anchors | 🟨 built, **read by nobody** |
-| animation clips resolved by name | 🟨 |
+| `.glb` really loading, painted, upright | 🟧 — `docs/images/t075-titan.png`: span 384 px vs 391.9 predicted (−1.5 %), implied height 9.853 m against class 10.0, feet +0.119 m off the ground plane. ⚠️ That picture was taken through a **mirror asset root**; what changed on 2026-08-18 is that the **shipped** `art.ron` names the same file, so the next window run repeats it with no fixture |
+| anchors read out of the model | 🟧 — `model "titan_husk": 6 anchor(s) read out of the file`, real binary, shipped `art.ron` |
+| the `cortex` anchor moving the kill zone | 🟧 — on the shipped binding: *8.90 m → 8.90 m, depth 0.14 m held back to the rig's 0.55 m* |
+| the other anchors (`hand.*`, `eye`, `hook.*`) | 🟨 kept by the loader since 2026-08-18, **consumed by nobody**, and **0 of the 439 `hook.*` reach it in the running game** |
+| animation clips resolved by name | 🟨 — and there is nothing to resolve: **0 clips in 278 files** |
 | a game state playing its clip | 🟨 built, **on a hand-made `AnimationClip`** |
+| `titan_large` bound | ⬜ — blocked on 1.39 cm of x, see the 🔴 section above |
+| a house / wall / tree wearing a model | ⬜ — planned by `world::map`, and no entity carries a `ModelName` |
 | the `.blend` half of the chain | ⬜ |
 
 **The four stages apply to models just the same** (§8): a placeholder out of primitives is ⬜ or

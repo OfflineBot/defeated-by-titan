@@ -1,6 +1,6 @@
 # environment — which machine can do what
 
-Updated: 2026-08-09 · Stage: 🟧 (measured, not estimated — the command stands next to every row)
+Updated: 2026-08-18 · Stage: 🟧 (measured, not estimated — the command stands next to every row)
 
 The project runs on two machines, and they cannot do the same things. Whoever mixes them up
 takes a missing graphics session for a bug, or an N100 for a performance regression
@@ -92,5 +92,45 @@ habit.
 | first `cargo build` (Bevy 0.19.0 + ~460 crates, `opt-level = 3` for dependencies) | `[debian]` | see `docs/lessons/environment.md` | `cargo build` |
 | `cargo check` over the whole tree, Bevy already built | `[cachy]` | **1 min 22 s** | `cargo check` |
 | `cargo test` (95 tests, warm tree) | `[cachy]` | under 10 s | `cargo test` |
+
+## Where a run finds `assets/` — and why that is not the working directory
+
+**One answer for both halves of `assets/`.** The RON files and the models live in the same
+folder, so they are found the same way: `data::assets_dir()` (`src/data/mod.rs`) is the only
+place that resolves it, and `src/lib.rs` hands its result to Bevy as
+`AssetPlugin::file_path`. The order is **the working directory first, then the crate the
+binary was built from** — the second one is the compile-time `CARGO_MANIFEST_DIR`, baked into
+the executable.
+
+| How it is started | RON | models |
+|---|---|---|
+| `cargo run` | ✅ | ✅ |
+| `./target/debug/defeated_by_titan` from anywhere | ✅ | ✅ **since 2026-08-18** |
+| the binary copied somewhere else | ✅ | ✅ |
+| from a **mirror asset root** (a copy of `assets/` as the working directory) | ✅ | ✅ |
+
+**What it looked like before 2026-08-18.** Bevy resolves its asset folder against
+`BEVY_ASSET_ROOT`, then the `CARGO_MANIFEST_DIR` **environment variable**, and only then
+against the executable's own directory (`bevy_asset-0.19.0/src/io/file/mod.rs:19-29`).
+`cargo run` and `cargo test` both set that variable — so the two places we look were the two
+places that worked, while **every script run in this project starts the binary directly** and
+looked in `target/debug/assets/`. Measured that day, same mirror asset root, two binaries:
+
+```
+before  ERROR bevy_asset::server: Path not found: <exe dir>/assets/3d/glb/a-042-….glb
+after   INFO  art.ron: 1 model(s) come out of a file, the rest stay primitives   (no error)
+```
+
+Nothing had ever been loaded through the asset server — all eight `art.ron` rows said
+`Primitive` — which is the only reason it stayed invisible for nine days.
+
+**How to see for yourself, from any directory:**
+
+```bash
+cd / && env -u CARGO_MANIFEST_DIR -u BEVY_ASSET_ROOT RUST_LOG=bevy_asset=debug \
+  /path/to/target/debug/defeated_by_titan --headless --ticks 1 2>&1 | grep 'base path'
+```
+
+Guarded by `tests/data.rs::the_bare_binary_finds_its_assets_from_a_foreign_working_directory`.
 
 Related: [`docs/lessons/environment.md`](lessons/environment.md) (the traps), `prompts/init.md` §14/§15.

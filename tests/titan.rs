@@ -38,7 +38,8 @@ use defeated_by_titan::data::GameData;
 use defeated_by_titan::debug::DebugOverlay;
 use defeated_by_titan::mission::MissionPhase;
 use defeated_by_titan::shared::{
-    Cli, HitZone, PlayerId, SpawnTitan, StateClock, TitanHit, TitanId, TitanKindName, TitanState,
+    Cli, HitZone, ModelAnchors, PlayerId, SpawnTitan, StateClock, TitanHit, TitanId, TitanKindName,
+    TitanState, CORTEX_ANCHOR,
 };
 use defeated_by_titan::titan::rig::{PartExtent, TitanPart};
 use defeated_by_titan::titan::{spawnable, SpawnRefused};
@@ -860,6 +861,10 @@ struct Pass {
 /// The player is parked 300 m away while the swing state machine runs up, so that the titan is
 /// still `Idle` when the pass is placed; a titan that has been walking for half a second has
 /// moved the target the test is trying to measure.
+///
+/// `model_cortex` is the `.glb`'s own `cortex` empty, in the root's space, or `None` for the
+/// computed rig. It is the one knob that can move the kill zone without moving a single length
+/// in `assets/data/`, which is exactly why it needs its own passes.
 fn fly_past_a_titan(
     kind: &str,
     dir: Vec3,
@@ -867,6 +872,7 @@ fn fly_past_a_titan(
     speed_m_s: f32,
     widen: Option<f32>,
     tracking: Tracking,
+    model_cortex: Option<Vec3>,
 ) -> Pass {
     let mut app = app_with_hits();
     if tracking == Tracking::Off {
@@ -913,6 +919,19 @@ fn fly_past_a_titan(
     ));
     spawn(&mut app, kind, Vec3::new(0.0, LANE_Y, 0.0));
     ticks(&mut app, 1);
+    // **The model bound the way the renderer binds it.** `render::model::read_the_models_anchors`
+    // turns the file's frame into the game's and scales it before it writes `ModelAnchors`, so
+    // what lands on the entity is a point in the ROOT's own space, metres above the feet, +Z
+    // backwards. Putting that same value on by hand is the whole of the binding as far as
+    // `titan` is concerned — and it is the only way to fly a pass at a `.glb`'s nape without a
+    // renderer, an asset server and an async scene load inside a unit test.
+    if let Some(anchor) = model_cortex {
+        let root = the_titan(&mut app);
+        let mut anchors = ModelAnchors::default();
+        anchors.0.insert(CORTEX_ANCHOR.to_string(), anchor);
+        app.world_mut().entity_mut(root).insert(anchors);
+        ticks(&mut app, 1);
+    }
 
     // Hold the real slash button through the real `Intent` channel, and start the pass on the
     // blade's first cutting tick so the whole active window lies in front of it.
@@ -932,7 +951,19 @@ fn fly_past_a_titan(
     let right = dir.cross(Vec3::Y).normalize();
     let clearance_m = rig.width_m * 0.5 + player_r;
     let offset_m = clearance_m + air_m;
-    let cortex = Vec3::new(0.0, LANE_Y + rig.cortex_height_m, rig.head_m * 0.5);
+    // **Where the kill zone really is**, and not where this file remembers putting it. Without
+    // a model that is the rig's own arithmetic, unchanged, so the four geometry passes measure
+    // exactly what they measured before this parameter existed. With one the sensor has been
+    // moved by `rig::cortex_from_the_model`, and the pass is aimed at where it moved to — a
+    // fixture that keeps aiming at the computed point would report a miss that is its own.
+    let cortex = match model_cortex {
+        None => Vec3::new(0.0, LANE_Y + rig.cortex_height_m, rig.head_m * 0.5),
+        Some(_) => {
+            let root = the_titan(&mut app);
+            let sensor = part_entity(&app, root, TitanPart::Cortex).expect("the rig has a cortex");
+            app.world().get::<GlobalTransform>(sensor).expect("global").translation()
+        }
+    };
     let tick_m = speed_m_s / d.game.simulation_hz as f32;
     // Half a step past the crossing plus two ticks of lead, the same aiming as
     // `tests/combat.rs::fly_past`.
@@ -1015,7 +1046,7 @@ fn q030_a_flying_player_reaches_the_nape_of_a_solid_husk() {
         "a husk plus a player needs {clearance_m:.3} m of clearance, Q-030 is written against 1.60"
     );
 
-    let p = fly_past_a_titan("husk", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off);
+    let p = fly_past_a_titan("husk", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off, None);
     assert!(
         p.cortex_tick.is_some(),
         "a pass at 30 m/s with {AIR_M:.2} m of air landed NO cortex hit. Closest approach \
@@ -1066,7 +1097,7 @@ fn q030_the_nape_is_reachable_on_a_large_titan_too() {
         (clearance_m - 2.10).abs() < 0.01,
         "a `large` titan plus a player needs {clearance_m:.3} m, Q-030 is written against 2.10"
     );
-    let p = fly_past_a_titan("warden", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off);
+    let p = fly_past_a_titan("warden", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off, None);
     assert!(
         p.cortex_tick.is_some(),
         "warden (14 m): no cortex hit. Clearance {clearance_m:.3} m, closest approach {:.3} m, \
@@ -1131,7 +1162,10 @@ fn q030_the_nape_is_reachable_on_a_large_titan_too() {
     let (tightest, _, tightest_margin) = margins[0].clone();
     let mut flyable_air_m = 0.0f32;
     for air_m in [0.30f32, 0.25, 0.20, 0.15, 0.10, 0.05] {
-        if fly_past_a_titan(&tightest, Vec3::NEG_Z, air_m, 30.0, None, Tracking::Off).cortex_tick.is_some() {
+        if fly_past_a_titan(&tightest, Vec3::NEG_Z, air_m, 30.0, None, Tracking::Off, None)
+            .cortex_tick
+            .is_some()
+        {
             flyable_air_m = air_m;
             break;
         }
@@ -1157,10 +1191,10 @@ fn q030_the_nape_is_cut_from_behind_and_not_from_the_front() {
     for kind in ["husk", "warden"] {
         // Flying along −Z the player comes over the titan's back (a fresh titan faces −Z), and
         // the blade meets the cortex before it meets anything else.
-        let behind = fly_past_a_titan(kind, Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off);
+        let behind = fly_past_a_titan(kind, Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off, None);
         // Flying along +X the player is in **front** of the titan and the blade swings towards
         // his back, through the whole depth of the body.
-        let front = fly_past_a_titan(kind, Vec3::X, AIR_M, 30.0, None, Tracking::Off);
+        let front = fly_past_a_titan(kind, Vec3::X, AIR_M, 30.0, None, Tracking::Off, None);
         assert!(behind.cortex_tick.is_some(), "{kind}: the pass from behind did not land");
         assert!(
             front.cortex_tick.is_none(),
@@ -1189,7 +1223,7 @@ fn q030_the_nape_is_cut_from_behind_and_not_from_the_front() {
 fn q030_a_titan_wide_enough_really_does_put_the_nape_out_of_reach() {
     let mut reachable = Vec::new();
     for fraction in [0.25f32, 0.29, 0.33, 0.37, 0.45] {
-        let p = fly_past_a_titan("husk", Vec3::NEG_Z, AIR_M, 30.0, Some(fraction), Tracking::Off);
+        let p = fly_past_a_titan("husk", Vec3::NEG_Z, AIR_M, 30.0, Some(fraction), Tracking::Off, None);
         reachable.push((fraction, p.cortex_tick.is_some(), p.blade_gap_m));
     }
     let at_file_value = reachable[0];
@@ -1542,8 +1576,6 @@ fn f053_the_telegraph_goes_dark_when_the_pose_angles_go_to_zero() {
 
 #[test]
 fn f030_a_models_cortex_anchor_beats_the_computed_position() {
-    use defeated_by_titan::shared::{ModelAnchors, CORTEX_ANCHOR};
-
     let mut app = app();
     let d = data(&app);
     let husk = d.titan("husk").expect("husk");
@@ -1604,6 +1636,190 @@ fn f030_a_models_cortex_anchor_beats_the_computed_position() {
     println!(
         "F-030 anchor: scale.ron {computed:.2} m -> model {:.2} m, cortex measured at {:.2} m",
         anchor.y, after.y
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F-030 · the model decides the nape's HEIGHT — it does not get to drag it to the front
+//
+// The 278-file drop of 2026-08-18 carries a `cortex` empty in every full body, and it does not
+// sit where the rig puts one. Measured out of the files (node walk, `.glb` JSON chunk):
+//
+// | file | `cortex` empty, file frame | off the neck axis |
+// |---|---|---|
+// | `a-042-koerpertyp-a-hager-mittel.glb` | `(+0.010, +8.900, −0.139)` | **0.139 m** |
+// | `a-042-koerpertyp-a-hager-gross.glb`  | `(+0.014, +12.460, −0.194)` | 0.194 m |
+// | `a-040-titan-basis-rig.glb`           | `(+0.010, +8.900, −0.450)` | **0.450 m** |
+// | `a-046-cortex-mesh.glb`               | `(+0.010, +8.900, −0.450)` | 0.450 m |
+// | `a-049-lurker-koerper.glb`            | `(+0.014, +8.965, −1.245)` | 1.245 m |
+//
+// **The drop does not agree with itself**, and that is the first thing to say out loud: the
+// pack's own base rig and its dedicated cortex part put the nape 0.45 m behind the neck, while
+// the 26 body variants put it at 0.139 m — which is exactly where their `halswulst` mesh sits
+// (`(+0.010, +8.443, −0.139)`), i.e. on the **skin of a neck that is about 0.36 m deep**. The
+// body files carry the point where the amber would be glued on; the cortex part carries the
+// middle of the amber itself (its mesh spans z −0.20 … −0.66).
+//
+// The rig's box is not that body. `scale.ron: width_fraction 0.25` makes a husk **2.5 m deep**,
+// and `titan.ron: cortex_radius_m 0.55` makes the kill zone 1.1 m across. A nape 0.139 m behind
+// the axis of a 2.5 m box is not a nape, it is a throat: the sphere then reaches to z −0.41,
+// and `gear.ron: blades.reach_m` fishes it out from the **front** at 0.20 m of air. That is the
+// husk's whole lesson deleted by a modelling detail
+// ([`q030_the_nape_is_cut_from_behind_and_not_from_the_front`]).
+//
+// So the depth is the rig's and the height is the model's — with one exception that costs
+// nothing and is the reason this is a clamp and not a deletion: a model that puts its nape
+// **further back** than the rig does (the lurker, 1.245 m) is believed, because that direction
+// can only make the approach angle sharper, never softer.
+// ---------------------------------------------------------------------------
+
+/// The `cortex` empty of `a-042-koerpertyp-a-hager-mittel.glb`, in the file's own frame.
+const DROP_CORTEX_MEDIUM: Vec3 = Vec3::new(0.010, 8.900, -0.139);
+/// The same empty in `a-042-koerpertyp-a-hager-gross.glb`.
+const DROP_CORTEX_LARGE: Vec3 = Vec3::new(0.014, 12.460, -0.194);
+/// `a-049-lurker-koerper.glb` — the one full body that puts its nape a long way back.
+const DROP_CORTEX_LURKER: Vec3 = Vec3::new(0.014, 8.965, -1.245);
+
+/// A drop anchor brought into the game the way `render::model::read_the_models_anchors` brings
+/// it: scaled by `fit_to_class` (which matches the class's cortex height exactly when the model
+/// carries a cortex) and then turned by `MODEL_FACES` — 180° about Y, because the pack is
+/// authored facing +Z and this game's forward is −Z. A rotation by π negates x and z.
+///
+/// It is arithmetic and not a second convention: both steps are `render::model`'s, spelled out
+/// here so that this file states where its numbers come from instead of hiding a magic vector.
+fn drop_anchor(raw: Vec3, class_cortex_m: f32) -> Vec3 {
+    let fit = class_cortex_m / raw.y;
+    Vec3::new(-raw.x * fit, class_cortex_m, -raw.z * fit)
+}
+
+/// ★ **The drop's own nape, flown at.** A bound model may not make a titan cuttable from the front.
+///
+/// This is [`q030_the_nape_is_cut_from_behind_and_not_from_the_front`] run against a titan whose
+/// kill zone was placed by a `.glb` instead of by `scale.ron` — the case that does not exist yet
+/// in `art.ron` and will exist the moment one row says `Gltf(...)`. Red before the clamp: the
+/// husk's front pass lands, and the design's central rule is gone from the running game with
+/// nothing on fire.
+#[test]
+fn f030_a_bound_model_cannot_drag_the_nape_round_to_the_front() {
+    let d = data(&app());
+    for (kind, raw) in [("husk", DROP_CORTEX_MEDIUM), ("warden", DROP_CORTEX_LARGE)] {
+        let k = d.titan(kind).unwrap_or_else(|| panic!("titan.ron has no {kind}"));
+        let anchor = drop_anchor(raw, d.titan_cortex_height_m(k).expect("cortex height"));
+        let behind =
+            fly_past_a_titan(kind, Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off, Some(anchor));
+        let front =
+            fly_past_a_titan(kind, Vec3::X, AIR_M, 30.0, None, Tracking::Off, Some(anchor));
+        assert!(
+            behind.cortex_tick.is_some(),
+            "{kind} with the drop's anchor: the pass from behind did not land (blade {:+.3} m). \
+             Binding a model may not cost the cut that F-030 stands on",
+            behind.blade_gap_m
+        );
+        assert!(
+            front.cortex_tick.is_none(),
+            "{kind} with the drop's anchor bound: a pass from the FRONT cut the cortex, blade \
+             {:+.3} m from it. The model's empty sits {:.3} m behind the neck axis and the \
+             rig's box is {:.2} m deep — honouring that depth puts the kill zone inside the \
+             chest and deletes the approach angle (Q-030)",
+            front.blade_gap_m,
+            -raw.z,
+            d.scale.titan.width_fraction * d.titan_height_m(k).expect("height")
+        );
+        println!(
+            "F-030 bound {kind}: behind cut on tick {:?} (blade {:+.3} m) · front no cut \
+             (blade {:+.3} m short)",
+            behind.cortex_tick, behind.blade_gap_m, front.blade_gap_m
+        );
+    }
+}
+
+/// The clamp is not a blanket override: a nape the model puts **further back** is believed.
+///
+/// The lurker's body is the only full body in the drop that does it (1.245 m in its own frame,
+/// 1.74 m once it is fitted to `large`), and this is the falsifiable half of the rule above — if
+/// [`TitanRig::cortex_in_head_from_model`] ever became "always the rig's depth", this test is
+/// what goes red, and it is what keeps a real modelling decision from being thrown away
+/// silently.
+///
+/// ⚠️ **It asserts geometry and not a cut, on purpose.** Measured 2026-08-18: the lurker's nape
+/// is not reachable at the 0.20 m of air every other kind is flown at — blade +0.080 m short
+/// with the computed nape, +0.060 m with the model's. That is `titan.ron`'s doing
+/// (`cortex_radius_m: 0.50` on a `large` body: 1.60 + 0.50 + 0.12 = 2.22 m of blade against
+/// 1.75 + 0.35 = 2.10 m of clearance, so 0.12 m of air and not 0.20 m), it is the same before
+/// and after this file was touched, and it is reported as a finding rather than smuggled into
+/// this test as a number picked to make it pass.
+#[test]
+fn f030_a_nape_the_model_puts_further_back_is_believed() {
+    let d = data(&app());
+    let k = d.titan("lurker").expect("titan.ron has no lurker");
+    let rig = TitanRig::of(&d, k).expect("the lurker has a size class");
+    let anchor = drop_anchor(DROP_CORTEX_LURKER, d.titan_cortex_height_m(k).expect("cortex"));
+    let local = rig.cortex_in_head_from_model(anchor);
+    assert!(
+        anchor.z > rig.head_m * 0.5,
+        "the fixture is wrong, not the code: the lurker's anchor at {:.3} m is not behind the \
+         rig's own nape at {:.3} m, so this test exercises the clamp instead of the branch \
+         around it",
+        anchor.z,
+        rig.head_m * 0.5
+    );
+    assert!(
+        (local.z - anchor.z).abs() < 1e-4,
+        "a nape further back than the rig's has to be taken as it stands: {:.3} m asked for, \
+         {:.3} m kept, and the rig's own depth is {:.3} m",
+        anchor.z,
+        local.z,
+        rig.head_m * 0.5
+    );
+    println!(
+        "F-030 lurker: model asks {:.3} m behind the neck, the rig would say {:.3} m, kept {:.3} m",
+        anchor.z,
+        rig.head_m * 0.5,
+        local.z
+    );
+}
+
+/// The three components of the conversion, one assertion each, with no app around them.
+///
+/// Height from the model, depth never in front of the rig's, side from the model. Goes red the
+/// moment somebody "simplifies" the clamp back to a subtraction.
+#[test]
+fn f030_the_model_decides_the_napes_height_and_the_rig_its_depth() {
+    let d = data(&app());
+    let husk = d.titan("husk").expect("husk");
+    let rig = TitanRig::of(&d, husk).expect("husk rig");
+    let computed = rig.cortex_in_head();
+    let anchor = drop_anchor(DROP_CORTEX_MEDIUM, d.titan_cortex_height_m(husk).expect("cortex"));
+    let local = rig.cortex_in_head_from_model(anchor);
+
+    // Height: the model's, to the millimetre, and it is the whole point of binding at all.
+    assert!(
+        (local.y - (anchor.y - rig.head_centre_m())).abs() < 1e-4,
+        "the model's cortex height was not taken: {:.3} m in the model, {:.3} m in the head",
+        anchor.y,
+        local.y
+    );
+    // Depth: the rig's, because the rig's box is what the blade has to reach past.
+    assert!(
+        (local.z - computed.z).abs() < 1e-4,
+        "the nape is {:.3} m behind the neck and the rig puts it at {:.3} m — a model 0.139 m \
+         off the axis of a {:.2} m deep box is a throat, not a nape",
+        local.z,
+        computed.z,
+        rig.width_m
+    );
+    // Side: the model's. No design rule is about left and right, and the drop's own x is
+    // 0.010 m, i.e. authoring noise that nothing should be re-centred for.
+    assert!(
+        (local.x - anchor.x).abs() < 1e-4,
+        "the model's lateral offset was dropped: {:.3} m in the model, {:.3} m in the head",
+        anchor.x,
+        local.x
+    );
+    println!(
+        "F-030 conversion: model ({:.3}, {:.3}, {:.3}) -> head ({:.3}, {:.3}, {:.3}), rig \
+         depth {:.3} m",
+        anchor.x, anchor.y, anchor.z, local.x, local.y, local.z, computed.z
     );
 }
 
@@ -1903,7 +2119,7 @@ fn q031_a_titan_turns_while_winding_up() {
 #[test]
 fn q031_the_nape_survives_a_titan_who_tracks_you() {
     // The husk keeps the full 20 cm.
-    let husk = fly_past_a_titan("husk", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::On);
+    let husk = fly_past_a_titan("husk", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::On, None);
     assert!(
         husk.cortex_tick.is_some(),
         "husk: a tracking titan swung his own nape out of the ideal pass at {AIR_M} m of air \
@@ -1913,7 +2129,7 @@ fn q031_the_nape_survives_a_titan_who_tracks_you() {
 
     // The warden does not, and this is the number: 0.15 m, at every speed the pass is flown at.
     let tight_m = 0.15;
-    let wide = fly_past_a_titan("warden", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::On);
+    let wide = fly_past_a_titan("warden", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::On, None);
     assert!(
         wide.cortex_tick.is_none(),
         "warden: the pass at {AIR_M} m of air lands again (blade {:+.3} m). Either \
@@ -1922,7 +2138,7 @@ fn q031_the_nape_survives_a_titan_who_tracks_you() {
         wide.blade_gap_m
     );
     for speed in [30.0_f32, 45.0, 60.0] {
-        let p = fly_past_a_titan("warden", Vec3::NEG_Z, tight_m, speed, None, Tracking::On);
+        let p = fly_past_a_titan("warden", Vec3::NEG_Z, tight_m, speed, None, Tracking::On, None);
         assert!(
             p.cortex_tick.is_some(),
             "warden at {speed} m/s: no cut with {tight_m} m of air (blade {:+.3} m). The nape of \

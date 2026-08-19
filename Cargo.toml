@@ -28,6 +28,12 @@ bevy = { version = "0.19.0", default-features = false, features = [
     "default_font",         # without it text renders nothing and does not say so
     "picking",
     "sysinfo_plugin",
+    # **Every texture in the model pack is a PNG.** `png` came in transitively until
+    # 2026-08-18 (through `bevy_image`'s own default), which means a feature trim anywhere in
+    # the tree would have taken the image decoder away and the 278 models would have rendered
+    # untextured — Bevy does not fail on a format it cannot decode, it logs and carries on.
+    # A dependency that all 278 files rely on is named here, not inherited.
+    "png",
 ] }
 ron = "0.12.2"
 serde = { version = "1.0.229", features = ["derive"] }

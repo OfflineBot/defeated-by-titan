@@ -29,6 +29,32 @@ pub const ANCHOR_NAMES: [&str; 8] =
 /// The one anchor whose absence is a gameplay bug and not a missing detail (`F-030`).
 pub const CORTEX_ANCHOR: &str = "cortex";
 
+/// **The open family.** Everything named `hook.<anything>` is an anchorable point, whatever
+/// comes after the dot.
+///
+/// [`ANCHOR_NAMES`] is a **closed** list on purpose — `cortex`, `eye`, `hand.l` are rig
+/// landmarks, one per body, and a typo in Blender must show up as a missing one rather than as
+/// a new one. Hook points are the opposite kind of thing and the 2026-08-18 drop proves it:
+/// **565 `hook.*` empties across 207 of 278 files, under 212 distinct names, 130 of which occur
+/// in exactly one file** — `hook.gesims_15..105` (a cornice every 15 m up a 120 m wall),
+/// `hook.traufe` (eaves), `hook.first` (ridge), `hook.krone`, `hook.spitze` (spire),
+/// `hook.wurzelbogen_quer` on one single tree. Only `hook.l`/`hook.r` were on the whitelist, so
+/// **439 across 144 files were dropped at load** — the entire anchorable surface of the
+/// architecture kit, in a game whose one verb is a grappling hook.
+///
+/// A closed list cannot hold that: it would have to be re-edited for every eaves a modeller
+/// names, and the failure mode of forgetting is silent. So the rule is the prefix, and the
+/// **name** carries the meaning for whoever consumes it later.
+pub const HOOK_PREFIX: &str = "hook.";
+
+/// Whether an empty out of a `.glb` is an anchor the loader keeps.
+///
+/// One place, so that `render::model` (which walks the instance) and any future check over the
+/// pack cannot disagree about what an anchor is.
+pub fn is_anchor_name(name: &str) -> bool {
+    ANCHOR_NAMES.contains(&name) || name.starts_with(HOOK_PREFIX)
+}
+
 /// The anchors that came **out of the model**, in the model root's own space, in metres.
 ///
 /// Inserted on **every** entity with a `ModelName`, empty for a primitive. That is deliberate:
@@ -67,6 +93,23 @@ mod tests {
         some.0.insert(CORTEX_ANCHOR.to_string(), Vec3::new(0.0, 8.9, 0.4));
         assert_eq!(some.get(CORTEX_ANCHOR), Some(Vec3::new(0.0, 8.9, 0.4)));
         assert_eq!(some.get("hook.l"), None, "one anchor present must not imply the others");
+    }
+
+    #[test]
+    fn every_hook_point_is_an_anchor_and_the_rig_landmarks_stay_a_closed_list() {
+        // The pack's own names, measured 2026-08-18 — 212 distinct ones, most of them in a
+        // single file. Whitelisting these was never going to happen.
+        for name in ["hook.l", "hook.traufe", "hook.gesims_105", "hook.wurzelbogen_quer"] {
+            assert!(is_anchor_name(name), "{name:?} is a point a rope can bite");
+        }
+        for name in ANCHOR_NAMES {
+            assert!(is_anchor_name(name));
+        }
+        // …and the family does not swallow the rest of the file. A wall segment carries 44
+        // nodes and 9 of them are hooks; the other 35 are meshes and joints.
+        for name in ["hook", "hooks.l", "Cube.003", "cortex.old", "Armature", ""] {
+            assert!(!is_anchor_name(name), "{name:?} is not an anchor");
+        }
     }
 
     #[test]

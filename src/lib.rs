@@ -32,6 +32,7 @@ pub mod world;
 
 use avian3d::prelude::{Gravity, PhysicsPlugins, PhysicsSystems, SubstepCount};
 use bevy::app::{PluginsState, ScheduleRunnerPlugin};
+use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
 use bevy::render::settings::{RenderCreation, WgpuSettings};
 use bevy::render::RenderPlugin;
@@ -221,6 +222,28 @@ fn base_plugins(start: &Cli) -> bevy::app::PluginGroupBuilder {
         } else {
             ExitCondition::DontExit
         },
+        ..default()
+    });
+
+    // **Where Bevy looks for `assets/`, said out loud.** Without this line Bevy resolves the
+    // folder against `BEVY_ASSET_ROOT`, then the `CARGO_MANIFEST_DIR` *environment variable*,
+    // and only then against **the executable's own directory**
+    // (`bevy_asset-0.19.0/src/io/file/mod.rs:19-29`). `cargo run` and `cargo test` both set
+    // that variable — so the defect is invisible exactly where we look at it, and the bare
+    // `./target/debug/defeated_by_titan`, which is what **every script run in this project
+    // uses**, went looking in `target/debug/assets/` and found nothing.
+    //
+    // It stayed invisible until 2026-08-18 because nothing had ever been loaded through the
+    // asset server: `art.ron` was `Primitive` in all eight rows. The first model row would
+    // have rendered nothing and said only `Path not found`.
+    //
+    // The path comes from [`data::assets_dir`] and from nowhere else — the RON files and the
+    // models are in the same folder, so they get the same answer, and `tools/norms.py` keeps
+    // the folder's name inside `src/data/` where it belongs. It is **absolute**, which is what
+    // overrides the base path above: `FileAssetReader::new` does `base.join(file_path)`, and a
+    // join with an absolute path is the absolute path.
+    plugins = plugins.set(AssetPlugin {
+        file_path: data::assets_dir().to_string_lossy().into_owned(),
         ..default()
     });
 

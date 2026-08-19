@@ -240,8 +240,48 @@ def check_docs(b: Report) -> None:
         b.checked += 1
 
 
+# An **asset pack** is referenced as a SET and never file by file: `art.ron` names the one
+# model it wants, the loader names none at all, and the README describes the naming scheme —
+# nobody writes down 278 file names, and nobody should. The per-file mention rule below
+# therefore does not apply inside a pack; `check_asset_packs` takes over there with the checks
+# that still have teeth.
+#
+# Measured 2026-08-18, the day the model pack landed: the mention rule produced **316
+# violations**, every single one a healthy file. A check that fires on 316 healthy files
+# catches nothing — it only teaches you to skip the output, and the next real orphan goes with
+# it.
+#
+# Key: the directory, relative to the repository root. Value: what a file **directly** in it is
+# allowed to be called. A directory that does not exist is skipped, an empty one is fine.
+ASSET_PACKS = {
+    # docs/models.md and assets/3d/glb/README.md: our own work, `<letter>-<nnn>-<what>.glb`.
+    "assets/3d/glb": r"^[a-z]-\d{3}-[a-z0-9-]+\.glb$|^README\.md$",
+    # The Blender sources beside them, same names.
+    "assets/3d/blend": r"^[a-z]-\d{3}-[a-z0-9-]+\.blend$|^README\.md$",
+    # assets/texturen/README.md lays the scheme down itself: <TEX-ID>.png is loaded,
+    # <TEX-ID>.emissiv.png is the emissive map, <TEX-ID>.felder.ron is the generated field
+    # table, index.html is the contact sheet.
+    "assets/texturen": (r"^TEX-[A-Z0-9-]+\.png$|^TEX-[A-Z0-9-]+\.emissiv\.png$"
+                        r"|^TEX-[A-Z0-9-]+\.felder\.ron$|^README\.md$|^index\.html$"),
+    # The hand-kept sources. **The PNG is output** — this is what gets edited.
+    "assets/texturen/quelle": r"^TEX-[A-Z0-9-]+\.svg$",
+}
+
+# What a `.glb` may point at from the inside, and where it lands. The models carry
+# `../../texturen/TEX-*.png`, which Bevy resolves against the .glb's own folder — so
+# `assets/texturen` may never be renamed without every model going untextured, silently.
+GLB_MAGIC = b"glTF"
+
+
+def in_a_pack(rel_dir: str) -> str | None:
+    return rel_dir if rel_dir in ASSET_PACKS else None
+
+
 def check_orphans(b: Report) -> None:
-    """Every file is linked and used — or deleted. There is nothing in between."""
+    """Every file is linked and used — or deleted. There is nothing in between.
+
+    **Except inside an asset pack** — see `ASSET_PACKS` and `check_asset_packs`.
+    """
     all_texts = []
     for p in files("**/*.md", "**/*.rs", "**/*.ron", "**/*.py", "**/*.sh", "**/*.toml",
                    "**/*.txt"):
@@ -249,6 +289,8 @@ def check_orphans(b: Report) -> None:
 
     for p in files("docs/**/*", "assets/**/*", "tools/**/*", "scripts/**/*"):
         rel = p.relative_to(ROOT).as_posix()
+        if in_a_pack(p.parent.relative_to(ROOT).as_posix()):
+            continue
         name = p.name
         mentioned = any(
             (rel in text or name in text) for q, text in all_texts if q != p)
@@ -257,6 +299,125 @@ def check_orphans(b: Report) -> None:
                    f"A file nobody knows about looks like truth and is never "
                    f"maintained")
         b.checked += 1
+
+
+# --------------------------------------------------------------------------
+# 4b. Asset packs — referenced as a set, checked as a set
+# --------------------------------------------------------------------------
+
+def glb_uris(p: Path) -> list[str] | str:
+    """Every `uri` a .glb points at from the inside, or a string saying why it cannot be read.
+
+    Only the JSON chunk is read, which stands at the front — the mesh data behind it is not
+    touched, so 278 files cost a few hundred kilobytes and not 26 MB.
+    """
+    import json
+    import struct
+    try:
+        with p.open("rb") as f:
+            head = f.read(12)
+            if len(head) < 12:
+                return "shorter than a glTF header"
+            magic, version, declared = struct.unpack("<4sII", head)
+            if magic != GLB_MAGIC:
+                return f"does not start with {GLB_MAGIC!r} — not a binary glTF"
+            if version != 2:
+                return f"is glTF version {version}, the loader reads 2"
+            if declared != p.stat().st_size:
+                return (f"declares {declared} bytes and is {p.stat().st_size} — "
+                        f"a truncated file loads as far as it goes and then stops")
+            length, kind = struct.unpack("<I4s", f.read(8))
+            if kind != b"JSON":
+                return f"has {kind!r} where the JSON chunk belongs"
+            doc = json.loads(f.read(length))
+    except (OSError, ValueError, struct.error) as e:
+        return f"cannot be read: {e}"
+    out = [i["uri"] for i in doc.get("images", []) if "uri" in i]
+    out += [buf["uri"] for buf in doc.get("buffers", []) if "uri" in buf]
+    return out
+
+
+def check_asset_packs(b: Report) -> None:
+    """A pack is one thing, so it is checked as one thing.
+
+    What the per-file mention rule used to promise and what stands in its place:
+
+    * **the pack is known**        — the folder itself has to be named somewhere
+    * **nothing strays into it**   — every file matches the pack's own naming scheme, so a
+                                     `Untitled.blend1`, a leftover `.bin` or a `foo.png`
+                                     dropped in by hand is still caught
+    * **it holds together inside** — every texture a `.glb` names has to exist where the
+                                     model looks for it (this is the check that catches
+                                     `assets/texturen` being renamed, which would leave 278
+                                     models untextured without a single error)
+    * **nothing dangles into it**  — every asset path named in the RON has to exist
+    * **the atlas is regrowable**  — every `<TEX>.png` has its `quelle/<TEX>.svg` source and
+                                     its `<TEX>.felder.ron` table, because the PNG is output
+    """
+    all_texts = [(p, p.read_text(encoding="utf-8", errors="replace"))
+                 for p in files("**/*.md", "**/*.rs", "**/*.ron", "**/*.py", "**/*.toml")]
+
+    for pack, pattern in ASSET_PACKS.items():
+        folder = ROOT / pack
+        if not folder.is_dir():
+            continue
+        name = folder.name
+        known = any((pack in text or f"{name}/" in text) for q, text in all_texts
+                    if not q.is_relative_to(folder))
+        b.check(known, f"{pack}/ is mentioned nowhere — a whole pack nobody links to is "
+                       f"318 orphans in one folder (§10)")
+
+        allowed = re.compile(pattern)
+        for p in sorted(folder.iterdir()):
+            if not p.is_file() or is_excluded(p):
+                continue
+            b.check(allowed.match(p.name) is not None,
+                    f"{pack}/{p.name} does not fit the pack's naming scheme "
+                    f"({pattern}) — a stray file in a pack is the one file nobody "
+                    f"maintains (§10)")
+
+    # Inside every model: the textures it points at.
+    for p in files("assets/3d/glb/*.glb"):
+        rel = p.relative_to(ROOT).as_posix()
+        uris = glb_uris(p)
+        if isinstance(uris, str):
+            b.fail(f"{rel} {uris}")
+            continue
+        for uri in uris:
+            if uri.startswith("data:"):
+                continue
+            target = (p.parent / uri).resolve()
+            b.check(target.exists(),
+                    f"{rel} points at {uri} and that file is not there — a model whose "
+                    f"texture is missing renders white and says nothing")
+            b.check(target.is_relative_to(ROOT / "assets"),
+                    f"{rel} points at {uri}, which leaves assets/ — the game ships "
+                    f"assets/, not the machine it was exported on")
+
+    # Every atlas can be built again from its own source.
+    atlas = ROOT / "assets/texturen"
+    if atlas.is_dir():
+        for png in sorted(atlas.glob("TEX-*.png")):
+            if png.name.endswith(".emissiv.png"):
+                continue
+            tex = png.stem
+            b.check((atlas / "quelle" / f"{tex}.svg").is_file(),
+                    f"assets/texturen/{png.name} has no quelle/{tex}.svg — the PNG is "
+                    f"output, and output without its source cannot be changed")
+            b.check((atlas / f"{tex}.felder.ron").is_file(),
+                    f"assets/texturen/{png.name} has no {tex}.felder.ron — without the "
+                    f"field table nothing can look a field up by name")
+
+    # And the other direction: a path named in the data has to lead somewhere.
+    asset_path = re.compile(r'"([^"]*\.(?:glb|png|ogg|wav|ron))"')
+    for p in files("assets/data/**/*.ron"):
+        rel = p.relative_to(ROOT).as_posix()
+        for no, line in enumerate(p.read_text(encoding="utf-8", errors="replace")
+                                  .splitlines(), 1):
+            for hit in asset_path.findall(line.split("//")[0]):
+                b.check((ROOT / "assets" / hit).is_file(),
+                        f"{rel}:{no} names {hit} and there is no such file under assets/ "
+                        f"— a dangling reference renders a primitive and logs one line")
 
 
 # --------------------------------------------------------------------------
@@ -316,6 +477,7 @@ def main() -> int:
         check_code(b)
         check_docs(b)
         check_orphans(b)
+        check_asset_packs(b)
         check_tests(b)
 
     if b.errors:

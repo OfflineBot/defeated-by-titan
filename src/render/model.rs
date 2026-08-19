@@ -47,7 +47,9 @@ use crate::shared::{MovementState, TitanKindName, TitanState};
 
 // The anchor contract lives in `shared/` and not here, because `titan` has to READ it: the
 // `cortex` empty out of the file is where the titan dies. See `shared::anchors`.
-pub use crate::shared::anchors::{ModelAnchors, ANCHOR_NAMES, CORTEX_ANCHOR};
+pub use crate::shared::anchors::{
+    is_anchor_name, ModelAnchors, ANCHOR_NAMES, CORTEX_ANCHOR, HOOK_PREFIX,
+};
 
 /// "This entity is the logical model `name`."
 ///
@@ -63,11 +65,19 @@ pub struct ModelName {
     /// Only used to **check** a model that brings its own `cortex` empty. `scale.ron` stays
     /// the one truth; this is the yardstick a swapped model is held against.
     pub cortex_height_m: Option<f32>,
+    /// How tall `scale.ron` says this entity is, in meters. `None` for everything that is not
+    /// a titan.
+    ///
+    /// **This is what lets one logical name serve two size classes.** `titan.ron` gives
+    /// `titan_husk` to three medium kinds (10.0 m) *and* to two small ones (4.2 m), the way
+    /// the primitive rig has always been built — one shape at the class height. A `.glb` is
+    /// authored at exactly one height, so [`fit_to_class`] brings it to this one.
+    pub height_m: Option<f32>,
 }
 
 impl ModelName {
     pub fn new(name: impl Into<String>) -> Self {
-        ModelName { name: name.into(), cortex_height_m: None }
+        ModelName { name: name.into(), cortex_height_m: None, height_m: None }
     }
 }
 
@@ -278,6 +288,7 @@ pub fn name_the_titans_model(
         commands.entity(entity).insert(ModelName {
             name: kind.model.clone(),
             cortex_height_m: data.titan_cortex_height_m(kind),
+            height_m: data.titan_height_m(kind),
         });
     }
 }
@@ -326,7 +337,7 @@ pub fn spawn_models(
                 let scene = commands
                     .spawn((
                         Name::new(format!("model:{}", wanted.name)),
-                        Transform::from_scale(Vec3::splat(model.scale)),
+                        model_transform(model.scale),
                     ))
                     .id();
                 if let Some(world) = assets.scenes.get(&wanted.name) {
@@ -344,6 +355,35 @@ pub fn spawn_models(
                     .insert((ModelBody::Scene(scene), ModelAnchors::default()));
             }
         }
+    }
+}
+
+/// **The drop faces the other way, and this is where that is undone.**
+///
+/// `docs/conventions.md` and the titan rig agree that a body's forward is **-Z**
+/// (`TitanRig::shoulder_in_torso`: "a body whose forward is -Z", `cortex_in_head` puts the nape
+/// at +Z). The asset drop of 2026-08-18 is authored the other way round, and it says so twice
+/// in every file that has a front: on `a-042-koerpertyp-a-hager-mittel` the `eye` empty sits at
+/// z = **+0.92** and the `cortex` empty — the nape — at z = **-0.139**. Same on the human kit:
+/// `a-136-npc-vanguard` puts its eye at z = +0.20.
+///
+/// Measured, not argued: with no rotation a husk that has aggroed and is walking at the player
+/// renders its **back** to him, and the `cortex` anchor lands on the wrong side of the neck —
+/// which took `tests/titan.rs::q030_the_nape_is_cut_from_behind_and_not_from_the_front` red,
+/// i.e. the titan became cuttable from the front.
+///
+/// **It belongs here and not in the files.** A model's authored axis convention is the seam
+/// between a file and the engine, which is exactly what this module is; and it is one property
+/// of one coherent export, not eight rows of RON that can drift apart.
+pub const MODEL_FACES: f32 = std::f32::consts::PI;
+
+/// The model's own transform on the scene child: the drop's frame turned into the game's, at
+/// the size [`fit_to_class`] worked out.
+fn model_transform(scale: f32) -> Transform {
+    Transform {
+        translation: Vec3::ZERO,
+        rotation: Quat::from_rotation_y(MODEL_FACES),
+        scale: Vec3::splat(scale),
     }
 }
 
@@ -661,16 +701,51 @@ pub fn read_the_models_anchors(
     };
 
     let mut found: BTreeMap<String, Vec3> = BTreeMap::new();
+    // How many of what came back are rope points rather than rig landmarks — the number the
+    // log line used to report as *ignored*. Until 2026-08-18 the filter here was
+    // `ANCHOR_NAMES.contains(&name)` and nothing else, so a wall segment carrying nine hand
+    // placed cornices arrived with **two** anchors, and the 439 `hook.*` empties the drop
+    // spreads over 144 files were dropped at load. `shared::anchors::is_anchor_name` now lets
+    // the whole `hook.` family through; the closed list still governs the rig landmarks.
+    let mut hooks = 0usize;
     for descendant in children.iter_descendants(instance_root) {
         let Ok(name) = names.get(descendant) else {
             continue;
         };
         let name = name.as_str();
-        if !ANCHOR_NAMES.contains(&name) {
+        if !is_anchor_name(name) {
             continue;
+        }
+        if name.starts_with(HOOK_PREFIX) {
+            hooks += 1;
         }
         found.insert(name.to_string(), position_in(descendant, instance_root, &parents, &transforms));
     }
+
+    // **The model is brought to the size the simulation already believes in.**
+    //
+    // `titan.ron` deliberately gives several size classes the same logical model, and the
+    // primitive rig has always been built at the class height out of `scale.ron`. A `.glb` is
+    // authored at exactly one height, so without this the small kinds would render at the
+    // medium one's — a 4.2 m collider inside a 10 m picture, which is exactly what `art.ron`'s
+    // own header forbids ("the same size, hit zone and scale").
+    let fit = fit_to_class(&found, wanted.height_m, wanted.cortex_height_m);
+    let scale = data.model(&wanted.name).map_or(1.0, |m| m.scale) * fit;
+
+    // ⚠️ **And the anchors go with it — both halves of it.** `position_in` composes the chain
+    // up to but NOT including the scene child, and the scene child is the entity that carries
+    // the model's own transform. So what it returns is in the FILE's frame at the FILE's size,
+    // while the mesh is drawn turned ([`MODEL_FACES`]) and scaled. Two silent bugs lived in
+    // that gap: an `art.ron: scale` of 2.0 put the cortex sensor at half the visible head
+    // height, and the drop's nape anchor landed on the front of the neck.
+    // Taken here, while `found` is still in model units — after the loop below it would be
+    // multiplied by `scale` a second time.
+    let stands = fitted_height_m(&found, scale);
+    let into_the_game = Quat::from_rotation_y(MODEL_FACES);
+    for anchor in found.values_mut() {
+        *anchor = into_the_game * (*anchor * scale);
+    }
+    commands.entity(instance_root).insert(model_transform(scale));
 
     match found.get(CORTEX_ANCHOR) {
         None => warn!(
@@ -696,9 +771,97 @@ pub fn read_the_models_anchors(
         }
     }
 
+    // **The other end of the same check.** [`fit_to_class`] matches the cortex exactly when
+    // the model brings one — so a body whose cortex sits at the wrong fraction of itself no
+    // longer shows up as a displaced cortex, it shows up as a body of the wrong height. If
+    // only the cortex were checked, the fit would silence the very warning that catches a
+    // wrongly authored model (an `a-045` head part, authored in its parent rig's space, is
+    // 1.32 m tall and carries the rig's cortex at 8.92 m — it would pass a cortex check and
+    // render as a 10 m titan made of one head).
+    if let (Some(height), Some(expected)) = (stands, wanted.height_m) {
+        let off = (height - expected).abs();
+        if off > data.art.cortex_tolerance_m {
+            warn!(
+                "model {:?}: brought to the cortex scale.ron names, this body stands \
+                 {height:.2} m tall and its size class is {expected:.2} m — {off:.2} m out, \
+                 past art.ron's cortex_tolerance_m of {:.2}. Either the model is authored for \
+                 another class or its cortex sits at the wrong fraction of it (docs/models.md).",
+                wanted.name, data.art.cortex_tolerance_m
+            );
+        }
+    }
+
     let count = found.len();
     commands.entity(owner).insert(ModelAnchors(found));
-    info!("model {:?}: {count} anchor(s) read out of the file", wanted.name);
+    info!(
+        "model {:?}: {count} anchor(s) read out of the file, {hooks} of them {HOOK_PREFIX}* rope \
+         points, drawn at scale {scale:.4}",
+        wanted.name
+    );
+}
+
+/// How much a model has to be scaled so that it agrees with `scale.ron` about **this entity**.
+///
+/// One logical name dresses two size classes on purpose — `titan.ron` gives `titan_husk` to
+/// three medium kinds (10.0 m) *and* to two small ones (4.2 m), the way the primitive rig has
+/// always been built: one shape at the class height. A `.glb` is authored at exactly one size,
+/// so it is brought to the entity's, against one of two yardsticks:
+///
+/// 1. **The `cortex` empty, whenever the model brings one and `scale.ron` names one.** That is
+///    the number this game is about — a titan dies at its cortex and nowhere else — and
+///    hitting it exactly is what keeps a swapped model and the cuboid rig killable in the same
+///    place. `art.ron`'s header asks for "the same size, hit zone and scale", and the two
+///    cannot both be exact: the drop authors its cortex at 0.8854 of its own height while
+///    `scale.ron`'s classes use 0.8929. **Measured, on 2026-08-18, which of the two to give
+///    up:** fitting by height instead moved the husk's kill zone from 8.90 m to 8.85 m, and
+///    five tests in `tests/titan.rs` went red on that 5 cm — a warden nape pass missed by
+///    0.020 m and a husk was suddenly cuttable from the front. Fitting by cortex moves the
+///    silhouette by 0.6 % (5.7 cm on a 10 m body) and moves no hit zone at all.
+/// 2. **The `hit.min`/`hit.max` pair**, for everything that carries no cortex — 278 of 278
+///    models in the drop carry it, and it is the only size claim a `.glb` makes about itself
+///    that a machine can read. ⚠️ **A corner pair, not an ordered AABB:** on all 278 files
+///    `hit.max.z < hit.min.z`, from Blender's +Y-forward to glTF's -Z-forward flip. Hence the
+///    absolute value; whoever consumes those two anchors next takes a componentwise min/max.
+///
+/// `1.0` when neither yardstick has both its numbers — a model that states no size, or an
+/// entity whose size nobody wrote down, is drawn exactly as it was authored. **Never a guess.**
+pub fn fit_to_class(
+    anchors: &BTreeMap<String, Vec3>,
+    wanted_height_m: Option<f32>,
+    wanted_cortex_m: Option<f32>,
+) -> f32 {
+    if let (Some(cortex), Some(wanted)) = (anchors.get(CORTEX_ANCHOR), wanted_cortex_m) {
+        if cortex.y > f32::EPSILON && wanted > 0.0 {
+            return wanted / cortex.y;
+        }
+    }
+    let Some(wanted) = wanted_height_m else {
+        return 1.0;
+    };
+    let Some(authored) = authored_height_m(anchors) else {
+        return 1.0;
+    };
+    if authored <= f32::EPSILON || wanted <= 0.0 {
+        return 1.0;
+    }
+    wanted / authored
+}
+
+/// What the model says it is tall, out of its own `hit.min`/`hit.max` pair. `None` when it
+/// states no size at all — which is a legal answer and not an error (see [`fit_to_class`]).
+pub fn authored_height_m(anchors: &BTreeMap<String, Vec3>) -> Option<f32> {
+    let lo = anchors.get("hit.min")?;
+    let hi = anchors.get("hit.max")?;
+    Some((hi.y - lo.y).abs())
+}
+
+/// How tall the model actually stands once it is drawn at `scale`.
+///
+/// **The counterweight to a cortex fit.** Matching the cortex exactly means the cortex can no
+/// longer report a badly authored model, so the height has to — see the check in
+/// [`read_the_models_anchors`].
+pub fn fitted_height_m(anchors: &BTreeMap<String, Vec3>, scale: f32) -> Option<f32> {
+    authored_height_m(anchors).map(|h| h * scale)
 }
 
 /// An entity's translation in `root`'s space, by walking the chain up.

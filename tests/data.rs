@@ -1508,3 +1508,93 @@ fn t005_the_missions_keep_the_order_the_file_wrote_them_in() {
         "the difficulty row runs easiest → hardest, because that is how the file runs"
     );
 }
+
+/// ★ **The bare binary finds `assets/` — from any working directory and any exe location.**
+///
+/// Bevy resolves [`AssetPlugin::file_path`] against `BEVY_ASSET_ROOT`, then against the
+/// `CARGO_MANIFEST_DIR` **environment variable**, and only then against the executable's own
+/// directory (`bevy_asset-0.19.0/src/io/file/mod.rs:19-29`). `cargo run` and `cargo test` both
+/// set that variable — so the defect hid in exactly the two places we look, while **every
+/// script run in this project starts `./target/debug/defeated_by_titan` directly** and would
+/// have got `Path not found: <exe dir>/assets/3d/glb/…`.
+///
+/// It stayed invisible until 2026-08-18 because nothing had ever gone through the asset
+/// server: all eight `art.ron` rows said `Primitive`. The first model row would have rendered
+/// nothing and logged one line.
+///
+/// **The observation is Bevy's, not ours.** `FileAssetReader::new` logs the root *after* it has
+/// joined base path and `file_path`, so this reads what the asset server actually uses and not
+/// what we handed it. Measured the same day against one mirror asset root, two binaries:
+///
+/// | binary | what the log said |
+/// |---|---|
+/// | before | `Path not found: <exe dir>/assets/3d/glb/a-042-…glb` — the entity kept its primitive |
+/// | after  | the model loads, no error |
+#[test]
+fn the_bare_binary_finds_its_assets_from_a_foreign_working_directory() {
+    let run = std::process::Command::new(env!("CARGO_BIN_EXE_defeated_by_titan"))
+        // **Not the repository.** A run that stands in the repository finds `assets/` by
+        // accident through the working directory and proves nothing about the binary.
+        .current_dir("/")
+        .env_remove("CARGO_MANIFEST_DIR")
+        .env_remove("BEVY_ASSET_ROOT")
+        .env("RUST_LOG", "bevy_asset=debug")
+        .args(["--headless", "--ticks", "1"])
+        .output()
+        .expect("the game binary did not start");
+
+    let log = String::from_utf8_lossy(&run.stderr).into_owned()
+        + &String::from_utf8_lossy(&run.stdout);
+    let want = concat!(env!("CARGO_MANIFEST_DIR"), "/assets");
+
+    let roots: Vec<&str> = log.lines().filter(|l| l.contains("as its base path")).collect();
+    assert!(
+        !roots.is_empty(),
+        "bevy_asset never said which root it uses — `RUST_LOG=bevy_asset=debug` no longer \
+         reaches the log, or the message was renamed. Without that line this test proves \
+         nothing, so it fails instead of passing quietly.\n{log}"
+    );
+    for line in &roots {
+        assert!(
+            line.contains(want),
+            "the asset server resolved a root outside the repository.\nwanted: {want}\ngot:    {line}"
+        );
+    }
+    assert!(
+        !log.contains("Path not found"),
+        "something under assets/ did not resolve in a plain 1-tick run:\n{log}"
+    );
+    assert!(run.status.success(), "a 1-tick headless run has to end at 0, ended {:?}", run.status);
+}
+
+/// ★ **The PNG decoder is named, not inherited.**
+///
+/// All 311 texture references in the 278 models of the pack are PNG. Until 2026-08-18 the
+/// `png` feature came in transitively through `bevy_image`'s own default — so any feature trim
+/// anywhere in the tree could have taken the decoder away, and Bevy does not fall over on a
+/// format it cannot decode: it logs once and renders the material untextured. A dependency 278
+/// files rest on is written down.
+#[test]
+fn the_png_decoder_is_an_explicit_feature_and_not_a_transitive_one() {
+    let manifest = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
+    )
+    .expect("Cargo.toml is unreadable");
+
+    let list = manifest
+        .split("bevy = {")
+        .nth(1)
+        .and_then(|rest| rest.split("] }").next())
+        .expect("Cargo.toml no longer has a `bevy = { … }` dependency block");
+
+    let named = list
+        .lines()
+        .filter_map(|l| l.split('#').next())
+        .any(|code| code.contains("\"png\""));
+
+    assert!(
+        named,
+        "`png` is not in bevy's feature list — every texture in assets/texturen/ is a PNG, \
+         and a missing decoder is silent (docs/models.md)"
+    );
+}

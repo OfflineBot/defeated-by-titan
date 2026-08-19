@@ -4,7 +4,7 @@
 // change `source:` here — not touching Rust.
 //
 //   source: Primitive              ⇒ the placeholder path built from Bevy primitives.
-//   source: Gltf("3d/glb/x.glb")   ⇒ that file, relative to `assets/`.
+//   source: Gltf("3d/glb/<file>.glb")   ⇒ that file, relative to `assets/`.
 //
 // Both paths have to run at any time and carry the same size, hit zone and scale.
 // **The game runs with not a single .glb in the repository** — that is what `Primitive`
@@ -15,17 +15,244 @@
 // means "this model animates nothing"; a name that is not in the file is a loud warning at
 // load and that state simply having no clip — never a silent substitute.
 //
-// STATUS: all placeholders. Machine A has no Blender, so for now only the
-// tools/blend/*.py grow here (docs/environment.md, docs/models.md).
+// ===================================================================================
+// THE ASSET DROP — read this before adding a row (2026-08-18)
+// ===================================================================================
+//
+// `assets/3d/glb/` holds **278 .glb (26 MB)** and `assets/texturen/` the **17 atlases
+// (16 MB)** they paint themselves with. Both are TRACKED on purpose (`.gitignore` carries an
+// explicit `!assets/3d/glb/**`), because a registry that names a file the repository does not
+// have is an empty screen with no error — which is the one failure this whole file exists to
+// prevent.
+//
+// ⚠️ **The folder `assets/texturen/` MUST NOT BE RENAMED.** Every .glb references its atlas
+// from the inside, by the relative URI `../../texturen/TEX-*.png`, which resolves out of
+// `assets/3d/glb/`. Rename the folder and all 278 models lose their textures at once — with a
+// warning, not an error. The German name is the pack's own internal contract and is therefore
+// one of the places CLAUDE.md rule 2 does not reach.
+//
+// The pack came with its own `data/*.ron` (the old German scaffolding, `skala.ron` and
+// friends). Those were **deliberately not copied**: `assets/data/*.ron` here is newer and is
+// the authority. Nothing in this repository reads anything out of the drop except the .glb
+// files themselves.
+//
+// ## What every model in the drop carries, measured over all 278 files
+//
+//   `hit.min` / `hit.max`   278 of 278 — a machine-readable bounding box, as two empties.
+//                           ⚠️ It is a CORNER PAIR, not an ordered AABB: on all 278 files
+//                           `hit.max.z < hit.min.z` (the Blender +Y-forward -> glTF
+//                           -Z-forward flip). Whoever consumes it takes a componentwise
+//                           min/max, never `max - min`. The one consumer today is
+//                           `render::model::fit_to_class`, and it takes `.abs()`.
+//   `cortex`                45 of 278 — where the titan dies. THE anchor the game reads.
+//   `hand.l` / `hand.r`      106 · `eye` 92 · `hook.l` / `hook.r` 63 files.
+//   `hook.<german>`         439 further empties across 144 files — roof eaves
+//                           (`hook.traufe`), ridges (`hook.first`), crowns (`hook.krone`),
+//                           the wall's cornice ladder (`hook.gesims_15..105`).
+//                           **The loader keeps them since 2026-08-18**: `hook.` is an OPEN
+//                           family in `shared::anchors::is_anchor_name`, because the 565
+//                           hook empties carry **212 distinct names and 130 of those appear
+//                           in exactly one file** — a whitelist is structurally impossible.
+//                           The eight rig landmarks stay a closed list, so a Blender typo
+//                           still reads as *missing* and not as *new*.
+//                           ⚠️ **Zero of the 439 reach the loader in the shipped game**, and
+//                           that is not this file's doing: they all sit in the architecture
+//                           kit, and no world block carries a `ModelName` yet (see the
+//                           `house_*` rows). Nothing consumes a per-model anchor either —
+//                           `vector::aim` raycasts avian colliders and never reads
+//                           `ModelAnchors`; the only consumer of any anchor in the tree is
+//                           `titan::rig::cortex_from_the_model`, and it reads `cortex` alone.
+//
+// ## `animations: {}` is not laziness — the drop has ZERO clips
+//
+// All 278 files carry an empty glTF `animations` array; the two rigs
+// (`a-001-basis-rig-vanguard`, `a-040-titan-basis-rig`) are armatures without a single
+// authored clip. **Do not invent a clip name here.** A name that is not in the file is a loud
+// warning at load *and* brings the cuboid rig back on screen the moment the game enters that
+// state (`PrimitiveFallback`, `src/render/model.rs`) — you would trade a model for a
+// placeholder. `{}` is the only honest value until somebody authors a clip, and it stays `{}`
+// on the BOUND row below as well: it is the proof of that rule, not an exception to it.
+// Re-derived twice already — this paragraph is the answer, do not measure it a third time, and
+// `tests/render.rs::f030_a_bound_row_names_no_clip_because_its_file_carries_none` reads the
+// file's own JSON chunk so the day somebody authors a walk cycle the map may be filled in.
+//
+// ## `scale:` stays 1.0, and that is enforced by a test
+//
+// The drop is authored in the game's exact metres — the door leaf measures 2.100 m against
+// `scale.ron reference.door_height_m 2.1`, the three half-timbered houses 4.50 / 8.00 / 11.50
+// against `heights_m`, the wall segments 120.00 against `wall.height_m`. So 1.0 is not a
+// default here, it is the measurement. Per-entity sizing is not this field's job either:
+// `render::model` scales a model to the height `scale.ron` gives the ENTITY, out of the
+// model's own `hit.min`/`hit.max`. That is what lets `titan_husk` dress a 10 m husk and a
+// 4.2 m scuttler out of one file, the way `titan.ron` already asks it to.
+// `tests/render.rs::f030_every_configured_row_is_drawn_at_the_scale_it_was_authored_in` holds
+// the 1.0 down.
+//
+// ## ONE of the ten rows ships BOUND — the two rules that decide it
+//
+// 1. **A registry row is only worth wiring when something spawns it.** Exactly one system in
+//    the whole tree inserts a `ModelName`: `render::model::name_the_titans_model`, driven by
+//    `titan.ron`. So `titan_husk` and `titan_large` are the only two names any entity in the
+//    running game asks for. Pointing any other row at a file would load glTF and put nothing
+//    on screen — and it would make this file claim something the game does not do.
+// 2. **A binding that takes a 🟧 test red is a wrong binding, not a red test.** That is what
+//    holds `titan_large` back today, measured and written out at the row itself.
+//
+// So: `titan_husk` is bound and dresses **five of the eight titan kinds** (husk, errant,
+// chorus, scuttler, weaver); the other nine rows are `Primitive`. **What each unbound row is
+// waiting for, and the file that would dress it, stands next to it**, so the next session does
+// not re-derive it.
 (
     models: {
-        "vanguard":       (source: Primitive, scale: 1.0, attribution: None, animations: {}),
-        "titan_husk":     (source: Primitive, scale: 1.0, attribution: None, animations: {}),
+        // ---- the district's titans · `titan_husk` is BOUND and on screen ----
+        //
+        // The only two logical names any entity in the running game asks for, both out of
+        // `titan.ron: kinds.*.model`. One file per body size serves several kinds, because
+        // `render::model::fit_to_class` brings a model to the CORTEX height `scale.ron` names
+        // for the kind wearing it, out of the model's own `hit.min`/`hit.max` — so a row is a
+        // body type, not a height.
+        //
+        //   titan_husk  -> 3d/glb/a-042-koerpertyp-a-hager-mittel.glb
+        //     worn by husk, errant, chorus (medium 10.0 / cortex 8.9) AND scuttler, weaver
+        //     (small 4.2 / cortex 3.7). Authored 10.0566 m tall, cortex at 8.9000 m.
+        //     Fitted: medium scale 1.0000 -> stands 10.057 m (0.057 out);
+        //             small  scale 0.4157 -> stands  4.181 m (0.019 out).
+        //   titan_large -> 3d/glb/a-042-koerpertyp-a-hager-gross.glb — picked, measured, and
+        //     NOT bound. The blocker stands at the row itself, below.
+        //     `hager` (gaunt) is the body titan.ron asks for — the warden's cover only works
+        //     with arm length. The drop has no 21 m titan body of its own; its only 21 m model
+        //     is `a-073-colossus-form`, and that one carries hook.l/hook.r, i.e. it is a
+        //     PLAYER form and not an enemy.
+        //
+        // ✅ **The blocker that held these two back until 2026-08-18 is gone.** It was the
+        // nape: the drop authors its `cortex` empty on the SKIN of the neck (0.139 m behind
+        // the neck axis on the medium body, 0.194 m on the large one), and `titan::rig` builds
+        // the kill zone at `head_m * 0.5` = 0.55 m behind it, which is the whole of Q-030 —
+        // "the nape is cut from behind, never from the front". Taking the anchor's depth
+        // literally made a husk cuttable from the FRONT (measured: blade -0.066 m past the
+        // cortex on a front pass).
+        // `titan::rig::cortex_in_head_from_model` now CLAMPS: `local.z.max(head_m * 0.5)`.
+        // **The model decides the Cortex's height and its side; the rig decides the minimum
+        // depth.** A model that puts its nape further BACK is still believed — that direction
+        // can only sharpen the approach angle. The drop does not even agree with itself here
+        // (`a-040-titan-basis-rig` and `a-046-cortex-mesh` both put the same anchor at
+        // -0.450 m, the centre of the amber blob), so there was no single "what the model
+        // says" to obey. Proven by `tests/titan.rs::f030_a_bound_model_cannot_drag_the_nape_
+        // round_to_the_front` on a bound husk and a bound warden, front pass and rear pass.
+        //
+        // The renderer also turns the drop's frame into the game's — the pack faces +Z, the
+        // game faces -Z, and unturned an aggroed husk shows the player its back
+        // (`render::model::MODEL_FACES`).
+        "titan_husk":     (source: Gltf("3d/glb/a-042-koerpertyp-a-hager-mittel.glb"), scale: 1.0, attribution: None, animations: {}),
+
+        // 🔴 **`titan_large` STAYS `Primitive`, and it is not a size problem — it is 1.4 cm of x.**
+        //
+        // Binding it takes `tests/titan.rs::q031_the_nape_survives_a_titan_who_tracks_you` red:
+        //   `warden: the pass at 0.2 m of air lands again (blade -0.020 m)`
+        // Q-031 pinned that a `large` titan who TURNS while you cross eats the pass at 0.20 m of
+        // air and leaves only 0.15 m. With the model bound the 0.20 m pass lands again — the
+        // warden gets easier, silently, out of an art file.
+        //
+        // **What actually differs, measured on a spawned warden with the row bound (2026-08-18):**
+        //   `the model's "cortex" empty moves the kill zone from 12.50 m to 12.50 m above the
+        //    feet, and its depth of 0.19 m was held back to the rig's 0.77 m`
+        // — the HEIGHT is identical (fit_to_class fits by the cortex, so it lands on 12.50 m
+        // exactly) and the DEPTH is identical (the clamp holds it at `head_m * 0.5` = 0.77 m).
+        // The one component left is x: `titan::rig` builds the computed Cortex at x = 0.0
+        // (rig.rs:184) and the model authors its `cortex` empty at x = +0.0139, which is
+        // -0.01394 after `MODEL_FACES` turns the frame. **1.39 cm sideways is the whole
+        // difference, and it flips a pinned measurement** — which says Q-031's 0.20 m margin was
+        // about a centimetre wide, not that the model is wrong.
+        //
+        // The drop's x is authoring noise, not anatomy: the same body type carries +0.010 on the
+        // medium and +0.0139 on the large, and a nape is on the centre line. So the likely fix
+        // is one line in **`src/titan/rig.rs::cortex_in_head_from_model`** — take the model's
+        // HEIGHT (and the depth, when it is deeper) and leave x at the rig's 0.0, exactly as the
+        // depth is already clamped. That is somebody else's file, so this row waits instead of
+        // the test being edited.
+        //
+        // **The repro costs no rebuild — this file is data:**
+        //   sed -i 's|"titan_large":    (source: Primitive|"titan_large":    (source: Gltf("3d/glb/a-042-koerpertyp-a-hager-gross.glb")|' assets/data/art.ron
+        //   cargo test --test titan 2>&1 | grep -E '^test result'
+        //
+        // Everything else about it is ready and measured, so the flip is one line the day the
+        // rig decides: worn by warden, lurker (large 14.0 / cortex 12.5) AND bellower (huge
+        // 21.0 / cortex 18.7); authored 14.0722 m tall with its cortex at 12.4600 m; fitted it
+        // stands 14.117 m (0.117 out) and 21.120 m (0.120 out) — both inside
+        // `cortex_tolerance_m` (0.15), and the two tightest numbers in this file.
+        // ⚠️ `bellower` cannot be spawned at all today: scale.ron `max_spawnable_class` caps at
+        // "large".
         "titan_large":    (source: Primitive, scale: 1.0, attribution: None, animations: {}),
+
+        // ---- UNBOUND · named, but nothing in the game carries the name yet ----
+        // Each line names the file that WOULD dress it and the exact blocker. Until that is
+        // cleared the row stays `Primitive`: a `Gltf` here costs the asset load and renders
+        // nothing.
+
+        // WOULD BE: 3d/glb/a-136-npc-vanguard.glb (1.814 m against scale.ron's 1.8, carries
+        // hook.l/hook.r/hand.l/hand.r/eye — the match is ready and measured).
+        // BLOCKER: no system puts a `ModelName` on the player body, and one cannot simply be
+        // added — the camera is a CHILD of the player at eye height, so a body model on the
+        // LOCAL player is seen from inside. This needs a first-person/third-person decision
+        // (docs/QUESTIONS.md) before it needs a row. A remote player would already work.
+        "vanguard":       (source: Primitive, scale: 1.0, attribution: None, animations: {}),
+
+        // WOULD BE: 3d/glb/a-020-vector-gear-stufe-1.glb (tiers 2 and 3 exist as -stufe-2 /
+        // -stufe-3; its hook.l/hook.r sit on the same three decimals as the body's, so it
+        // needs no mount offset at all).
+        // BLOCKER: nothing spawns a gear entity. The gear is state on the player today, not a
+        // thing in the world.
         "vector_gear":    (source: Primitive, scale: 1.0, attribution: None, animations: {}),
+
+        // WOULD BE: 3d/glb/a-024-klingen-paar-neu.glb (a PAIR, authored already in hand
+        // position, 2.08 m along Z, matching the body's hand.l/hand.r; -gebrochen is the
+        // broken pair). There is no single-blade file in the drop.
+        // BLOCKER: no blade entity in the player's hands, and — being a pair — it hangs off
+        // the same first/third-person decision as `vanguard`.
         "blade":          (source: Primitive, scale: 1.0, attribution: None, animations: {}),
+
+        // ---- the three half-timbered houses: the pack is exact, the wiring is one hop short
+        //
+        // `world::map` now PLANS a model name (`BlockPlan.model`, `world::map::dress_for`) and
+        // `dress_for` refuses any name whose row here is not `Gltf(...)` — so these three rows
+        // are the switch for the whole district. Measured with the switch on: 602 of 937
+        // houses dressed, 5155 -> 3393 blocks (-34 %), footprint moves a median 1.42 m.
+        //
+        // 🔴 BLOCKER (all three, one cause): **`BlockPlan::spawn` does not insert the
+        // `ModelName`** — `ModelName` lives in `src/render/model.rs` and `world` has no
+        // allow-list edge to `render`, so it has to move to `shared` first (where
+        // `ModelAnchors` already sits) before a block can carry one. Flipping these rows
+        // TODAY would dress the plan — new footprints, and a dressed house emits no cuboid
+        // roof — while nothing renders: a district of flat-topped boxes in exchange for
+        // nothing on screen. **Do not flip them before an entity carries the name.**
+        //
+        // The heights are exact against `scale.ron: architecture.heights_m` under the same
+        // key, and `tests/world.rs::f003_the_dressing_catalogue_is_what_the_glb_files_really_
+        // measure` parses the three files and holds all eleven numbers down.
+        //
+        // ⚠️ `house_small` additionally can never be worn in Ashgate: the district's
+        // `min_height_m` is 6.5 and the model is authored at 4.50, so its smallest fit is
+        // 9.5 x 12.0 m — outside every slot. That is the height band, not the pack.
+        // WOULD BE: 3d/glb/a-083-fachwerkhaus-klein.glb — 6.56 x 4.50 x 8.32 m.
         "house_small":    (source: Primitive, scale: 1.0, attribution: None, animations: {}),
+        // WOULD BE: 3d/glb/a-083-fachwerkhaus-stadthaus.glb — 9.10 x 8.00 x 7.90 m.
+        "house_town":     (source: Primitive, scale: 1.0, attribution: None, animations: {}),
+        // WOULD BE: 3d/glb/a-083-fachwerkhaus-gross.glb — 8.30 x 11.50 x 9.90 m.
+        "house_large":    (source: Primitive, scale: 1.0, attribution: None, animations: {}),
+
+        // WOULD BE: nothing in the drop. `scale.ron heights_m.tree` is 12.0 and `maps.ron`
+        // draws a 2.5 x 12.0 x 2.5 block; the drop's smallest giant tree
+        // (`a-105-riesenbaum-gerade`) is 34 m and the tallest 48 m. Scaling a 48 m tree by
+        // 0.25 shrinks its hook points and its trunk into a different asset.
+        // BLOCKER: **a missing model, not a scale factor** — and the same `ModelName`-on-a-
+        // block hop as the houses.
         "tree_giant":     (source: Primitive, scale: 1.0, attribution: None, animations: {}),
+
+        // WOULD BE: 3d/glb/a-130-nachschubstation.glb — 3.90 x 4.20 x 3.35 m.
+        // BLOCKER: `missions.ron hub.refuel_stations` is a bare point today and `maps.ron`
+        // draws the racks as two hand-tuned blocks (docs/FINDINGS.md FIND-080), so binding
+        // this changes a silhouette that was measured on purpose and needs its own
+        // before/after picture — plus the same `ModelName`-on-a-block hop.
         "crate_resupply": (source: Primitive, scale: 1.0, attribution: None, animations: {}),
     },
     // How far a model's own `cortex` empty may sit from the height scale.ron names for that

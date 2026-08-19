@@ -186,21 +186,51 @@ impl TitanRig {
         )
     }
 
-    /// The same point, but taken **out of the model** instead of computed.
+    /// The same point, but taken **out of the model** — with one of its three components
+    /// overruled.
     ///
     /// A `cortex` empty in a `.glb` is given in the model root's own space — metres above the
-    /// origin between the feet (`docs/models.md`). The rig's cortex hangs under the head, so
-    /// the anchor has to be expressed in the head's frame; in the rest pose the head's origin
-    /// sits at `(0, head_centre_m(), 0)` above the root with no rotation, which makes the
+    /// origin between the feet, +Z backwards once `render::model::MODEL_FACES` has turned the
+    /// drop's frame into the game's (`docs/models.md`). The rig's cortex hangs under the head,
+    /// so the anchor has to be expressed in the head's frame; in the rest pose the head's origin
+    /// sits at `(0, head_centre_m(), 0)` above the root with no rotation, which makes that
     /// conversion a subtraction. [`cortex_in_head`](Self::cortex_in_head) is the same formula
     /// with the rig's own numbers put in.
+    ///
+    /// **And then the depth is clamped to `head_m * 0.5`.** Measured against the drop of
+    /// 2026-08-18, and it is not a matter of taste:
+    ///
+    /// - all 26 full bodies put their `cortex` empty **0.06–0.38 m** behind the neck axis
+    ///   (`a-042-…-mittel.glb`: 0.139 m) — on the skin of a neck about 0.36 m deep, right where
+    ///   their `halswulst` mesh is. The pack's own base rig and its dedicated cortex part
+    ///   (`a-040`, `a-046`) say **0.450 m** instead, the middle of the amber blob. The drop does
+    ///   not agree with itself, so there is no single "what the model says" to obey here.
+    /// - The body a blade has to reach past is **not that neck**. It is this rig's box, and the
+    ///   box does not change when a model is bound — a model is a picture plus anchors, the
+    ///   collider stays `width_fraction * height_m` deep, 2.5 m for a husk. A kill sphere of
+    ///   `cortex_radius_m: 0.55` centred 0.139 m behind that box's axis reaches forward to
+    ///   z −0.41, and `tests/titan.rs::f030_a_bound_model_cannot_drag_the_nape_round_to_the_front`
+    ///   measured what follows: the husk is then cut **from the front**, blade 0.066 m *inside*
+    ///   the cortex. `F-030` is a 🟧 row with red-checked evidence and "the nape is on the back
+    ///   of the neck" is the design's central rule — so it is not the rule that gives way to a
+    ///   modelling detail.
+    ///
+    /// **Why a clamp and not a flat `head_m * 0.5`.** Only one direction can do damage. A model
+    /// that puts its nape *further back* than the rig does — the lurker's body, 1.74 m once it
+    /// is fitted to `large` — only makes the approach angle sharper, and dropping that would be
+    /// the exact defect `F-030` exists to close, moved into another axis. So: **the model
+    /// decides the height and the side, the rig decides the minimum depth.**
+    ///
+    /// The x is the model's untouched: no rule in this game is about left and right, and the
+    /// drop's own x is 0.010–0.028 m, i.e. authoring noise nothing should be re-centred for.
     ///
     /// **Why the rest pose and not the current one:** the cortex is a child of the head and
     /// therefore follows the lean for free through `GlobalTransform`. A conversion through the
     /// *current* pose would apply that lean twice, and the kill zone would drift a little
     /// further out of the head with every degree of wind-up.
     pub fn cortex_in_head_from_model(&self, anchor: Vec3) -> Vec3 {
-        anchor - Vec3::new(0.0, self.head_centre_m(), 0.0)
+        let local = anchor - Vec3::new(0.0, self.head_centre_m(), 0.0);
+        Vec3::new(local.x, local.y, local.z.max(self.head_m * 0.5))
     }
 
     /// Where a shoulder sits **inside the torso's local frame**. `right` is +X, which is the
@@ -481,11 +511,22 @@ pub fn cortex_from_the_model(
         if transform.translation == local {
             continue;
         }
-        info!(
-            "the model's {CORTEX_ANCHOR:?} empty moves the kill zone from {:.2} m to {:.2} m \
-             above the feet (F-030)",
-            rig.cortex_height_m, anchor.y
-        );
+        if local.z > anchor.z + 1e-4 {
+            // One line per titan, not per tick, and it is the line that explains a kill zone
+            // sitting somewhere other than where the modeller put it.
+            info!(
+                "the model's {CORTEX_ANCHOR:?} empty moves the kill zone from {:.2} m to {:.2} m \
+                 above the feet, and its depth of {:.2} m was held back to the rig's {:.2} m — \
+                 the Cortex stays behind the neck (F-030)",
+                rig.cortex_height_m, anchor.y, anchor.z, local.z
+            );
+        } else {
+            info!(
+                "the model's {CORTEX_ANCHOR:?} empty moves the kill zone from {:.2} m to {:.2} m \
+                 above the feet, {:.2} m behind the neck as the model asks (F-030)",
+                rig.cortex_height_m, anchor.y, local.z
+            );
+        }
         transform.translation = local;
     }
 }
