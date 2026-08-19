@@ -1,0 +1,248 @@
+# f025-chain — F-025's own acceptance, and it could not be run until 2026-08-19 because no
+# script verb reached the aim assist. `settings <key> <value>` is that verb.
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/f025-chain.txt --ticks 2400
+#   ./target/debug/defeated_by_titan --headless --script scripts/f025-chain.txt --ticks 2400 >/dev/null 2>&1; echo $?
+#
+# The sentence being tested, verbatim out of the backlog:
+#
+#   "Ein geübter Spieler kann bei aktivem Snap eine Bahn über 5 Wechsel beschleunigen; das
+#    System wählt nie einen Punkt hinter dem Spieler, wenn ein brauchbarer vor ihm liegt."
+#
+# Two halves, two acts, plus a control act that is the whole reason the first one means
+# anything.
+#
+# ## What it is evidence FOR
+#
+#   ACT 1  five hook swaps at 100 % / 100 % accelerate, and every one of them really anchors
+#   ACT 2  the SAME five inputs with the assist at 0 % / 0 % do not — three of five find no
+#          anchor at all and the chain ends on the pavement. This act is the control: without
+#          it "the chain accelerated" is a claim about gravity, not about the assist.
+#   ACT 3  the same anchor, the same spot, the player merely turned around — the assist does
+#          not reach over his shoulder for it.
+#
+# ## ⚠️ `assert rope == 1` on EVERY leg, and that is not decoration
+#
+# A first draft of this file measured a chain of 32 -> 36 -> 42 m/s and it was **a lie**: legs
+# 2 and 3 anchored nothing, the player was in free fall, and `assert speed` rose exactly as it
+# would have with no rope in the game at all (`docs/FINDINGS.md` FIND-103 — a test that asks
+# the screen and the function the same question passes when both are wrong). A control run
+# with the third `hook` line deleted produced the same numbers to three decimals. So: a leg is
+# a leg only if a rope is on it, and every leg here says so.
+#
+# Each leg holds its arm 0.12 s LONGER than the wait before the mark, so the rope is still on
+# at the mark; the 0.15 s afterwards lets the hold expire before the next arm fires. The arms
+# alternate right/left/right/left/right, so `rope == 1` at a mark is the arm fired for THAT
+# leg and not the one before it.
+#
+# ## ⚠️ Ashgate coordinates, and they are only as old as the map
+#
+# `maps.ron: current` is "ashgate" and these are its numbers, measured 2026-08-19 against the
+# working tree of that afternoon: the gantry lane, ten stations at a 35 m pitch along the main
+# street, crossbeam y 56..60, from z = 227.5 down to z = -87.5 (`FIND-041`, `w5-lane.txt`).
+# A graybox-coordinate script fails on this map (`FIND-059`) and this one will fail the day the
+# lane moves — which is the point of it: the numbers below are a measurement, not a wish.
+#
+# ⚠️ **`w5-lane.txt`'s own look angles no longer aim where its header says.** It compensates
+# every shot by ±28° because the side rays used to sit a fixed 28° off the crosshair; since
+# 2026-08-18 `aim_spread_deg` is a CEILING that `vector::aim::effective_spread_rad` resolves
+# per tick and the rays come out far closer to the centre (`FIND-096`). Every `look` in this
+# file therefore aims straight at the target, yaw 0, down the street.
+#
+# Rope only: no Shift, no W, and no Ctrl until ACT 3. `assert gas == 300` at the end of ACT 1
+# and ACT 2 is the proof that every metre per second below came out of the rope and gravity.
+
+wait 1.5
+
+# =====================================================================================
+# ACT 1 — FIVE SWAPS AT FULL SNAP. **The acceptance.**
+# =====================================================================================
+# Measured 2026-08-19 [offlinebot], dropped from the beam line at (0, 58, 257.5):
+#
+#   leg   anchored   speed        height     what it is
+#   1     yes        16.890 m/s   50.862 m   the first arc, released early and high
+#   2     yes        27.467       39.010
+#   3     yes        34.828       27.520
+#   4     yes        39.370       19.084
+#   5     yes        45.232        6.670     7.5x running speed, on zero gas
+#
+# Strictly monotone over five swaps, and the whole 44 m of descent is spent buying it:
+# v²/2 + g·h is 143 + 1017 at leg 1 and 1023 + 133 at leg 5 — the same 1160 J/kg. That is what
+# "accelerate a trajectory" means here, and it is why the rope has to be on: a chain that
+# anchors nothing descends exactly as fast and arrives on the pavement.
+settings assist_catch 100
+settings assist_strength 100
+warp 0 58 257.5
+look 0 0
+wait 0.1
+
+look 0 0
+hook right 0.82
+wait 0.7
+mark f025-snap-leg-1
+assert rope == 1
+assert speed > 6.0            # 16.890 — already 2.8x running speed
+assert speed < 20.0
+assert height > 49.0          # 50.862
+assert height < 53.0
+wait 0.15
+
+look 0 25
+hook left 0.52
+wait 0.4
+mark f025-snap-leg-2
+assert rope == 1
+assert speed > 16.9           # ★ faster than leg 1 measured. 27.467
+assert speed < 32.0
+assert height < 41.0          # 39.010 — and lower than leg 1: the speed is bought with height
+wait 0.15
+
+look 0 30
+hook right 0.52
+wait 0.4
+mark f025-snap-leg-3
+assert rope == 1
+assert speed > 27.4           # ★ faster than leg 2. 34.828
+assert speed < 39.0
+assert height < 30.0          # 27.520
+wait 0.15
+
+look 0 35
+hook left 0.52
+wait 0.4
+mark f025-snap-leg-4
+assert rope == 1
+assert speed > 34.8           # ★ faster than leg 3. 39.370
+assert speed < 44.0
+assert height < 22.0          # 19.084
+wait 0.15
+
+look 0 40
+hook right 0.52
+wait 0.4
+mark f025-snap-leg-5
+assert rope == 1
+assert speed > 39.3           # ★ faster than leg 4. 45.232 = 7.5x running
+assert speed < 50.0
+assert height > 3.0           # 6.670 — still in the air, not a landing
+assert height < 10.0
+assert gas == 300             # not one unit: five swaps on the rope alone
+wait 0.15
+
+# =====================================================================================
+# ACT 2 — THE CONTROL. The same five lines with the assist OFF.
+# =====================================================================================
+# `settings assist_strength 0` is `F-016`'s definition of the absence of the feature — the
+# free ray is the whole answer and `vector::aim` casts no probe at all. Measured, same tree:
+#
+#   leg   anchored   speed        height
+#   1     yes        16.766 m/s   50.964 m   the level shot still hits the beam
+#   2     NO         28.098       38.250     free fall
+#   3     NO         39.799       18.385     free fall
+#   4     yes        27.120        3.000     a rope caught 3 m over the pavement, braking
+#   5     NO         26.628        2.198     on the ground
+#
+# **Three of the five shots find nothing.** The look angles are aimed at where the player will
+# be, not at where the beam is, and free aim answers the crosshair and nothing else. So the
+# rising speed in legs 2 and 3 is gravity, and the chain is over by leg 4.
+#
+# ⚠️ These asserts are green **because free aim fails here**, the same shape as
+# `w5-lane.txt` ACT B. Whoever makes free aim carry this chain has to make this act go red,
+# and that is what it is for.
+settings assist_catch 0
+settings assist_strength 0
+wait 3.2
+warp 0 58 257.5
+look 0 0
+wait 0.1
+
+look 0 0
+hook right 0.82
+wait 0.7
+mark f025-free-leg-1
+assert rope == 1              # the level shot is the one free aim gets
+wait 0.15
+
+look 0 25
+hook left 0.52
+wait 0.4
+mark f025-free-leg-2
+assert rope == 0              # ★ nothing. The 28.098 m/s at this mark is a fall.
+wait 0.15
+
+look 0 30
+hook right 0.52
+wait 0.4
+mark f025-free-leg-3
+assert rope == 0              # ★ nothing again
+wait 0.15
+
+look 0 35
+hook left 0.52
+wait 0.4
+mark f025-free-leg-4
+wait 0.15
+
+look 0 40
+hook right 0.52
+wait 0.4
+mark f025-free-leg-5
+assert rope == 0
+assert height < 4.0           # 2.198 — on the pavement, where ACT 1 was at 6.7 m and climbing
+assert speed < 34.0           # 26.628 against ACT 1's 45.232
+assert gas == 300
+wait 0.15
+
+# =====================================================================================
+# ACT 3 — NEVER A POINT BEHIND YOU. The cheap half, and it is one number twice.
+# =====================================================================================
+# On the boulevard at (150, 2, -60). The wall gallery — a 700 m anchorable ledge at y = 59
+# that projects 14 m out over the boulevard — is 27.6 m away in −Z and 57 m up, so it sits
+# at 64° of elevation from the pavement. Behind him (+Z) stands the town: roofs at 11 m.
+#
+# Two shots from the same tile, both at 100 % / 100 %, both at pitch 64. The only difference
+# is which way he faces. Reeled in for 3 s afterwards, so where he ends up IS the measurement
+# — no assertion here asks the aiming code what it chose:
+#
+#   yaw 0   (gallery ahead)    hooks, reels to **60.746 m**   — the ledge
+#   yaw 180 (gallery behind)   hooks, reels to  **5.723 m**   — a roof in front of his face
+#
+# The 60 m ledge is eight metres behind his back in the second shot and the assist does not
+# take it. That is the acceptance's second half, measured: the catch cone is 20° wide at
+# 100 % (`shared::settings::ASSIST_CATCH_MAX_DEG`), so a point behind the crosshair is not a
+# candidate at all — `tests/vector_hooks.rs::f024_never_a_point_behind_the_player` proves the
+# geometry, and this proves the consequence in the running game.
+#
+# ⚠️ Ctrl is held here, so gas IS spent from this point on. That is why this act is last.
+settings assist_catch 100
+settings assist_strength 100
+wait 3.2
+warp 150 2 -60
+look 0 64
+wait 0.3
+mark f025-ahead-fire
+assert height < 2.0
+hook right 4.0
+wait 0.7
+mark f025-ahead-hooked
+assert rope == 1
+key Ctrl 3.0
+wait 3.3
+mark f025-ahead-reeled
+assert height > 40.0          # 60.746 — the gallery, the usable point that lay ahead
+wait 1.2
+
+warp 150 2 -60
+look 180 64
+wait 0.3
+mark f025-behind-fire
+assert height < 2.0
+hook left 4.0
+wait 0.7
+mark f025-behind-hooked
+assert rope == 1              # it finds something — it just does not find THAT something
+key Ctrl 3.0
+wait 3.3
+mark f025-behind-reeled
+assert height < 20.0          # ★ 5.723. A roof in front of him, not the 60 m ledge behind.
+wait 1.0

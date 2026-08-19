@@ -33,7 +33,7 @@ use crate::mission::{KillTally, MissionPhase};
 use crate::player::{integrator::ground_top_speed_m_s, locomotion::in_flight};
 use crate::shared::{
     MovementState, LookOverride, IntentSystems, Blades, Gas, Health, Hook, LocalPlayer, Mark,
-    PlayerId,
+    PlayerId, PlayerSettings,
     StateClock, WarpPlayer, Cli, Velocity, Tick, TitanId, TitanKindName, TitanState, SpawnTitan,
 };
 use script::{Instruction, ScriptCommand, Metric};
@@ -214,6 +214,13 @@ pub struct DriverWorld<'w, 's> {
     keys: ResMut<'w, ButtonInput<KeyCode>>,
     mouse: ResMut<'w, ButtonInput<MouseButton>>,
     look: ResMut<'w, LookOverride>,
+    /// This machine's preferences — what `settings <key> <value>` moves.
+    ///
+    /// `ResMut` and not `Option<ResMut>`: `menu::MenuPlugin` calls `init_resource` outside its
+    /// window gate, so the resource exists in **every** launch mode including `--headless`. An
+    /// `Option` here would turn a missing resource into a `settings` line that quietly does
+    /// nothing, which is the one failure this driver is built to refuse.
+    settings: ResMut<'w, PlayerSettings>,
     spawn_titan: MessageWriter<'w, SpawnTitan>,
     warp: MessageWriter<'w, WarpPlayer>,
     marks: MessageWriter<'w, Mark>,
@@ -351,6 +358,15 @@ fn run_script(mut run: ResMut<ScriptRun>, tick: Res<Tick>, time: Res<Time<Fixed>
                     error!("{message}");
                     run.failures.push(message);
                 }
+            }
+            // ⚠️ Applied **immediately**, not deferred: `run_script` is in `FixedPreUpdate`
+            // and `vector::aim` reads the settings in `SimulationSystems::World` of the same
+            // tick, so a `settings` line bites on the tick after the line — the same one-tick
+            // latency `look` has. It is logged because a knob nobody can see in the run log is
+            // a knob nobody can tell was set.
+            ScriptCommand::Settings { key, value } => {
+                key.apply(&mut world.settings, value);
+                info!("settings t={} {} = {value}", tick.0, key.key());
             }
             ScriptCommand::End => {
                 run.at = run.plan.len();

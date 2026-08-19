@@ -16,6 +16,7 @@
 //! wait 1.2                    # commands are deferred — otherwise you photograph an empty field
 //! mark eingehakt              # a line in the log to line a screenshot up against
 //! assert speed > 25           # ⭐ the script may judge for itself: if it falls over, it is a test
+//! settings assist_catch 100    # this MACHINE's aim assist, 0..100 % — not a player's
 //! ```
 //!
 //! `assert` is the reason this is more than a demo: it turns a **run** into a test — and
@@ -66,8 +67,59 @@ pub enum ScriptCommand {
     Mark(String),
     /// `assert <metric> <comparison> <value>`
     Assert { metric: Metric, comparison: Comparison, value: f32 },
+    /// `settings <key> <value>` — move one row of this **machine's** [`PlayerSettings`].
+    ///
+    /// ⚠️ **A machine setting and not a player's.** `shared::PlayerSettings` is a `Resource`:
+    /// it is what the person at *this* keyboard has set, and `vector::aim` applies the aim
+    /// assist to `With<LocalPlayer>` only (`docs/FINDINGS.md` FIND-104, `Q-038`). A script line
+    /// therefore changes the local machine's preference — it is **not** addressed at a player
+    /// and there is no way to give two players different knobs from a script. The day the
+    /// knobs travel they move into `Intent` beside `aim_spread_deg`, and this verb grows a
+    /// player argument with them.
+    Settings { key: Setting, value: f32 },
     /// `end` — stop early
     End,
+}
+
+/// Which row of [`PlayerSettings`](crate::shared::PlayerSettings) a `settings` line moves.
+///
+/// **Deliberately only the two aim-assist knobs**, and the reason is the same one
+/// [`Metric`] gives for its own shortness: a key that changes nothing a script can measure is
+/// not a script verb, it is a settings screen. These two are the only fields of
+/// `PlayerSettings` that (a) change what the *simulation* does and (b) have no other route out
+/// of a script — the mouse sensitivity and the FOV are a device and a picture (and `look`
+/// bypasses the first one anyway), and `aim_spread_deg` already reaches the simulation through
+/// `Intent` where a script can read its effect off `ArmAim`.
+///
+/// Both are percentages, `0..100`, and `0` is defined as the absence of the feature
+/// (`F-016`): `settings assist_strength 0` is bit-for-bit the free aim that shipped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Setting {
+    /// `assist_catch` — how far off the crosshair the hook may still catch, 0..100 %.
+    /// 100 % is `shared::settings::ASSIST_CATCH_MAX_DEG` (20°) off the look direction.
+    AssistCatch,
+    /// `assist_strength` — how much better a candidate has to be than the point you are
+    /// really aiming at, 0..100 %. 0 % never snaps (FREI), 100 % needs no margin (SNAP).
+    AssistStrength,
+}
+
+impl Setting {
+    /// The word a script writes.
+    pub fn key(self) -> &'static str {
+        match self {
+            Setting::AssistCatch => "assist_catch",
+            Setting::AssistStrength => "assist_strength",
+        }
+    }
+
+    /// Writes the value into the machine's settings. **One field, one writer** — the driver is
+    /// the only caller, and it runs in `FixedPreUpdate` where the settings screen does not.
+    pub fn apply(self, s: &mut crate::shared::PlayerSettings, value: f32) {
+        match self {
+            Setting::AssistCatch => s.assist_catch_pct = value,
+            Setting::AssistStrength => s.assist_strength_pct = value,
+        }
+    }
 }
 
 /// What an `assert` can measure. Deliberately few and **all of them measurable** — a
@@ -316,13 +368,40 @@ fn parse_line(line: &str) -> Result<ScriptCommand, String> {
                 value: number(t.get(3), "comparison value")?,
             })
         }
+        // The one verb that reaches `shared::PlayerSettings`. Without it the whole aim assist
+        // (`F-016`/`F-024`/`F-025`) was unreachable from every script in the repository, and
+        // `F-025`'s own acceptance — a chain that accelerates over five swaps **with the snap
+        // on** — could not be run at all.
+        "settings" => {
+            let key = match *t.get(1).ok_or("setting key is missing")? {
+                "assist_catch" => Setting::AssistCatch,
+                "assist_strength" => Setting::AssistStrength,
+                other => {
+                    return Err(format!(
+                        "{other:?} is not a setting a script may move — known: \
+                         assist_catch, assist_strength"
+                    ));
+                }
+            };
+            let value = number(t.get(2), "setting value")?;
+            // ⚠️ **Refused, not clamped.** A line that asked for 150 % and silently got 100 %
+            // would leave a run measuring something other than what it says — the same failure
+            // the whole error list above exists to prevent.
+            if !(0.0..=100.0).contains(&value) {
+                return Err(format!(
+                    "{} is a percentage and {value} is outside 0..100",
+                    key.key()
+                ));
+            }
+            Ok(ScriptCommand::Settings { key, value })
+        }
         "end" => Ok(ScriptCommand::End),
         // The list is spelled out and not left to a reader of this file: the error message is
         // the only place a script author finds the vocabulary, and `slash` was invisible for
         // exactly as long as it was missing from here.
         other => Err(format!(
             "unknown command {other:?} — known: \
-             spawn, warp, look, key, hook, slash, wait, mark, assert, end"
+             spawn, warp, look, key, hook, slash, wait, mark, assert, settings, end"
         )),
     }
 }
@@ -545,6 +624,81 @@ assert speed > 25
         // Without it a script cannot switch the overlay into its own screenshot.
         assert_eq!(parse_key("F3"), Ok(KeyCode::F3));
         assert_eq!(parse_key("f3"), Ok(KeyCode::F3));
+    }
+
+    #[test]
+    fn the_settings_verb_reaches_the_two_assist_knobs() {
+        // **The gap `F-025` could not be tested through.** The driver had 46 verbs and none of
+        // them touched `shared::PlayerSettings`, so the whole aim assist was unreachable from
+        // every script in the repository — and its own acceptance ("a chain over 5 swaps with
+        // the snap on") could not be run at all.
+        let a = parse("settings assist_catch 100\nsettings assist_strength 55\n")
+            .expect("`settings` is a verb");
+        assert_eq!(
+            a[0].command,
+            ScriptCommand::Settings { key: Setting::AssistCatch, value: 100.0 }
+        );
+        assert_eq!(
+            a[1].command,
+            ScriptCommand::Settings { key: Setting::AssistStrength, value: 55.0 }
+        );
+    }
+
+    #[test]
+    fn an_unknown_settings_key_is_an_error_and_not_a_line_that_does_nothing() {
+        // The failure mode this whole file exists to prevent: a script line that is quietly
+        // ignored leaves the run green and half of it undone (§6 rule 2's spirit — a missing
+        // value crashes, it does not default).
+        let f = parse("settings assist_agression 100\n").expect_err("that key does not exist");
+        assert!(f[0].reason.contains("not a setting"), "{:?}", f[0].reason);
+        for known in ["assist_catch", "assist_strength"] {
+            assert!(
+                f[0].reason.contains(known),
+                "the error has to list {known:?}: {:?}",
+                f[0].reason
+            );
+        }
+        // And a value outside the slider's own window is refused at PARSE time, not clamped
+        // silently: a script that asked for 150 % and got 100 % measured something other than
+        // what it says.
+        let f = parse("settings assist_catch 150\n").expect_err("150 % is not a percentage");
+        assert!(f[0].reason.contains("0..100"), "{:?}", f[0].reason);
+        let f = parse("settings assist_strength\n").expect_err("the value is missing");
+        assert!(f[0].reason.contains("is missing"), "{:?}", f[0].reason);
+    }
+
+    #[test]
+    fn the_vocabulary_in_the_error_message_lists_settings_too() {
+        // `slash` was invisible for exactly as long as it was missing from that list.
+        let f = parse("setting assist_catch 100\n").expect_err("`setting` is not a command");
+        assert!(f[0].reason.contains("settings"), "{:?}", f[0].reason);
+    }
+
+    #[test]
+    fn a_settings_line_moves_the_field_it_names_and_no_other() {
+        let mut s = knobs_at_zero();
+        Setting::AssistCatch.apply(&mut s, 100.0);
+        assert_eq!(s.assist_catch_pct, 100.0);
+        assert_eq!(s.assist_strength_pct, 0.0, "the other knob may not move");
+        Setting::AssistStrength.apply(&mut s, 100.0);
+        assert_eq!(s.assist_strength_pct, 100.0);
+        // Independent of the code under test: 100 % catch is the 20 deg end stop, and
+        // `assist_is_on` needs BOTH knobs off zero.
+        assert!(s.assist_is_on());
+        assert!((s.assist_catch_deg() - 20.0).abs() < 1e-4);
+    }
+
+    /// A `PlayerSettings` with both knobs at zero, built without `GameData`.
+    fn knobs_at_zero() -> crate::shared::PlayerSettings {
+        crate::shared::PlayerSettings {
+            mouse_deg_per_px: 0.08,
+            invert_y: false,
+            fov_deg: 60.0,
+            aim_spread_deg: 28.0,
+            pitch_limit_deg: 89.0,
+            assist_catch_pct: 0.0,
+            assist_strength_pct: 0.0,
+        }
     }
 
     #[test]
