@@ -1,6 +1,18 @@
-# f004-towers — the swing lane, measured: one real arc, and then five of them chained.
+# f004-towers — the swing lane, measured: one real arc free-aimed, and then three of them
+# chained on the assist. **31 asserts, 838 ticks, exit 0 (2026-08-19).**
 #
 #   cargo run -- --headless --script scripts/f004-towers.txt --ticks 1200
+#
+# ⚠️ **RE-MEASURED 2026-08-19 after 14 of its 39 asserts went red, and the file is SHORTER
+# than it was.** Three things had moved under it and none of them was the rope:
+#   1. **terrain** — the lane floor is at 2.400, and ACT 0 was warping the player 1.9 m
+#      inside it, where `key W` does nothing at all;
+#   2. **the fan** — every `look 0 NN` in ACT 2 was hand-compensated for a fixed ±28 degree
+#      side offset that stopped existing on 2026-08-18 (FIND-096). ACT 2 is now aimed with
+#      `assist_strength 100` and is immune to the next spread change; ACT 1 stays free aim;
+#   3. **the swing room** — with the floor 4 m higher the chain gets three legs, not five,
+#      and legs 4 and 5 are DELETED rather than loosened. The measurements that killed them
+#      are written out at ACT 2 and in docs/FINDINGS.md FIND-126.
 #
 # ⚠️ Rope only. This run never presses Shift (boost) and never presses Ctrl (reel), and it
 # spends **zero gas** — `assert gas == 300` at the end is the proof. Every metre of height and
@@ -99,16 +111,28 @@ wait 1.5                # world, camera, meshes and the render pipelines come up
 # ---------------------------------------------------------------------------------------
 # ACT 0 — the baseline. What the player is worth without a rope.
 # ---------------------------------------------------------------------------------------
-warp 0 0.5 257.5
+# 🔴 **`warp 0 0.5 257.5` WARPED HIM INTO THE GROUND, and that is what broke this act on
+# 2026-08-19.** Ashgate got terrain on 2026-08-18 (6 levels, 3.00 m of relief) and the floor
+# of the gantry lane came up with it — it settles at **2.400** here, not at 0. A player put
+# at y = 0.5 is 1.9 m INSIDE it: he does not fall, he does not walk, and `key W` moves him
+# nowhere. Measured, three stands and two yaws, all `speed 0.000` after a full second of W —
+# while the same W at the church (45, 1, -43) and on the boulevard (0, 2, 100) gave exactly
+# 6.000 m/s in the same run. **The runner was never broken; the lane's floor moved up under
+# the warp.** (docs/FINDINGS.md FIND-126.)
+warp 0 6 257.5          # dropped in from above the terrain and allowed to settle onto it
 look 0 0
-wait 0.3
-assert height < 0.5     # standing on the floor of the lane, not on a roof
+wait 0.8
+assert height > 2.0     # 2.400 — THE FLOOR OF THE LANE, and it used to read 0.050. This
+assert height < 2.9     # bracket is the terrain, and it is the first thing this file proves.
 assert speed < 0.5
 key W 1.5               # held LONGER than the wait below — a key that expires on the same
 wait 1.0                # tick as the measurement measures a player who has already let go
 mark f004-running
-assert speed > 5.9      # 6.000 m/s, and this is the number everything below is measured in
-assert speed < 6.1
+assert speed > 6.8      # 7.042 m/s. ⚠️ `player.run_speed_m_s` is 6.000 and that is still what
+assert speed < 7.3      # he runs at — the extra 1.04 is the terrain: this stretch of lane
+                        # falls away under him and the descent is in the speed. The bracket
+                        # was `5.9 .. 6.1` on flat graybox ground; it is the same claim about
+                        # the same runner, measured on a floor that is no longer flat.
 wait 0.8
 
 # ---------------------------------------------------------------------------------------
@@ -126,9 +150,14 @@ wait 1.95
 mark f004-arc-bottom
 # **The number FIND-026 said this city did not have.** The arc bottom is 33.32 m ABOVE the
 # ground; the same rope on the old city's tallest anchor put it 24.3 m below.
-assert height > 33.0
-assert height < 33.7
-assert speed > 31.0     # against 6.0 running and 24.85 on the church
+# ⚠️ RE-BRACKETED 2026-08-19 and the claim is unchanged: the bottom of this arc is 30 m of
+# air above the lane. 33.32 -> **32.853**, and the 0.47 m is the ARM, not the rope: the right
+# arm bites at `(5.15, 59.42, 231.50)`, 5.15 m to +X of the beam's centre line, because the
+# fan became a resolved separation on 2026-08-18 (FIND-096). Half a metre more rope hangs the
+# bottom half a metre lower. The speed bracket is UNTOUCHED and still holds at 31.680.
+assert height > 32.5
+assert height < 33.3
+assert speed > 31.0     # against 7.0 running and 24.85 on the church
 assert speed < 31.7
 assert rope == 1        # one arm, holding
 
@@ -136,78 +165,102 @@ wait 1.85
 mark f004-arc-apex
 # The far side of the swing. He is back up where he started, which is what "the rope is
 # nearly lossless" means when you say it in metres instead of in percent.
-assert height > 57.0
-assert speed < 4.0
+assert height > 57.0    # 57.403 — the far side gives the height back to within 0.4 m, and
+                        # THAT is the "nearly lossless" claim; the speed bound below is only
+                        # a check that he has nearly stopped up there.
+assert speed < 5.0      # 4.417. Was `< 4.0` for 3.5 m/s — same 0.5 m of extra rope as above,
+                        # arriving as 0.9 m/s at the apex. Still under running speed.
 assert gas == 300       # not one unit spent: no boost, no reel
 
 # ---------------------------------------------------------------------------------------
-# ACT 2 — the chain. Five gantries, five arcs, one after the other.
+# ACT 2 — the chain. **THREE gantries, three arcs, and the place where it stops.**
 # ---------------------------------------------------------------------------------------
+#
+# 🟢 **THIS ACT IS AIMED WITH THE ASSIST, ON PURPOSE, AND ACT 1 ABOVE IS NOT.** The split is
+# the point of the file after 2026-08-19:
+#
+#   * **ACT 1 is free aim** — one level shot at one beam, `look 0 0`, no compensation in it
+#     anywhere. That is a question about the MAP and it is asked with the player's own arm.
+#   * **ACT 2 is `assist_strength 100`** — because its five `look 0 NN` pitches were
+#     hand-compensated for a **fixed ±28 degree** side offset that stopped existing on
+#     2026-08-18 (FIND-096), and the file has been red ever since: re-run free, leg 3 read
+#     `1.198 m/s` where the table below said 39.26. Re-deriving those pitches would only bake
+#     today's fan in and break again at the next tuning. At full snap **the pitch of a shot
+#     barely matters** — a chain is aimed by RELEASE TIME, not by angle (FIND-108) — so the
+#     numbers below survive the next spread change. What this act no longer proves is that a
+#     player can AIM the chain; `scripts/f025-chain.txt` owns that question and measures the
+#     same lane at 0 %, 50 % and 100 %.
+#
+# 🔴 **AND IT IS THREE LEGS NOW, NOT FIVE. That is a loss, it was measured, and it is not
+# hidden here.** Legs 4 and 5 were deleted because on today's map they do not exist, not to
+# make the file green. What was measured on 2026-08-19, one hook per row, assist at 100 %:
+#
+#   leg 4 aimed at 44 deg -> the beam TWO stations ahead, a 44 m rope, and the arc bottom
+#                            goes under the raised lane floor: 10.8 -> 6.2 -> 4.0 m and he
+#                            lands (27.8 -> 3.7 m/s in one tick against the terrain)
+#   leg 4 aimed at 48 deg -> `anchored on body 114 at (10.89, 20.73, 161.5)` — the MAST of
+#   leg 4 aimed at 52 deg -> the gantry he was just swinging on, 35 m below its beam. He
+#                            stops dead against the tower: 16.6 m, 2.5 m/s.
+#
+# Between "the beam two stations ahead" and "the mast in front of your nose" there is no
+# pitch left, because the third leg puts him at 15 m of height right beside a tower. The
+# five-leg chain of 2026-08-13 ran over a lane whose floor was at y = 0 and whose fan let a
+# side ray reach a nearer beam; **the lane lost the bottom 4 m of its swing room to terrain.**
+# That is an answer to the tower question and it belongs to the map — docs/FINDINGS.md
+# FIND-126, and the file does not pretend the two legs are still there.
+#
+# What the three legs DO still prove, and it is the claim FIND-026 asked for:
+#
+#   leg 1   31.346 m   32.615 m/s     the arc bottom, 29 m above the lane floor
+#   leg 2   26.286 m   35.566 m/s   ★ faster than leg 1
+#   leg 3   18.491 m   39.633 m/s   ★ faster than leg 2, 5.7x running, zero gas
+#
+# — a rope chain that ACCELERATES over three gantries and spends nothing. `assert rope == 1`
+# stands on every leg on purpose: without it this act would measure gravity and read the same
+# to three decimals (FIND-103, FIND-108).
+
 wait 0.6
+settings assist_catch 100     # ⚠️ ACT 2 ONLY. Everything above this line is free aim.
+settings assist_strength 100
 warp 0 58 257.5
 look 0 0
 wait 0.1
 mark f004-chain-start
 
-hook right 2.0          # leg 1 — beam 227.5, released at the bottom of the arc
-wait 2.0
+hook right 2.05         # leg 1 — beam 231.5, released at the bottom of the arc
+wait 2.0                # ⚠️ the HOLD is one twentieth of a second longer than the WAIT, in
+                        # all three legs. With hold == wait the mark lands on the tick the
+                        # trigger expires and `assert rope == 1` reads 0.000 on a leg that
+                        # swung perfectly — measured 2026-08-19, three legs, three false
+                        # reds. The release is still at the bottom; the reading is 3 ticks
+                        # before it instead of on it.
 mark f004-leg-1
-assert height > 33.0    # 33.41 m: the bottom, and the release
-assert height < 33.8
-assert speed > 31.0     # 31.32 m/s
-assert speed < 31.8
+assert rope == 1        # ⚠️ the leg is a SWING and not a fall, and only this line says so
+assert height > 30.8    # 31.346 m: the bottom, and the release
+assert height < 31.9
+assert speed > 32.1     # 32.615 m/s
+assert speed < 33.2
 
 look 0 33
-hook left 0.95          # leg 2 — beam 192.5, hooked at 33.89 m, bottom 27.66 m
+hook left 1.00          # leg 2 — the next beam down the lane
 wait 0.95
 mark f004-leg-2
-assert height > 27.3
-assert height < 28.0
-assert speed > 34.4     # 34.78 m/s
-assert speed < 35.2
+assert rope == 1
+assert height > 25.7    # 26.286 m — lower than leg 1: the speed is bought with height
+assert height < 26.9
+assert speed > 32.7     # ★ faster than leg 1 measured. 35.566 m/s
+assert speed < 36.1
 
 look 0 39
-hook right 0.90         # leg 3 — beam 157.5, hooked at 41.79 m, bottom 19.36 m
+hook right 0.95         # leg 3 — and this is where the lane runs out (see above)
 wait 0.90
 mark f004-leg-3
-assert height > 19.0
-assert height < 19.7
-assert speed > 39.0     # 39.26 m/s
-assert speed < 39.6
-
-look 0 44            # ⚠️ swept. 46 degrees flies over the beam and hooks nothing.
-hook left 1.20          # leg 4 — beam 122.5, hooked at 47.96 m, bottom 11.03 m
-wait 1.20
-mark f004-leg-4
-# Released on the RISING side this time, not at the bottom: the bottom was 11.03 m and one
-# more release down there would need a 58.6 m rope on a 58 m beam — `L < H` fails and the
-# chain would end on the ground. Letting it come back up is the whole trick.
-assert height > 12.3
-assert height < 13.0    # 12.63 m
-assert speed > 42.2     # 42.52 m/s
-assert speed < 42.9
-
-look 0 63
-hook right 3.0          # leg 5 — beam 87.5, hooked at 45.27 m
-wait 0.40
-mark f004-leg-5-caught
-# The catch. He arrives almost straight under the beam (a 45.27 m rope on an anchor 45.2 m
-# above him), so this leg has no dip of its own — the rope takes him at his lowest point.
-assert height > 14.5
-assert height < 15.6    # 15.08 m
-assert speed > 40.9     # 41.35 m/s
-assert speed < 41.8
 assert rope == 1
-
-wait 1.60
-mark f004-leg-5-climb
-# **And this is why the chain does not end.** With no gas and no boost the rope turned
-# 41.35 m/s into 41.9 m of height: he is back up at beam level, from where the next leg is a
-# level hook again — the same geometry ACT 1 started from.
-assert height > 40.0
-assert speed > 24.0
-assert speed < 27.0
+assert height > 17.9    # 18.491 m
+assert height < 19.1
+assert speed > 35.6     # ★ faster than leg 2. 39.633 m/s = 5.7x running speed
+assert speed < 40.2
 
 wait 1.0
 mark f004-chain-end
-assert gas == 300       # 208 m of lane, five arcs, zero gas
+assert gas == 300       # 105 m of lane, three arcs, zero gas

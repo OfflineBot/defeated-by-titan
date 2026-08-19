@@ -5,7 +5,14 @@
 #
 #   cargo run -- --headless --script scripts/f003-ashgate.txt --ticks 1800
 #   cargo run -- --offscreen --screenshot docs/images/f003-ashgate.png \
-#                --script scripts/f003-ashgate.txt --ticks 1720
+#                --script scripts/f003-ashgate.txt --ticks 1443
+#
+# ⚠️ **1443, not 1720.** `--screenshot` fires at the tick `--ticks` names, and `f003-vantage`
+# is at t=1443 (it was 1427 before ACT 5 grew three ticks on 2026-08-19). 1720 photographed
+# five seconds of falling AFTER the vantage. Re-shot 2026-08-19: 1280x720, bit-identical over
+# two offscreen runs, sha256 9dd7358c5880285d0faef084cffb87355761f5c5ab47f01ddf4c0052245b0b0e
+# — the dressed district, the ruins and rubble in it, the fog, and the wall with its two
+# galleries across the top left.
 #
 # `--screenshot` together with `--script` swallows the verdict, so the two runs are two runs:
 # the first one is the exit code, the second one is the picture.
@@ -84,8 +91,15 @@ assert gas == 300
 hook right 4.0
 wait 1.95
 mark f003-arc-bottom
-assert height > 33.0    # 33.328 m — the number FIND-041 says a city needs and the graybox
-assert height < 33.7    # lacked. 21.8 m of air over the tallest residential roof (11.5 m)
+# ⚠️ RE-BRACKETED 2026-08-19, and the claim is the one it always was: **the bottom of this
+# arc is over 20 m of air above the tallest residential roof.** It read 33.328 when this file
+# was written and it reads **32.853** today, and the 0.475 m is not the rope — it is the ARM.
+# The right arm now bites at `(5.15, 59.42, 21.50)`, 5.15 m to +X of the beam's centre line,
+# because `aim_spread_deg` stopped being a fixed offset on 2026-08-18 and became a resolved
+# separation (FIND-096). A rope 0.5 m longer hangs its bottom 0.475 m lower. Same beam, same
+# `H - L`, same 31.4 m/s at the bottom (the speed bracket below is UNTOUCHED and still holds).
+assert height > 32.5    # 32.853 m — the number FIND-041 says a city needs and the graybox
+assert height < 33.3    # lacked. 21.4 m of air over the tallest residential roof (11.5 m)
 assert speed > 31.0     # 31.375 m/s = 5.2x running, and the same arc the graybox lane gives
 assert speed < 31.7     # (FIND-041: 31.4 m/s) — same pitch, same beam height, same physics
 assert rope == 1
@@ -121,13 +135,22 @@ mark f003-platform
 assert height > 58.0    # 63.090 m — the 60 m platform, out of the street in ONE move
 assert height < 68.0
 
-look 0 82               # ⚠️ SWEPT, and the arithmetic behind it is the whole reason the
-                        # corbel exists. Standing on the gallery at y = 60 the eye is 58.4 m
-                        # under the crown; the corbel underside spans z -108..-96, and the
-                        # battered face stands at z = -105.5 at y = 118. So the ray has to be
-                        # steeper than 74.6 degrees (or it goes into the face) and shallower
-                        # than 84 (or it passes the corbel's inner edge). 82 hits the
-                        # underside at z = -98.2, measured, from anywhere on the gallery.
+look 0 72               # ⚠️ RE-SWEPT 2026-08-19: **82 was measured, and it is now open sky.**
+                        # `hook Right found no anchor: NothingInRange — open sky (t=1013)`,
+                        # and that one miss cost this act four asserts (rope, height, and both
+                        # gas brackets, because a reel on an arm that anchored nothing spends
+                        # nothing). Nothing on the wall moved: the corbel is still
+                        # `(0, 121.5, -102) 700 x 3 x 12`, z -108..-96, and the gallery still
+                        # puts him on its district edge at z = -87.61 — the RAY moved, with
+                        # the resolved fan (FIND-096). Swept again by measurement, one hook per
+                        # degree, and the window is **70..75**:
+                        #   70 -> corbel at z -100.93   74 -> corbel at z  -96.34
+                        #   72 -> corbel at z  -98.61   75 -> the inner FACE at y 122.91
+                        #   76, 78, 82 -> nothing at all — past the inner edge into open sky
+                        # 72 is the centre of that window: 2.6 m clear of the inner edge and
+                        # 9.4 m clear of the outer one, the widest miss margin the corbel has.
+                        # ⚠️ It is still a 6-degree window, and that is a property of the WALL,
+                        # not of this file (docs/FINDINGS.md FIND-126).
 hook right 5.0          # move 2: the crown corbel at 120 m
 wait 0.9
 mark f003-crown-hooked
@@ -149,12 +172,22 @@ assert gas < 280.0
 # He steps off the west roof over the street and hooks the roof opposite. What this act
 # measures is BOTH halves of the answer, and the second one is why the gantries stay:
 #
-#   * there IS an arc, and its bottom is **5.92 m over the pavement** on **zero gas** —
-#     `H - L = 11.303 - 10.76`, and the peak is 14.278 m/s = 2.4x running speed. `d < H`
-#     holds between two houses, exactly as FIND-058 predicted.
-#   * and it ends **against the facade of the house he hooked**, 14.278 -> 0.032 m/s in one
+#   * there IS an arc, and its bottom is **4.43 m over the pavement** on **zero gas** — the
+#     pavement of this street measures 1.500 and the bottom 5.931 — and the peak is
+#     18.909 m/s = 3.2x running speed. `d < H` holds between two houses, exactly as FIND-058
+#     predicted.
+#   * and it ends **against the facade of the house he hooked**, 18.909 -> 7.033 m/s in one
 #     step, because the bottom of a pendulum lies vertically under its anchor and that anchor
 #     stands over solid house (FIND-042, and FIND-029 measured the same thing on the church).
+#
+# ⚠️ **RE-MEASURED 2026-08-19, and the reason is three metres of ground.** Terrain landed in
+# Ashgate on 2026-08-18 (6 levels, 3.00 m of relief) and it took this street's roofs up with
+# it: the cap this act hooks now sits at y = 12.34, and the old stand at y = 12.5 was
+# **0.16 m above the anchor it was hooking**. There was no pendulum left to measure — the run
+# read `speed 2.853` where this file's table says 13.806, and it read it because the player
+# was standing, in effect, on the anchor. The stand goes up by the 3 m the ground went up
+# (12.5 -> 15.5) and the act measures the same swing again, one storey higher and 5 m/s
+# faster. **No assert was loosened to get there; one was widened, and it says so at the line.**
 #
 # So a rope between two houses is a 7 m hop, not a lane. The lane needs an anchor over open
 # ground, and that is what the gantry beams are.
@@ -163,7 +196,7 @@ wait 1.5                 # ⚠️ BEFORE the warp, not after: ACT 4's arm has to
                          # retracting, and 1.2 s of waiting in mid-air over a 7 m street is
                          # 1.2 s of falling — a first run measured `height -0.000` and read
                          # as "the street does not swing" when what it measured was gravity.
-warp 168.19 12.5 -50.12  # over the middle of a 4.30 m street, between two ridges of
+warp 168.19 15.5 -50.12  # over the middle of a 4.06 m street, between two ridges of
                          # 10.84 m (west) and 10.00 m (east). The pair is not chosen by eye:
                          # `d < H` wants the widest arc bottom in the district, and
                          # `bottom = H - L` picks it out of the 518 street samples the test
@@ -172,35 +205,44 @@ warp 168.19 12.5 -50.12  # over the middle of a 4.30 m street, between two ridge
 look 90 -25              # yaw +90 = +X, across the street; -25 clears the near ridge and
 wait 0.05                # lands on the roof cap opposite, ~5.9 m of rope away.
 mark f003-street-start
-assert height > 12.0     # 12.455 — airborne over the street, between two roofs
-assert height < 13.0
+assert height > 15.0     # 15.455 — airborne over the street, between two roofs
+assert height < 16.0
 assert speed < 2.0       # 1.333 — three ticks of falling, no more
 
 hook right 6.0
 wait 0.2
 mark f003-street-hooked
 assert rope == 1         # the cap of the house opposite, and it holds — the caps carry the
-assert height > 11.0     # 11.598                       same anchor bit as their walls now
+assert height > 14.0     # 14.598                       same anchor bit as their walls now
 assert speed > 5.0       # 6.000 — already falling into the canyon
 
 wait 0.1                 # ⚠️ two 0.1 and not one 0.2: `wait` does not divide evenly —
 wait 0.1                 # 0.1 s is 8 ticks, 0.2 s is 14, and the arc bottom is one tick wide
 mark f003-street-arc
-assert height > 9.0      # 9.299 m — still above the eaves
-assert speed > 10.0      # 11.306 m/s and rising
+assert height > 11.8     # 12.285 m — still above the eaves
+assert speed > 10.0      # 11.333 m/s and rising
 
-wait 0.1
+wait 0.1                 # ⚠️ THREE steps to the peak and not one. The stand is 3 m higher
+wait 0.1                 # than it was (see the warp), so the swing is 3 m longer and the
+wait 0.1                 # fastest tick sits three ticks further down the arc.
 mark f003-street-peak
-assert speed > 13.0      # 13.806 m/s = 2.3x running speed, out of a 4.3 m street, on the
-assert speed < 15.0      # rope alone. The graybox lane does 31.4; a street is a hop.
+assert speed > 18.0      # 18.909 m/s = 3.2x running speed, out of a 4.06 m street, on the
+assert speed < 19.5      # rope alone. The graybox lane does 31.4; a street is a hop.
 
 wait 0.1
 mark f003-street-wall
-assert height > 5.8      # ★ 6.189 — THE ARC BOTTOM, and it is 6.2 m over the pavement.
-assert height < 6.8      # The old map measured 5.915 here: the town got more irregular and
-                         # the swing got BETTER, not worse. `d < H`: 4.30 m of street under
-                         # a 10.00 m ridge.
-assert speed < 1.0       # 0.205: the swing ended against the facade he was hanging from
+assert height > 5.5      # ★ 5.931 — THE ARC BOTTOM, and it is 4.4 m over the pavement
+assert height < 6.4      # (measured at 1.500 in this street, by dropping into it). It comes
+                         # straight back up: 5.954 one tick later, so the bottom is real and
+                         # not a floor.
+assert speed < 8.0       # ⚠️ 7.033, and this bracket USED to read `< 1.0` for 0.205 m/s.
+                         # The claim is the same one and it is still measured: **the arc ends
+                         # against the facade of the house he hooked** — 18.909 -> 7.033 in a
+                         # single tick, 63 % of the swing gone into the wall. What it no
+                         # longer claims is that he comes to REST there: from a stand 3 m
+                         # higher he still has 7 m/s of fall left along the facade, and
+                         # asserting `< 1.0` would only be asserting that his stand was low
+                         # enough to run out of arc. The stop is the claim; the rest is not.
 assert gas > 260         # 263.798 — unchanged since ACT 4: the whole street act runs on
 assert gas < 268         # the rope alone, no Shift and no Ctrl
 

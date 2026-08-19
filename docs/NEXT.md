@@ -1236,3 +1236,64 @@ ones feel wrong.
 The test that proved "the lurker does not chase" was green and blind to it; **writing the script
 found it.** A behaviour test that only measures the thing it switched off cannot see what the
 switch broke next to it.
+
+### §2F — 🔴 a proven claim is contaminated, and the fix is being deliberately withheld
+
+`FIND-123`, 2026-08-19. **One swing kills a warden.** The graze that knocks his hand off the nape
+and the cut that goes into the nape are **the same swing** — `blades::cut::sweep` reports both
+zones from one pass, and `receive_hits` opens the guard on the first and honours the second.
+
+`F-060`'s designed version says the guard opens on a **frontal attack on the arms**, and that is
+**one `matches!` in `receive_hits`**. It was built, it works, and the round **took it back out** —
+because four 🟧 rows (`q030` ×2, `q031`, the `f030` model test) reach the warden's cortex *only*
+because their own torso graze opens him. Landing the correct rule would redden all four, and this
+project does not trade a proven claim for a new feature.
+
+⚠️ **The consequence is worse than the bug: `Q-031`'s 0.15 m nape margin is measured through the
+contaminated path.** That number is what the warden's whole "the nape survives a titan who tracks
+you" claim rests on, and it was taken while a single swing could open and cut in one motion. **It
+has to be re-measured once `F-060` lands properly**, and until then it should be read as an upper
+bound, not a fact.
+
+**What has to happen, in order:** re-aim `q030`/`q031` so they open the guard **explicitly**
+(a separate arm pass) instead of relying on their own torso graze → land `F-060`'s one-line rule →
+re-measure the 0.15 m → then `q031` means what it says. `f060_…` already asserts that an arm cut
+opens him, so the day the rule lands that half is held.
+
+**This is the second time today a proven row turned out to rest on something that moved**
+(`FIND-113` was the first: `F-030` and `F-034`'s scripts had been red for days). Both were found by
+work that had no reason to look. **The pattern is worth a habit: when a round touches a mechanism,
+it should re-run the 🟧 evidence that depends on it, not only its own tests.**
+
+### §2G — ✅ the tower question is answered, and the answer is "they stay"
+
+Measured 2026-08-19 (`FIND-126`), after `scripts/w5-lane.txt` was re-aimed with the snap assist so
+all three acts are compared by one aiming method:
+
+| lane | top speed of a rope-only chain |
+|---|---|
+| the **gantries** | **32.6 m/s** |
+| the wall gallery | 26.6 m/s |
+| the **town roofscape** | **1.35 m/s** — a chain dies standing still after three legs |
+
+**The user's *"es sind random türme da die nicht so sein sollte"* cannot be honoured by deletion.**
+The town does not carry the lane, even now that it is 100 % anchorable with terrain and 18 m
+ridges — the roofscape number is not "worse", it is *nothing*. Removing the gantries returns the
+district to `FIND-026`'s dead rope, which is the state the whole feature exists to prevent.
+
+**So the question changes shape** and it is his to answer:
+1. **Replace them with architecture that holds a 35 m pitch** — the design's own vocabulary has
+   candidates the pack already ships: a **bell tower** (`church` is 35 m in `scale.ron` and is a
+   LANDMARK, not a grid house), a **gatehouse**, a **granary**, `a-095`/`a-096` wall works. A 58 m
+   scaffold reads as game furniture; a 35 m spire reads as a town. **`FIND-041`'s arithmetic is the
+   constraint: a usable arc needs the horizontal gap smaller than the anchor height**, so a 35 m
+   anchor buys roughly a 30 m pitch, not 35.
+2. **Or keep them and make them belong** — dress them as cranes, hoists, wall lifts (`a-099-mauerlift`
+   exists), and they stop being "random towers".
+3. **Or accept a slower district.** The gantry lane at 32.6 m/s is what the movement gate will be
+   judged against; the gallery at 26.6 is the honest fallback.
+
+⚠️ **The lane also lost the bottom 4 m of its swing room to the terrain**, and the gantry chain is
+**3 legs now, not 5**: at 44° leg 4 takes the beam two stations ahead and its arc bottom goes under
+the raised floor; at 48–52° it snaps to the mast of the gantry it is swinging on. So even the
+baseline degraded when Ashgate gained relief — nobody noticed until the file was re-aimed.

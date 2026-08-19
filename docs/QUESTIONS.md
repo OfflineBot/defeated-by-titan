@@ -1308,3 +1308,63 @@ numbers as arguments, so it survives all three answers unchanged.
 The user playing with the knobs and telling us the number he likes. If a *single* number turns out
 to be right for everybody, (2) becomes trivially correct and the question dies. If he wants it
 different per situation, (1) and (3) get interesting.
+
+---
+
+## Q-039 — looking straight down: should the fan collapse, or is "within what it asked for" enough?
+
+**Raised 2026-08-19 by the round that fixed `B-008`.** It is a feel question and the user is the
+only one who can settle it; the mechanical half is already fixed and measured
+(`docs/BUGS.md` B-008, `docs/FINDINGS.md` FIND-121).
+
+### The situation
+
+`F-023` puts the two arms on a fan around the look direction — 11.21° per side at the shipped
+wheel over an Ashgate street. That is a *screen* spread, and it is the same 11.21° at every pitch.
+Looking level it is exactly right: both rays land on the wall you are looking at.
+
+**Looking down it stops meaning anything.** "Left" and "right" of a crosshair that points at your
+own feet are an arbitrary direction, and the world offset the fan buys — `d · sin(11.21°)` — is a
+whole roof at 30 m and two roofs at 60 m. Measured from 30 m over the street at
+`(168.19, ., -50.12)`, straight down, **the two arms landed on the same two roof caps from every
+height**: the pavement the crosshair stood on was unhookable, and nothing said so.
+
+`B-008` fixed the gross half: a side hit further off than `vector.aim_side_coherence_k` × what the
+fan asked for, on a different body, is refused and the arm falls back to the centre. From 30 m the
+two roofs read 1.84× and 1.96× and are now refused — both arms take the pavement.
+
+**But from 60 m they read 1.21× and 1.25×**, and that is *inside* what the fan asked for at 60 m
+(11.7 m per side). So from high enough over a street, looking straight down still hooks the roofs
+beside you. The player's marker shows it, so it is not silent any more — but it is still not
+aimable.
+
+### The three answers
+
+1. **Leave it.** From 60 m the roofs really are what the fan drew, the markers say so, and a
+   player who wants the street can look at it from lower down or narrow the wheel. Cheapest, and
+   it keeps the one thing the spread is good for while diving: catching a roof beside you without
+   looking at it.
+2. **Collapse the fan with pitch.** `effective_spread_rad` gets a sixth input and multiplies the
+   resolved angle by something like `cos(pitch)` past a threshold, so at −90° all three rays are
+   one. Predictable at every height, and it makes "look at it, hook it" true straight down. It
+   costs the diving player the sideways catch, and it is a second knob on a model that already has
+   eleven.
+3. **Tighten `aim_side_coherence_k`.** 1.5 → 1.2 refuses the 60 m case too. One number, no new
+   code — but 1.2 is close to what a wall at 45° of grazing legitimately produces (1.27), so it
+   would start refusing coherent hits on real facades. **Measured, this is the wrong screw.**
+
+**ASSUMPTION the work continues under: (1).** `B-008`'s complaint was *"lands somewhere else in
+silence"*, and the silence and the gross case are both gone — the residue is a 1.2× overshoot that
+the HUD marker shows. (2) is a *feel* change to verified work (`FIND-096`), and rule 5's habit says
+do not change a model nobody has complained about the new behaviour of yet.
+
+**Rollback point if he wants (2):** `src/vector/aim.rs::effective_spread_rad` — one term at the end
+of the function and one key in `game.ron: vector.aim_sep_*`, plus a case in
+`tests/vector_aiming.rs::f023_the_side_ray_sits_at_half_the_wheel_at_every_pitch`, which asserts
+today that the angle is pitch-independent and **would have to be rewritten**. Nothing else reads
+the pitch. If he wants (3) instead it is one number in `game.ron` and no code at all.
+
+### What would settle it
+
+Him flying over Ashgate, looking down at a street from 40–80 m, and saying whether the two arms
+grabbing the roofs beside him reads as *"the game helped me"* or as *"the game ignored me"*.

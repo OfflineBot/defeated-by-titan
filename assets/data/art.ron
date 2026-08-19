@@ -206,9 +206,30 @@
 
         // WOULD BE: 3d/glb/a-024-klingen-paar-neu.glb (a PAIR, authored already in hand
         // position, 2.08 m along Z, matching the body's hand.l/hand.r; -gebrochen is the
-        // broken pair). There is no single-blade file in the drop.
-        // BLOCKER: no blade entity in the player's hands, and — being a pair — it hangs off
-        // the same first/third-person decision as `vanguard`.
+        // broken pair, a-023-klingengriffe the empty grips, and there are ten
+        // a-025-klinge-kosmetik-* skins). There is no single-blade file in the drop.
+        //
+        // BLOCKER, **re-verified 2026-08-19 and it is worse than "no entity yet"**: the blade
+        // is not an object in this game at all. `blades::cut::blade_segment` computes two
+        // points — hand and tip — out of the player's position, look direction and
+        // `gear.ron: blades.reach_m`, casts a capsule between them, and throws them away in
+        // the same tick. There is no entity, no mesh, no transform and nothing for a
+        // `ModelName` to sit on; the only two things in `src/` that insert one are
+        // `render::model::name_the_titans_model` (a titan) and `world::map` (a dressed
+        // block). Switching this row to `Gltf(...)` today would load 2 MB and render nothing —
+        // which is precisely the failure this whole file exists to prevent, and the reason it
+        // stays `Primitive`.
+        //
+        // WHAT WOULD HAVE TO HAPPEN, in order:
+        //  1. a decision on first vs third person (`docs/QUESTIONS.md`) — the camera is a
+        //     CHILD of the local player at eye height, so a pair authored in hand position is
+        //     seen from inside the head. This blocks `vanguard` and `vector_gear` too.
+        //  2. a `blades` (or `render`) system that spawns ONE entity per player carrying the
+        //     pair, parented to the player and offset to the hand.
+        //  3. a swing pose for it. ⚠️ **The pack ships zero animation clips** — measured over
+        //     all 278 files — so `animations: {}` is honest and stays; the blade would swing
+        //     by a hand-written transform curve or not at all. Naming a clip here is a loud
+        //     warning at load, by design.
         "blade":          (source: Primitive, scale: 1.0, attribution: None, animations: {}),
 
         // ---- the three half-timbered houses: the pack is exact, the wiring is one hop short

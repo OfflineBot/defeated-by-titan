@@ -268,6 +268,55 @@ gone`) is now unnecessary; taking it out is that file's job, not this one's.
    handover can be written down — which is why the release sits in `Drive` and not in the system
    that does the teleporting.
 
+#### `B-003` — AMENDED 2026-08-19: not *every* warp, only the ones that lengthen the rope
+
+**The 2026-08-10 fix released every rope on every `warp`, whatever the distance.** Right for the
+case it was written for, wrong for the 35 scripts that use `warp` to put a player somewhere: it
+cost the `F-029` round two runs on a warp that had *shortened* a rope from 62 m to 23 m, and it
+was written down nowhere a script author looks (`docs/FINDINGS.md` FIND-116).
+
+**The rule that replaced it is the joint's own.** `limits = (0, L)` corrects only when the
+distance *exceeds* `L`, so a teleport that leaves the rope no longer than it already is has
+nothing to correct: a warp **toward** the anchor, along it, or onto the same spot **keeps the
+rope**, and the length ratchets down to the distance that now really exists (`B-004`). Only a
+warp that lengthens the rope cuts it. `src/player/rope.rs::warp_keeps_the_rope` is the whole rule
+and all three readers of `WarpPlayer` in that file ask it.
+
+⚠️ **And the other direction has no usable budget — measured, and the first version of the key
+was wrong because of it.** `vector.warp_rope_slack_m` was set to 0.25 m, derived from
+`player.max_substep_m`. Then it was measured on a 9.00 m rope with gravity off:
+
+| excess | drag in one tick | the speed the player leaves at |
+|---|---|---|
+| 0.0000 m | 0.0000 m | 0.000 m/s |
+| 0.0001 m | 0.0024 m | 0.143 m/s |
+| 0.0100 m | 0.2401 m | **14.403 m/s** |
+| 0.0500 m | 1.2001 m | **72.004 m/s** |
+| 0.2500 m | 1.4479 m | **75.000 m/s** = `vector.max_speed_m_s` |
+
+The solver corrects the whole excess inside **one substep**, so it comes back out as a velocity of
+`excess * simulation_hz * substeps` = excess × 1440 /s. **One centimetre is already twice running
+speed.** So the key is a float tolerance and not a distance a player may be moved:
+`0.004 m`, bounded by `<= player.run_speed_m_s / (simulation_hz * substeps)`.
+`max_substep_m` bounds a *position* step and says nothing about a solver impulse — that is what
+the guess was worth, and it is why the table is in `game.ron`.
+
+**Also amended: `attach_ropes` no longer throws the shot away.** A hook that bites in the tick its
+player is warped used to get **no rope at all**; it now measures its length **from the warp
+destination**, which is the spot the player will really be standing on.
+
+- **Tests:** `tests/vector_rope.rs::b003_a_warp_inside_the_rope_length_keeps_the_rope` (★ red
+  first: *"a warp of 0.05 m cut a rope of 9.00 m. The joint had 0.0001 m to correct"* — 0 joints
+  against 1) · `b003_a_warp_past_the_rope_length_still_lets_go` · `b003_the_warp_slack_is_bounded_by_the_files_own_numbers`.
+  The two original `b003_` tests were green before and are green after: their warp is 55 m off a
+  9 m rope.
+- **In the running game:** all eight scripts that `warp` after a `hook`, A/B against one pinned
+  binary with only the two keys different — `f003-ashgate`, `f004-towers`, `f019-hq`, `f025-chain`,
+  `f028-why`, `f029-grapple`, `game-full` **byte-identical**, `w5-lane` different in one anchor
+  (that one is `B-008`'s doing, not this rule's). **No warp in the repository changes its verdict**
+  — every one of them is a teleport that lengthens the rope. The value is for the next script and
+  for the `F-029` case.
+
 ### `B-002` — the mouse only turned the view correctly at exactly 60 fps
 
 **Fixed on 2026-08-10**, test `p3_the_applied_yaw_equals_the_device_motion` was red, is green.
@@ -771,3 +820,82 @@ he is the one who will feel it.
 
 **Related:** `B-003` releases **every** rope on any `warp`, whatever the distance — that cost the
 `F-029` round two runs and is documented nowhere a script author looks.
+
+
+### B-008 — ✅ FIXED 2026-08-19 · the fallback now asks the right question
+
+**`F-028`'s fallback asked *"did this side ray find anything anchorable?"*.** In Ashgate the
+answer is never no — the district is 100 % anchorable and the ground is always under the cone — so
+a side ray that had left the surface the crosshair stands on carried on and bit whatever it met.
+**The question is generalised, not replaced:** *"did this side ray find the thing the crosshair is
+on?"* (`src/vector/aim.rs::side_hit_is_coherent`), answered by the body id first and, for a
+different body, by whether the hit is within `vector.aim_side_coherence_k` × the separation the
+fan itself asked for (`d · sin(half)`).
+
+**Where a downward shot lands now.** 30 m over the street at `(168.19, ., -50.12)`, looking
+straight down, `scripts/b008-down.txt`:
+
+```
+before   hook Left  anchored on body 2154 at 164.53 12.34 -50.44     the roof cap, 11.50 m off
+         hook Right anchored on body 2156 at 172.01 11.50 -50.46     the other one, 10.77 m off
+         assert Height < 6 — measured 11.839          1 of 4 asserts failed, exit 1
+
+after    hook Left  anchored on body 573 at 168.19 1.50 -50.63       the pavement, 0.00 m off
+         hook Right anchored on body 573 at 168.19 1.50 -50.63
+         script run finished: 4 asserts held, 290 ticks              exit 0
+```
+
+The fan is **untouched** — `FIND-096`'s narrowing stands, `side_dirs` still has exactly one
+production caller, and `ArmAim` is still written once, so what the rope flies at and what the
+marker shows is still one number (`F-023`).
+
+- **Tests:** `tests/vector_aiming.rs::b008_a_shot_aimed_straight_down_lands_on_what_the_crosshair_stands_on`
+  (★ red first: *"the Left arm aims at … body 2154 — 11.50 m off a crosshair that stands on body
+  573 and asked for 5.85 m"*; red again with the tolerance set to `f32::INFINITY`) ·
+  `b008_a_side_hit_that_left_the_crosshairs_surface_is_not_a_target` (the predicate against
+  typed-in points).
+- **Measured, and it is why the rule is this one** — the ratio of the real hit to what the fan
+  asked for, from the same spot: level aiming (`-70°`, `-28°`) reads **1.02×** and is kept;
+  straight down from 30 m reads **1.84×** and **1.96×** and is refused; straight down from 15 m
+  reads **1.30×** and **2.34×**.
+
+⚠️ **What it does NOT fix, and it is a feel question → `docs/QUESTIONS.md` Q-039.** Straight down
+from **60 m** the two roofs beside the street sit **1.21×** and **1.25×** off the crosshair — which
+is genuinely inside what the fan asked for at that range — so they are still what the arms take.
+Whether a steep pitch should collapse the fan toward the centre outright is the user's call.
+
+---
+
+## B-009 — a body put inside the terrain is frozen, and nothing in the game says so
+
+**Found 2026-08-19 while repairing `scripts/f004-towers.txt` (`docs/FINDINGS.md` FIND-126).
+Not fixed — this is the write-up, and the repro is four lines.**
+
+Ashgate got terrain on 2026-08-18 and the floor of the gantry lane settles at **2.400**. A
+player placed **below** that surface does not get pushed out, does not fall, does not walk, and
+gets **no log line, no message and no HUD state**. He is simply gone as an actor.
+
+```
+warp 0 0.5 257.5      # the lane floor here is 2.400 — this is 1.9 m INSIDE it
+look 0 0
+key W 1.5
+wait 1.0
+assert speed > 5.9    # measured 0.000  (and `height` reads -0.000, not 0.5)
+```
+
+**Measured, same run, same binary:** `speed 0.000` at three stands (`0/0.5/257.5`,
+`0/0.5/257.5` at yaw 90, `6/0.5/250`) — and **6.000 m/s** at the church (`45, 1, -43`) and on
+the boulevard (`0, 2, 100`). Dropped in from `y = 20` at the same spot he lands at 4.780 and
+runs normally. **The runner is fine; the placement is not, and the silence is the bug.**
+
+**Why it matters beyond a debug verb:** `warp` is a script verb, but a spawn point, a mission
+deploy position or a respawn is the same operation with the same failure mode, and the symptom
+a player would report is *"I could not move"* with nothing in the log to find. `B-007`'s lesson
+applies exactly: **the failure is not the geometry, it is that nothing says so.**
+
+**What a fix would have to decide** (not mine — `src/**` belongs to another agent this round):
+whether a body found under the surface is lifted to it, refused with an error, or logged once —
+and the script verb `warp` is the cheapest place to make it loud.
+
+**Evidence:** `docs/FINDINGS.md` FIND-126 §2 · `scripts/f004-towers.txt` ACT 0, which now warps
+in from `y = 6` and asserts the floor at `2.0 .. 2.9` as a terrain fact of its own.

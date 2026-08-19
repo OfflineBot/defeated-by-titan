@@ -15,7 +15,8 @@
 #   t=777   cut titan 3 Cortex at 30.33 m/s   -> 2/3
 #   t=898   cut titan 4 Cortex at 30.33 m/s   -> 3/3
 #   t=898   MISSION WON (decided_at_tick 898, deadline 19 800) — 3/3 kills, health 100
-#   headless: 23 asserts held, 1200 ticks, exit 0
+#   headless: 24 asserts held, 1200 ticks, exit 0  (23 until 2026-08-19; the 24th is the
+#             invocation guard at line 95 and it is an ADDED claim, not a changed one)
 #
 # ⚠️ **THE MAP CHANGED UNDER THIS FILE ON 2026-08-12 AND IT WAS RE-AIMED, NOT LOOSENED.**
 # `maps.ron: current` is `"ashgate"`; the graybox watchtower ACT 1 hooked and the lot ACT 4
@@ -78,6 +79,22 @@
 
 wait 1.5          # world, camera, meshes and the render pipelines come up (90 ticks)
 key F3 0.05       # the overlay carries pos, tick, phase and kills into the PNG
+
+# ***** THE INVOCATION GUARD — read this before you believe a red run of this file *****
+#
+# 🔴 **`--mission tutorial` is not optional here, and without it this file reports `10 of 23
+# asserts failed` while NOTHING is wrong with the game.** Measured 2026-08-19 against one
+# pinned binary: with the flag, 23 of 23 held and `MISSION WON at tick 899`; without it the
+# identical run cut the same three napes at the same ticks (653/657, 774/778, 895/899) and
+# failed exactly the ten `kills`/`phase` asserts, because with no mission loaded there is no
+# tally to read and `Phase` reads 0. The flight, the map, the aiming and the roster were all
+# innocent — the command line was short one flag.
+#
+# The assert below is that trap made loud: it fires at line 95 instead of at line 292, and its
+# message is the diagnosis. `Phase == 2` is `Active` (0 Briefing 1 Deploying 2 Active 3 Won
+# 4 Lost) and the tutorial is Active from tick 1.
+assert phase == 2 # ⚠️ RUN THIS AS `--headless --mission tutorial`. A 0.000 here means the
+                  # mission never loaded and every kills/phase assert below is meaningless.
 
 # =========================================================================================
 # ACT 1 — the flight. Hook a landmark, reel, and be moving faster than the design assumes.

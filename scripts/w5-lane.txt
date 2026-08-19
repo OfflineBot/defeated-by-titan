@@ -25,20 +25,33 @@
 #   ACT B  the town roofscape       — houses only, no gantry. **It does not carry it.**
 #   ACT C  the wall gallery         — the one town shape that does, and why
 #
-# ## ⚠️ THE AIM IS NOT WHAT IT WAS — `F-023` put a 28° spread on both hooks
+# ## ⚠️ 🟢 THE AIM: **this whole file is fired with the snap assist, and that is deliberate**
 #
-# `assets/data/game.ron: vector.aim_spread_deg` is 28 and `src/vector/aim.rs::side_angle_rad`
-# reads it as a **full** angle, so the right hook flies 28° right of the crosshair and the left
-# hook 28° left. Every `look` line in this file is therefore yawed **away** from the target by
-# 28° in the hand's direction, and the pitch is raised to compensate: the ray's elevation is
-# `asin(sin(pitch) · cos 28°)`, so a 33° shot needs `pitch 38.1`.
+# `settings assist_catch 100` / `settings assist_strength 100` stand at the top of the run.
+# Two reasons, and the second one is the important one:
 #
-# **Two consequences that are not obvious and cost a round to find:**
-#   * `scripts/f004-towers.txt` still says `look 0 0` and is **16 of 39 red** today. Its hooks
-#     go 13.8 m sideways into the gantry LEGS (which are anchorable since the 100 % flip) and
-#     the chain stops dead at 0.9 m/s. Nothing is wrong with the map or with the rope.
-#   * **No side ray can point more than 62° above the horizon** (`asin(cos 28°)`). `f004`'s
-#     leg 5 asked for 63° and is unaimable as written. This file's ACT A leg 5 uses 60.
+# 1. **The old aim broke.** Every `look` line in this file used to be yawed ±28° away from its
+#    target with the pitch raised by `asin(sin(pitch)·cos 28°)` to compensate, because
+#    `vector.aim_spread_deg` was a **fixed** side offset. On 2026-08-18 it stopped being fixed
+#    — it is a resolved separation in metres now, state- and distance-dependent (FIND-096) —
+#    and the compensation started pointing the shots into nothing. Re-run on 2026-08-19 the
+#    file was **19 of 51 red**, and its ACT A leg 3 measured **1.202 m/s** where the table
+#    below says 39.250. Re-deriving the angles would bake today's fan in and break again at
+#    the next tuning.
+# 2. **This file compares three SHAPES of map, and a comparison is only worth something if all
+#    three are aimed the same way.** At full snap the pitch of a shot barely matters — 20° to
+#    50° picks the same anchor, a chain is aimed by RELEASE TIME (FIND-108) — so what separates
+#    the gantry lane from the roofscape from the gallery below is the geometry and nothing
+#    else. It also gives the roofscape its **best** shot: ACT B's verdict is now "even with the
+#    snap picking the anchor for him, the town does not carry a lane."
+#
+# ⚠️ What this file therefore does NOT measure is whether a player can aim these shots freely.
+# `scripts/f025-chain.txt` owns that question (0 %, 50 % and 100 % over the same lane) and
+# `scripts/f004-towers.txt` keeps one free-aimed arc for it.
+#
+# ⚠️ And the ground moved too: Ashgate got terrain on 2026-08-18 and the lane floor is at
+# **2.400**, the town terrace at **3.000**. Heights in this file are absolute world y, so
+# every one of them is read against a floor that is no longer 0.
 #
 # =====================================================================================
 # ACT A — THE GANTRY LANE, re-aimed. The baseline every other act is read against.
@@ -48,84 +61,75 @@
 # `L < H`, and since `L ≥ d` the gap to the next anchor must be smaller than the anchor's
 # height. **58 m of anchor is what buys a 35 m pitch.**
 #
-# Measured [offlinebot, 2026-08-13] against the numbers `f004-towers.txt` has carried since it
-# was written — same beams, same holds, only the aim corrected for the spread:
+# Measured [offlinebot] three times over, and the third column is what the lane gives today:
 #
-#   leg           f004 (2026-08-12)      here (2026-08-13)
-#   arc bottom    33.41 m / 31.32 m/s    33.456 / 31.296
-#   leg 2         27.66 m / 34.78 m/s    27.745 / 34.738
-#   leg 3         19.36 m / 39.26 m/s    19.371 / 39.250
-#   leg 4         12.63 m / 42.52 m/s    12.210 / 42.722
-#   leg 5 caught  15.08 m / 41.35 m/s    14.142 / 41.806
+#   leg           f004 (2026-08-12)   spread-aimed (08-13)   snap-aimed (2026-08-19)
+#   arc bottom    33.41 m / 31.32     33.456 / 31.296        31.346 / 32.615
+#   leg 2         27.66 m / 34.78     27.745 / 34.738        26.286 / 35.566
+#   leg 3         19.36 m / 39.26     19.371 / 39.250        18.491 / 39.633
+#   leg 4         12.63 m / 42.52     12.210 / 42.722        — gone, see below
+#   leg 5 caught  15.08 m / 41.35     14.142 / 41.806        — gone, see below
 #
-# **208 m of chained swinging in 7.05 s = 29.5 m/s = 4.9x running, peak 42.7 m/s (7.1x), and
-# not one unit of gas.** The lane is intact; only the aim had moved.
+# **105 m of chained swinging in 3.95 s = 26.6 m/s = 4.4x running, peak 39.6 m/s (6.6x), and
+# not one unit of gas.** The lane still accelerates and it is four metres shorter in the
+# vertical than it was: the terrain of 2026-08-18 took the bottom of its swing room away, and
+# that is what cost legs 4 and 5. **43 asserts, 1330 ticks, exit 0 (2026-08-19).**
 
 wait 1.5
+settings assist_catch 100
+settings assist_strength 100
 
 warp 0 58 257.5
-look 28 0
+look 0 0
 wait 0.1
 mark w5-gantry-start
 assert height > 57.5
 assert speed < 3.0
 
-hook right 2.0
+# ⚠️ Every leg's HOLD is 0.05 s longer than its WAIT. With hold == wait the mark lands on the
+# tick the trigger expires and `assert rope == 1` reads 0.000 on a leg that swung perfectly —
+# measured 2026-08-19, three legs, three false reds. The release is still at the bottom.
+hook right 2.05
 wait 2.0
 mark w5-gantry-leg-1
-# The bottom of the first arc: 33.46 m ABOVE the ground and 22 m above the residential roofs.
-assert height > 33.0
-assert height < 34.0
-assert speed > 30.8
-assert speed < 31.8
+# The bottom of the first arc: 31.35 m ABOVE the ground and 19 m above the residential roofs.
+assert rope == 1
+assert height > 30.8
+assert height < 31.9
+assert speed > 32.1
+assert speed < 33.2
 
-look -28 38.1
-hook left 0.95
+look 0 33
+hook left 1.00
 wait 0.95
 mark w5-gantry-leg-2
-assert height > 27.3
-assert height < 28.2
-assert speed > 34.3
-assert speed < 35.2
+assert rope == 1
+assert height > 25.7
+assert height < 26.9
+assert speed > 32.7     # ★ faster than leg 1
+assert speed < 36.1
 
-look 28 45.5
-hook right 0.90
+look 0 39
+hook right 0.95
 wait 0.90
 mark w5-gantry-leg-3
-assert height > 19.0
-assert height < 19.8
-assert speed > 38.8
-assert speed < 39.7
-
-look -28 51.9
-hook left 1.20
-wait 1.20
-mark w5-gantry-leg-4
-# Released on the RISING side: the bottom was 11 m, and one more release down there would need
-# a 58.6 m rope on a 58 m beam — `L < H` fails and the chain would end on the pavement.
-assert height > 11.8
-assert height < 12.7
-assert speed > 42.2
-assert speed < 43.2
-
-look 28 60
-hook right 3.0
-wait 0.40
-mark w5-gantry-leg-5-caught
-assert height > 13.7
-assert height < 14.6
-assert speed > 41.3
-assert speed < 42.3
-
-wait 1.6
-mark w5-gantry-leg-5-climb
-# **This is why the chain does not end.** With no gas the rope turns 41.8 m/s back into height:
-# he is at 38 m again, from where the next leg is the level hook ACT A started with.
-assert height > 37.8
-assert height < 38.8
-assert speed > 18.5
-assert speed < 19.5
+assert rope == 1
+assert height > 17.9
+assert height < 19.1
+assert speed > 35.6     # ★ faster than leg 2 — 39.633 m/s, 5.7x running, on no gas at all
+assert speed < 40.2
 assert gas == 300
+
+# 🔴 **THREE LEGS, NOT FIVE, AND THE TWO THAT ARE GONE ARE THE ANSWER TO THE TOWER QUESTION.**
+# Legs 4 and 5 were measured out of existence on 2026-08-19, not loosened away: aimed at 44°
+# the fourth leg takes the beam two stations ahead, and its arc bottom now goes UNDER the
+# raised lane floor (10.8 -> 6.2 -> 4.0 m, then 27.8 -> 3.7 m/s against the terrain); aimed at
+# 48° or 52° it snaps to the MAST of the gantry he is swinging on (`body 114 at (10.89, 20.73,
+# 161.50)`) and stops dead at 2.5 m/s. Between "two stations ahead" and "the mast in front of
+# your nose" there is no pitch left, because leg 3 puts him at 18 m of height beside a tower.
+# **The lane lost the bottom four metres of its swing room to terrain**, and with them the
+# 208 m five-arc chain of 2026-08-13. What is left is 105 m and it still ACCELERATES:
+# 32.6 -> 35.6 -> 39.6 m/s on zero gas. -> docs/FINDINGS.md FIND-126.
 
 # =====================================================================================
 # ACT B — THE TOWN ROOFSCAPE, houses only. **It does not carry the lane.**
@@ -142,14 +146,22 @@ assert gas == 300
 #
 # Five legs, each one aimed at a roof the rake actually found, each one dying:
 #
-#   fire at 15.8 m -> caught at 9.2 m, 0.33 m/s     (the wall of the house at z = 248)
-#   fire at  9.0 m -> caught at 7.3 m, 0.33 m/s
-#   fire at  7.1 m -> caught at 5.4 m, 0.33 m/s
-#   fire at  5.2 m -> caught at 3.6 m, 0.33 m/s
-#   fire at  3.4 m -> standing at 3.0 m, 0.00 m/s
+#   fire at 15.8 m -> caught at 5.87 m, 1.35 m/s    (the wall of the house at z = 238)
+#   fire at  5.9 m -> caught at 4.22 m, 1.05 m/s
+#   fire at  4.2 m -> standing at 3.00 m, 0.00 m/s
+#   leg 4          -> standing at 3.00 m, 0.00 m/s   — the hook lands, nothing moves
+#   leg 5          -> standing at 3.00 m, 0.00 m/s
 #
-# **Net advance: about 2 m in 11 s. Top speed 3.0 m/s — half of running (6.0).** Against the
-# gantry lane's 29.5 m/s that is not a slower lane, it is no lane.
+# **Net advance: about 2 m in 11 s. Top speed 1.35 m/s — a fifth of running (6.0).** Against
+# the gantry lane's 39.6 m/s that is not a slower lane, it is no lane.
+#
+# ⚠️ **RE-MEASURED 2026-08-19 with the snap doing the aiming, and it got WORSE, not better.**
+# The old numbers were 9.2 / 7.3 / 5.4 / 3.6 m at 0.33 m/s; with `assist_strength 100`
+# choosing the anchor for him he is standing still on the terrace after **three** legs instead
+# of five. Every one of the five hooks anchors — the roofs are anchorable — and three of them
+# move him not at all. `assert speed < 5.0` is the same claim it always was; the brackets under
+# it moved down because the town got deader, and a bound that moves DOWN on a claim of death
+# is not a loosened bound.
 #
 # ⚠️ The asserts below are green **because the lane is dead**. Whoever gives the district a
 # shape that swings has to make ACT B go red, and that is the point of it.
@@ -160,7 +172,7 @@ assert gas == 300
 # hold has expired.
 wait 1.6
 warp 30 16 250
-look 34.93 -40.43
+look 0 -35
 wait 0.1
 mark w5-town-1-fire
 assert height > 15.4
@@ -168,35 +180,35 @@ assert height < 16.3
 hook right 2.2
 wait 2.2
 mark w5-town-1-end
-assert height > 8.8
-assert height < 9.7
+assert height > 5.4     # 5.868
+assert height < 6.4
 assert speed < 5.0
 
-look -36.01 -42.98
+look 0 -37
 hook left 2.2
 wait 2.2
 mark w5-town-2-end
-assert height > 6.9
-assert height < 7.8
+assert height > 3.8     # 4.222
+assert height < 4.8
 assert speed < 5.0
 
-look 38.69 -48.41
+look 0 -40
 hook right 2.2
 wait 2.2
 mark w5-town-3-end
-assert height > 5.0
-assert height < 5.9
+assert height > 2.6     # 3.000 — the terrace, and he does not leave it again
+assert height < 3.5
 assert speed < 5.0
 
-look -32.55 -33.6
+look 0 -33
 hook left 2.4
 wait 2.4
 mark w5-town-4-end
-assert height > 3.2
-assert height < 4.4
+assert height > 2.6     # 3.000
+assert height < 3.5
 assert speed < 5.0
 
-look 31.48 -29.74
+look 0 -30
 hook right 2.6
 wait 2.6
 mark w5-town-5-end
@@ -220,11 +232,21 @@ assert gas == 300
 # One leg, fired from beside the rail and not from on top of it (standing on it, the rope holds
 # you where you stand and nothing falls — measured: height 60.000, speed 0.000, five legs long):
 #
-#   anchor (114.95, 58.82, −87.61), rope 35.85 m -> **arc bottom 23.23 m at 37.80 m/s**
+#   anchor (130.67, 58.10, −87.61), rope 19.4 m -> **arc bottom 41.27 m at 26.57 m/s**
 #
-# **That is a deeper arc and 21 % more speed than the gantry's first leg** (33.46 m / 31.30 m/s)
-# out of an anchor one metre taller — because the rail lets the rope be 35.85 m where the beam's
-# 35 m pitch only allowed 26.
+# ⚠️ **RE-MEASURED 2026-08-19 under the snap, and one sentence of this act's claim did not
+# survive.** It used to read *"a deeper arc and 21 % more speed than the gantry's first leg"*
+# off a 35.85 m rope to (114.95, 58.82, −87.61). The snap does not reach that far along the
+# rail — it takes the point the crosshair is nearest, 19.4 m away — so the arc is shallower and
+# **26.57 m/s is 19 % SLOWER than the gantry's 32.62, not 21 % faster.** The comparison the act
+# exists for is untouched and the ranking is unchanged: **gantry 32.6 · gallery 26.6 · town
+# roofscape 1.35.** The gallery is still the one shape in this district that is not a gantry
+# and still swings, and its arc bottom is still 41 m of air over the boulevard rather than a
+# facade. What is gone is the claim that it BEATS the gantry.
+#
+# ⚠️ And do not aim it further along the rail to get the old rope back: swept at yaw 85, 89 and
+# 92 the snap reaches 160 m down the wall, the rope outgrows the anchor height, and all three
+# legs end on the boulevard at 46–47 m/s. `L < H` again.
 #
 # ⚠️ It is at the district's edge, not through it, and chaining it past the second leg runs the
 # aim into the wall face behind the rail (which is anchorable since the 100 % flip). What ACT C
@@ -232,18 +254,19 @@ assert gas == 300
 
 wait 0.6
 warp 150 59 -80
-look 105.78 -2.9
+look 77.8 -2.6
 wait 0.1
 mark w5-gallery-start
 assert height > 58.4
 assert height < 59.3
 
-hook right 2.2
+hook right 2.25
 wait 2.2
 mark w5-gallery-leg-1
-assert height > 22.8
-assert height < 23.7
-assert speed > 37.3
-assert speed < 38.3
+assert rope == 1        # ⚠️ the leg is a SWING and not a fall, and only this line says so
+assert height > 40.7    # 41.268 — the bottom, over the boulevard and not inside a house
+assert height < 41.8
+assert speed > 26.0     # 26.568
+assert speed < 27.1
 assert gas == 300
 end
