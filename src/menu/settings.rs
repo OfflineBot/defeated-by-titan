@@ -50,7 +50,7 @@
 
 use bevy::prelude::*;
 
-use super::{plate, PauseElement, Screen};
+use super::{plate, PauseElement, Screen, SettingsFrom};
 use crate::data::GameData;
 use crate::shared::settings::{
     ASSIST_CATCH_MAX_DEG, ASSIST_MAX_PCT, ASSIST_MIN_PCT, FOV_MAX_DEG, FOV_MIN_DEG,
@@ -92,7 +92,9 @@ pub enum SettingsAction {
     AssistCatch(Nudge),
     /// `F-016` / `F-024` — how hard it pulls once it has a candidate. 0 % is free aim.
     AssistStrength(Nudge),
-    /// Back to the pause screen — the same place `Esc` goes.
+    /// Back to the screen the options were opened from — the same place `Esc` goes, and
+    /// since 2026-08-19 that is a recorded answer ([`SettingsFrom`]) rather than a constant:
+    /// the title screen opens the options too.
     Back,
 }
 
@@ -258,6 +260,7 @@ fn toggle_row(screen: &mut ChildSpawnerCommands, label: &str, on: bool) {
 pub fn settings_buttons(
     buttons: Query<(&Interaction, &SettingsAction)>,
     data: Res<GameData>,
+    back: Res<SettingsFrom>,
     mut settings: ResMut<PlayerSettings>,
     mut screen: ResMut<Screen>,
 ) {
@@ -295,7 +298,7 @@ pub fn settings_buttons(
                 settings.nudge_assist_strength(n.steps());
                 info!("aim assist strength = {:.0} %", settings.assist_strength_pct);
             }
-            SettingsAction::Back => *screen = Screen::Paused,
+            SettingsAction::Back => *screen = back.0,
         }
     }
 }

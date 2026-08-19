@@ -32,6 +32,16 @@ pub struct Cli {
     /// lobby in der man die mission starten kann"* — a front door you have to ask for is not a
     /// front door. [`hub_by_default`] is the whole rule and [`Cli::no_hub`] is the way back.
     pub hub: bool,
+    /// **This run opens on the title screen** — the game's name, *New Game*, *Settings*,
+    /// *Quit* — and the world behind it stands still until something is picked
+    /// (`menu::Screen::Title`).
+    ///
+    /// ⚠️ **No flag sets this.** It is derived, and only from what was *not* said: a command
+    /// line that names any door at all has already answered the question the title screen asks,
+    /// so `--hub`, `--mission`, `--sandbox`, `--no-hub` and `--script` each go straight through
+    /// it ([`title_by_default`]). `--hub` is therefore the way to skip the front door, and it is
+    /// the flag `scripts/f070-hub.txt` already uses.
+    pub title: bool,
     /// `--no-hub`: **the old behaviour** — start in `Briefing`, an empty session with no hub
     /// furniture and no live trigger volumes. What every `--script` run gets anyway.
     pub no_hub: bool,
@@ -125,7 +135,13 @@ impl Cli {
         if script_forces_headless(s.script.is_some(), s.offscreen, has_display()) {
             s.headless = true;
         }
-        // **The front door.** A run that names no other door starts in the hub.
+        // **The front door, and it is a screen before it is a place.** Asked BEFORE the line
+        // below, because that one sets `s.hub` itself and would make "did he say `--hub`?"
+        // unanswerable one statement later.
+        if title_by_default(s.no_hub, s.mission.is_some(), s.sandbox, s.script.is_some(), s.hub) {
+            s.title = true;
+        }
+        // **And the place behind it.** A run that names no other door starts in the hub.
         if hub_by_default(s.no_hub, s.mission.is_some(), s.sandbox, s.script.is_some()) {
             s.hub = true;
         }
@@ -168,6 +184,41 @@ impl Cli {
 /// [`Cli::no_hub`] turns it off explicitly for the case none of the three covers.
 fn hub_by_default(no_hub: bool, has_mission: bool, sandbox: bool, has_script: bool) -> bool {
     !no_hub && !has_mission && !sandbox && !has_script
+}
+
+/// Whether a run opens on **the title screen** — the game's name, *New Game*, *Settings*,
+/// *Quit*, and the world standing still behind it.
+///
+/// > *„gibt es ein hauptmenü?"* — the user, 2026-08-19. There was not one: a flagless
+/// > `cargo run` walked into the hub and that was the whole launch.
+///
+/// **The rule is "he named no door at all"**, which is one condition stricter than
+/// [`hub_by_default`] — the title is the screen you get *instead* of a decision, so any flag
+/// that already makes the decision walks past it:
+///
+/// - `--hub` **names the hub**, and this is the one difference to [`hub_by_default`]: that
+///   function cannot tell "he said `--hub`" from "he said nothing", because both end in the
+///   hub. Here it matters, and it is what `scripts/f070-hub.txt` relies on — it asks for the
+///   hub and must not land in a menu;
+/// - `--mission <name>` and `--sandbox` name their own door, exactly as above;
+/// - 🔴 **`--script <file>`, and it is load-bearing for the same reason it is there.** All 35
+///   scripts in `scripts/` are the evidence corpus of this project; a script run that stopped
+///   at a title screen would freeze `Time<Virtual>` the moment a window existed and assert
+///   against a game that never started. A script run therefore never sees the title, and
+///   `f070-hub.txt` — the one script that *asks* for the hub — is covered twice over;
+/// - [`Cli::no_hub`] is the explicit "no front door" for the case none of the four covers.
+///
+/// ⚠️ **No flag turns the title on.** There is deliberately no `--title`: the flagless launch is
+/// the one that has it, and a flag would be a second answer to a question the absence of flags
+/// already answers.
+fn title_by_default(
+    no_hub: bool,
+    has_mission: bool,
+    sandbox: bool,
+    has_script: bool,
+    hub: bool,
+) -> bool {
+    !no_hub && !has_mission && !sandbox && !has_script && !hub
 }
 
 /// Whether a script run is quietly switched over to `--headless`.
@@ -276,17 +327,56 @@ mod tests {
         assert!(s.unknown.iter().any(|u| u.contains("not a number")));
     }
 
-    /// ⚠️ **`Cli::default()` and "no arguments" stopped being the same thing on 2026-08-13.**
+    /// ⚠️ **`Cli::default()` and "no arguments" stopped being the same thing on 2026-08-13**,
+    /// and they moved one field further apart on 2026-08-19.
     ///
-    /// `hub` is now derived from what was *not* said, so a flagless command line differs from
-    /// the struct default in exactly one field — and that difference is the front door. The
-    /// struct default stays as it was on purpose: every test in this repository builds its
-    /// `Cli` with `..default()`, and a default that started a hub would have moved several
-    /// hundred of them into a world with live trigger volumes in it.
+    /// `hub` and `title` are both derived from what was *not* said, so a flagless command line
+    /// differs from the struct default in exactly those two fields — and the pair of them is the
+    /// front door: the title screen you see, and the hub standing behind it. The struct default
+    /// stays as it was on purpose: every test in this repository builds its `Cli` with
+    /// `..default()`, and a default that opened a menu would have parked several hundred of them
+    /// in front of a plate with the clock stopped.
     #[test]
     fn empty_args_yield_the_defaults_except_the_front_door() {
-        assert_eq!(parse(&[]), Cli { hub: true, ..Cli::default() });
+        assert_eq!(parse(&[]), Cli { hub: true, title: true, ..Cli::default() });
         assert!(!Cli::default().hub, "the struct default stays Briefing — the tests live on it");
+        assert!(!Cli::default().title, "…and it opens no menu, for exactly the same reason");
+    }
+
+    /// ★ **The front door is a screen now** (`UI-001`, 2026-08-19).
+    ///
+    /// > *„gibt es ein hauptmenü?"* — the user. A flagless run stops at the title screen; a run
+    /// that named any door at all walks straight past it, and **that is what leaves all 35
+    /// scripts in `scripts/` running exactly as they did.**
+    #[test]
+    fn a_launch_that_names_no_door_opens_the_title_screen() {
+        assert!(parse(&[]).title, "a plain `cargo run` has to show the game's name first");
+        assert!(parse(&["--headless", "--ticks", "240"]).title, "--headless is not a door");
+        assert!(
+            parse(&[]).hub,
+            "the title did not replace the hub — it stands in front of it, and *New Game* is \
+             the release rather than a second boot path"
+        );
+
+        assert!(!parse(&["--hub"]).title, "--hub names the hub and walks past the menu");
+        assert!(parse(&["--hub"]).hub, "…and still lands there");
+        assert!(!parse(&["--mission", "tutorial"]).title, "a named mission is its own door");
+        assert!(!parse(&["--sandbox"]).title, "the sandbox is not a menu either");
+        assert!(!parse(&["--no-hub"]).title, "--no-hub is the way back to the old behaviour");
+
+        // 🔴 The load-bearing one: the evidence corpus.
+        let script = parse(&["--headless", "--script", "scripts/p1-overlay.txt", "--ticks", "400"]);
+        assert!(!script.title, "a script run must never stop at a menu — it asserts on a game");
+        let hub_script = parse(&["--headless", "--hub", "--script", "scripts/f070-hub.txt"]);
+        assert!(!hub_script.title, "the one script that asks for the hub is covered twice over");
+
+        // Order: (--no-hub, has mission, sandbox, has script, --hub)
+        assert!(title_by_default(false, false, false, false, false), "nothing named: the title");
+        assert!(!title_by_default(true, false, false, false, false), "--no-hub wins");
+        assert!(!title_by_default(false, true, false, false, false), "--mission wins");
+        assert!(!title_by_default(false, false, true, false, false), "--sandbox wins");
+        assert!(!title_by_default(false, false, false, true, false), "--script wins");
+        assert!(!title_by_default(false, false, false, false, true), "--hub wins");
     }
 
     #[test]

@@ -1325,3 +1325,257 @@ fn f175_the_menu_plate_is_legible_on_any_frame() {
         "the backdrop has gone opaque — a paused screenshot no longer shows what was paused"
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// The front door: the title screen (`UI-001`, 2026-08-19)
+//
+// > *„gibt es ein hauptmenü?"* — the user. There was not one: a flagless `cargo run` put him
+// > straight into the hub, with the game's name nowhere on screen and no *New Game* and no
+// > *Quit* before the first frame of play.
+//
+// Everything here needs a window entity for the same reason the rest of the file does — the
+// domain is gated on `With<PrimaryWindow>`. What a `--headless` run can still prove is which
+// screen the launch *decided* on, and `menu::announce_the_first_screen` says that out loud.
+// ---------------------------------------------------------------------------------------
+
+use defeated_by_titan::menu::title::TitleAction;
+
+/// A launch that named **no door at all** — `--headless` is not a door, it is how anything runs
+/// on this machine — plus a window entity, so this domain draws.
+///
+/// ⚠️ **The clock is set to manual BEFORE the first `update`.** That is what makes
+/// [`f175_the_title_lets_no_frame_of_the_game_run`] able to see a single frame of `Playing`: at
+/// 100 ms a step, one unpaused frame is roughly six fixed steps, and the tick counter shows it.
+/// With real time the very first frame's delta is ~0 and a flicker would hide inside it.
+fn app_at_the_front_door() -> (App, Entity) {
+    let mut app = defeated_by_titan::app(Cli::from_args(["--headless".to_string()]));
+    let window = app.world_mut().spawn((Window::default(), PrimaryWindow)).id();
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(
+        std::time::Duration::from_millis(100),
+    ));
+    app.update();
+    (app, window)
+}
+
+/// Which plates are on screen, by the screen they were built for.
+fn plates(app: &mut App) -> Vec<Screen> {
+    let mut q = app.world_mut().query::<&MenuRoot>();
+    q.iter(app.world()).map(|root| root.0).collect()
+}
+
+/// ★ **The first thing a launch shows.**
+///
+/// Goes red the moment the boot flow forgets the front door: without it the run lands in
+/// `Screen::Playing`, no plate is built, and the first assert names the screen that is up.
+#[test]
+fn f175_a_flagless_launch_opens_the_title_screen_first() {
+    let (mut app, window) = app_at_the_front_door();
+
+    assert_eq!(
+        plates(&mut app),
+        vec![Screen::Title],
+        "a launch that named no door has to open the title screen, and exactly one plate"
+    );
+
+    let text = plate_text(&mut app);
+    assert!(
+        text.iter().any(|t| t == defeated_by_titan::WINDOW_TITLE),
+        "the title screen does not say the game's name: {text:?}"
+    );
+    for entry in ["New Game", "Settings", "Quit"] {
+        assert!(text.iter().any(|t| t == entry), "no {entry:?} on the title: {text:?}");
+    }
+
+    // ⚠️ **The pointer case nothing else in this domain has.** Every other screen hands a
+    // captured pointer back; here nothing has ever taken it, and nothing may.
+    let c = cursor(&app, window);
+    assert_eq!(
+        c.grab_mode,
+        CursorGrabMode::None,
+        "the title screen grabbed the pointer — there is nothing to look around at yet"
+    );
+    assert!(c.visible, "a title screen you cannot click is a wall, not a door");
+
+    // The hub is loaded behind the plate and stopped, which is why *New Game* is a release and
+    // not a second boot path.
+    assert_eq!(
+        *app.world().resource::<State<MissionPhase>>().get(),
+        MissionPhase::Hub,
+        "the world behind the title is not the hub — then *New Game* would have to build one"
+    );
+    assert!(
+        app.world().resource::<Time<Virtual>>().is_paused(),
+        "the game ran underneath the title screen"
+    );
+}
+
+/// ★ **Not one frame of the game runs before the player asks for it.**
+///
+/// The half a screenshot could not show, and the half the test above does not cover: a plate
+/// can be on screen over a world that is quietly running underneath it. `Time<Virtual>` is what
+/// `run_fixed_main_schedule` feeds on, so **the tick counter is the honest question** — and it
+/// answers it in numbers: 0 while the title is up, 29 over the same five frames once it is gone
+/// (measured 2026-08-19, 100 ms a frame at 60 Hz).
+///
+/// ⚠️ It does **not** prove anything about the very first frame: the fixed loop of frame one
+/// runs before `apply_screen` ever pauses the clock, and it stayed at 0 only because a first
+/// frame's delta is ~0. That is measured, not designed.
+#[test]
+fn f175_the_title_lets_no_frame_of_the_game_run() {
+    use defeated_by_titan::shared::Tick;
+
+    let (mut app, window) = app_at_the_front_door();
+    assert_eq!(
+        app.world().resource::<Tick>().0,
+        0,
+        "the simulation stepped before the title screen was even up"
+    );
+
+    for _ in 0..5 {
+        app.update();
+    }
+    assert_eq!(
+        app.world().resource::<Tick>().0,
+        0,
+        "five frames at 100 ms went into the simulation while nobody had pressed anything"
+    );
+    assert_eq!(
+        app.world().resource::<Time<Virtual>>().elapsed(),
+        std::time::Duration::ZERO,
+        "the virtual clock moved under the title screen"
+    );
+    assert_eq!(cursor(&app, window).grab_mode, CursorGrabMode::None, "the pointer was taken");
+}
+
+/// *New Game* is the moment the game starts: the plate goes, the pointer is taken, the clock
+/// runs — and the place it starts in is the hub that was standing there all along.
+#[test]
+fn f175_new_game_hands_the_pointer_over_to_the_hub() {
+    use defeated_by_titan::shared::Tick;
+
+    let (mut app, window) = app_at_the_front_door();
+    press(&mut app, &TitleAction::NewGame);
+    app.update();
+
+    assert_eq!(*app.world().resource::<Screen>(), Screen::Playing);
+    assert!(plates(&mut app).is_empty(), "the title plate stayed up over the running game");
+
+    let c = cursor(&app, window);
+    assert_eq!(c.grab_mode, CursorGrabMode::Locked, "the game has to take the pointer");
+    assert!(!c.visible, "a system cursor in the middle of the crosshair is nobody's design");
+    assert!(!app.world().resource::<Time<Virtual>>().is_paused());
+
+    let started = app.world().resource::<Tick>().0;
+    app.update();
+    assert!(app.world().resource::<Tick>().0 > started, "the simulation never started");
+    assert_eq!(
+        *app.world().resource::<State<MissionPhase>>().get(),
+        MissionPhase::Hub,
+        "*New Game* has to leave you standing in the hub, not in a sortie"
+    );
+}
+
+/// `Esc` is a way **back**, and behind the title there is nothing.
+///
+/// It must not start the game (a reflex press would skip the menu) and it must not quit it (a
+/// reflex press would end the run). Both are one button away and neither is a key.
+#[test]
+fn f175_escape_is_no_way_out_of_the_title() {
+    let (mut app, window) = app_at_the_front_door();
+    press_esc(&mut app, window);
+
+    assert_eq!(*app.world().resource::<Screen>(), Screen::Title, "Esc walked out of the title");
+    assert_eq!(plates(&mut app), vec![Screen::Title], "the title plate went away on Esc");
+    assert!(app.should_exit().is_none(), "Esc on the title ended the run");
+    assert_eq!(cursor(&app, window).grab_mode, CursorGrabMode::None);
+}
+
+/// ★ **The invariant the title screen could have broken.**
+///
+/// *"Settings is reached from the pause screen and from nowhere else, so there is exactly one
+/// route in and `Esc` always knows where back is"* — the title is the second route. The way back
+/// is therefore **recorded** (`menu::SettingsFrom`) instead of assumed, and this test drives
+/// both routes in one run, because a constant answer is right on exactly one of them.
+#[test]
+fn f175_the_settings_come_back_to_the_screen_that_opened_them() {
+    // Route one, the new one: title → settings → title, by key and by button.
+    let (mut app, window) = app_at_the_front_door();
+    press(&mut app, &TitleAction::Settings);
+    app.update();
+    assert_eq!(*app.world().resource::<Screen>(), Screen::Settings);
+
+    press_esc(&mut app, window);
+    assert_eq!(
+        *app.world().resource::<Screen>(),
+        Screen::Title,
+        "Esc out of the settings landed on a screen the player never came from"
+    );
+
+    press(&mut app, &TitleAction::Settings);
+    app.update();
+    press(&mut app, &SettingsAction::Back);
+    app.update();
+    assert_eq!(
+        *app.world().resource::<Screen>(),
+        Screen::Title,
+        "the Back button and Esc have to agree — they are the same door"
+    );
+
+    // Route two, the old one, unchanged: pause → settings → pause.
+    let (mut app, window) = app_with_window();
+    press_esc(&mut app, window);
+    press(&mut app, &PauseAction::Settings);
+    app.update();
+    assert_eq!(*app.world().resource::<Screen>(), Screen::Settings);
+    press_esc(&mut app, window);
+    assert_eq!(
+        *app.world().resource::<Screen>(),
+        Screen::Paused,
+        "the pause route lost its way back when the title route was added"
+    );
+}
+
+/// **Nothing on this plate is a row that cannot do anything.**
+///
+/// `UI-001` asks for *"Play, Neuigkeiten, Einstellungen, Sozial-Links"* and two of those four
+/// have nothing behind them today; `save` is being built in a parallel round, so there is also
+/// nothing to *Continue*. The registry rule of §4 applies to a menu the same way it applies to a
+/// spawn table: do not add a row nothing can spawn.
+#[test]
+fn f175_the_title_offers_only_what_the_game_can_actually_do() {
+    let (mut app, _window) = app_at_the_front_door();
+
+    assert_eq!(
+        in_screen_order::<TitleAction>(&mut app),
+        vec![TitleAction::NewGame, TitleAction::Settings, TitleAction::Quit],
+        "the title's rows are not the three that work, in the order they are read"
+    );
+
+    let text = plate_text(&mut app);
+    for empty in ["Continue", "Load", "News", "Credits", "Multiplayer"] {
+        assert!(
+            !text.iter().any(|t| t.contains(empty)),
+            "the title offers {empty:?} and nothing in this build can do it: {text:?}"
+        );
+    }
+}
+
+/// **`--hub` is the way past the front door**, and it is the flag every hub script already uses.
+///
+/// The Cli half of this — that `--script`, `--mission`, `--sandbox` and `--no-hub` walk past the
+/// title too — is a table in `src/shared/cli.rs`; this is the half that proves the app acts on
+/// it, which is the thing the 35 scripts in `scripts/` depend on.
+#[test]
+fn f175_a_named_door_walks_straight_past_the_title() {
+    let start = Cli::from_args(["--headless".to_string(), "--hub".to_string()]);
+    assert!(!start.title, "--hub names a door, so it has already answered the title's question");
+
+    let (mut app, window) = windowed(start);
+    assert_eq!(
+        *app.world().resource::<Screen>(),
+        Screen::Playing,
+        "--hub stopped at the title screen — every hub script would now start in a menu"
+    );
+    assert!(plates(&mut app).is_empty(), "a plate was built for a run that asked for the hub");
+    assert_eq!(cursor(&app, window).grab_mode, CursorGrabMode::Locked);
+}

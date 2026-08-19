@@ -3,13 +3,24 @@
 //! > *„zudem fehlen settings. menu (also bei escape) und eine main lobby in der man die mission
 //! > starten kann"* — the user, 2026-08-13 (`docs/NEXT.md` §1D, reqs 6–8).
 //!
-//! Three screens since then, and one key that walks between them:
+//! Four screens since then, and one key that walks between them:
 //!
 //! ```text
-//!   Playing ──Esc──► Paused ──Settings──► Settings ──Back/Esc──┐
-//!      ▲               │  │                                    │
-//!      └──Esc/Resume────┘  └──Mission select──► Lobby ──Deploy──┴──► Playing
+//!   Title ──New Game──► Playing ──Esc──► Paused ──Settings──► Settings ──Back/Esc──┐
+//!     ▲   └─Settings─► Settings ─┐  ▲       │  │                                   │
+//!     └────────Back/Esc──────────┘  └Esc/Resume┘  └─Mission select─► Lobby ─Deploy─┴─► Playing
 //! ```
+//!
+//! ## The title screen is the door, and it is the **first** thing a launch shows
+//!
+//! > *„gibt es ein hauptmenü?"* — the user, 2026-08-19. Until then a flagless `cargo run`
+//! > walked straight into the hub.
+//!
+//! Which screen a run opens on is decided **once**, by `FromWorld for Screen` out of
+//! [`Cli::title`](crate::shared::Cli::title) — see the impl for why it is not a `Startup`
+//! system. A command line that named any door at all (`--hub`, `--mission`, `--sandbox`,
+//! `--no-hub`, `--script`) goes straight past it, which is what keeps all 35 scripts in
+//! `scripts/` running exactly as they did.
 //!
 //! ## What this domain owns: the pointer
 //!
@@ -20,7 +31,8 @@
 //! **The release was built before the capture.** A locked pointer with no release key is a
 //! game you have to `pkill` — and on a machine where nobody has ever seen this game in a
 //! window, that failure would have been found by somebody else, later, without a terminal
-//! open. `tests/menu.rs` holds that guarantee across all three screens.
+//! open. `tests/menu.rs` holds that guarantee across all four screens — including the
+//! title, which is the one case where the pointer was **never taken in the first place**.
 //!
 //! ## What decides: the window entity, not the flag
 //!
@@ -49,6 +61,7 @@ pub mod lobby;
 pub mod pause;
 pub mod plate;
 pub mod settings;
+pub mod title;
 
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
@@ -69,6 +82,13 @@ impl Plugin for MenuPlugin {
             // the mouse sensitivity in **every** run, window or not.
             .init_resource::<PlayerSettings>()
             .init_resource::<lobby::LobbyChoice>()
+            .init_resource::<SettingsFrom>()
+            // **Says out loud which door this run came through**, once, at startup — and
+            // outside the window gate on purpose. A `--headless` run draws no menu and can
+            // therefore never show a screen; the one thing it *can* still prove is where the
+            // launch landed, and this line is that evidence
+            // (`tests/menu.rs` holds the in-process half).
+            .add_systems(Startup, announce_the_first_screen)
             .add_systems(
                 Update,
                 (
@@ -80,10 +100,15 @@ impl Plugin for MenuPlugin {
                     // window.
                     (
                         toggle_screen,
+                        title::title_buttons,
                         pause::pause_buttons,
                         settings::settings_buttons,
                         lobby::lobby_buttons,
                     ),
+                    // After the buttons and before anything looks at the screen: the way back
+                    // out of the options is recorded from where they were opened, and both
+                    // openers get it without knowing about it.
+                    remember_the_way_into_settings,
                     apply_screen,
                     // Clear first, build second, and `.chain()` between them: a screen that
                     // changed has to lose its old plate in the same frame it gains the new
@@ -116,19 +141,73 @@ fn there_is_a_window(windows: Query<(), With<PrimaryWindow>>) -> bool {
 /// with them.
 ///
 /// **It walks back one step, not all the way out.** From the settings screen `Esc` returns to
-/// the pause screen you opened it from, because that is where the eye expects to land; from the
-/// lobby it returns to the game, because the lobby's "back" is the hub floor you are standing
-/// on either way.
-fn toggle_screen(keys: Res<ButtonInput<KeyCode>>, mut screen: ResMut<Screen>) {
+/// **the screen the settings were opened from** — [`SettingsFrom`], written by exactly one
+/// system, because there are two openers since the title screen exists and an assumed answer
+/// would be wrong on one of them. From the lobby it returns to the game, because the lobby's
+/// "back" is the hub floor you are standing on either way.
+///
+/// **From the title `Esc` does nothing at all.** The title is where the chain of "back" ends:
+/// there is nothing behind it, and the two things `Esc` could plausibly mean there — start the
+/// game, or quit it — are both a button press away and neither should happen by reflex.
+fn toggle_screen(
+    keys: Res<ButtonInput<KeyCode>>,
+    back: Res<SettingsFrom>,
+    mut screen: ResMut<Screen>,
+) {
     if !keys.just_pressed(KeyCode::Escape) {
         return;
     }
-    *screen = match *screen {
+    let next = match *screen {
+        Screen::Title => Screen::Title,
         Screen::Playing => Screen::Paused,
         Screen::Paused => Screen::Playing,
-        Screen::Settings => Screen::Paused,
+        Screen::Settings => back.0,
         Screen::Lobby => Screen::Playing,
     };
+    // Compared before it is written: `Screen` is change-detected and the HUD rebuilds its
+    // visibility on `resource_changed::<Screen>` (`hud::hide_while_a_menu_is_up`). An `Esc` on
+    // the title that wrote `Title` over `Title` would run that pass for nothing, every press.
+    if *screen != next {
+        *screen = next;
+    }
+}
+
+/// **Where `Back` and `Esc` go from [`Screen::Settings`]** — the screen the options were opened
+/// from.
+///
+/// Until 2026-08-19 the answer was the constant `Screen::Paused`, and it was right because the
+/// pause screen was the only route in. The title screen is the second one, and *"`Esc` always
+/// knows where back is"* is only still true if the way back is **recorded** instead of assumed.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SettingsFrom(pub Screen);
+
+impl Default for SettingsFrom {
+    /// The pause screen, because that is the route that existed first and the one a run with no
+    /// window would have taken. It is overwritten on the frame before the options open.
+    fn default() -> Self {
+        Self(Screen::Paused)
+    }
+}
+
+/// Keeps [`SettingsFrom`] pointing at the last screen that was **not** the settings.
+///
+/// **One writer, and it is this system** — not the two buttons that open the options. A third
+/// opener added later cannot forget to set it, which is exactly the failure mode "every opener
+/// writes it itself" has: the button compiles, the screen opens, and `Esc` walks out the wrong
+/// door on one route only.
+fn remember_the_way_into_settings(screen: Res<Screen>, mut from: ResMut<SettingsFrom>) {
+    if *screen != Screen::Settings && from.0 != *screen {
+        from.0 = *screen;
+    }
+}
+
+/// One line at startup saying which door the run came through.
+///
+/// It is the only evidence a `--headless` run can give about this domain: with no window there
+/// is no menu at all (see the module docs), so "the launch reached the title" cannot be seen —
+/// it can only be **said**, once, by the state that decided it.
+fn announce_the_first_screen(screen: Res<Screen>) {
+    info!("menu: the first screen of this run is {:?}", *screen);
 }
 
 /// Makes the world match [`Screen`]: the pointer, and whether time runs.
@@ -237,6 +316,7 @@ fn spawn_menu(
     }
     match *screen {
         Screen::Playing => {}
+        Screen::Title => title::spawn_title_screen(&mut commands),
         Screen::Paused => pause::spawn_pause_screen(&mut commands, in_a_sortie(&phase)),
         Screen::Settings => settings::spawn_settings_screen(&mut commands, &data, &settings),
         Screen::Lobby => lobby::spawn_lobby_screen(&mut commands, &data, &choice),
@@ -260,9 +340,18 @@ pub fn in_a_sortie(phase: &State<MissionPhase>) -> bool {
 /// reason that does not apply here: a second player does not get a second pause screen, he
 /// gets his own `Intent`. ⚠️ The day this game is played over a network, pausing stops being
 /// a thing one machine may do to the simulation — see the note on [`Screen::Paused`].
-#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Screen {
-    #[default]
+    /// **The front door.** The game's name, *New Game*, *Settings*, *Quit* — the first thing a
+    /// launch that named no other door shows, before a frame of the game has been simulated.
+    ///
+    /// ⚠️ It is a `Screen` and not a `MissionPhase`, and that is the exact opposite of the
+    /// decision the hub got (`f072_the_hub_is_a_place_and_not_a_screen`) — for the same reason.
+    /// The hub is a **place**: you walk in it, the pointer is captured, the clock runs. The
+    /// title is a **plate over a stopped world**: nothing is walked, nothing is simulated, the
+    /// pointer is free. Everything `apply_screen` decides, it decides right here without a
+    /// single new branch.
+    Title,
     Playing,
     /// ⚠️ **Local-only.** Pausing works by stopping `Time<Virtual>`, i.e. the whole
     /// simulation. Over a network that is not available to a client, and the pause screen
@@ -275,6 +364,44 @@ pub enum Screen {
     /// **The main lobby** — pick a mission, pick a difficulty, deploy. The screen the walk-in
     /// deployment pads never had, and it starts the same sortie they do.
     Lobby,
+}
+
+/// **Where a run begins, decided once, out of the command line.**
+///
+/// `Screen` has **no `Default`** on purpose since the title screen exists. A `Default` would
+/// have to be one of two answers — `Title` breaks every one of the several hundred tests that
+/// build their `Cli` with `..default()`, `Playing` silently swallows the front door — and
+/// `init_resource` would take it without anybody noticing which. `FromWorld` has the one thing
+/// a `Default` cannot have: the run's own [`Cli`], which `src/lib.rs` inserts before the first
+/// plugin is added.
+///
+/// ⚠️ **Here and not in a `Startup` system**, and the reason is stated narrowly because the
+/// wide version is not true: `Startup` runs inside the first frame *before* `Update`, so
+/// `apply_screen` would not have been late and the pointer would not have flickered. What a
+/// startup writer would be late for is everything that runs **before** `Update` in that first
+/// frame — `First`, `PreUpdate`, `StateTransition`, the fixed loop — and every other `Startup`
+/// system, which has no ordering against it at all: [`announce_the_first_screen`] is one of
+/// those, and it would have printed whatever it happened to see. `FromWorld` runs while the
+/// plugin is built, so there is no frame and no schedule in which the answer is not yet there.
+///
+/// ⚠️ **What is NOT claimed:** `apply_screen` stops the clock in `Update`, and the first
+/// frame's fixed loop runs before it. It steps that frame's delta, which at startup is ~0 —
+/// `tests/menu.rs::f175_the_title_lets_no_frame_of_the_game_run` measured 0 ticks there and 29
+/// over five frames once the screen was gone, so the pause is what holds, not the ordering.
+impl FromWorld for Screen {
+    fn from_world(world: &mut World) -> Self {
+        // `expect` and not a fallback: `MenuPlugin` is only ever added by `crate::app`, which
+        // inserts `Cli` first (`src/lib.rs`). A quiet default here would be a second, wrong
+        // answer to "where does this run start" in exactly the case nobody tests.
+        let start = world.get_resource::<crate::shared::Cli>().expect(
+            "menu::MenuPlugin needs Cli — it is inserted in crate::app before any plugin",
+        );
+        if start.title {
+            Screen::Title
+        } else {
+            Screen::Playing
+        }
+    }
 }
 
 /// On **every** node this domain spawns, containers included — the whole overlay is despawned
