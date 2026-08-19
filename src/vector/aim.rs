@@ -40,37 +40,282 @@
 use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
 use bevy::prelude::*;
 
-use crate::data::GameData;
-use crate::shared::{AimPoint, ArmAim, Body, BodyId, BodyMask, Intent, Side};
+use crate::data::{GameData, VectorTuning};
+use crate::shared::{
+    AimPoint, ArmAim, Body, BodyId, BodyMask, Intent, MovementState, Side, Velocity,
+};
 
 use super::hook::anchor_target;
 
-/// How far off the look direction one side ray sits, given the player's spread setting.
-/// Radians in, radians out (`docs/conventions.md`).
+/// **The one place that says what `aim_spread_deg` means: it is the angle BETWEEN the two
+/// side rays, and everything downstream of this line is a HALF-angle.**
 ///
-/// ⚠️ **`aim_spread_deg` is a HALF-angle**, and that is a decision with two sources pulling
-/// against each other:
+/// `docs/FINDINGS.md` FIND-086 recorded the contradiction and left it open: `assets/data/
+/// game.ron` and `src/data/mod.rs` read the key as a half-angle (`±28°`, 56° of fan), while
+/// `docs/NEXT.md` §1B's brief specified *"two side rays at ±`aim_spread_deg`/2"* (28° of fan).
+/// The file won on rule 2 and nothing decided between them on merit.
 ///
-/// - `assets/data/game.ron` says so and does the arithmetic in its own comment: *"At 100 m of
-///   aim distance 28° puts the two side points 2 · 100 · sin(28°) = **93.9 m** apart"*, and
-///   its ceiling `aim_spread_max_deg: 44.0` is justified as *"1.75° to spare"* against the
-///   45.75° half of the 91.5° horizontal frustum. Both numbers are only true for a half-angle.
-/// - `docs/NEXT.md` §1B's `W3` brief says *"two side rays at ±`aim_spread_deg`/2"*.
+/// **Resolved for the brief on 2026-08-18, and the tiebreaker is that the game has now been
+/// played:** *„der spread für seile ist zu weit auseinander"* (the user). Under the old reading
+/// the shipped wheel opened **56°** of a 91.5° horizontal frustum — the two markers stood 61 %
+/// of the screen apart — and the ceiling `aim_spread_max_deg: 44.0` meant 88°, very nearly the
+/// whole image. Under this one the wheel is the fan itself: 28° is 31 % of the screen, and the
+/// widest a player may dial is now narrower than what the game used to hand him by default.
+/// `docs/FINDINGS.md` **FIND-096**.
 ///
-/// **The file wins** (rule 2: the number and its meaning live in the RON), and the acceptance
-/// criterion holds either way — the brief asks for ≥ 45 m at 28°/100 m and this gives 93.9.
-/// The contradiction is written down in `docs/FINDINGS.md` FIND-083; flipping the reading is
-/// this one function.
-pub fn side_angle_rad(spread_rad: f32) -> f32 {
-    spread_rad
+/// Every other reading of the number is derived from this function, so there is exactly one
+/// line to flip if the decision is ever reversed — and `tests/vector_aiming.rs::
+/// f023_the_side_ray_sits_at_half_the_wheel_at_every_pitch` goes red the moment it is.
+pub fn wheel_half_rad(wheel_rad: f32) -> f32 {
+    0.5 * wheel_rad
+}
+
+/// How far off the look direction one side ray sits, given the angle the model **resolved**
+/// this tick. Radians in, radians out (`docs/conventions.md`).
+///
+/// The argument is already a half-angle — [`effective_spread_rad`] produced it, and it took
+/// the wheel's total apart with [`wheel_half_rad`] on the way. This function is the identity
+/// and stays here as the seam: rope, HUD marker and ray all reach the world through
+/// [`side_dirs`], so there is one number and never two (`F-023`).
+pub fn side_angle_rad(half_rad: f32) -> f32 {
+    half_rad
+}
+
+/// **How wide the two arms aim right now, in radians off the look direction** — the model
+/// behind `F-023` since 2026-08-18.
+///
+/// The user, 2026-08-18: *„der spread für seile ist zu weit auseinander und sollte mehr
+/// dynamisch sein!"* Two claims, and one model answers both: **the two ropes aim a number of
+/// METRES apart, and what the player is doing decides how many.**
+///
+/// ## Why metres and not degrees
+///
+/// A degree is a screen quantity whose world meaning moves by a factor of 20 over a 500 m hook
+/// range: the shipped 28° puts the two landing points 9.4 m apart at 10 m and **187.8 m** apart
+/// at 200 m. Nothing in Ashgate is 187 m wide — `lot_m` is 36 — so at range the two anchors are
+/// in different parts of town, at most one of them is where you are going, and the side ray
+/// that missed collapses onto the centre ray at [`aim`]'s fallback. **"Too wide" and "both arms
+/// share one point again" (`docs/FINDINGS.md` FIND-039) are the same defect**, and a constant
+/// angle causes both.
+///
+/// ## The five inputs
+///
+/// 1. **What you are hanging on** — [`MovementState`]. Tethered is a *chain* and stays near
+///    your line (`aim_sep_tether_m`, the courtyard); grounded or on a wall you are picking a
+///    route across the block face (`aim_sep_stand_m`); airborne and untethered you are
+///    searching and may cross a street (`aim_sep_search_m`, the block pitch).
+/// 2. **How fast**, on the **horizontal** speed — a straight fall would otherwise pin the fan
+///    at the moment a falling player wants the widest sweep. Linear from
+///    `aim_sep_calm_speed_m_s` (running) down to the floor at `aim_sep_fast_speed_m_s`
+///    (FIND-041's measured chained-swing peak).
+/// 3. **How far away what you are looking at is** — the smoothed centre distance. It is free:
+///    [`aim`] casts that ray eleven lines before it needs this number.
+/// 4. **Whether the crosshair found anything at all.** `None` means the world has told us
+///    nothing yet, and then the wheel *is* the fan.
+/// 5. **The wheel**, twice: it scales the metre target (`k = wheel / aim_sep_neutral_deg`) and
+///    half of it is the hard **ceiling** on the result ([`wheel_half_rad`] — the wheel is the
+///    angle *between* the rays). The user's own word decides that reading — *„wie weit
+///    auseinander es gehen **darf**"* (2026-08-12).
+///
+/// ## Why the near field is not the wheel's business
+///
+/// Inputs 1-3 are all *metres of city*, and metres are the wrong unit at arm's length: a 36 m
+/// block-face budget on a point 10 m away asks for ±61°, so the ceiling caught it and handed
+/// the wheel straight back. That is why the round that made this model dynamic measured
+/// **4 % narrower standing and 1 % airborne** over 10-50 m — a no-op at the ranges Ashgate is
+/// actually built at (6 m streets, 6.5-11.5 m houses: the first hook of a flight is 6-20 m).
+/// `aim_sep_full_reach_m` is the fix: the metre budget ramps in with distance, so below it the
+/// angle is constant per state and the separation grows linearly. `docs/FINDINGS.md` FIND-096.
+///
+/// ## The invariant that makes the complaint unregressable
+///
+/// `effective_spread_rad(..) <= wheel_half_rad(ctx.wheel_rad)` in every state, at every
+/// distance, at every wheel position — one `clamp`, and `tests/vector_aiming.rs` sweeps it.
+/// **This model can never draw a wider fan than the player allows**, and since 2026-08-18 the
+/// near field does not reach that ceiling at any wheel position: at the widest notch the two
+/// hooks are 5.2 m apart at 10 m against the 9.4 m the game used to give at the *default*.
+///
+/// Pure: no `Res`, no `World`, no randomness. The angle is recomputed locally from the
+/// replicated [`Intent`] plus local simulation state and **never goes on the wire**
+/// (`docs/multiplayer.md`).
+pub fn effective_spread_rad(v: &VectorTuning, ctx: SpreadContext) -> f32 {
+    let floor_rad = v.aim_spread_floor_deg.to_radians();
+
+    // 1. What you are hanging on, as a separation in METRES OF CITY.
+    let state_m = match ctx.state {
+        MovementState::Tethered => v.aim_sep_tether_m,
+        MovementState::Airborne => v.aim_sep_search_m,
+        MovementState::Grounded | MovementState::OnWall | MovementState::Downed => {
+            v.aim_sep_stand_m
+        }
+    };
+
+    // 2. The wheel scales that target — so one notch still bites at every distance, which is
+    //    the failure mode of a model whose wheel only sets a ceiling.
+    let k_wheel = ctx.wheel_rad.to_degrees() / v.aim_sep_neutral_deg.max(f32::MIN_POSITIVE);
+    let state_m = (state_m * k_wheel).max(v.aim_sep_floor_m);
+
+    // 3. How fast, on the HORIZONTAL speed: linear collapse towards the floor between running
+    //    and FIND-041's measured chained-swing peak.
+    let span = (v.aim_sep_fast_speed_m_s - v.aim_sep_calm_speed_m_s).max(f32::MIN_POSITIVE);
+    let f_speed = ((ctx.horizontal_speed_m_s - v.aim_sep_calm_speed_m_s) / span).clamp(0.0, 1.0);
+    let sep_m = v.aim_sep_floor_m + (state_m - v.aim_sep_floor_m) * (1.0 - f_speed);
+
+    // 4. **The near field is governed by the city and not by the wheel.** A block-scale budget
+    //    is a nonsense at arm's length: 36 m of separation on a point 10 m away is ±61°, off
+    //    the screen on both sides, so the old model simply hit the ceiling and handed back the
+    //    wheel — which is why making the fan dynamic was a measured NO-OP under 38 m and the
+    //    user still had 9.4 m of fan on the roof across the street. The budget is therefore
+    //    only fully available once you are looking `aim_sep_full_reach_m` away; nearer than
+    //    that it scales with how much city actually lies between you and the point.
+    let reach_m = v.aim_sep_full_reach_m.max(f32::MIN_POSITIVE);
+
+    // 5. Metres -> angle, at the distance you are actually looking at. `asin` of the half
+    //    chord, the inverse of [`separation_m`]. Note what the ramp does to it: below
+    //    `reach_m` the `d` cancels, so the near field is a CONSTANT angle per state
+    //    (`asin(sep_m / 2 reach_m)` — 9.6° standing, 11.2° searching at the shipped keys) and
+    //    the separation grows linearly with range, exactly as a screen-shaped quantity should.
+    //    Nothing under the crosshair means the world has said nothing, and then the wheel is
+    //    the whole answer.
+    let ceiling_rad = wheel_half_rad(ctx.wheel_rad);
+    let want_rad = match ctx.distance_m {
+        Some(d) if d.is_finite() && d > 0.0 => {
+            let budget_m = sep_m * (d / reach_m).min(1.0);
+            (budget_m / (2.0 * d)).clamp(0.0, 1.0).asin()
+        }
+        _ => ceiling_rad,
+    };
+
+    // 6. Permission is a CEILING (*„wie weit auseinander es gehen darf"*) and the floor is a
+    //    floor. `min` before `max` so a floor above the ceiling — which `game.ron`'s ordering
+    //    guard forbids — still yields the ceiling rather than a NaN-shaped surprise.
+    want_rad.min(ceiling_rad).max(floor_rad.min(ceiling_rad))
+}
+
+/// What [`effective_spread_rad`] needs to know about one player this tick.
+///
+/// A struct and not six arguments: five of them are `f32` and a call site that swaps two of
+/// them compiles.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpreadContext {
+    /// The player's own setting, already clamped into `game.ron`'s window by
+    /// [`Intent::aim_spread_rad`] — the **total** angle between the two rays, which is the
+    /// unit `aim_spread_deg` carries. The ceiling on the result is half of it
+    /// ([`wheel_half_rad`], the one place that says so).
+    pub wheel_rad: f32,
+    /// What the body hangs on, from the previous tick.
+    pub state: MovementState,
+    /// Speed in the plane, m/s — **not** [`Velocity::speed_m_s`].
+    pub horizontal_speed_m_s: f32,
+    /// The smoothed distance to what the crosshair is on, in metres. `None` = the centre ray
+    /// has never hit anything since this player spawned.
+    pub distance_m: Option<f32>,
+}
+
+/// One step of the outer safety clamp on how fast the fan may open or close — **and the
+/// re-clamp that keeps the ramp inside the wheel.**
+///
+/// The rate limit alone is an escape hatch out of the ceiling: [`effective_spread_rad`] clamps
+/// its answer to the wheel, and then a slew that starts from last tick's *wider* angle walks
+/// towards it from outside. A player who wheels 44° down to 10° used to get 41/38/35/32/29/26…
+/// for eleven ticks — 0.19 s of exactly the fan he just said he did not want. The ceiling is
+/// his word (*„wie weit auseinander es gehen **darf**"*, 2026-08-12), so it binds on the tick
+/// he turns the wheel and not a fifth of a second later.
+///
+/// `min` before `max`, the same ordering as [`effective_spread_rad`]: a floor above the ceiling
+/// — which `game.ron`'s ordering guard forbids — still yields the ceiling and not a surprise.
+///
+/// Separated from [`aim`] because a system needs a `World` to test and this needs five numbers.
+pub fn slew_spread_rad(
+    prev_rad: Option<f32>,
+    target_rad: f32,
+    step_rad: f32,
+    ceiling_rad: f32,
+    floor_rad: f32,
+) -> f32 {
+    let slewed = match prev_rad {
+        Some(prev) if prev.is_finite() => prev + (target_rad - prev).clamp(-step_rad, step_rad),
+        _ => target_rad,
+    };
+    slewed.min(ceiling_rad).max(floor_rad.min(ceiling_rad))
+}
+
+/// The metric separation of the two landing points at `distance_m`, in metres.
+///
+/// The chord `2 d sin θ`, which is this repo's own convention for the number (`game.ron`
+/// derives its window with it, `tests/vector_aiming.rs` asserts against it). It errs *narrow*
+/// against the `2 d tan θ` a flat wall would realise, and narrow is the direction asked for.
+pub fn separation_m(half_rad: f32, distance_m: f32) -> f32 {
+    2.0 * distance_m * half_rad.sin()
+}
+
+/// One step of the low-pass on the aim distance, in **log2 metres**.
+///
+/// Two decisions live here, both taken from the losing designs by the judges' verdict:
+///
+/// - **Log space.** The angle is a function of `1/d`, so a constant *relative* rate makes a
+///   depth discontinuity feel the same at 12 m and at 300 m; a constant metric rate does not.
+/// - **Hold on a miss.** A centre ray that finds nothing is the *absence* of evidence about
+///   distance, not evidence of a far one. Holding keeps the near-field fan across a roofline
+///   sweep, so the side rays still catch the roof — the one thing the old wide fan was good at
+///   — and it keeps sky ticks out of the estimate entirely.
+///
+/// Returns `None` only while nothing has ever been seen. `settle_s <= 0` disables the filter.
+pub fn settle_distance_m(
+    prev_m: Option<f32>,
+    seen_m: Option<f32>,
+    settle_s: f32,
+    dt_s: f32,
+    min_m: f32,
+    max_m: f32,
+) -> Option<f32> {
+    let Some(seen) = seen_m.filter(|d| d.is_finite() && *d > 0.0) else {
+        return prev_m; // a miss says nothing about distance
+    };
+    let target = seen.clamp(min_m.max(f32::MIN_POSITIVE), max_m.max(min_m));
+    let (Some(prev), true) = (prev_m.filter(|d| d.is_finite() && *d > 0.0), settle_s > 0.0) else {
+        return Some(target); // first evidence, or no filter: snap
+    };
+    if !(dt_s.is_finite() && dt_s > 0.0) {
+        return Some(prev);
+    }
+    let (l_prev, l_target) = (prev.log2(), target.log2());
+    // Settle exactly instead of asymptotically, so a standing player stops writing the
+    // component at all and change detection goes quiet (`docs/lessons/performance.md` rule 1).
+    if (l_target - l_prev).abs() < SETTLE_EPS_LOG2 {
+        return Some(target);
+    }
+    let alpha = 1.0 - (-dt_s / settle_s).exp();
+    Some((l_prev + (l_target - l_prev) * alpha).exp2())
+}
+
+/// When the filtered distance is close enough to snap. 0.002 in log2 is 0.14 % of the
+/// distance, which is under 0.01° of angle at the widest setting — an epsilon on a float, not
+/// a game value, and therefore not a `game.ron` key (rule 2 is about tunables).
+const SETTLE_EPS_LOG2: f32 = 0.002;
+
+/// The per-player memory the model needs: the smoothed aim distance and the angle it resolved
+/// to last tick.
+///
+/// **A component and never a `Resource`** — there is no such thing as *the* player
+/// (`docs/multiplayer.md` rule 3). `None` is an explicit "nothing seen yet, snap instead of
+/// slew" and not a magic `0.0`, so a fresh player, a respawn and a warp-to-a-new-entity all
+/// start clean by construction; a warp of an *existing* entity re-converges within `3 τ`.
+///
+/// **One writer:** [`aim`]. It is inserted there too, so no foreign spawn site has to
+/// remember it.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
+pub struct AimSpread {
+    pub distance_m: Option<f32>,
+    pub half_rad: Option<f32>,
 }
 
 /// The two side directions, `Side::Left` first — the look direction yawed by
 /// ±[`side_angle_rad`] **around the camera's up axis**, not around world Y.
 ///
-/// `spread_rad` is what [`Intent::aim_spread_rad`] hands over: the player's own wheel setting,
-/// already clamped into the window from `game.ron`. That clamp lives on the `Intent` and not
-/// here, so that the wheel, the HUD and this ray can never disagree about what 0° means.
+/// `half_rad` is what [`effective_spread_rad`] resolved this tick: a **half**-angle, already
+/// under the wheel's own ceiling and already through [`wheel_half_rad`]. The two rays are
+/// therefore `2 · half_rad` apart, and that total is the number the wheel carries.
 ///
 /// Around the camera's up axis, because the spread the user asks for is a *screen* spread:
 /// looking 60° down, a yaw around world Y rolls the two rays into the ground on one side and
@@ -80,11 +325,11 @@ pub fn side_angle_rad(spread_rad: f32) -> f32 {
 /// `(cos yaw, 0, -sin yaw)` of `docs/conventions.md`'s axis contract, and the look direction
 /// has no component along it at any pitch — so `look·cos ∓ right·sin` is a unit vector
 /// without a normalize, at every pitch including straight up and straight down.
-pub fn side_dirs(intent: &Intent, spread_rad: f32) -> [Vec3; 2] {
+pub fn side_dirs(intent: &Intent, half_rad: f32) -> [Vec3; 2] {
     let look = intent.look_dir();
     let (sin_yaw, cos_yaw) = intent.yaw.sin_cos();
     let right = Vec3::new(cos_yaw, 0.0, -sin_yaw);
-    let (sin, cos) = side_angle_rad(spread_rad).sin_cos();
+    let (sin, cos) = side_angle_rad(half_rad).sin_cos();
     // Index order is `Side::index()`: left = 0, right = 1. Left of a player looking along -Z
     // is -X, so the left ray leans against `right`.
     [look * cos - right * sin, look * cos + right * sin]
@@ -109,16 +354,29 @@ pub fn side_dirs(intent: &Intent, spread_rad: f32) -> [Vec3; 2] {
 /// own capsule is excluded anyway. The day a titan limb becomes an anchor (`F-029`) this
 /// becomes a real one-tick lag and has to be measured, not argued about.
 pub fn aim(
+    mut commands: Commands,
     data: Res<GameData>,
+    time: Res<Time<Fixed>>,
     space: SpatialQuery,
     bodies: Query<(&Body, Option<&BodyId>)>,
-    mut players: Query<(Entity, &Intent, &Transform, &mut AimPoint, &mut ArmAim)>,
+    mut players: Query<(
+        Entity,
+        &Intent,
+        &Transform,
+        &Velocity,
+        &MovementState,
+        &mut AimPoint,
+        &mut ArmAim,
+        Option<&mut AimSpread>,
+    )>,
 ) {
     let v = &data.game.vector;
     let range_m = v.hook_range_m;
     let eye_height_m = data.game.player.eye_height_m;
+    let dt_s = time.delta_secs();
 
-    for (player, intent, transform, mut point, mut arms) in &mut players {
+    for (player, intent, transform, velocity, state, mut point, mut arms, spread) in &mut players
+    {
         let eye_m = eye(transform.translation, eye_height_m);
         let centre = cast(&space, &bodies, player, eye_m, intent.look_dir(), range_m);
 
@@ -131,7 +389,55 @@ pub fn aim(
         // The player's own wheel setting (`W2`), absolute and never a delta, clamped into the
         // file's window by the `Intent` itself — a per-player number, not a resource, because
         // there is no such thing as *the* player (`docs/multiplayer.md` rule 3).
-        let spread_rad = intent.aim_spread_rad(v.aim_spread_min_deg, v.aim_spread_max_deg);
+        //
+        // Since 2026-08-18 that setting is the **ceiling** and not the angle: how far the two
+        // rays really open is solved here, out of the centre ray that was just cast, out of
+        // what the body hangs on and out of how fast it is going ([`effective_spread_rad`]).
+        // The distance costs nothing — `cast` builds the point as `eye + dir * hit.distance`,
+        // so its length back is the hit distance exactly, not an approximation.
+        let wheel_rad = intent.aim_spread_rad(v.aim_spread_min_deg, v.aim_spread_max_deg);
+        let previous = spread.as_deref().copied().unwrap_or_default();
+        let seen_m = centre.point_m.map(|p| (p - eye_m).length());
+        let distance_m = settle_distance_m(
+            previous.distance_m,
+            seen_m,
+            v.aim_spread_settle_s,
+            dt_s,
+            v.min_rope_m,
+            range_m,
+        );
+        let target_rad = effective_spread_rad(
+            v,
+            SpreadContext {
+                wheel_rad,
+                state: *state,
+                        horizontal_speed_m_s: Vec3::new(velocity.0.x, 0.0, velocity.0.z).length(),
+                distance_m,
+            },
+        );
+        // The outer safety clamp, on top of the distance filter: one tick may never move the
+        // fan more than `aim_spread_slew_deg_s / tick rate`, so a single-tick depth blip is a
+        // slide and not a snap. `None` — a player who has never aimed — snaps instead of
+        // sweeping up from a stale angle.
+        let step_rad = v.aim_spread_slew_deg_s.to_radians() * dt_s.max(0.0);
+        let spread_rad = slew_spread_rad(
+            previous.half_rad,
+            target_rad,
+            step_rad,
+            wheel_half_rad(wheel_rad),
+            v.aim_spread_floor_deg.to_radians(),
+        );
+        let resolved = AimSpread { distance_m, half_rad: Some(spread_rad) };
+        match spread {
+            // `set_if_neq` for the same reason as `AimPoint` below: a standing player settles
+            // exactly (`SETTLE_EPS_LOG2`) and then stops writing at all.
+            Some(mut carried) => {
+                carried.set_if_neq(resolved);
+            }
+            None => {
+                commands.entity(player).insert(resolved);
+            }
+        }
         let dirs = side_dirs(intent, spread_rad);
         let sides = Side::ALL.map(|side| {
             let found = cast(&space, &bodies, player, eye_m, dirs[side.index()], range_m);

@@ -96,12 +96,18 @@ pub fn spawn_settings_screen(commands: &mut Commands, data: &GameData, s: &Playe
         row(
             screen,
             "Aim spread",
-            &format!("{:.1} deg", s.aim_spread_deg),
+            &format!("{:.1} deg max", s.aim_spread_deg),
             // Named, because a player who has already found the wheel has to see that this is
-            // the same number and not a second one.
+            // the same number and not a second one — and since 2026-08-18 it is a CEILING, so
+            // the row says what the ropes actually do at that setting instead of a degree the
+            // game only obeys when you point at the sky. The metres are the standing target
+            // scaled by this notch (`src/vector/aim.rs::effective_spread_rad`, step 2).
             &format!(
-                "{:.0} - {:.0}, the mouse wheel sets it too",
-                v.aim_spread_min_deg, v.aim_spread_max_deg
+                "{:.0} - {:.0}, the mouse wheel sets it too — up to {:.0} m apart",
+                v.aim_spread_min_deg,
+                v.aim_spread_max_deg,
+                (v.aim_sep_stand_m * s.aim_spread_deg / v.aim_sep_neutral_deg)
+                    .max(v.aim_sep_floor_m)
             ),
             SettingsAction::Spread,
         );

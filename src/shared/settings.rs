@@ -56,7 +56,8 @@ pub struct PlayerSettings {
     /// what `PerspectiveProjection.fov` is (`docs/QUESTIONS.md` Q-021).
     pub fov_deg: f32,
     /// **The live aim spread**, `F-023`. The wheel writes it, the settings screen writes it,
-    /// `Intent::aim_spread_deg` carries it. Half-angle (`vector::aim`).
+    /// `Intent::aim_spread_deg` carries it. Half-angle, and since 2026-08-18 a **ceiling**:
+    /// `vector::aim::effective_spread_rad` resolves what the two rays really open to.
     pub aim_spread_deg: f32,
     /// How far up and down the local mouse path may look. Clamped to the file's value at all
     /// times — `render::camera` clamps the *incoming intent* against `game.ron` as well, and

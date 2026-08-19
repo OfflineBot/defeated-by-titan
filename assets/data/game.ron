@@ -185,27 +185,158 @@
         // man einstellen können wie weit auseinander es gehen darf!)" — so the spread is a
         // number the PLAYER sets at runtime, and these four are the window he sets it in.
         //
-        // ⚠️ UNTUNED. The current half-angle between the two arms' aim rays, in degrees off the
-        // look direction. At 100 m of aim distance 28° puts the two side points
-        // 2 * 100 * sin(28°) = **93.9 m** apart — that is a whole city block between your two
-        // hooks, which is what „mehr spreaden" has to mean if it is to change how a swing
-        // feels. It is a starting value inside the window below and nothing else.
+        // The value the wheel starts at, and TWO things changed about its meaning on
+        // 2026-08-18, both out of one sentence he wrote after playing: „der spread fuer seile
+        // ist zu weit auseinander und sollte mehr dynamisch sein!"
+        //
+        // 1. It is a CEILING and not the angle. His own word from 2026-08-12 decides that —
+        //    „wie weit auseinander es gehen DARF" — so the wheel says what the game is ALLOWED
+        //    to open to, and the eleven keys below say what it actually opens to.
+        // 2. It is the angle BETWEEN the two rays, not the angle off the look direction. That
+        //    contradiction between this file and docs/NEXT.md §1B stood open in FINDINGS as
+        //    FIND-086 with nothing to decide it on merit; „zu weit auseinander" is that
+        //    tiebreaker, and it is worth exactly a factor of two. Under the old reading 28
+        //    meant +-28 deg = 56 deg of fan, and the two markers stood 61 % of the screen
+        //    apart (the horizontal frustum is 91.5 deg at camera.fov_deg 60 on 16:9). It now
+        //    means 28 deg of fan = 31 % of the screen. src/vector/aim.rs::wheel_half_rad is
+        //    the ONE place that says so; everything else derives from it. FIND-096.
+        //
+        // ⚠️ The old comment here did the arithmetic 2 * 100 * sin(28°) = 93.9 m and called
+        // that „a whole city block between your two hooks". It was right about the number and
+        // that is exactly what he complained about: 93.9 m at 100 m is two anchors in two
+        // different parts of town, and 187.8 m at 200 m is four block pitches. A constant
+        // angle cannot be right at both ends of a 500 m hook range — see aim_sep_stand_m.
         aim_spread_deg: 28.0,
         // The floor of the wheel's window. **Strictly above 0**: at 0 the two arms share one
         // ray again, which is exactly the state F-023 exists to end (FIND-039) — a player who
-        // can wheel the spread back to zero can turn the feature off by accident.
+        // can wheel the spread back to zero can turn the feature off by accident. 10 deg of
+        // fan is +-5 deg: 1.74 m apart at 10 m and 8.7 m at 50 m — narrow, and still visibly
+        // two markers rather than one.
         aim_spread_min_deg: 10.0,
-        // The ceiling. **At most 60°**, and that is geometry, not taste: past 60° off the look
-        // direction the side ray leaves the 91.5° horizontal frustum (camera.fov_deg 60
-        // vertical on 16:9), so the marker the user demands („da wo das seil am ende auch
-        // landet soll die markierung hin") would have to be drawn off-screen. 44 keeps both
-        // markers inside the image with 1.75° to spare at the widest setting.
+        // The ceiling, re-derived on 2026-08-18 rather than merely halved. The old 44 was
+        // justified by the frustum — „1.75 deg to spare" against the 45.75 deg half of the
+        // 91.5 deg horizontal image — and that argument only ever held for a half-angle. As a
+        // TOTAL the frustum would allow 91.5 and the binding constraint is no longer geometry
+        // but the complaint: 44 deg of fan is +-22 deg, still comfortably inside the image
+        // (23.75 deg to spare), and it is NARROWER THAN THE 56 DEG THE GAME USED TO HAND HIM
+        // BY DEFAULT. The widest a player may now dial is tighter than what he called too
+        // wide — which is the point, and the reason the number did not move.
         aim_spread_max_deg: 44.0,
         // One notch of the wheel. (max - min) / step = (44 - 10) / 2 = **17 notches**, and
         // tests/data.rs asks for at least 8: fewer than that and the wheel is a three-position
         // switch the player will read as broken rather than as a setting. Fine enough to feel
         // like a dial, coarse enough that one flick crosses the window.
         aim_spread_step_deg: 2.0,
+        // ── F-023, 2026-08-18: THE SPREAD IS A SEPARATION IN METRES, NOT AN ANGLE ──────────
+        // „der spread fuer seile ist zu weit auseinander und sollte mehr dynamisch sein!"
+        // Two claims, and the ten keys below answer both with one model: the two ropes aim a
+        // number of METRES OF CITY apart, and what the player is doing decides how many. The
+        // angle is then solved every fixed tick out of the centre ray's own hit distance —
+        // free, because that ray is already cast eleven lines before the angle is chosen.
+        //
+        // The metres are the district's own rulers (maps.ron: ashgate.layout), not taste:
+        //   frontage_m 12          one house front  -> aim_sep_floor_m
+        //   lot_m 36 - 2*wing 11   the courtyard 14 -> aim_sep_tether_m
+        //   lot_m 36               the block face   -> aim_sep_stand_m
+        //   lot_m 36 + street_m 6  the block PITCH  -> aim_sep_search_m
+        // ⚠️ ASSUMPTION (docs/FINDINGS.md FIND-095): Ashgate is the tuning target. The graybox
+        // is a different city (lot 28 + street 7 = 35 m pitch, no frontage key at all) and
+        // maps.ron has no per-map override for aim tuning. Rollback point: these four keys.
+        // ⚠️ And maps.ron:492 says „lot_m 36 + street_m 7 = block pitch 43 m" while :499 sets
+        // street_m: 6.0 — the pitch is 42. The comment is stale, the value below is not.
+        //
+        // Where each clamp binds at the shipped wheel of 28°, so nobody files „the wheel does
+        // nothing" as a bug: below aim_sep_full_reach_m (108 m) the RAMP is the answer in every
+        // state, and it is a constant angle there — 9.6 deg off centre grounded, 11.2 deg
+        // airborne, 3.7 deg tethered. Beyond it the four metre targets take over, and the 2°
+        // floor takes over above ~172 m tethered-and-boosted, ~191 m swinging, i.e. past the
+        // map. The wheel's own CEILING binds nowhere in the near field at any notch — it is
+        // the answer only when the crosshair is on nothing at all (sky), where the world has
+        // told the model nothing.
+        //
+        // The hard floor of the angle the GAME may resolve to, below the floor the PLAYER can
+        // dial. Strictly above 0 (at 0 both arms share one ray again, FIND-039) and strictly
+        // below aim_spread_min_deg, or the model can never narrow past the wheel and the whole
+        // feature is dead. At 2° the two rays are still 1.7 m apart at 25 m and 7.0 m at
+        // 100 m: two shoulders, never one ray. ⚠️ UNTUNED.
+        aim_spread_floor_deg: 2.0,
+        // Outer safety clamp on how fast the effective angle may move. Both ends are derived:
+        // (aim_spread_max_deg - aim_spread_floor_deg) / 0.25 s = 42 / 0.25 = **168** is the
+        // slowest that still settles inside a human reaction time, and 5° per 60 Hz tick =
+        // **300** is the fastest that still reads as a slide rather than a snap. At 180 one
+        // tick moves 3.0° and the whole window crosses in 0.23 s. ⚠️ UNTUNED.
+        aim_spread_slew_deg_s: 180.0,
+        // Time constant of the low-pass on **log2 of the aim distance**. The primary smoother:
+        // a crosshair crossing a roof edge changes the depth 12 m -> 300 m in one tick, and
+        // filtering the distance in log space is a constant RELATIVE rate, so the same edge
+        // feels the same at 12 m and at 300 m. 0.10 s is this file's own „reads as instant"
+        // band (the hook flight is 0.04-0.12 s at the distances most shots are), and 3 tau =
+        // 0.30 s is the settle window already used further down. ⚠️ UNTUNED.
+        aim_spread_settle_s: 0.10,
+        // The wheel notch at which the four metre targets apply unscaled: k = wheel / this.
+        // A separate key from aim_spread_deg so that neither number has two jobs — that one is
+        // where the wheel STARTS, this one is what the wheel is measured against. Same value
+        // today, and nothing requires them to stay the same.
+        aim_sep_neutral_deg: 28.0,
+        // One house frontage (maps.ron ashgate.layout.perimeter.frontage_m). The floor of the
+        // FAR field: past aim_sep_full_reach_m the speed term collapses towards this and never
+        // past it, so two hooks are never provably on one facade (the FIND-039 collapse F-023
+        // exists to end). ⚠️ It is deliberately NOT a floor in the near field — 12 m of
+        // separation on a point 8 m away is +-48 deg, which is the defect, not the guard. What
+        // keeps the near field apart is aim_spread_floor_deg, an ANGLE.
+        aim_sep_floor_m: 12.0,
+        // The courtyard: lot_m 36 - 2 * wing_depth_m 11 = 14. Target while a rope holds. The
+        // second hook mid-swing is a CHAIN and belongs near your line — the bible's traversal
+        // tech is hook switching, not holding two wide anchors (docs/gameplay/references.md
+        // §5, „the left/right separation is which shoulder fires and which swerve you can
+        // chain, not two previews"). ⚠️ UNTUNED.
+        aim_sep_tether_m: 14.0,
+        // The block face (lot_m). Target on the ground or on a wall: standing still and
+        // picking a route, the two rays land on opposite edges of the block ahead of you.
+        // This is the key the user's complaint is measured against — at 100 m it takes the
+        // separation 93.9 m -> 36.0 m and at 200 m 187.8 m -> 36.0 m. ⚠️ UNTUNED.
+        aim_sep_stand_m: 36.0,
+        // The block PITCH (lot_m 36 + street_m 6). Target airborne and untethered: falling
+        // with nothing attached is the one state where the two rays may cross a street,
+        // because you are searching rather than steering. ⚠️ UNTUNED.
+        aim_sep_search_m: 42.0,
+        // ── THE NEAR-FIELD GOVERNOR, 2026-08-18 ───────────────────────────────────────────
+        // The distance at which the four targets above apply IN FULL. Nearer than this the
+        // budget is scaled by d / this, so the near field is a constant angle per state and
+        // the separation grows linearly with range.
+        //
+        // Why it exists: metres are the wrong unit at arm's length. 36 m of separation on a
+        // point 10 m away is +-61 deg, off the screen on both sides — so the model asked for
+        // it, the wheel's ceiling caught it, and the answer handed back was the wheel. The
+        // round that made the fan dynamic was therefore a MEASURED NO-OP where the game is
+        // actually played: 4 % narrower standing and 1 % airborne over 10..50 m, while
+        // Ashgate's own rulers put most hooks there (street 6 m, houses 6.5..11.5 m, so a
+        // roof-to-roof hook across a street is 6..20 m). docs/FINDINGS.md FIND-096.
+        //
+        // 108 = 3 * lot_m, and it is fixed by the handover, not chosen for the look of it:
+        // a GROUNDED player looking at the far edge of his own block (lot_m 36) gets
+        // 36 * 36/108 = 12 m between his hooks — exactly one house frontage, exactly
+        // aim_sep_floor_m. So the ramp meets the metre floor at the block face and nothing
+        // steps. What that buys at the wheel's default, against the game the user played:
+        //   10 m   9.39 m -> 3.33 m grounded, 3.89 m airborne   (a house front is 12 m)
+        //   25 m  23.47 m -> 8.33 m grounded, 9.72 m airborne   (a block face is 36 m)
+        //  100 m  93.90 m -> 33.3 m grounded
+        // and the wheel can no longer undo it: at the widest notch (44) the near field is
+        // 5.24 m at 10 m, because what governs it is this key and not the ceiling. ⚠️ UNTUNED.
+        aim_sep_full_reach_m: 108.0,
+        // ──────────────────────────────────────────────────────────────────────────────────
+        // Below this HORIZONTAL speed the state's target applies in full. = player.run_speed_m_s
+        // (6.0): below running you are not moving in Vector-Gear terms.
+        aim_sep_calm_speed_m_s: 6.0,
+        // At and above this HORIZONTAL speed the target is pinned to aim_sep_floor_m. NOT
+        // invented: 43.0 is the MEASURED peak of the chained-swing run (docs/FINDINGS.md
+        // FIND-041, 208 m in 7.23 s on the rope alone). An ordinary pure swing is 17-21 m/s
+        // (docs/QUESTIONS.md Q-018) and therefore lands at 30-41 % of the way down: noticeably
+        // tighter, not pinned. Horizontal and not total speed, deliberately — a straight 43 m/s
+        // drop would otherwise pin the fan at the moment a falling player wants the widest
+        // sweep. ⚠️ UNTUNED.
+        aim_sep_fast_speed_m_s: 43.0,
+        // ──────────────────────────────────────────────────────────────────────────────────
         reel_speed_m_s: 28.0,        // F-005 Reel-In
         min_rope_m: 3.0,          // any closer would drag the camera into the wall
         // Gauss-Seidel iterations over both rope constraints. With one iteration the second

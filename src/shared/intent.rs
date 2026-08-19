@@ -29,8 +29,8 @@ pub struct Intent {
     pub pitch: f32,
     /// Pressed buttons as a bit pattern.
     pub buttons: Buttons,
-    /// How far the two arms' aim rays stand apart, as a **half-angle off the look direction
-    /// in degrees** — the number the mouse wheel sets (`F-023`; the user, 2026-08-12:
+    /// How far the two arms' aim rays are **allowed** to stand apart, as a half-angle off the
+    /// look direction in degrees — the number the mouse wheel sets (`F-023`; the user, 2026-08-12:
     /// *„es muss mehr rechts und links spreaden!! (mit mausrad soll man einstellen können wie
     /// weit auseinander es gehen darf!)"*).
     ///
@@ -43,6 +43,15 @@ pub struct Intent {
     ///
     /// Degrees here and radians in the code is the axis convention of `docs/conventions.md`
     /// — read it through [`Intent::aim_spread_rad`], which also clamps.
+    ///
+    /// ⚠️ **Since 2026-08-18 this is a ceiling, not the angle.** The user, 2026-08-18: *„der
+    /// spread für seile ist zu weit auseinander und sollte mehr dynamisch sein!"* — and his own
+    /// word from 2026-08-12 decides the reading: *„wie weit auseinander es gehen **darf**"*.
+    /// What the two rays really open to is solved per tick in `vector::aim::
+    /// effective_spread_rad` out of this ceiling plus the aim distance, the movement state and
+    /// the horizontal speed. **The resolved angle never goes on the wire** — it is a local
+    /// recomputation from this replicated setting plus local simulation state, so a dropped
+    /// packet still costs nothing (`docs/multiplayer.md`).
     pub aim_spread_deg: f32,
     /// Which simulation tick. The server will later discard anything too old.
     pub tick: u64,
