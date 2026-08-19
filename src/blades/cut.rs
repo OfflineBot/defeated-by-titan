@@ -31,19 +31,43 @@
 //!
 //! Same crate, opposite rule. Whoever "fixes" the inconsistency breaks the game silently.
 //!
-//! ## What this file does not know
+//! ## Two casts, then a refinement — `F-032`, 2026-08-19
 //!
-//! A titan has exactly **one** body collider today — the root capsule (`src/titan/rig.rs:554`).
-//! So a non-cortex hit can be reported as "not the cortex" and no more than that; per-limb
-//! zones are `F-032`/`F-036` and are not built. [`HitZone::Torso`] is the honest name for
-//! "the blade found the body".
+//! Until 2026-08-19 a titan carried exactly **one** body collider, the root capsule, and this
+//! file said so: a non-cortex hit could be reported as "not the cortex" and no more than that,
+//! so `HitZone::ArmLeft`, `LegRight` and the rest had never been produced by anything in this
+//! game (`docs/FINDINGS.md` FIND-109). `titan::rig` now publishes each arm and each leg as a
+//! [`HitZoneOf`] box — **data, not a collider** — and the two casts stay exactly two:
+//!
+//! | step | what | zone |
+//! |---|---|---|
+//! | 1 | `cast_shape` on [`LAYER_TITAN_CORTEX`] | [`HitZone::Cortex`] — the only one that kills |
+//! | 2 | `cast_shape` on [`LAYER_TITAN_BODY`] | [`HitZone::Torso`], the honest catch-all |
+//! | 3 | [`limb_zone`] — the same swept blade against that titan's four limb boxes | the limb, if the blade really crossed one |
+//!
+//! **Step 3 is not a third collider, and that was measured.** A `Sensor` per limb on a layer of
+//! its own is the obvious build, it was the first build, and it broke `F-029` inside the hour:
+//! `vector::aim` casts the hook ray **unfiltered** on purpose and resolves the carrier off the
+//! collider entity, an arm sticks out of the root capsule, and a rope aimed at a titan started
+//! biting his arm — which carries no `Body` — instead of his body. A collision layer cannot fix
+//! that; avian's default filter has `mask: LayerMask::ALL`. So a titan's physics after `F-032`
+//! is bit for bit what it was before it, and the four zones cost the collision world nothing.
+//!
+//! **Why a refinement and not a replacement.** Every limb box lies inside or on the surface of
+//! the capsule (FIND-116), so the silhouette is what a cast finds first; the limb is the *more
+//! specific* answer to the same contact, and it is only asked for where the body already
+//! answered. Head and eye are still not produced — see `titan::rig::hit_zone` for why the head
+//! box was deliberately left out rather than renaming the graze of every measured cut in the
+//! game.
 
+use avian3d::parry::math::Pose3;
+use avian3d::parry::query::{cast_shapes, ShapeCastOptions};
 use avian3d::prelude::{Collider, ShapeCastConfig, SpatialQuery, SpatialQueryFilter};
 use bevy::prelude::*;
 
 use crate::data::{BladeTuning, GameData};
 use crate::shared::{
-    Blades, HitStop, HitZone, Intent, PlayerId, Side, Tick, TitanHit, TitanId, Velocity,
+    Blades, HitStop, HitZone, HitZoneOf, Intent, PlayerId, Side, Tick, TitanHit, TitanId, Velocity,
     LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
 };
 
@@ -59,6 +83,81 @@ pub struct BladeHit {
     pub zone: HitZone,
     /// How far along the sweep the blade met it, in metres.
     pub distance_m: f32,
+}
+
+/// **Which zones one swing has already reported**, per side, one bit per [`HitZone`] — `F-032`.
+///
+/// ## Why the boolean it replaces was not enough any more
+///
+/// `super::swing::Swing::has_grazed` is one bit: *this swing has already booked a non-cortex
+/// hit*. It exists because every titan is wider than his own neck, so a pass that ends in the
+/// nape meets the body one or more ticks earlier, and a single "this swing has landed" flag
+/// would end every swing on the shoulder.
+///
+/// With one bit for all seven non-cortex zones, **a limb could never be reported.** Measured
+/// 2026-08-19 on the real husk: the blade meets the root capsule at `z = −119.19` and the arm
+/// box at `z = −119.69`, 0.50 m apart — which at 30 m/s is exactly one tick, at 8 m/s is four
+/// ticks, and at 75 m/s is none at all. The zone a cut reported would have depended on how fast
+/// the player was flying, which is the sort of thing nobody finds for a month.
+///
+/// So the rule keeps its shape and gains a width: **each zone is reported at most once per
+/// swing.** A pass along a flank still books one `Torso` however many ticks it spends inside
+/// the silhouette; a pass that crosses the arm on the way books the arm as well, once.
+/// [`HitZone::Cortex`] is not in here at all — it has its own flag (`Swing::has_cut`) and it
+/// ends the swing.
+///
+/// It hangs on the **player**, not in a resource: twenty of them one day, each with his own
+/// swing (`docs/multiplayer.md` rule 3). It is per-swing scratch state and deliberately not a
+/// field of `Swing` — `src/blades/swing.rs` belonged to another hand the day this was written,
+/// and a component that is cleared from the same loop that reads it has one writer either way.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GrazedZones {
+    left: u8,
+    right: u8,
+}
+
+impl GrazedZones {
+    fn side(&self, side: Side) -> u8 {
+        match side {
+            Side::Left => self.left,
+            Side::Right => self.right,
+        }
+    }
+
+    fn side_mut(&mut self, side: Side) -> &mut u8 {
+        match side {
+            Side::Left => &mut self.left,
+            Side::Right => &mut self.right,
+        }
+    }
+
+    /// A swing that is not cutting carries no history into the next one.
+    pub fn clear(&mut self, side: Side) {
+        *self.side_mut(side) = 0;
+    }
+
+    pub fn contains(&self, side: Side, zone: HitZone) -> bool {
+        self.side(side) & bit_of(zone) != 0
+    }
+
+    pub fn insert(&mut self, side: Side, zone: HitZone) {
+        *self.side_mut(side) |= bit_of(zone);
+    }
+}
+
+/// One bit per zone. Spelled out rather than derived from a discriminant, so that adding a
+/// variant to [`HitZone`] is a compile error here and not a silent collision on bit 0.
+fn bit_of(zone: HitZone) -> u8 {
+    match zone {
+        HitZone::Cortex => 1 << 0,
+        HitZone::Head => 1 << 1,
+        HitZone::Eye => 1 << 2,
+        HitZone::ArmLeft => 1 << 3,
+        HitZone::ArmRight => 1 << 4,
+        HitZone::LegLeft => 1 << 5,
+        HitZone::LegRight => 1 << 6,
+        HitZone::Torso => 1 << 7,
+    }
 }
 
 /// The blade as a segment in **world** coordinates, for one side of one player.
@@ -105,10 +204,11 @@ pub fn blade_segment(
 pub fn wear_of(blades: &BladeTuning, zone: HitZone) -> f32 {
     match zone {
         HitZone::Cortex => blades.wear_per_hit,
-        // Everything else is a graze along hardened hide. `Head`/`Eye`/limbs are `F-032`/`F-036`
-        // and no cast produces them today (a titan has one body collider, `super::cut`'s header)
-        // — when they do, they are cuts into a limb and not into the nape, and this is the right
-        // default for them until someone measures otherwise.
+        // Everything else is a graze along hardened hide. Since 2026-08-19 that really does
+        // include the four limbs (`F-032`, `super::cut`'s header); `Head` and `Eye` still have
+        // no producer. A limb cut is a cut into a limb and not into the nape, and one rate for
+        // all of them is the right default until somebody measures otherwise — the factor is
+        // below 1.0 and `gear.ron` carries the argument for that next to the number.
         _ => blades.wear_per_hit * blades.wear_torso_factor,
     }
 }
@@ -155,12 +255,20 @@ pub fn spend(harness: &mut Blades, blades: &BladeTuning, zone: HitZone) -> bool 
 /// (`docs/multiplayer.md` rule 3).
 #[allow(clippy::type_complexity)]
 pub fn cut(
+    mut commands: Commands,
     data: Res<GameData>,
     space: SpatialQuery,
     tick: Res<Tick>,
     mut messages: MessageWriter<TitanHit>,
     parents: Query<&ChildOf>,
     titans: Query<(&TitanId, &Velocity)>,
+    // **The seam of `F-032`.** The boxes `titan::rig` published for each arm and each leg. This
+    // domain never learns how a titan is assembled — it walks down from the body the cast
+    // already found and asks each box what it is (`docs/FINDINGS.md` FIND-109). `Children` is
+    // Bevy's own relation: reading it is not an edge into `titan/`, the same argument
+    // [`owner`] makes about `ChildOf`.
+    children: Query<&Children>,
+    limbs: Query<(&HitZoneOf, &GlobalTransform)>,
     // `&mut Blades` and not `Option<&mut Blades>`: `player::spawn_player` gives every player a
     // harness, and a player without one has no blades and therefore never cuts — the same shape
     // `super::swing::equip` documents for `Swings`. `blades` is the **only** writer of `Blades`
@@ -179,14 +287,33 @@ pub fn cut(
         &mut SweptFrom,
         &mut Blades,
         Option<&HitStop>,
+        // `F-032`: which zones this player's two swings have already booked. `Option`, because
+        // it is scratch state that no spawner has to remember — the first swing that reports
+        // anything brings it into being, and from then on it is written in place.
+        Option<&mut GrazedZones>,
     )>,
 ) {
     let blades = &data.gear.blades;
     let eye_height_m = data.game.player.eye_height_m;
 
-    for (entity, id, intent, transform, velocity, timing, mut swings, mut from, mut harness, stop) in
-        &mut players
+    for (
+        entity,
+        id,
+        intent,
+        transform,
+        velocity,
+        timing,
+        mut swings,
+        mut from,
+        mut harness,
+        stop,
+        grazed,
+    ) in &mut players
     {
+        // One local copy per player per tick: both sides are decided against it and it is
+        // written back once, so two blades landing on the same tick cannot lose each other's
+        // bit through two competing `insert`s.
+        let mut zones_seen = grazed.as_deref().copied().unwrap_or_default();
         let now = transform.translation;
         // **The displacement of this tick**, and nothing derived from a velocity: the clamp
         // (`F-012`) and every contact of the step sit between `Velocity` and what the body
@@ -219,6 +346,12 @@ pub fn cut(
 
         for side in Side::ALL {
             let swing = swings.side_mut(side);
+            if !swing.is_active(timing) {
+                // Outside the cutting window there is no swing to remember. Cleared here and
+                // not on the swing's edge, so that this file owns the whole life of the bits it
+                // reads (`super::swing::Swing::start` clears `has_grazed` at the same moment).
+                zones_seen.clear(side);
+            }
             if !swing.is_active(timing) || swing.has_cut {
                 continue;
             }
@@ -227,19 +360,32 @@ pub fn cut(
             let Some(hit) = sweep(&space, entity, blades.thickness_m, a, b, delta) else {
                 continue;
             };
-            // **A graze is reported once, a cut ends the swing.** Every titan is wider than his
-            // own neck, so the blade meets the body one or more ticks before the nape; one
-            // single "this swing has landed" flag would end every swing on the shoulder and
-            // make the cortex unreachable on every kind (`super::swing::Swing::has_grazed`).
-            if hit.zone != HitZone::Cortex && swing.has_grazed {
-                continue;
-            }
             // The hit entity is the collider. The `TitanId` hangs on the root of the rig, so
             // walk up — `combat` may not know how a titan is assembled, and it does not have
             // to: `ChildOf` is Bevy's, not `titan`'s.
-            let Some((titan_id, titan_velocity)) = owner(&parents, &titans, hit.collider) else {
+            let Some((root, titan_id, titan_velocity)) = owner(&parents, &titans, hit.collider)
+            else {
                 continue;
             };
+
+            // **`F-032`: the body answered, now ask which part of it.** Only here, only for this
+            // titan, and only when the cast found the silhouette rather than the nape.
+            let zone = match hit.zone {
+                HitZone::Torso => {
+                    let capsule = Collider::capsule_endpoints(blades.thickness_m, a, b);
+                    limb_zone(&children, &limbs, root, &capsule, delta).unwrap_or(HitZone::Torso)
+                }
+                other => other,
+            };
+            // **Each zone is reported once, a cut ends the swing.** Every titan is wider than
+            // his own neck, so the blade meets the body one or more ticks before the nape; one
+            // single "this swing has landed" flag would end every swing on the shoulder and
+            // make the cortex unreachable on every kind (`super::swing::Swing::has_grazed`).
+            // Since `F-032` the flag is one bit per zone and not one bit in total — see
+            // [`GrazedZones`] for the measurement that made the difference matter.
+            if zone != HitZone::Cortex && zones_seen.contains(side, zone) {
+                continue;
+            }
 
             // **The CLOSING speed**, projected on the direction the blade travelled — not
             // `|v|`. A player flying past parallel to a running titan closes on nothing, and
@@ -253,10 +399,14 @@ pub fn cut(
                 continue;
             }
 
-            if hit.zone == HitZone::Cortex {
+            if zone == HitZone::Cortex {
                 swing.has_cut = true;
             } else {
+                // Both, and they are not the same statement: `has_grazed` is `blades::swing`'s
+                // own "this swing has touched a body" and stays exactly what it was, while the
+                // mask is what decides whether THIS zone may still be reported.
                 swing.has_grazed = true;
+                zones_seen.insert(side, zone);
             }
             // Loud, once per swing per zone. A cut that lands is the single most important
             // event in this game, and a `--script` run has no other way to say when it
@@ -264,12 +414,12 @@ pub fn cut(
             // line.
             info!(
                 "tick {}: cut titan {} {:?} at {:.2} m/s (player {})",
-                tick.0, titan_id.0, hit.zone, closing_m_s, id.0
+                tick.0, titan_id.0, zone, closing_m_s, id.0
             );
             messages.write(TitanHit {
                 titan: titan_id,
                 by: *id,
-                zone: hit.zone,
+                zone,
                 speed_m_s: closing_m_s,
             });
 
@@ -281,7 +431,7 @@ pub fn cut(
             // `&mut harness` is the first `DerefMut` on this player this tick, and it is inside
             // this branch on purpose: `Changed<Blades>` now means "the harness really moved",
             // which is what `hud::blade_pips` and every future listener get to rely on.
-            if spend(&mut harness, blades, hit.zone) {
+            if spend(&mut harness, blades, zone) {
                 // Loud, like the cut above it: drawing a spare is one of five moments in a whole
                 // mission, and a `--script` run has no other way to see it happen.
                 info!(
@@ -291,6 +441,22 @@ pub fn cut(
             }
             if harness.is_broken() {
                 info!("tick {}: player {} is out of blades — a rack is the way back", tick.0, id.0);
+            }
+        }
+
+        match grazed {
+            // In place: no `Commands`, no flush, and no `Changed` on a player who is not cutting
+            // — the component is only written when the mask really moved.
+            Some(mut on_body) => {
+                if *on_body != zones_seen {
+                    *on_body = zones_seen;
+                }
+            }
+            // The first swing of this player that booked anything brings it into being.
+            None => {
+                if zones_seen != GrazedZones::default() {
+                    commands.entity(entity).insert(zones_seen);
+                }
             }
         }
     }
@@ -309,6 +475,9 @@ pub fn closing_speed(player_m_s: Vec3, titan_m_s: Vec3, delta_m: Vec3) -> f32 {
 }
 
 /// **Two casts, cortex first.** See the module header for why the order is the mechanism.
+///
+/// The limb zones are **not** in here: they are not colliders, and they are asked for by
+/// [`limb_zone`] afterwards, only where this function already answered [`HitZone::Torso`].
 ///
 /// `entity` is excluded so that the player's own capsule can never answer — it is on avian's
 /// default bit and would not match either mask today, but the day somebody hangs
@@ -351,7 +520,62 @@ pub fn sweep(
     None
 }
 
-/// From a collider entity up to the body that owns it.
+/// **Which limb the blade really crossed** — `F-032`, and the whole of the secondary hit zones.
+///
+/// Asked **only** where [`sweep`] already answered [`HitZone::Torso`], and only about the
+/// descendants of the one titan that answered. That is rule 6's half of this feature: no
+/// system in this file ever walks all the limbs in the world to answer a question about the
+/// body in front of the blade — with nothing hit, this function is not called at all, and with
+/// something hit it is four box tests.
+///
+/// The test is the same swept capsule the cast used, run against each box with `parry`'s own
+/// `cast_shapes` instead of the spatial tree. That is not an approximation of the cast: it is
+/// the identical algorithm avian calls one level up (`SpatialQuery::cast_shape` walks the BVH
+/// and then dispatches to exactly this). What it does not need is a collider in the world, and
+/// that is the point — see the module header.
+///
+/// Ties break on the **earlier** impact, so a blade that crosses an arm and a leg in one tick
+/// reports the one it reached first.
+pub fn limb_zone(
+    children: &Query<&Children>,
+    limbs: &Query<(&HitZoneOf, &GlobalTransform)>,
+    root: Entity,
+    blade: &Collider,
+    delta_m: Vec3,
+) -> Option<HitZone> {
+    let here = Pose3::from_parts(Vec3::ZERO, Quat::IDENTITY);
+    let options = ShapeCastOptions { max_time_of_impact: 1.0, ..default() };
+    let mut best: Option<(f32, HitZone)> = None;
+    for entity in children.iter_descendants(root) {
+        let Ok((zone, at)) = limbs.get(entity) else {
+            continue;
+        };
+        let (_, rotation, translation) = at.to_scale_rotation_translation();
+        let half = zone.half_extent_m;
+        let box_shape = Collider::cuboid(half.x * 2.0, half.y * 2.0, half.z * 2.0);
+        // `vel1 = delta_m` over a unit of time, so `max_time_of_impact: 1.0` is exactly the
+        // displacement of this tick — the same window `ShapeCastConfig::from_max_distance` gives
+        // the cast above.
+        let Ok(Some(hit)) = cast_shapes(
+            &here,
+            delta_m,
+            &**blade.shape_scaled(),
+            &Pose3::from_parts(translation, rotation),
+            Vec3::ZERO,
+            &**box_shape.shape_scaled(),
+            options,
+        ) else {
+            continue;
+        };
+        if best.is_none_or(|(t, _)| hit.time_of_impact < t) {
+            best = Some((hit.time_of_impact, zone.zone));
+        }
+    }
+    best.map(|(_, zone)| zone)
+}
+
+/// From a collider entity up to the body that owns it — the **root entity**, its id and its
+/// velocity.
 ///
 /// The cortex is a grandchild of the root (`src/titan/rig.rs`), the body capsule sits on the
 /// root itself — so this walks up until it finds the [`TitanId`], and gives up rather than
@@ -360,11 +584,11 @@ fn owner(
     parents: &Query<&ChildOf>,
     titans: &Query<(&TitanId, &Velocity)>,
     collider: Entity,
-) -> Option<(TitanId, Velocity)> {
+) -> Option<(Entity, TitanId, Velocity)> {
     let mut at = collider;
     loop {
         if let Ok((id, velocity)) = titans.get(at) {
-            return Some((*id, *velocity));
+            return Some((at, *id, *velocity));
         }
         at = parents.get(at).ok()?.parent();
     }

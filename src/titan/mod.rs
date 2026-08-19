@@ -303,6 +303,7 @@ pub fn spawn_titan(
             windup_arm_deg: s.windup_arm_deg,
             windup_lean_deg: s.windup_lean_deg,
             strike_arm_deg: s.strike_arm_deg,
+            roll_lean_deg: s.roll_lean_deg,
         },
         // **A titan lives as long as the sortie he was spawned into, and not one tick
         // longer.** See the module head, "How long a titan lives".

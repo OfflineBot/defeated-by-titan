@@ -38,8 +38,8 @@ use defeated_by_titan::data::GameData;
 use defeated_by_titan::debug::DebugOverlay;
 use defeated_by_titan::mission::MissionPhase;
 use defeated_by_titan::shared::{
-    Cli, HitZone, ModelAnchors, PlayerId, SpawnTitan, StateClock, TitanHit, TitanId, TitanKindName,
-    TitanState, CORTEX_ANCHOR,
+    Cli, HitZone, HitZoneOf, ModelAnchors, PlayerId, SpawnTitan, StateClock, TitanHit, TitanId,
+    TitanKindName, TitanState, CORTEX_ANCHOR,
 };
 use defeated_by_titan::titan::rig::{PartExtent, TitanPart};
 use defeated_by_titan::titan::{spawnable, SpawnRefused};
@@ -410,6 +410,7 @@ fn f050_the_overlay_agrees_with_the_pose() {
         windup_arm_deg: d.scale.titan.windup_arm_deg,
         windup_lean_deg: d.scale.titan.windup_lean_deg,
         strike_arm_deg: d.scale.titan.strike_arm_deg,
+        roll_lean_deg: d.scale.titan.roll_lean_deg,
     };
     let timing = TitanTiming::of(husk, d.game.simulation_hz);
     let pose = pose_of(TitanState::Windup, clock.ticks_in_state, &timing, &angles);
@@ -732,17 +733,133 @@ fn f064_no_kind_spawns_above_the_class_cap() {
         }
     }
 
-    assert!(spawned > 0 && refused > 0, "{spawned} spawned, {refused} refused — a cap that \
-         refuses nothing or allows nothing tests nothing");
-    // The bellower is `huge` and therefore unspawnable this session. That is intended
-    // (docs/QUESTIONS.md Q-028) and it is the one row this test pins down by name.
-    assert!(
-        matches!(spawnable(&d, "bellower"), Err(SpawnRefused::AboveClassCap { .. })),
-        "the bellower is `huge` and must not spawn while the cap is `large`"
-    );
+    assert!(spawned > 0, "the cap allows nothing at all — nothing above was measured");
     assert!(
         matches!(spawnable(&d, "no_such_titan"), Err(SpawnRefused::UnknownKind { .. })),
         "an unknown kind must be refused by name, not silently ignored"
+    );
+    println!("F-064 cap `{}`: {spawned} kinds spawn, {refused} are refused", d.scale.titan.max_spawnable_class);
+}
+
+/// ★ **The refusal path itself, against a cap this test sets — not against the shipped one.**
+///
+/// It used to be one assertion inside the test above: *"`spawned > 0 && refused > 0`, a cap that
+/// refuses nothing or allows nothing tests nothing"*. That sentence is right and the place was
+/// wrong, and `docs/FINDINGS.md` FIND-118 measured what it cost: with the shipped cap raised to
+/// `huge` **nothing in `titan.ron` is refused any more** — `boss` is the only class above it and
+/// no kind names it — so three assertions in that test went red for a change that had nothing to
+/// do with them. A user decision that is one line in a RON file was, in practice, one line plus
+/// three assertions in a test file, and the entry that recorded it could not fix that because
+/// `tests/titan.rs` belonged to another round.
+///
+/// So the **mechanism** is measured here, on a cap this test chooses, and the **file** is
+/// measured above. Whatever `scale.ron: max_spawnable_class` is set to, exactly one of the two
+/// has to move — and it is never this one.
+#[test]
+fn f064_the_cap_refuses_by_name_whatever_the_shipped_cap_happens_to_be() {
+    let app = app();
+    let mut d = data(&app);
+
+    // The smallest class in the table, so that everything above it is refused however the file
+    // is tuned. Not a made-up class name: an unknown cap is `SpawnRefused::UnknownCap` and a
+    // different claim.
+    let (smallest, floor) = d
+        .scale
+        .titan
+        .classes
+        .iter()
+        .min_by(|a, b| a.1.height_m.total_cmp(&b.1.height_m))
+        .map(|(name, class)| (name.clone(), class.height_m))
+        .expect("scale.ron has size classes");
+    d.scale.titan.max_spawnable_class = smallest.clone();
+
+    let mut refused = 0usize;
+    let mut allowed = 0usize;
+    for (name, kind) in &d.titans.kinds {
+        let class = d.size_class(&kind.size_class).expect("every kind names a class");
+        match spawnable(&d, name) {
+            Err(refusal) => {
+                refused += 1;
+                assert!(
+                    class.height_m > floor,
+                    "{name} is {} m under a cap of {floor} m and was refused anyway: {refusal}",
+                    class.height_m
+                );
+                assert!(
+                    matches!(refusal, SpawnRefused::AboveClassCap { .. }),
+                    "{name} was refused, but not by the class cap: {refusal:?}"
+                );
+            }
+            Ok(_) => {
+                allowed += 1;
+                assert!(class.height_m <= floor, "{name} is above the cap and was allowed");
+            }
+        }
+    }
+    assert!(
+        allowed > 0 && refused > 0,
+        "cap `{smallest}` ({floor} m) allowed {allowed} and refused {refused} — a cap that \
+         refuses nothing or allows nothing tests nothing"
+    );
+    println!("F-064 refusal path at cap `{smallest}`: {allowed} allowed, {refused} refused");
+}
+
+/// **The bellower is blocked on purpose, and this is the one place that says so.**
+///
+/// `docs/QUESTIONS.md` Q-028 is a user decision taken in his absence and `assets/data/scale.ron`
+/// carries the line. What this test adds is that the block is now **really** one line: it is the
+/// only assertion in the repository that names the bellower against the cap, so lifting
+/// `max_spawnable_class` to `"huge"` means editing `scale.ron` and deleting this function —
+/// nothing else moves (FIND-118 measured the version where three other assertions did).
+///
+/// **Why it is still blocked, argued rather than inherited.** His mechanic is the *call*, and it
+/// is real and measured (`tests/mission.rs::f062_a_bellowers_call_reaches_a_husk_that_is_blind_on
+/// _his_own`). What he is *for* is the **ear** — `docs/gameplay/enemies.md`: he reacts to the
+/// **sound of gas**, and the whole stealth layer of the enemy chapter hangs off that one
+/// sentence. `F-051`, the perception model, does not exist. So a spawnable bellower today calls
+/// on **sight**, at `aggro_radius_m` 70, and wakes every titan within `call_radius_m` 90 for 25
+/// seconds — with no counterplay at all, because the counterplay the design specifies is "spend
+/// less gas" and nothing can hear gas.
+///
+/// 🔴 **And the second half is worse than hollow, and it was measured on 2026-08-19 by raising
+/// the cap and running the suite: he cannot be killed.** `Q-030`'s arithmetic on a 21 m body —
+/// `width_fraction` 0.25 gives a radius of 2.625 m, plus the player's 0.35 m is 2.975 m of
+/// clearance, against `reach_m` 1.60 + `cortex_radius_m` 0.70 + `thickness_m` 0.12 = 2.42 m of
+/// blade. **−0.555 m.** No flying pass reaches that nape at any offset and at any speed, and
+/// `q030_a_titan_wide_enough_really_does_put_the_nape_out_of_reach` says so the moment he is
+/// spawnable. A kind that cannot do the one thing he is for is a judgement call; a kind the
+/// player cannot kill is a bug with a body. The number below is that arithmetic, so this test
+/// carries the reason and not only the decision.
+#[test]
+fn f064_the_bellower_stays_blocked_until_the_ear_exists() {
+    let app = app();
+    let d = data(&app);
+    let bellower = &d.titans.kinds["bellower"];
+    assert_eq!(
+        bellower.size_class, "huge",
+        "the bellower changed class — then this block is about something else"
+    );
+    assert!(
+        matches!(spawnable(&d, "bellower"), Err(SpawnRefused::AboveClassCap { .. })),
+        "the bellower spawns. If that is intended, `F-051`'s ear exists or the user said so — \
+         delete this test and say which (docs/QUESTIONS.md Q-028, docs/FINDINGS.md FIND-118)"
+    );
+
+    // The reason, as a number, out of the same three files `Q-030` reads.
+    let rig = TitanRig::of(&d, bellower).expect("the bellower has a rig even unspawned");
+    let clearance_m = rig.width_m * 0.5 + d.game.player.radius_m;
+    let budget_m = d.gear.blades.reach_m + rig.cortex_radius_m + d.gear.blades.thickness_m;
+    let margin_m = budget_m - clearance_m;
+    assert!(
+        margin_m < 0.0,
+        "the bellower's nape is reachable now ({margin_m:+.3} m of margin) — the strongest \
+         argument for keeping him out has gone, and the block is a design decision again"
+    );
+    println!(
+        "F-064 the bellower ({}) stays out while max_spawnable_class is `{}` — Q-028, and his \
+         nape is {margin_m:+.3} m out of reach anyway ({budget_m:.3} m of blade against \
+         {clearance_m:.3} m of clearance)",
+        bellower.size_class, d.scale.titan.max_spawnable_class
     );
 }
 
@@ -1393,6 +1510,7 @@ fn f053_the_wind_up_moves_the_hand_far_enough_to_see() {
             windup_arm_deg: d.scale.titan.windup_arm_deg,
             windup_lean_deg: d.scale.titan.windup_lean_deg,
             strike_arm_deg: d.scale.titan.strike_arm_deg,
+            roll_lean_deg: d.scale.titan.roll_lean_deg,
         };
         let hand_of = |pose: Pose| {
             let pelvis = Transform::from_xyz(0.0, rig.leg_m, 0.0);
@@ -2420,3 +2538,49 @@ fn record_releases(mut log: ResMut<ReleaseLog>, mut released: MessageReader<Hook
     log.0.extend(released.read().copied());
 }
 
+
+/// ★ **Rule 6, structurally: `F-032` added four hit zones and not one collider.**
+///
+/// The perf question this feature owes an answer to is *"limb colliders multiply collider
+/// count"*, and the answer is that there are none. A titan carries exactly the two colliders he
+/// carried on 2026-08-18 — the root capsule and the cortex sensor — so the broad phase, avian's
+/// collider tree, `world::index` and every unfiltered ray in the game (`vector::aim`'s above
+/// all) see a body that has not changed at all. The four [`HitZoneOf`] boxes are plain data and
+/// are only ever looked at from `blades::cut::limb_zone`, on a tick where a blade already found
+/// the body.
+///
+/// It is also the guard on the version of this feature that was built first and taken back out:
+/// a `Sensor` per limb on a layer of its own **broke `F-029`** within the hour, because
+/// `vector::aim` casts unfiltered and an arm sticks out of the capsule. This test is what goes
+/// red if anybody rebuilds it that way.
+#[test]
+fn f032_the_limb_zones_are_data_and_the_body_still_carries_two_colliders() {
+    let mut app = app();
+    spawn(&mut app, "husk", Vec3::new(0.0, 0.0, -200.0));
+    ticks(&mut app, 2);
+    let root = the_titan(&mut app);
+
+    let colliders: Vec<&str> = rig_entities(&app, root)
+        .into_iter()
+        .filter(|e| app.world().get::<Collider>(*e).is_some())
+        .map(|e| app.world().get::<Name>(e).map(|n| n.as_str()).unwrap_or("?"))
+        .collect();
+    assert_eq!(
+        colliders.len(),
+        2,
+        "the husk carries {} colliders ({colliders:?}). It carried two before F-032 — the root \
+         capsule and the cortex sensor — and a limb collider is not a cheaper hit zone, it is a \
+         surface `vector::aim`'s unfiltered hook ray runs into (docs/FINDINGS.md, F-029)",
+        colliders.len()
+    );
+
+    let zones: Vec<HitZone> = rig_entities(&app, root)
+        .into_iter()
+        .filter_map(|e| app.world().get::<HitZoneOf>(e).map(|z| z.zone))
+        .collect();
+    assert_eq!(zones.len(), 4, "the husk publishes {} hit zones: {zones:?}", zones.len());
+    for wanted in [HitZone::ArmLeft, HitZone::ArmRight, HitZone::LegLeft, HitZone::LegRight] {
+        assert!(zones.contains(&wanted), "no {wanted:?} box on the rig: {zones:?}");
+    }
+    println!("F-032 the husk: colliders {colliders:?}, hit zones {zones:?}");
+}

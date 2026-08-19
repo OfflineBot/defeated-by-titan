@@ -1510,7 +1510,8 @@ fn f033_a_player_at_a_rack_of_the_hub_walks_away_restocked() {
 
 use avian3d::prelude::ColliderDisabled;
 use defeated_by_titan::shared::{TitanKindName, TitanState};
-use defeated_by_titan::titan::brain::Guard;
+use defeated_by_titan::shared::StateClock;
+use defeated_by_titan::titan::brain::{Guard, TitanTiming};
 
 /// Every titan of one kind: its root entity, where it stands, and what it is doing.
 fn bodies_of(app: &mut App, kind: &str) -> Vec<(Entity, Vec3, TitanState)> {
@@ -1734,6 +1735,14 @@ fn f059_the_weavers_nape_is_out_of_the_world_until_he_commits() {
 /// `docs/gameplay/enemies.md`'s *"arms first, then the cortex"*, and it is the one kind in the
 /// roster whose fight has two steps.
 ///
+/// ⚠️ **"Arms first" is still the design and still not the code.** `F-060`'s acceptance names
+/// the arms — *"Frontalangriff auf Arme oeffnet den Cortex"* — and since `F-032` gave the limbs
+/// their own zones the arm hit exists to be read. It is not read yet: narrowing the opener to
+/// the two arm zones reddens four 🟧 reach rows that reach the warden's cortex only because
+/// their own pass grazes his torso first. The second half of this test is the half that is new:
+/// **an arm cut opens him too**, so the day the narrowing lands, this line already holds.
+/// `titan::brain::receive_hits` carries the one-line diff and the reason.
+///
 /// **Red when:** the warden's `cortex_guard` is set to `Always`.
 #[test]
 fn f060_a_body_cut_opens_the_wardens_nape_and_time_closes_it_again() {
@@ -1755,10 +1764,11 @@ fn f060_a_body_cut_opens_the_wardens_nape_and_time_closes_it_again() {
     };
     assert!(open_ticks > 0, "titan.ron: the warden's cortex_guard has to be WhenOpened(s)");
 
-    // The same message a blade through the chest writes (`scripts/f032-swords.txt` act B).
     let warden_id = *app.world().get::<TitanId>(warden).expect("a warden carries a TitanId");
     let husk_id = *app.world().get::<TitanId>(husk).expect("a husk carries a TitanId");
     let by = a_player(&mut app);
+
+    // The same message a blade through the chest writes (`scripts/f032-swords.txt` act B).
     for titan in [warden_id, husk_id] {
         app.world_mut().write_message(TitanHit {
             titan,
@@ -1777,7 +1787,27 @@ fn f060_a_body_cut_opens_the_wardens_nape_and_time_closes_it_again() {
         nape_is_covered(&mut app, warden),
         "the warden's nape stayed open past his own {open_ticks} ticks — the window is not a window"
     );
-    println!("F-060 the warden's nape opened on a torso hit and closed again after {open_ticks} ticks");
+    // **And the arm opens him too** — the zone `blades::cut::limb_zone` produces for a blade
+    // across the arm box, which did not exist before `F-032`
+    // (`tests/combat.rs::f032_a_cut_through_the_arm_is_an_arm_hit_and_never_the_torso`). Today
+    // that is one zone among several; the day `receive_hits` narrows the opener to the arms it
+    // is the only one, and this assertion is what carries over unchanged.
+    app.world_mut().write_message(TitanHit {
+        titan: warden_id,
+        by,
+        zone: HitZone::ArmRight,
+        speed_m_s: 20.67,
+    });
+    ticks(&mut app, 3);
+    assert!(
+        !nape_is_covered(&mut app, warden),
+        "a cut into the warden's ARM did not open his nape — that is F-060's own acceptance \
+         sentence, and it is the one zone that must never stop working"
+    );
+    println!(
+        "F-060 the warden's nape opened on a torso hit and on an arm hit, and closed again \
+         after {open_ticks} ticks"
+    );
 }
 
 /// **`F-061` — the lurker never takes a step, and that is the whole kind.**
@@ -1953,4 +1983,134 @@ fn f065_every_wave_of_every_difficulty_asks_for_a_kind_that_may_spawn() {
         }
     }
     assert!(seen > 10, "only {seen} waves were checked — missions.ron got smaller, not the test");
+}
+
+/// ★ **`F-059` — the roll, and this is the half `shared/state.rs` was needed for.**
+///
+/// The roster round built the weaver's *lesson* (`cortex_guard: WhenCommitted` — his nape is
+/// out of the world unless he is committed to his own attack) and said so plainly: the roll
+/// itself needs a [`TitanState`] arm, and that file was another hand's. This is the arm.
+///
+/// The backlog's acceptance sentence is *"Rolle hat lesbares Startup, danach garantierte
+/// Unverwundbarkeit fuer definierte Dauer"* (`F-059`), and the state is cut along exactly that
+/// line — so this test asks for exactly those three things:
+///
+/// 1. his attack **ends in a roll** and not in a walk back to `Pursue`;
+/// 2. the roll's `roll_startup_s` is a window in which the nape is **still a target** — the tell
+///    is readable *and* punishable, which is what makes it a startup and not a cheat;
+/// 3. after it, and until the roll is over, the cortex is **out of the world** — the guaranteed
+///    invulnerability, with a number on it;
+/// 4. and the body has moved **backwards** by the end of it, so the roll costs the player
+///    position and not only time.
+///
+/// **Red when:** `titan.ron: weaver.behaviour.roll_s` goes to 0 (he never enters the state), or
+/// `roll_startup_s` is raised to `roll_s` (no i-frames), or `Guard::open` stops making the
+/// startup an exception.
+#[test]
+fn f059_the_weavers_attack_ends_in_a_roll_that_is_readable_first_and_untouchable_after() {
+    let mut app = a_field();
+    spawn_titan(&mut app, "weaver", Vec3::new(0.0, 0.0, 12.0));
+    ticks(&mut app, 4);
+    let weaver = one_body(&mut app, "weaver").0;
+
+    let (roll_ticks, startup_ticks) = {
+        let d = data(&app);
+        let t = TitanTiming::of(&d.titans.kinds["weaver"], d.game.simulation_hz);
+        (t.roll_ticks, t.roll_startup_ticks)
+    };
+    assert!(
+        roll_ticks > startup_ticks && startup_ticks > 0,
+        "titan.ron: the weaver's roll is {roll_ticks} ticks with a {startup_ticks}-tick startup \
+         — a roll with no startup is invulnerability with no tell, and a roll that is all \
+         startup has no invulnerability in it at all"
+    );
+
+    // He walks 7 m/s into a 2.5 m reach from 12 m, so the whole cycle is inside four seconds.
+    // Sampled every tick, because what is under test is WHERE inside the state things change.
+    let mut seen: Vec<(u32, TitanState, bool, f32)> = Vec::new();
+    let mut rolled = false;
+    for _ in 0..600 {
+        ticks(&mut app, 1);
+        let state = *app.world().get::<TitanState>(weaver).expect("the weaver has a state");
+        let at = app.world().get::<Transform>(weaver).expect("a body").translation;
+        let n = app.world().get::<StateClock>(weaver).expect("a clock").ticks_in_state;
+        if state == TitanState::Roll {
+            rolled = true;
+            seen.push((n, state, nape_is_covered(&mut app, weaver), at.z));
+        } else if rolled {
+            break;
+        }
+    }
+    assert!(rolled, "the weaver never rolled in ten seconds — his attack still ends in Pursue");
+    assert!(seen.len() as u32 >= roll_ticks - 1, "the roll lasted {} ticks, not {roll_ticks}", seen.len());
+
+    // 2. The startup is open. One tick of grace at the seam: `guard_the_cortex` queues its
+    //    `Commands` and Bevy applies them at the next flush.
+    let open_in_startup = seen.iter().filter(|(n, _, covered, _)| *n + 1 < startup_ticks && !covered).count();
+    assert!(
+        open_in_startup > 0,
+        "the weaver's nape was covered for every one of the {startup_ticks} startup ticks: \
+         {seen:?}. Then the tell is not a window and the roll is a free escape"
+    );
+
+    // 3. …and the rest of the roll is not. This is the acceptance sentence.
+    let late: Vec<_> = seen.iter().filter(|(n, _, _, _)| *n > startup_ticks + 1).collect();
+    assert!(!late.is_empty(), "the roll has no ticks after its own startup: {seen:?}");
+    assert!(
+        late.iter().all(|(_, _, covered, _)| *covered),
+        "the weaver was cuttable after his startup: {late:?} — F-059 asks for GUARANTEED \
+         invulnerability for a defined duration, and a guarantee with a hole is not one"
+    );
+
+    // 4. And he really left. He stands at z = +12 and the player at the origin, so a retreat is
+    //    an increase in z.
+    let (_, _, _, first) = seen.first().copied().expect("the roll had a first tick");
+    let (_, _, _, last) = seen.last().copied().expect("the roll had a last tick");
+    assert!(
+        last - first > 1.0,
+        "the weaver rolled {:.2} m backwards — a roll that does not move is a timer",
+        last - first
+    );
+    println!(
+        "F-059 the weaver's roll: {} ticks ({startup_ticks} of startup), nape open for {} of \
+         them, {:.2} m of retreat",
+        seen.len(),
+        seen.iter().filter(|(_, _, c, _)| !c).count(),
+        last - first
+    );
+}
+
+/// **The control: seven of eight kinds never enter the state at all.**
+///
+/// `TitanState`'s own doc calls a variant nothing enters or leaves "decoration"; the mirror of
+/// that failure is a variant *everything* enters, which would turn the whole roster into
+/// weavers. `roll_s: 0.0` is what says "this kind does not roll", and this is the test that it
+/// is read.
+#[test]
+fn f059_only_the_weaver_rolls_and_the_file_is_what_says_so() {
+    let app = a_field();
+    let d = data(&app);
+    let hz = d.game.simulation_hz;
+    let rollers: Vec<&String> =
+        d.titans.kinds.iter().filter(|(_, k)| k.behaviour.roll_s > 0.0).map(|(n, _)| n).collect();
+    assert_eq!(
+        rollers,
+        vec!["weaver"],
+        "titan.ron: {rollers:?} roll. The roll is the weaver's identity (docs/gameplay/enemies.md) \
+         and a second kind with it is a reskin of him"
+    );
+    for (name, kind) in &d.titans.kinds {
+        let t = TitanTiming::of(kind, hz);
+        if kind.behaviour.roll_s <= 0.0 {
+            assert_eq!(t.roll_ticks, 0, "{name} has roll_s 0 and still resolves {} roll ticks", t.roll_ticks);
+            continue;
+        }
+        assert!(
+            t.roll_startup_ticks > 0 && t.roll_startup_ticks < t.roll_ticks,
+            "{name}: {} startup ticks out of {} — see F-059's acceptance",
+            t.roll_startup_ticks,
+            t.roll_ticks
+        );
+    }
+    println!("F-059 rollers in titan.ron: {rollers:?}");
 }

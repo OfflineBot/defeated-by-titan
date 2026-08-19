@@ -248,11 +248,13 @@ impl HitStop {
 /// purely so that a debug overlay can print one word — and an allow list that grows for
 /// reasons like that stops being a rule.
 ///
-/// ⚠️ **Two arms are missing on purpose, do not "complete" the enum.** `Alerted` belongs to
-/// `F-051` and `Stagger` to `F-032`, neither of which is being built this session. Adding a
-/// variant with nothing that enters or leaves it produces an FSM that is decoration — a state
-/// that is set correctly while nothing gates on it, which is exactly what `F-050`'s
-/// tick-count test exists to catch.
+/// ⚠️ **Arms are still missing on purpose, do not "complete" the enum.** `Alerted` belongs to
+/// `F-051` and `Stagger` to `F-032`, neither of which is built. Adding a variant with nothing
+/// that enters or leaves it produces an FSM that is decoration — a state that is set correctly
+/// while nothing gates on it, which is exactly what `F-050`'s tick-count test exists to catch.
+/// [`Roll`](Self::Roll) is the counter-example and it earned its place: something enters it
+/// (`titan::brain::decide`), something leaves it, the pose changes inside it, the body moves
+/// inside it, and the cortex sensor goes out of the world halfway through it.
 ///
 /// **How long each state lasts stands in `titan.ron`** (`windup_s`, `strike_s`, `recover_s`,
 /// `death_s`), in ticks, never in `Time::delta_secs()` — the pose is a pure function of
@@ -270,6 +272,17 @@ pub enum TitanState {
     Strike,
     /// **The punish window.** The reason an attack is worth baiting.
     Recover,
+    /// `F-059` — **the weaver's backward roll, and the only invulnerability in this game.**
+    ///
+    /// The design's sentence is *"Rolle hat lesbares Startup, danach garantierte
+    /// Unverwundbarkeit fuer definierte Dauer"* (`docs/backlog/gameplay.ron` F-059), and the
+    /// state is cut in two along exactly that line: for `behaviour.roll_startup_s` he crouches
+    /// with his nape **still open** — that is the readable part, and it is a longer window for
+    /// the player, not a shorter one — and for the rest of `behaviour.roll_s` the cortex sensor
+    /// is out of the world while the body carries itself backwards at `roll_speed_m_s`.
+    ///
+    /// Every kind whose `roll_s` is 0 never enters it, which today is seven of eight.
+    Roll,
     /// Cortex cut. Dissolving over `death_s`, collider already gone.
     Death,
 }
@@ -321,6 +334,46 @@ impl StateClock {
     pub fn is_timed(&self) -> bool {
         self.state_ticks > 0
     }
+}
+
+/// **One secondary hit zone: which [`HitZone`] this box is, and how big it is** — `F-032`.
+///
+/// Written by `titan::rig::build_rig` onto each arm and each leg, read by `blades::cut`. It
+/// lives here for the same reason [`TitanState`] does: it is the seam between two domains that
+/// must not know each other. `blades` cannot resolve a limb without the rig's box layout, and
+/// rebuilding that layout inside `blades/` would be a second truth about the body; reading
+/// `titan::rig::TitanPart` would be an edge into `titan/`. So the sender publishes the box as
+/// **data** and the receiver tests the blade against it (`docs/FINDINGS.md` FIND-109 proposed
+/// exactly this shape, and `docs/NEXT.md` §2C gives the same answer for `ModelName`).
+///
+/// ## ⚠️ It is data, not a collider, and that is not a detail
+///
+/// The obvious build is a `Sensor` collider per limb on a layer of its own. It was built that
+/// way first, on 2026-08-19, and it **broke `F-029` in the same hour**: `vector::aim` casts the
+/// hook ray **unfiltered** on purpose (*"hit first, then check anchorable"*) and resolves the
+/// carrier with `bodies.get(hit.entity)` on the collider entity, without walking up the
+/// hierarchy. An arm box sticks out of the root capsule (`w/2 .. 3w/4` against a radius of
+/// `w/2`), so the ray started hitting the arm instead of the body, found no [`Body`](super::Body)
+/// on it, and `tests/titan.rs::f029_a_rope_bites_a_walking_titan_and_rides_him` went red with
+/// *"the rope found no anchor on a titan 30 m away and dead in the crosshair"*. A collision
+/// layer cannot rescue that: avian's default `SpatialQueryFilter` carries `mask:
+/// LayerMask::ALL`, so an unfiltered ray answers with **every** collider whatever its
+/// membership.
+///
+/// So a titan's physics is exactly what it was before `F-032` — one capsule and one cortex
+/// sensor — and the four limb zones cost the collision world, the spatial index and the
+/// broad phase **nothing at all**.
+///
+/// `half_extent_m` is in the box's own local frame, in metres; its pose is the entity's
+/// `GlobalTransform`, so a zone follows the pose for free exactly like the cortex does.
+///
+/// [`HitZone::Cortex`] deliberately does **not** travel this way. It has its own collider on
+/// its own layer, asked first, because it is the one zone that kills and a kill must not hang
+/// on a marker somebody can forget to write.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HitZoneOf {
+    pub zone: super::message::HitZone,
+    pub half_extent_m: Vec3,
 }
 
 #[cfg(test)]

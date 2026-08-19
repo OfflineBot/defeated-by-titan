@@ -47,13 +47,13 @@ use avian3d::prelude::{
 use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
-use defeated_by_titan::blades::cut::{blade_segment, sweep};
+use defeated_by_titan::blades::cut::{blade_segment, limb_zone, sweep};
 use defeated_by_titan::blades::swing::{BladeTiming, SweptFrom, Swings};
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::shared::{
     BladeRestockRequest, Blades, BodyId, Cli, Health, HitStop, HitZone, HookAnchored, HookReleased,
-    LocalPlayer, MovementState, PlayerId, ReleaseReason, Side, SpawnTitan, Tick, TitanHit, TitanId,
-    TitanState, Velocity, LAYER_PLAYER, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
+    HitZoneOf, LocalPlayer, MovementState, PlayerId, ReleaseReason, Side, SpawnTitan, Tick,
+    TitanHit, TitanId, TitanState, Velocity, LAYER_PLAYER, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
 };
 use defeated_by_titan::titan::rig::TitanPart;
 
@@ -2221,5 +2221,197 @@ fn f032_no_kind_can_be_tuned_into_a_permanent_stagger_lock() {
             .map(|(k, v)| format!("{k} {}", v.stagger_s))
             .collect::<Vec<_>>()
             .join(" · ")
+    );
+}
+
+/// ★ **`F-032` — an arm hit is its own zone, and it stopped being the torso today.**
+///
+/// Until 2026-08-19 a titan carried **one** collider, the root capsule (`docs/FINDINGS.md`
+/// FIND-109), so `blades::cut::sweep` could only ever answer `Cortex` or the honest catch-all
+/// `Torso` — a blade through the chest, the arm and the leg all wrote the identical message.
+/// `HitZone::ArmLeft`, `ArmRight`, `LegLeft` and `LegRight` had never been produced by anything
+/// in this game.
+///
+/// The pass below is the f032 chest pass moved **1.75 m to the husk's right**: the hand sits at
+/// `x + 0.95` and `gear.ron: reach_m` carries the blade to `x + 2.55`, across an arm box that
+/// spans `1.25 .. 1.875` (`w/2 + w/8 ± w/8` for `w = 2.5 m`). The blade is inside the root
+/// capsule (radius 1.25 m) for the whole of it, which is exactly why this is a test about
+/// PRECEDENCE and not about geometry: the nearest surface is the capsule, and the answer has to
+/// be the arm anyway.
+///
+/// **Red when:** the limb tier is taken out of `sweep`, or the limb colliders out of
+/// `titan::rig::build_rig` — the zone is `Torso` again in both cases.
+#[test]
+fn f032_a_cut_through_the_arm_is_an_arm_hit_and_never_the_torso() {
+    let mut app = app();
+    let d = data(&app);
+    let husk_r = d.titan("husk").expect("husk").cortex_radius_m;
+    let (root, cortex) = a_standing_husk(&mut app);
+
+    // The rig really did grow the four boxes, and they are where this pass expects them.
+    // Without this line a missing collider reads as "the zone table is wrong" further down.
+    {
+        let mut q = app.world_mut().query::<(&HitZoneOf, &GlobalTransform)>();
+        let boxes: Vec<String> = q
+            .iter(app.world())
+            .map(|(z, t)| format!("{:?} at {:.2?}", z.zone, t.translation()))
+            .collect();
+        assert_eq!(boxes.len(), 4, "the husk carries {} limb zones: {boxes:?}", boxes.len());
+        println!("F-032 the husk's limb zones: {}", boxes.join(" · "));
+    }
+
+    // 1.75 m to his right and 2.4 m below the nape: through the right arm, far from the
+    // cortex sphere the blade's own 0.12 m cannot bridge.
+    let over_the_arm = cortex + Vec3::new(1.75, 0.0, 0.0);
+    let gaps = fly_past(&mut app, over_the_arm, husk_r, 30.0, cortex.y - 2.4, 2, 8);
+
+    let zones: Vec<HitZone> = hits(&app).into_iter().map(|(_, h)| h.zone).collect();
+    assert!(!zones.is_empty(), "the pass through the husk's right arm cut nothing: {gaps:?}");
+    assert!(
+        zones.contains(&HitZone::ArmRight),
+        "a blade through the arm box reported {zones:?} — the limb colliders or the limb tier \
+         of `sweep` are missing, and every body cut is a `Torso` again (FIND-109)"
+    );
+    assert!(
+        !zones.contains(&HitZone::Cortex),
+        "a pass 2.4 m below the nape and 1.75 m to the side reported {zones:?} — a limb hit is \
+         never a kill, and this test no longer measures a limb"
+    );
+
+    // And the nape rule is untouched: an arm is preparation, not damage.
+    ticks(&mut app, 400);
+    assert_ne!(
+        app.world().get::<TitanState>(root),
+        Some(&TitanState::Death),
+        "an arm cut killed the husk — only the Cortex may do that"
+    );
+    println!("F-032 arm pass: zones {zones:?}");
+}
+
+/// ★ **`F-032` — and the leg, which is the one that needed the per-zone graze rule.**
+///
+/// The arm boxes break the surface of the root capsule (`w/2 .. 3w/4` against a radius of
+/// `w/2`); the leg boxes do **not** — they span `0 .. w/2` and sit wholly inside it. So a blade
+/// flown at a leg meets the silhouette one or more ticks before the leg, and under the old
+/// one-bit rule (`super::swing::Swing::has_grazed`) that first `Torso` swallowed everything
+/// behind it. `blades::cut::GrazedZones` is what this test is really about: **each zone once**,
+/// so the pass books the body it entered through *and* the leg it went on to cut.
+///
+/// **Red when:** the mask goes back to one bit — the zones are then `[Torso]` and a leg hit
+/// cannot be produced at any speed.
+#[test]
+fn f032_a_cut_through_the_leg_is_a_leg_hit_and_the_body_it_entered_through_is_still_reported() {
+    let mut app = app();
+    let d = data(&app);
+    let husk_r = d.titan("husk").expect("husk").cortex_radius_m;
+    let (root, cortex) = a_standing_husk(&mut app);
+
+    // Knee height on a 10 m husk (`leg_fraction` 0.48 → the legs run 0 .. 4.80 m) and 1.3 m to
+    // his right, so the blade lies across the right leg box (`0 .. w/2` = 0 .. 1.25 m).
+    let over_the_leg = Vec3::new(cortex.x + 1.3, cortex.y, cortex.z);
+    let gaps = fly_past(&mut app, over_the_leg, husk_r, 30.0, 2.4, 2, 8);
+
+    let zones: Vec<HitZone> = hits(&app).into_iter().map(|(_, h)| h.zone).collect();
+    assert!(!zones.is_empty(), "the pass through the husk's right leg cut nothing: {gaps:?}");
+    assert!(
+        zones.contains(&HitZone::LegRight),
+        "a blade through the leg box reported {zones:?} — the leg sits INSIDE the root capsule,          so without the per-zone graze mask the silhouette answers first and the leg never does"
+    );
+    assert!(
+        !zones.contains(&HitZone::Cortex),
+        "a pass at knee height reported {zones:?} — a limb hit is never a kill"
+    );
+    // Each zone once, however many ticks the blade spends inside it. A mask that never closed
+    // would book a hit on every tick of the active window and empty the harness in one pass.
+    for zone in [HitZone::Torso, HitZone::LegRight] {
+        let n = zones.iter().filter(|z| **z == zone).count();
+        assert!(n <= 1, "{zone:?} was booked {n} times in one swing: {zones:?}");
+    }
+
+    ticks(&mut app, 400);
+    assert_ne!(
+        app.world().get::<TitanState>(root),
+        Some(&TitanState::Death),
+        "a leg cut killed the husk — only the Cortex may do that"
+    );
+    println!("F-032 leg pass: zones {zones:?}");
+}
+
+/// **The control**, and it is the half that keeps the test above from being a rename.
+///
+/// The same husk, the same speed, the same tick budget, with the pass back on the chest line
+/// where `f032_a_body_cut_staggers_the_titan_and_never_kills_him` flies it. The blade spans
+/// `x −0.8 .. +0.8` there and touches no limb box at all, so the answer has to stay `Torso` —
+/// a limb tier that swallowed the body would pass the arm test and break every graze in the
+/// game.
+#[test]
+fn f032_the_chest_is_still_the_torso_after_the_limbs_got_their_own_zones() {
+    let mut app = app();
+    let d = data(&app);
+    let husk_r = d.titan("husk").expect("husk").cortex_radius_m;
+    let (_, cortex) = a_standing_husk(&mut app);
+
+    let gaps = fly_past(&mut app, cortex, husk_r, 30.0, cortex.y - 2.4, 2, 8);
+    let zones: Vec<HitZone> = hits(&app).into_iter().map(|(_, h)| h.zone).collect();
+    assert!(!zones.is_empty(), "the pass through the husk's chest cut nothing: {gaps:?}");
+    assert!(
+        zones.iter().all(|z| *z == HitZone::Torso),
+        "a pass down the middle of the body reported {zones:?} — `Torso` is the honest name for \
+         \"the blade found the body\" and nothing on the chest line is a limb"
+    );
+    println!("F-032 chest pass: zones {zones:?}");
+}
+
+/// **Rule 6, with a number: what the limb refinement costs per landed hit.**
+///
+/// The sibling of [`f030_the_cost_of_one_thousand_casts`], and the reason it exists is that
+/// `F-032`'s cost cannot be seen in a frame budget: [`limb_zone`] runs **only** on a tick where
+/// a blade already found a body, and only over that one titan's four boxes. A whole-frame A/B
+/// measures the noise of whatever else is on the machine; this measures the work.
+///
+/// It runs against the **real husk**, so the four boxes are the rig's own and not a fixture's.
+#[test]
+fn f032_the_cost_of_one_thousand_limb_refinements() {
+    let mut app = app();
+    let (root, cortex) = a_standing_husk(&mut app);
+    let d = data(&app);
+    let thickness = d.gear.blades.thickness_m;
+
+    #[derive(Resource, Default)]
+    struct Cost(f64, u32);
+    app.insert_resource(Cost::default());
+
+    app.world_mut()
+        .run_system_once(
+            move |children: Query<&Children>,
+                  limbs: Query<(&HitZoneOf, &GlobalTransform)>,
+                  mut out: ResMut<Cost>| {
+                let mut found = 0u32;
+                let started = Instant::now();
+                for i in 0..1000 {
+                    // A different blade every time, so nothing is cached: the hand walks down
+                    // the husk's right flank from the shoulder to the knee, which is the band
+                    // an arm zone and a leg zone share.
+                    let y = cortex.y - 1.0 - i as f32 * 0.006;
+                    let a = Vec3::new(cortex.x + 0.9, y, cortex.z);
+                    let b = a + Vec3::new(1.6, 0.0, 0.0);
+                    let blade = Collider::capsule_endpoints(thickness, a, b);
+                    if limb_zone(&children, &limbs, root, &blade, Vec3::new(0.0, -0.5, 0.0))
+                        .is_some()
+                    {
+                        found += 1;
+                    }
+                }
+                out.0 = started.elapsed().as_secs_f64() * 1e6 / 1000.0;
+                out.1 = found;
+            },
+        )
+        .expect("the benchmark system runs");
+
+    let cost = app.world().resource::<Cost>();
+    assert!(cost.1 > 0, "1000 refinements found no limb at all — the benchmark measured nothing");
+    println!(
+        "F-032 cost: {:.2} µs per refinement over 1000 calls ({} of them found a limb) [debian]",
+        cost.0, cost.1
     );
 }

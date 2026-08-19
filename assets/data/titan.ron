@@ -88,7 +88,8 @@
                      // this file that is NOT free to be made interesting.
                      behaviour: (swerve_deg: 0.0, swerve_period_s: 0.0, lunge_m_s: 0.0,
                       flank_offset_m: 0.0, call_radius_m: 0.0, call_hold_s: 0.0, ambush: false,
-                      cortex_guard: Always)),
+                      cortex_guard: Always,
+                      roll_s: 0.0, roll_startup_s: 0.0, roll_speed_m_s: 0.0)),
         // Unpredictable changes of direction -> leading your shots. Stays husk-sized:
         // the surprise lies in the movement, not in the bulk.
         // 5.0 m -> 10.0 m (class `medium`)
@@ -105,7 +106,8 @@
                      // never on the line you aimed at. That is the whole lesson: lead him.
                      behaviour: (swerve_deg: 35.0, swerve_period_s: 0.9, lunge_m_s: 0.0,
                       flank_offset_m: 0.0, call_radius_m: 0.0, call_hold_s: 0.0, ambush: false,
-                      cortex_guard: Always)),
+                      cortex_guard: Always,
+                      roll_s: 0.0, roll_startup_s: 0.0, roll_speed_m_s: 0.0)),
         // Very fast, jump attack -> vertical evasion. **The fast small one.**
         // The smallest class is his role: small enough to fit between houses.
         // 3.5 m -> 4.2 m (class `small`)
@@ -130,7 +132,8 @@
                      // answer is altitude, which is what the design asks the scuttler to teach.
                      behaviour: (swerve_deg: 0.0, swerve_period_s: 0.0, lunge_m_s: 14.0,
                       flank_offset_m: 0.0, call_radius_m: 0.0, call_hold_s: 0.0, ambush: false,
-                      cortex_guard: Always)),
+                      cortex_guard: Always,
+                      roll_s: 0.0, roll_startup_s: 0.0, roll_speed_m_s: 0.0)),
         // Evasive roll with i-frames -> timing instead of spam. A roll needs a short
         // body; 4.5 m sat between `small` (4.2) and `medium` (10) — decided for
         // `small`, because 10 m no longer roll away credibly.
@@ -153,7 +156,20 @@
                      // 0.5 + 0.18 + 0.37 = 1.05 s of commitment is your window.
                      behaviour: (swerve_deg: 0.0, swerve_period_s: 0.0, lunge_m_s: 0.0,
                       flank_offset_m: 0.0, call_radius_m: 0.0, call_hold_s: 0.0, ambush: false,
-                      cortex_guard: WhenCommitted)),
+                      cortex_guard: WhenCommitted,
+                      // **The roll** (F-059), and it is the second half of the same lesson the
+                      // guard above is the first half of. He is only cuttable inside his own
+                      // attack — and the attack now ENDS in a roll instead of walking back into
+                      // Pursue: 0.15 s of crouch with the nape still open (a LONGER window than
+                      // he had, and the readable startup the design asks for), then 0.30 s in
+                      // which the cortex sensor is out of the world while he travels
+                      // 9.0 * 0.45 = 4.05 m backwards.
+                      // What it costs the player: a blade thrown at the end of the window
+                      // catches nothing, and he has to close 4 m again. That is
+                      // "timing instead of spam" with a number on it.
+                      // ⚠️ UNTUNED. All three are guesses; roll_startup_s is the one that
+                      // decides whether the tell can be read at all.
+                      roll_s: 0.45, roll_startup_s: 0.15, roll_speed_m_s: 9.0)),
         // Shields the cortex with his hand -> arms first, then cortex. The cover only works
         // when the hand really does hide the cortex: for that he needs arm length.
         // 8.0 m -> 14.0 m (class `large`)
@@ -174,7 +190,8 @@
                      // itself.
                      behaviour: (swerve_deg: 0.0, swerve_period_s: 0.0, lunge_m_s: 0.0,
                       flank_offset_m: 0.0, call_radius_m: 0.0, call_hold_s: 0.0, ambush: false,
-                      cortex_guard: WhenOpened(3.0))),
+                      cortex_guard: WhenOpened(3.0),
+                      roll_s: 0.0, roll_startup_s: 0.0, roll_speed_m_s: 0.0)),
         // Motionless ambush, grab out of the air -> changes of height, attention.
         // "Out of the air" is a question of reach: at 10 m he grabs below the roof, at
         // 14 m above the roof — only then does he force a change of height.
@@ -195,7 +212,8 @@
                      // costs 48.
                      behaviour: (swerve_deg: 0.0, swerve_period_s: 0.0, lunge_m_s: 0.0,
                       flank_offset_m: 0.0, call_radius_m: 0.0, call_hold_s: 0.0, ambush: true,
-                      cortex_guard: Always)),
+                      cortex_guard: Always,
+                      roll_s: 0.0, roll_startup_s: 0.0, roll_speed_m_s: 0.0)),
         // Reacts to the sound of gas, calls in reinforcements -> resource discipline.
         // **The big loud one.** He was the largest kind so far and stays it: the largest
         // class that occurs in a normal mission.
@@ -217,7 +235,8 @@
                      // `scale.ron: max_spawnable_class` is `large` (Q-028). See FIND-118.
                      behaviour: (swerve_deg: 0.0, swerve_period_s: 0.0, lunge_m_s: 0.0,
                       flank_offset_m: 0.0, call_radius_m: 90.0, call_hold_s: 25.0, ambush: false,
-                      cortex_guard: Always)),
+                      cortex_guard: Always,
+                      roll_s: 0.0, roll_startup_s: 0.0, roll_speed_m_s: 0.0)),
         // Pairs cover each other -> target prioritization, separation. Two equally large
         // standard titans; the task is the pair, not the single body.
         // 5.0 m -> 10.0 m (class `medium`)
@@ -236,7 +255,8 @@
                      // target prioritization, which is what the pair is for.
                      behaviour: (swerve_deg: 0.0, swerve_period_s: 0.0, lunge_m_s: 0.0,
                       flank_offset_m: 9.0, call_radius_m: 0.0, call_hold_s: 0.0, ambush: false,
-                      cortex_guard: Always)),
+                      cortex_guard: Always,
+                      roll_s: 0.0, roll_startup_s: 0.0, roll_speed_m_s: 0.0)),
 
         // The class `boss` (28 m) is deliberately unused: its first representative is a
         // raid opponent, and raids stand behind the Vector Gear gate (docs/ROADMAP.md).

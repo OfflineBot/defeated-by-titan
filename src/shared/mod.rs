@@ -47,7 +47,9 @@ pub use spatial::{IndexEntry, SpatialIndex, RayResult, RayHit};
 pub use rope::{rope_reel_in, rope_step, RopeConstraint, ConstraintResult};
 pub use cli::Cli;
 pub use rng::Rng;
-pub use state::{MovementState, Gas, Blades, Velocity, Health, HitStop, TitanState, StateClock};
+pub use state::{
+    MovementState, Gas, Blades, Velocity, Health, HitStop, HitZoneOf, TitanState, StateClock,
+};
 pub use layers::{
     GameLayer, LAYER_WORLD, LAYER_PLAYER, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
 };

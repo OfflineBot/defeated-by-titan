@@ -52,8 +52,8 @@ use bevy::prelude::*;
 
 use crate::data::{GameData, TitanKind};
 use crate::shared::{
-    Body, BodyMask, Health, ModelAnchors, StateClock, TitanId, TitanKindName, TitanState,
-    Velocity, CORTEX_ANCHOR, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
+    Body, BodyMask, Health, HitZone, HitZoneOf, ModelAnchors, StateClock, TitanId, TitanKindName,
+    TitanState, Velocity, CORTEX_ANCHOR, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
 };
 
 /// Which box of the rig this is. Its own type instead of eight marker components, so that a
@@ -429,7 +429,10 @@ pub fn build_rig(
     // ---- legs: children of the hip, hanging down to the ground -------------------------
     let leg_half = Vec3::new(w * 0.25, rig.leg_m * 0.5, w * 0.25);
     let leg_mesh = meshes.add(Cuboid::new(w * 0.5, rig.leg_m, w * 0.5));
-    for (part, sign) in [(TitanPart::LegLeft, -1.0f32), (TitanPart::LegRight, 1.0)] {
+    for (part, zone, sign) in [
+        (TitanPart::LegLeft, HitZone::LegLeft, -1.0f32),
+        (TitanPart::LegRight, HitZone::LegRight, 1.0),
+    ] {
         let leg = commands
             .spawn((
                 Name::new(if sign < 0.0 { "leg_left" } else { "leg_right" }),
@@ -438,6 +441,7 @@ pub fn build_rig(
                 Transform::from_xyz(sign * w * 0.25, -rig.leg_m * 0.5, 0.0),
                 Mesh3d(leg_mesh.clone()),
                 MeshMaterial3d(body_material.clone()),
+                hit_zone(leg_half, zone),
             ))
             .id();
         commands.entity(pelvis).add_child(leg);
@@ -460,7 +464,10 @@ pub fn build_rig(
     // ---- arms: hinged at the shoulder, inside the torso's frame ------------------------
     let arm_half = Vec3::new(w * 0.125, rig.arm_m * 0.5, w * 0.125);
     let arm_mesh = meshes.add(Cuboid::new(w * 0.25, rig.arm_m, w * 0.25));
-    for (part, right) in [(TitanPart::ArmLeft, false), (TitanPart::ArmRight, true)] {
+    for (part, zone, right) in [
+        (TitanPart::ArmLeft, HitZone::ArmLeft, false),
+        (TitanPart::ArmRight, HitZone::ArmRight, true),
+    ] {
         let arm = commands
             .spawn((
                 Name::new(if right { "arm_right" } else { "arm_left" }),
@@ -469,6 +476,7 @@ pub fn build_rig(
                 arm_transform(rig, right, 0.0),
                 Mesh3d(arm_mesh.clone()),
                 MeshMaterial3d(body_material.clone()),
+                hit_zone(arm_half, zone),
             ))
             .id();
         commands.entity(torso).add_child(arm);
@@ -606,6 +614,51 @@ pub fn cortex_from_the_model(
         }
         transform.translation = local;
     }
+}
+
+/// **One limb box, as a hit zone** — `F-032`, and the end of "a titan has exactly one collider".
+///
+/// It is one component and **no collider at all**: [`HitZoneOf`] publishes the box's half
+/// extent as data, `blades::cut::limb_zone` tests the swept blade against it, and the physics
+/// world never learns that the box exists. Why it is not a `Sensor` on a layer of its own —
+/// which is what this was for the first two hours of its life — is written on [`HitZoneOf`]:
+/// `vector::aim` casts the hook ray **unfiltered**, an arm sticks out of the root capsule, and
+/// a collider there takes the rope off the titan. The measurement is in `docs/FINDINGS.md`.
+///
+/// ## ⚠️ Every limb box lies INSIDE the root capsule, and that is what the tiering is for
+///
+/// FIND-116 named this as the thing that would make limb hit zones change nothing: the capsule
+/// has radius `w/2`, the legs span `0 .. w/2` of it and the arms `w/2 .. 3w/4`, so a cast that
+/// asked one question for both would answer with the silhouette nearly every time. **The
+/// overlap is therefore resolved by precedence, not by distance:** `blades::cut` asks the
+/// cortex layer, then the body layer, and a body hit is then **refined** against these boxes.
+/// A blade inside the capsule and inside an arm box is an arm hit; a blade inside the capsule
+/// and inside nothing else is the honest catch-all `Torso`.
+///
+/// Measured 2026-08-19 on the real husk: the chest pass of
+/// `tests/combat.rs::f032_a_body_cut_staggers_the_titan_and_never_kills_him` still reports
+/// `[Torso]`, the same pass moved 1.75 m to his right reports `[Torso, ArmRight]`, and at knee
+/// height `[Torso, LegRight]`.
+///
+/// ## What deliberately does NOT get one
+///
+/// **The head, the torso and the pelvis.** Not an oversight:
+///
+/// * the head box spans `cortex_height_m .. height_m` and a nape pass crosses it, so a head
+///   zone would rename the graze of every cut in the game from `Torso` to `Head` — and
+///   `F-030`, `q030`, `q031` and `F-034` are 🟧 rows whose evidence is those passes. A zone
+///   nothing reads yet is not worth moving measured evidence for.
+/// * [`HitZone::Eye`] is `F-032`'s third half (*"Augentreffer erzeugt 3 s Orientierungslosigkeit"*)
+///   and it needs an **eye anchor on the model**, not a box on the rig: an eye is 20 cm on a
+///   10 m body and this rig has no feature that small. The pack's `a-064-zone-*` empties name
+///   `cortex`, `cortex-gross`, `gelenk`, `huefte`, `riss` and `schulter` — no eye either.
+/// * the torso and the pelvis **are** the body. `Torso` is what the root capsule already
+///   answers, and a second box for the same zone is two things to keep in agreement for no gain.
+///
+/// **Rule 6:** one component per limb, written once at spawn, never touched again. It follows
+/// the pose through `GlobalTransform` for free, exactly like the cortex.
+fn hit_zone(half_extent_m: Vec3, zone: HitZone) -> HitZoneOf {
+    HitZoneOf { zone, half_extent_m }
 }
 
 /// A matte material. A missing `metallic` means 1.0 in glTF, and a diffuse material without

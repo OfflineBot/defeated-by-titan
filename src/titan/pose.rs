@@ -38,6 +38,9 @@ pub struct PoseAngles {
     pub windup_arm_deg: f32,
     pub windup_lean_deg: f32,
     pub strike_arm_deg: f32,
+    /// `F-059` — how far the torso tips **forward** through the roll's startup. Negative, the
+    /// other way round from [`Self::windup_lean_deg`].
+    pub roll_lean_deg: f32,
 }
 
 /// What the rig looks like this tick: one arm angle, one lean angle, both in degrees.
@@ -77,6 +80,33 @@ pub fn pose_of(state: TitanState, ticks_in_state: u32, t: &TitanTiming, a: &Pose
                 fraction(ticks_in_state, t.recover_ticks),
             ),
             lean_deg: 0.0,
+        },
+        // **`F-059` — the crouch IS the tell, and it is over before the i-frames start.**
+        //
+        // The lean runs 0 → `roll_lean_deg` over `roll_startup_ticks` and back to 0 over what
+        // is left of the roll. That split is not cosmetic: `roll_startup_ticks` is exactly the
+        // window in which `titan::brain::Guard::open` still calls the nape a target, so what
+        // the player sees tipping forward is what he is still allowed to cut, and the moment
+        // the body straightens out of the crouch is the moment the blade stops finding
+        // anything. One number, two readers, same tick — the same discipline `StateClock`
+        // exists for.
+        //
+        // The arm hangs. A rolling body that keeps its striking arm up is a body still
+        // telegraphing an attack it has already thrown.
+        TitanState::Roll => Pose {
+            arm_deg: 0.0,
+            lean_deg: if ticks_in_state < t.roll_startup_ticks {
+                lerp(0.0, a.roll_lean_deg, fraction(ticks_in_state, t.roll_startup_ticks))
+            } else {
+                lerp(
+                    a.roll_lean_deg,
+                    0.0,
+                    fraction(
+                        ticks_in_state - t.roll_startup_ticks,
+                        t.roll_ticks.saturating_sub(t.roll_startup_ticks),
+                    ),
+                )
+            },
         },
     }
 }
@@ -152,11 +182,24 @@ mod tests {
     use super::*;
 
     fn timing() -> TitanTiming {
-        TitanTiming { windup_ticks: 36, strike_ticks: 12, recover_ticks: 24, cooldown_ticks: 90, death_ticks: 60 }
+        TitanTiming {
+            windup_ticks: 36,
+            strike_ticks: 12,
+            recover_ticks: 24,
+            cooldown_ticks: 90,
+            death_ticks: 60,
+            roll_ticks: 27,
+            roll_startup_ticks: 9,
+        }
     }
 
     fn angles() -> PoseAngles {
-        PoseAngles { windup_arm_deg: 140.0, windup_lean_deg: 12.0, strike_arm_deg: -30.0 }
+        PoseAngles {
+            windup_arm_deg: 140.0,
+            windup_lean_deg: 12.0,
+            strike_arm_deg: -30.0,
+            roll_lean_deg: -55.0,
+        }
     }
 
     #[test]

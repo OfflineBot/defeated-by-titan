@@ -78,6 +78,12 @@ pub struct TitanTiming {
     pub cooldown_ticks: u32,
     /// How long the body takes to dissolve. The collider goes on tick one regardless.
     pub death_ticks: u32,
+    /// `F-059` — the whole backward roll. **0 = this kind does not roll**, and that is the one
+    /// switch [`decide`] reads to know whether `Recover` ends in a roll or in `Pursue`.
+    pub roll_ticks: u32,
+    /// How much of [`roll_ticks`](Self::roll_ticks) is the readable crouch, with the nape still
+    /// a target. After it come the i-frames — see [`Guard::open`].
+    pub roll_startup_ticks: u32,
 }
 
 impl TitanTiming {
@@ -88,6 +94,13 @@ impl TitanTiming {
             recover_ticks: ticks(kind.recover_s, simulation_hz),
             cooldown_ticks: ticks(kind.attack_cooldown_s, simulation_hz),
             death_ticks: ticks(kind.death_s, simulation_hz),
+            roll_ticks: ticks(kind.behaviour.roll_s, simulation_hz),
+            // Clamped to the roll's own length: a startup that outlasts the roll would be a
+            // roll with no i-frames at all, i.e. `F-059`'s acceptance sentence quietly failing
+            // instead of loudly. `tests/data.rs` refuses the file that says it, this line makes
+            // sure the code cannot be surprised by it either.
+            roll_startup_ticks: ticks(kind.behaviour.roll_startup_s, simulation_hz)
+                .min(ticks(kind.behaviour.roll_s, simulation_hz)),
         }
     }
 }
@@ -137,6 +150,7 @@ pub fn duration_ticks(state: TitanState, timing: &TitanTiming) -> u32 {
         TitanState::Windup => timing.windup_ticks,
         TitanState::Strike => timing.strike_ticks,
         TitanState::Recover => timing.recover_ticks,
+        TitanState::Roll => timing.roll_ticks,
         TitanState::Death => timing.death_ticks,
     }
 }
@@ -168,6 +182,8 @@ pub struct TitanTuning {
     pub call_hold_ticks: u32,
     /// `F-061`: an ambusher has no `Pursue`. See [`decide`].
     pub ambush: bool,
+    /// `F-059`: how fast the body carries itself **backwards** through [`TitanState::Roll`].
+    pub roll_speed_m_s: f32,
 }
 
 impl TitanTuning {
@@ -188,6 +204,7 @@ impl TitanTuning {
             call_radius_m: b.call_radius_m,
             call_hold_ticks: ticks(b.call_hold_s, simulation_hz),
             ambush: b.ambush,
+            roll_speed_m_s: b.roll_speed_m_s,
         }
     }
 }
@@ -225,7 +242,17 @@ impl Guard {
     }
 
     /// Is the nape a target this tick? **Pure**, so the test can ask it without an app.
-    pub fn open(&self, state: TitanState) -> bool {
+    ///
+    /// `ticks_in_state` and `roll_startup_ticks` are only ever looked at in
+    /// [`TitanState::Roll`], and there they are the whole of `F-059`: the crouch is open, the
+    /// roll is not. It is checked **before** [`Self::rule`] and not inside it, because
+    /// i-frames are i-frames whatever a kind's guard rule says — a kind with
+    /// [`CortexGuard::Always`] that learned to roll would otherwise roll visibly and be
+    /// cuttable all the way through it.
+    pub fn open(&self, state: TitanState, ticks_in_state: u32, roll_startup_ticks: u32) -> bool {
+        if state == TitanState::Roll {
+            return ticks_in_state < roll_startup_ticks;
+        }
         match self.rule {
             CortexGuard::Always => true,
             // Committed = inside his own attack. `Idle` and `Pursue` are not, and `Death` is
@@ -275,11 +302,38 @@ pub(super) fn receive_hits(
 ) {
     for hit in hits.read() {
         if hit.zone != HitZone::Cortex {
-            // **The warden's two-stage attack** (`F-060`): a cut into the body is what knocks
-            // the hand off the nape. The same cut already staggers him for `stagger_s`
-            // (`combat::hitstop`, `F-032`), so one blade buys both halves — he stumbles, and
-            // for `WhenOpened(s)` seconds the cortex is a target. For every other kind
-            // `open_ticks` is 0 and this line does nothing.
+            // **The warden's two-stage attack** (`F-060`), and since 2026-08-19 it is the
+            // backlog's own sentence rather than an approximation of it: *"Frontalangriff auf
+            // **Arme** oeffnet den Cortex fuer ein Zeitfenster"*, `docs/gameplay/enemies.md`'s
+            // *"a two-stage attack: arms first, then the cortex"*. Until `F-032` gave the limbs
+            // their own zones there was nothing to say "arm" with — every cut into the body
+            // wrote `Torso` (`docs/FINDINGS.md` FIND-109) — so **any** body cut opened him, and
+            // that was a compromise with the collider, not a design.
+            //
+            // The same cut already staggers him for `stagger_s` (`combat::hitstop`, `F-032`),
+            // so one blade still buys both halves: he stumbles, and for `WhenOpened(s)` seconds
+            // the cortex is a target. For every other kind `open_ticks` is 0 and this loop does
+            // nothing at all.
+            //
+            // 🔴 **The designed version is ONE LINE and it is not being taken today.**
+            //
+            //     if !matches!(hit.zone, HitZone::ArmLeft | HitZone::ArmRight) { continue; }
+            //
+            // It was written, it works, and it was taken back out the same hour, because four
+            // 🟧 rows go red under it: `q030_the_nape_is_reachable_on_a_large_titan_too`,
+            // `q030_the_nape_is_cut_from_behind_and_not_from_the_front`,
+            // `q031_the_nape_survives_a_titan_who_tracks_you` and
+            // `f030_a_bound_model_cannot_drag_the_nape_round_to_the_front` all use the **warden**
+            // as their 14 m body and all of them reach his cortex only because the torso graze
+            // of their own pass opens him one tick earlier. They measure REACH; that they also
+            // walk through his guard is an accident of the pass.
+            //
+            // Which is the finding, and it is about the game and not about the tests: **the
+            // warden's two-stage attack is defeated by a single pass today** — the graze that
+            // knocks the hand off the nape and the cut that kills him are the same swing.
+            // `docs/FINDINGS.md`, `F-060`. Whoever takes the line above has to re-aim those four
+            // passes at a `large` kind whose nape is always open (the lurker) and re-measure the
+            // 0.15 m of `Q-031` on a body that was never opened by the measurement itself.
             for (_, id, state, _, _, mut guard) in &mut bodies {
                 if *id == hit.titan && *state != TitanState::Death && guard.open_ticks > 0 {
                     guard.open_left = guard.open_ticks;
@@ -449,9 +503,29 @@ pub fn decide(
         TitanState::Recover => {
             if clock.ticks_in_state < timing.recover_ticks {
                 TitanState::Recover
+            } else if timing.roll_ticks > 0 {
+                // **`F-059`, and this is the only edge into the roll.** The design's sentence is
+                // *"reacts to an approach towards the cortex with a backward roll"*, and the
+                // approach that matters is the one his `cortex_guard: WhenCommitted` lets
+                // through: his nape is out of the world in `Idle` and `Pursue`, so a roll
+                // triggered there would be i-frames on a hit zone that is already gone —
+                // decoration, and exactly what `TitanState`'s own doc warns against. The moment
+                // i-frames can mean anything is the **end of his open window**, and that is
+                // here. It also makes the window LONGER by `roll_startup_s` rather than
+                // shorter: he crouches with his nape still bare before he is untouchable.
+                TitanState::Roll
             } else if tuning.ambush {
                 // Back to standing still. `Recover -> Pursue` would turn the lurker into a
                 // slow husk the moment he had swung once, which is the whole thing he is not.
+                TitanState::Idle
+            } else {
+                TitanState::Pursue
+            }
+        }
+        TitanState::Roll => {
+            if clock.ticks_in_state < timing.roll_ticks {
+                TitanState::Roll
+            } else if tuning.ambush || !in_range {
                 TitanState::Idle
             } else {
                 TitanState::Pursue
@@ -601,15 +675,19 @@ pub(super) fn answer_the_call(
 /// `titan/` throws away has already been counted by `mission::count_kills`.
 pub(super) fn guard_the_cortex(
     mut commands: Commands,
-    mut bodies: Query<(Entity, &TitanState, &mut Guard), With<TitanBody>>,
+    mut bodies: Query<(Entity, &TitanState, &StateClock, &TitanTiming, &mut Guard), With<TitanBody>>,
     children: Query<&Children>,
     parts: Query<&TitanPart>,
 ) {
-    for (root, state, mut guard) in &mut bodies {
-        if guard.rule == CortexGuard::Always {
+    for (root, state, clock, timing, mut guard) in &mut bodies {
+        // A kind with an always-open nape that also cannot roll has nothing to do here. The
+        // second half of that sentence is `F-059`: the i-frames are a property of the state,
+        // not of the rule, so a roller is visited even when his rule is `Always`.
+        if guard.rule == CortexGuard::Always && timing.roll_ticks == 0 {
             continue;
         }
-        let cover = *state != TitanState::Death && !guard.open(*state);
+        let cover = *state != TitanState::Death
+            && !guard.open(*state, clock.ticks_in_state, timing.roll_startup_ticks);
         if cover == guard.covered {
             continue;
         }
@@ -734,6 +812,22 @@ pub(super) fn walk(
             continue;
         }
 
+        // **The roll** (`F-059`). The second place in this file where a titan moves outside
+        // `Pursue`, and the mirror of the leap above: the body carries itself **backwards**,
+        // still facing the player, and does not turn while it does. That it keeps its facing is
+        // what makes the roll a retreat and not a flight — he comes straight back at you.
+        //
+        // He rolls through his own startup as well, and that is deliberate: a crouch that
+        // stands still and then teleports into a slide is a tell the player learns to ignore.
+        if *state == TitanState::Roll && tuning.roll_speed_m_s > 0.0 {
+            gait.speed_m_s = tuning.roll_speed_m_s;
+            let step = *transform.back() * tuning.roll_speed_m_s;
+            transform.translation += step * dt;
+            linear.0 = step;
+            velocity.0 = step;
+            continue;
+        }
+
         if !pursuing {
             // Planted. A titan that keeps sliding through its own wind-up is the "FSM as
             // decoration" failure, in one line. He may still turn on the spot — that is a
@@ -822,7 +916,15 @@ mod tests {
     use super::*;
 
     fn timing() -> TitanTiming {
-        TitanTiming { windup_ticks: 36, strike_ticks: 12, recover_ticks: 24, cooldown_ticks: 90, death_ticks: 60 }
+        TitanTiming {
+            windup_ticks: 36,
+            strike_ticks: 12,
+            recover_ticks: 24,
+            cooldown_ticks: 90,
+            death_ticks: 60,
+            roll_ticks: 0,
+            roll_startup_ticks: 0,
+        }
     }
 
     /// The husk's numbers: no swerve, no leap, no flank, no call, no ambush.
@@ -840,6 +942,7 @@ mod tests {
             call_radius_m: 0.0,
             call_hold_ticks: 0,
             ambush: false,
+            roll_speed_m_s: 0.0,
         }
     }
 

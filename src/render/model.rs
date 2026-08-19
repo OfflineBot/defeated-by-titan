@@ -111,6 +111,9 @@ pub fn clip_state_of_titan(state: TitanState) -> &'static str {
         TitanState::Windup => "windup",
         TitanState::Strike => "strike",
         TitanState::Recover => "recover",
+        // `F-059`. No drop ships a `roll` clip today, and a missing clip is already the case
+        // this function's caller handles — the rig's own pose carries the state either way.
+        TitanState::Roll => "roll",
         TitanState::Death => "death",
     }
 }

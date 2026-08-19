@@ -73,6 +73,20 @@ pub const LAYER_TITAN_BODY: LayerMask = LayerMask(1 << 3);
 /// The cortex — the only place a titan dies. See [`GameLayer::TitanCortex`].
 pub const LAYER_TITAN_CORTEX: LayerMask = LayerMask(1 << 4);
 
+// ⚠️ **There is deliberately no `LAYER_TITAN_LIMB`, and that was measured** (`F-032`,
+// 2026-08-19). A titan's arm and leg hit zones are `shared::HitZoneOf` boxes with **no collider
+// at all**: `vector::aim` casts its hook ray **unfiltered** on purpose (`src/vector/aim.rs:31`,
+// "hit first, then check anchorable"), and it resolves the carrier with
+// `bodies.get(hit.entity)` on the *collider* entity — no walk up the hierarchy. An arm box
+// carries no `Body`, and the arm sticks out of the root capsule (`w/2 .. 3w/4` against a radius
+// of `w/2`), so the first version of this feature put a real `Sensor` collider there and
+// **broke `F-029`**: the ray hit the arm before the capsule, the lookup missed, and
+// `tests/titan.rs::f029_a_rope_bites_a_walking_titan_and_rides_him` reported *"the rope found no
+// anchor on a titan 30 m away and dead in the crosshair"*. A layer cannot fix that — avian's
+// default `SpatialQueryFilter` has `mask: LayerMask::ALL`, so **every** collider answers an
+// unfiltered ray whatever its membership. See `blades::cut::limb_zone` for what was built
+// instead.
+
 #[cfg(test)]
 mod tests {
     use super::*;

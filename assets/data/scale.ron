@@ -201,6 +201,11 @@
         windup_lean_deg: 12.0,
         // Negative: the strike swings the arm back DOWN past the rest pose.
         strike_arm_deg: -30.0,
+        // F-059, the weaver's roll. NEGATIVE tips the torso FORWARD (windup_lean_deg is
+        // positive and tips it back), so this is the crouch that makes the roll's startup
+        // readable before the i-frames begin. One number for the whole rig, like the three
+        // above it. ⚠️ UNTUNED — nobody has played it.
+        roll_lean_deg: -55.0,
 
         // **The class cap for this session, and it is a user decision I made in his
         // absence** — docs/QUESTIONS.md Q-028, with the assumption and the place to

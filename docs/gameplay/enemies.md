@@ -1,7 +1,8 @@
 # enemies — why at least half of them have to break the autopilot, and what each one teaches
 
-Updated: 2026-08-12 · Stage: 🟨 (carried over out of the design bible; only the Husk exists in
-the code, and only as a body with a cortex — no AI, no attack cycle)
+Updated: 2026-08-19 · Stage: 🟨 (the chapter is the design; what of it is in the code stands in
+[What is built of this](#what-is-built-of-this-2026-08-19) below — seven of the eight kinds
+fight differently, one of them cannot spawn, and none of the numbers has been played)
 
 ## The finding this whole chapter comes out of
 
@@ -60,11 +61,48 @@ None of this is AI work, and all of it is decided:
 
 | Decision | Consequence |
 |---|---|
-| **The cortex is the only lethal spot** | every other hit zone is preparation, not damage. Legs off = it falls; arms off = it cannot grab; eyes = it cannot see you. `combat` sends the hit, `titan` decides what it means for its body ([`../architecture.md`](../architecture.md)) |
+| **The cortex is the only lethal spot** | every other hit zone is preparation, not damage. Legs off = it falls; arms off = it cannot grab; eyes = it cannot see you. `combat` sends the hit, `titan` decides what it means for its body ([`../architecture.md`](../architecture.md)). **The zones exist since 2026-08-19** — arms and legs; the fall, the grab and the blinding do not (see below) |
 | **Every attack has a wind-up of ≥ 0.4 s** | a readability guarantee (P4), pinned in the RON — an attack that undercuts it is a bug, not a difficulty setting |
 | **Titans vaporize, they do not bleed** | steam, not blood ([`world.md`](world.md)) |
 | **Size classes, not per-kind heights** | `assets/data/titan.ron` carries a size class per kind; the heights themselves live once, in `scale.ron` ([`../models.md`](../models.md)) |
 | **The cortex sits at ~89 % of body height and is smaller than the head** | both are pinned by `tests/data.rs` — a cortex that is a point feels like a broken game |
+
+## What is built of this (2026-08-19)
+
+**Seven of the eight kinds now fight differently**, out of `assets/data/titan.ron: <kind>.behaviour`
+(`F-057`..`F-063`): the errant swerves, the scuttler lunges through his own blow, the chorus pair
+splits, the lurker never takes a step, the warden's hand covers his nape, the weaver is only
+cuttable inside his own attack — and, since today, rolls out of it.
+
+**Secondary hit zones exist** (`F-032`). A blade now reports `ArmLeft`, `ArmRight`, `LegLeft` or
+`LegRight` where it used to report the catch-all `Torso` for the whole body — measured on the real
+husk, `scripts/f032-swords.txt`: the pass that produced *"cut titan 3 Torso"* at every height in
+`docs/FINDINGS.md` FIND-109 now produces `Torso` on the chest line and `LegLeft` a few ticks later
+as the blade falls past the knee. What a limb hit **means** is still only the stagger every body
+cut buys: *"Bein-Treffer laesst Titan stuerzen"* and *"Augen-Treffer erzeugt 3 s
+Orientierungslosigkeit"* (`F-032`'s acceptance) are the next step and are **not built**, and there
+is no eye zone at all — an eye is 20 cm on a 10 m body and the box rig has no feature that small.
+
+**The weaver's roll is built** (`F-059`). His attack ends in `TitanState::Roll` instead of walking
+back into `Pursue`: `roll_startup_s` of crouch with his nape **still a target** — a longer window
+than he had, and the readable startup the design asks for — then the rest of `roll_s` with the
+cortex sensor out of the world while he carries himself `roll_speed_m_s` backwards. Measured:
+27 ticks, 9 of them open, **3.90 m of retreat**. He does *not* roll on approach, and that is a
+decision rather than a shortcut: his nape is out of the world in `Idle` and `Pursue` anyway, so
+i-frames there would be invulnerability on a hit zone that is already gone.
+
+🔴 **The bellower still cannot spawn, and there are now two reasons.** The first is the one
+`docs/QUESTIONS.md` Q-028 records: he is class `huge` and `scale.ron: max_spawnable_class` is
+`large`. The second was measured on 2026-08-19 by raising the cap and running the suite, and it is
+worse than "half a kind": **his nape cannot be reached at all.** A 21 m body at `width_fraction`
+0.25 is 2.625 m of radius, plus the player's 0.35 m is 2.975 m of clearance, against
+`reach_m` 1.60 + `cortex_radius_m` 0.70 + `thickness_m` 0.12 = 2.42 m of blade — **−0.555 m**. No
+flying pass cuts that nape at any offset or any speed. And the thing he exists for, the **ear**, is
+`F-051` and does not exist, so a spawnable bellower today calls on sight and pulls a 90 m radius
+with no counterplay, because the counterplay this chapter specifies is *play quietly* and nothing
+can hear gas. Both are pinned by `tests/titan.rs::f064_the_bellower_stays_blocked_until_the_ear_exists`,
+which is the one place in the repository that names him against the cap: **lifting the cap is one
+line in `scale.ron` plus deleting that test, and nothing else.**
 
 ## The open one
 
