@@ -52,8 +52,8 @@ use bevy::prelude::*;
 
 use crate::data::{GameData, TitanKind};
 use crate::shared::{
-    Health, ModelAnchors, StateClock, TitanId, TitanKindName, TitanState, Velocity,
-    CORTEX_ANCHOR, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
+    Body, BodyMask, Health, ModelAnchors, StateClock, TitanId, TitanKindName, TitanState,
+    Velocity, CORTEX_ANCHOR, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
 };
 
 /// Which box of the rig this is. Its own type instead of eight marker components, so that a
@@ -368,6 +368,44 @@ pub fn build_rig(
                 // it is right from today.
                 CollisionLayers::new(LAYER_TITAN_BODY, LayerMask::ALL),
             ),
+            // **`F-029`: this is the whole of "a titan holds a rope".**
+            //
+            // `vector::aim` has hit this capsule from the day it existed — it casts with
+            // avian's default filter on purpose, so that a rope can never travel *through* an
+            // untagged wall. What it could not do was hand the hit on: `hook::anchor_target`
+            // asks for a [`BodyId`], no titan entity carried a [`Body`], and the arm therefore
+            // stayed `Idle` without a word. That was **`B-007`**, both halves of it — because a
+            // solid body that holds nothing also *hides* the good wall behind it.
+            //
+            // `world::index::maintain_index` does the rest and needed no line: it hands out the
+            // [`BodyId`], and its third block (`Changed<GlobalTransform>`) re-inserts the hull
+            // of a body that moved. `vector::hook` stores the anchor as
+            // `local_m = point − entry.center_m` and reads it back as `entry.center_m + local_m`
+            // every tick, so the rope rides a walking titan without anybody writing a rope
+            // system for it (`tests/titan.rs::f029_a_rope_bites_a_walking_titan_and_rides_him`).
+            //
+            // **Where the hull is measured from.** `world::index::entry_from` puts the entry's
+            // centre on the entity's world position, and a titan's origin lies **between his
+            // feet** (`docs/conventions.md`) — so the vertical half below is measured about the
+            // feet and not about the waist. That is deliberate and it costs nothing: the index
+            // grids **XZ only** (`shared::spatial`, decision 1), the anchor arithmetic is a pure
+            // difference of two positions, and `cast_ray`/`aabb_overlaps` are stubs with no
+            // callers. The XZ half is the capsule's own radius, which is what decides how many
+            // cells a walking titan touches.
+            //
+            // ⚠️ **The whole silhouette holds, the nape included — and that does not hand the
+            // player a kill.** `F-030`'s rule is about where a *cut* lands, not where a rope may
+            // bite, and it is guarded by a **speed**: `blades::cut` drops every pass under
+            // `gear.ron: blades.min_speed_m_s` (8.0 m/s) before it ever looks at the zone
+            // (`src/blades/cut.rs:248`). A player parked on the nape closes at ~0 m/s and cuts
+            // nothing; he has bought position, which is the genre's core move, not a free kill.
+            // The alternative — an un-hookable head — cannot be built here anyway: the rig has
+            // exactly one collider, the root capsule, and every limb box sits *inside* it
+            // (`docs/FINDINGS.md` FIND-109), so a ray never reaches a limb to be refused by it.
+            Body {
+                half_size_m: Vec3::new(w * 0.5, rig.height_m * 0.5, w * 0.5),
+                mask: BodyMask::SOLID.with(BodyMask::ANCHORABLE),
+            },
         ))
         .id();
 
@@ -470,6 +508,45 @@ pub fn build_rig(
     commands.entity(head).add_child(cortex);
 
     root
+}
+
+/// **`F-029`: the ropes let go of a corpse, in the tick he dies.**
+///
+/// `brain::receive_hits` takes the body collider off the root the moment the cortex is cut —
+/// *"a corpse is never a wall"* — but a collider is not what a rope hangs on. The rope hangs on
+/// the [`Body`]/[`BodyId`] pair, and without this line it would stay taut through the whole
+/// `death_s` dissolve and only come free when the entity is despawned. A second of hanging on a
+/// dead titan is the acceptance sentence of `F-029` failing: *"löst sich beim Tod des Titanen
+/// mit Feedback."*
+///
+/// **No new channel** (the commission's rule and the right one): taking the component off makes
+/// `world::index`'s `on_body_removed` observer fire, the id lands in the index's mailbox, and
+/// `maintain_index` writes [`BodyGone`](crate::shared::BodyGone) in the next tick's
+/// `SimulationSystems::Spatial` — which is the set `vector::hook` already reads it in, with
+/// `ReleaseReason::BodyGone` already in the enum. One tick, deterministic: `Death` is decided in
+/// `Drive`, `Spatial` is the first set of the *next* tick.
+///
+/// `vector::hook`'s second guard (`index.body(id).is_none()`) fires on the same tick from the
+/// same removal, so the message and the lookup can never disagree about a corpse.
+///
+/// **Rule 6:** `Changed<TitanState>` is empty on every tick in which no titan changed state —
+/// which is all but a handful per titan per sortie. It never walks the living.
+///
+/// `With<Body>` and not a `Death`-only query, so a titan already released is not visited again
+/// for the rest of his dissolve.
+pub fn the_ropes_let_go_of_a_corpse(
+    mut commands: Commands,
+    dying: Query<(Entity, &TitanState), (With<TitanBody>, With<Body>, Changed<TitanState>)>,
+) {
+    for (entity, state) in &dying {
+        if *state != TitanState::Death {
+            continue;
+        }
+        // One line per death, not per tick — and it is the line that explains a rope going
+        // slack under a player who was mid-swing.
+        info!("the titan is dead: his Body goes, and every rope on him releases (F-029)");
+        commands.entity(entity).remove::<Body>();
+    }
 }
 
 /// **Where a swapped model dies.**

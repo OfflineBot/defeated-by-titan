@@ -1,0 +1,134 @@
+# F-029 Dynamische Ankerpunkte — a rope bites a titan, rides him, and lets go when he dies.
+#
+#   cargo run -q -- --headless --script scripts/f029-grapple.txt --ticks 900
+#
+# and, as a SEPARATE run, the one that returns a usable exit code:
+#
+#   cargo run -q -- --headless --script scripts/f029-grapple.txt --ticks 900 >/dev/null 2>&1; echo $?
+#
+# ⚠️ A `--screenshot` run is not a verdict (`docs/FINDINGS.md` FIND-073) — only the `--headless`
+# run prints "N asserts held" and returns an exit code worth reading.
+#
+# The acceptance, verbatim: *"Ein Haken an einem Titanen bleibt während dessen Bewegung korrekt
+# verankert und löst sich beim Tod des Titanen mit Feedback."* Both halves stand below, in that
+# order. It is also the repro `docs/BUGS.md` B-007 asked for: before today every `hook` here
+# ended as `NoAnchor` with the arm silently in `Idle`, and every `assert rope == 1` was red.
+#
+# ## Why both acts happen in the sky, and act 2 at 520 m
+#
+# The same lane `tests/titan.rs::fly_past_a_titan` flies in, and for a sharper reason here.
+# `F-023` gives each arm its **own** ray, about 12.9° off the look; a side ray that finds
+# nothing anchorable falls back to the centre ray, one that finds something keeps it, and the
+# whole of Ashgate is anchorable — **the ground included**. A first version of this script aimed
+# at a titan standing at y = 0 and the left arm quietly bit a roof 8 m beside him
+# (`anchored on body 150 at 38.00 0.39 -8.53`), then asserted `rope == 1` about a house.
+#
+# ⚠️ **A 12.9° fan is a big lateral error on a ray that points almost straight down**, and act 2
+# is a fall from directly above a titan — q030's pass line is 11 m over the nape and 1.80 m to
+# its side, so the look at the body is 82° below the horizon whatever else one does. At 60 m the
+# second version's left ray landed on the ground 21 m away (`anchored on body 10 at
+# 6.93 0.05 -18.85`); lifted to 520 m it cleared the ground and found a **tower top** at
+# y = 123 instead, 429 m out (`anchored on body 77 at 29.81 123.00 -96.31`), and the flight
+# alone took 51 ticks.
+#
+# So act 2 stands at **900 m**, and the number is derived, not chosen: the tallest thing in the
+# world is that tower at 123 m, so an eye at 920 m has **everything except the titan** further
+# away than `game.ron: vector.hook_range_m` (500 m). Both rays then either bite the husk or find
+# nothing and fall back to the centre — which bites the husk. Nothing else about the pass
+# changes; q030's geometry is entirely relative to the body.
+#
+# ## Why nobody warps while a rope is out
+#
+# `B-003`: `player::rope::update_rope_lengths` sets `overextended` on **every** anchored arm of a
+# warped player, whatever the distance, and `vector::hook` then releases it in the next tick.
+# The first version of this script hooked a titan and warped onto the pass line, and the log
+# read `let go: Overextended (t=329)` two ticks later. So each act warps first and hooks after.
+#
+# ## Act 1 — the ride
+#
+# The player hangs 14 m off a husk who is well inside his `aggro_radius_m` (45 m), so
+# `brain::walk` really carries the body: this is a hook into a MOVING carrier, not into a statue.
+# `look -90 0` is the yaw whose direction is +X (`look_dir` is
+# `(−sin yaw·cos pitch, sin pitch, −cos yaw·cos pitch)`).
+#
+# `assert rope == 1` two seconds later is the claim. The anchor is kept in the CARRIER's frame
+# (`HookState::Anchored { body, local_m }`) and `vector::hook` reads it back every tick as
+# `index.body(id).center_m + local_m`; `world::index::maintain_index` re-inserts the hull of
+# anything whose `GlobalTransform` changed. That block was written for `F-029` and had nothing to
+# do until a titan carried a `Body`. The number behind the assert is in
+# `tests/titan.rs::f029_a_rope_bites_a_walking_titan_and_rides_him`: 2.910 m walked, 0.0389 m of
+# drift, against one tick of his own travel (0.0485 m).
+#
+# ## Act 2 — the death
+#
+# `scripts/q030-reach.txt`'s pass, moved 60 m up and otherwise untouched: the player falls from
+# 18.5 m above the titan's feet at x = −1.80, which is 0.20 m of air beside a 1.60 m body, and
+# the blade crosses the nape at ~21 m/s in `Recover`. What is added is the rope: he hooks the
+# titan's crown on the way down, 10 m of it, and it never goes taut because he is falling
+# *towards* the anchor for the whole pass.
+#
+# The timing between the warp and the slash is q030's to the tick — 1.25 s of fall — split
+# differently only because the hook has to be fired inside it.
+#
+# ⚠️ **The closing speed of this pass is 9.75 m/s against `gear.ron: blades.min_speed_m_s` = 8.0,
+# and that is a thinner margin than q030's own 20.67 m/s.** Same fall, same 1.25 s between the
+# warp and the slash — what is different is that the husk is `Pursue`-ing a player 18 m above
+# him instead of standing 1.88 m away, so his lean and his own velocity at the crossing differ.
+# Sweeping the pre-slash wait shows how narrow the window is: 0.50 s lands the cortex, 0.62 s
+# and 0.74 s both miss it entirely. **Whoever touches this file re-runs it and reads the speed**
+# — a pass that drops under 8.0 m/s writes no `TitanHit` at all and the two asserts below then
+# fail for a reason that has nothing to do with F-029.
+#
+# When the cortex is cut, `titan::brain::receive_hits` puts him in `Death`,
+# `titan::rig::the_ropes_let_go_of_a_corpse` takes his `Body` off in the same tick, the observer
+# in `world::index` files it, and `maintain_index` writes `BodyGone` in the next tick's
+# `Spatial` — the set `vector::hook` already reads it in. `assert rope == 0` is that chain, and
+# `hook Left of player 1 let go: BodyGone` is the feedback in the log.
+#
+# ⚠️ `assert titans == 1` and not `== 0`: act 1's husk is still walking 55 m away. That is
+# deliberate — a second living body in the world is what makes `assert rope` a statement about
+# the RIGHT titan.
+
+wait 1.5
+
+# ---- Act 1: hook a walking titan and stay on him --------------------------------------
+spawn titan husk 60 60 0
+warp 46 63 0
+look -90 0
+wait 0.30
+assert rope == 0
+hook left 3.0
+wait 0.40
+mark act1-hooked-a-walking-titan
+assert rope == 1
+wait 2.0
+mark act1-still-anchored-while-he-walks
+assert rope == 1
+wait 0.8
+
+# ---- Act 2: hook the titan that is about to die, then kill him -------------------------
+spawn titan husk 0 900 0
+warp -1.80 918.5 0.55
+# Down and inward, at the body's own axis: the horizontal line from (-1.80, 0.55) to (0, 0) is
+# yaw -73°, and 82° of descent puts the ray 2.4 m under his crown — the middle of the capsule
+# and not its last millimetre.
+look -73 -82
+wait 0.20
+hook left 4.0
+wait 0.20
+mark act2-hooked-the-titan-that-is-about-to-die
+assert rope == 1
+# The look goes back to q030's, because the blade hangs perpendicular to it and not to the
+# velocity (`blades::cut::blade_segment`). The rope does not care where the player is looking.
+look 0 0
+wait 0.50
+slash right 0.40
+wait 0.08
+mark act2-cortex-pass
+wait 0.30
+mark act2-the-corpse-let-the-rope-go
+assert rope == 0
+# `titan.ron: husk.death_s` is 1.0 — the body dissolves for a whole second after the cut, and
+# the rope has to be free long before the entity is.
+wait 1.20
+assert titans == 1

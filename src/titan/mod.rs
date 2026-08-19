@@ -133,7 +133,7 @@ use crate::data::{GameData, TitanKind};
 use crate::mission::MissionPhase;
 use crate::shared::{IdCounter, SimulationSystems, SpawnTitan, TitanId};
 
-use brain::{TitanClock, TitanGait, TitanTarget, TitanTiming, TitanTuning};
+use brain::{Guard, TitanClock, TitanGait, TitanTarget, TitanTiming, TitanTuning};
 use pose::PoseAngles;
 use rig::TitanRig;
 
@@ -148,7 +148,23 @@ impl Plugin for TitanPlugin {
                 // decide the edge, then put the body into the pose that goes with it.
                 // `.chain()`, because the pose of tick *n* has to be the pose of the state
                 // the FSM just decided on — not of the one before it.
-                (brain::receive_hits, brain::advance, pose::apply_pose)
+                // `rig::the_ropes_let_go_of_a_corpse` sits between the hit and the FSM step
+                // for one reason: `receive_hits` is the only writer of `TitanState::Death`,
+                // and taking the `Body` off in the same tick is what makes a rope release
+                // in the next one (`F-029`). It is `Changed<TitanState>`-gated and costs
+                // nothing on a tick in which nobody died.
+                // `answer_the_call` and `guard_the_cortex` stand BETWEEN the FSM and the pose,
+                // and both belong there: the call writes the alert the NEXT `advance` reads,
+                // and the guard has to see the state this tick's `advance` just decided, or a
+                // weaver's nape opens one tick after his wind-up instead of with it.
+                (
+                    brain::receive_hits,
+                    rig::the_ropes_let_go_of_a_corpse,
+                    brain::advance,
+                    brain::answer_the_call,
+                    brain::guard_the_cortex,
+                    pose::apply_pose,
+                )
                     .chain()
                     .in_set(SimulationSystems::Drive),
                 // `Integrate`, and **before every avian system**: what is written here is the
@@ -278,7 +294,8 @@ pub fn spawn_titan(
     let s = &data.scale.titan;
     commands.entity(root).insert((
         TitanTiming::of(kind, data.game.simulation_hz),
-        TitanTuning::of(kind),
+        TitanTuning::of(kind, data.game.simulation_hz),
+        Guard::of(kind, data.game.simulation_hz),
         TitanClock::default(),
         TitanTarget::default(),
         TitanGait::default(),

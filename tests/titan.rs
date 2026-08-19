@@ -2173,3 +2173,250 @@ fn q031_the_nape_survives_a_titan_who_tracks_you() {
         husk.blade_gap_m, wide.blade_gap_m
     );
 }
+
+// ===========================================================================================
+// `F-029` Dynamische Ankerpunkte — **a titan holds a rope, and the rope rides him.**
+//
+// > *„Ankerpunkte an bewegten Objekten: Titanenkörper (Schulter, Arm, Nacken) … Werden pro
+// > Frame mit dem Trägerobjekt mitgeführt und beim Tod oder der Zerstörung des Trägers sauber
+// > entfernt."*
+//
+// The acceptance is one sentence: *"Ein Haken an einem Titanen bleibt während dessen Bewegung
+// korrekt verankert und löst sich beim Tod des Titanen mit Feedback."*
+//
+// **This is the half of `B-007` that is geometry and not wording.** `vector::aim` already hit
+// the titan — it casts with avian's default filter on purpose, so that a rope can never travel
+// *through* a wall — but no titan entity carried a [`Body`], so `hook::anchor_target` returned
+// `None` at `aim.body?`, the arm stayed `Idle`, and the titan additionally **blocked** the good
+// wall behind him. One component on the rig root closes both.
+//
+// Nothing here forces an `AimPoint`. The ray is the game's own, the index is the game's own and
+// the walk is `titan::brain::walk` — a fixture that wrote the anchor itself would pass with the
+// titan deleted, which is the one thing these tests must not do.
+// ===========================================================================================
+
+/// The lane the F-029 pair meets in — **the same trick `fly_past_a_titan` uses**: 60 m up, well
+/// over Ashgate's tallest roof, so that the aim ray measures the titan and not a church.
+const GRAPPLE_LANE_Y: f32 = 60.0;
+
+/// Where the titan stands. His feet are the lane; he is kinematic and `brain::walk` is his only
+/// writer, so he does not fall out of it.
+const GRAPPLE_TITAN_M: Vec3 = Vec3::new(0.0, GRAPPLE_LANE_Y, 0.0);
+
+/// The player: 14 m to the titan's −X side and 3 m up, which puts his eye inside the capsule's
+/// vertical span (feet + 1.6 m … feet + 8.4 m on a 10 m husk). Inside `aggro_radius_m` (45 m),
+/// because a hook into a statue proves nothing about a moving carrier.
+const GRAPPLE_PLAYER_M: Vec3 = Vec3::new(-14.0, GRAPPLE_LANE_Y + 3.0, 0.0);
+
+/// Parks the local player where he is put, weightless and still, looking at **+X**.
+///
+/// `look_dir()` is `(−sin yaw · cos pitch, sin pitch, −cos yaw · cos pitch)`, so the yaw whose
+/// look is `+X` is `atan2(-1, 0)`. Through [`LookOverride`], which is the same absolute channel
+/// the `--script` driver's `look` command uses — a test that wrote `Intent` straight onto the
+/// player would be driving the game through a door nothing else uses.
+fn hold_the_player(app: &mut App, at_m: Vec3) {
+    let player = the_player(app);
+    app.world_mut().entity_mut(player).insert((
+        Transform::from_translation(at_m),
+        GravityScale(0.0),
+        LinearVelocity(Vec3::ZERO),
+    ));
+    app.world_mut().resource_mut::<LookOverride>().0 = Some((f32::atan2(-1.0, 0.0), 0.0));
+    app.update();
+}
+
+fn arm(app: &App, player: Entity, side: Side) -> HookState {
+    app.world().get::<Hook>(player).expect("the player carries a Hook").arm(side).state
+}
+
+fn arm_tip(app: &App, player: Entity, side: Side) -> Vec3 {
+    app.world().get::<Hook>(player).expect("the player carries a Hook").arm(side).tip_m
+}
+
+/// Presses `Q` and runs until the left arm anchors, at most `limit` ticks.
+fn grapple(app: &mut App, player: Entity, limit: u64) -> Option<u64> {
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyQ);
+    for n in 1..=limit {
+        app.update();
+        if arm(app, player, Side::Left).is_anchored() {
+            return Some(n);
+        }
+    }
+    None
+}
+
+/// The pair, set up: a husk in the lane, the player 14 m off him and pointed at his flank.
+fn a_titan_in_the_crosshair(app: &mut App) -> (Entity, Entity) {
+    spawn(app, "husk", GRAPPLE_TITAN_M);
+    let root = the_titan(app);
+    hold_the_player(app, GRAPPLE_PLAYER_M);
+    // One for `world::index` to hand the new body its `BodyId`, one for the aim ray to find it.
+    ticks(app, 2);
+    let player = the_player(app);
+    (root, player)
+}
+
+#[test]
+fn f029_a_rope_bites_a_walking_titan_and_rides_him() {
+    let mut app = app();
+    let (root, player) = a_titan_in_the_crosshair(&mut app);
+
+    // 1. The titan is a carrier at all — `B-007`'s `aim.body?`.
+    let anchored_after = grapple(&mut app, player, 60)
+        .expect("the rope found no anchor on a titan 30 m away and dead in the crosshair");
+    let HookState::Anchored { body, local_m } = arm(&app, player, Side::Left) else {
+        unreachable!()
+    };
+    let carried = app
+        .world()
+        .get::<BodyId>(root)
+        .copied()
+        .expect("the rig root carries no BodyId — world::index never took it in");
+    assert_eq!(body, carried, "the rope hangs on something that is not the titan");
+
+    // 2. It bit the body and not the air around it: the anchor sits inside the husk's own
+    //    silhouette, half a width out at most.
+    let rig = *app.world().get::<TitanRig>(root).expect("the root carries its rig");
+    // `local_m` is measured from the root's origin, which lies **between the feet**. A point on
+    // the body therefore sits inside the rig's own box: half a width to either side, and
+    // between the ground and the crown.
+    assert!(
+        local_m.x.abs() <= rig.width_m * 0.5 + 1e-3
+            && local_m.z.abs() <= rig.width_m * 0.5 + 1e-3
+            && (0.0..=rig.height_m).contains(&local_m.y),
+        "local_m {local_m:?} is outside the husk's own box ({:.2} m wide, {:.2} m tall) — that \
+         is not a point on his body",
+        rig.width_m,
+        rig.height_m
+    );
+
+    // 3. **The ride.** He is inside `aggro_radius_m` (45 m) so `brain::walk` really carries him;
+    //    the rope has to move by exactly what he moved by, and by nothing else.
+    // A second of run-up first: `titan.ron: husk.accel_m_s2` is 3.0, so the first second is
+    // spent reaching `speed_m_s` 3.0 — and under acceleration the index's one-tick propagation
+    // lag is a real `a · dt · T` term (0.075 m over 1.5 s) that would be measured as drift. At
+    // constant speed it is exactly zero, which is the number worth asserting.
+    ticks(&mut app, 60);
+    let titan_before = app.world().get::<GlobalTransform>(root).unwrap().translation();
+    let tip_before = arm_tip(&app, player, Side::Left);
+    ticks(&mut app, 60);
+    let titan_after = app.world().get::<GlobalTransform>(root).unwrap().translation();
+    let tip_after = arm_tip(&app, player, Side::Left);
+
+    let walked = titan_after - titan_before;
+    // The control the whole test hangs on: with a titan who did not move, an anchor nailed to
+    // the world would pass every line below.
+    assert!(
+        walked.length() > 2.5,
+        "the husk walked {:.3} m in a second at 3.0 m/s — this run proves nothing about a \
+         MOVING carrier, and an anchor nailed to the world would pass every line below it",
+        walked.length()
+    );
+    assert!(
+        arm(&app, player, Side::Left).is_anchored(),
+        "the rope let go while he was walking: {:?}",
+        arm(&app, player, Side::Left)
+    );
+    let drift = (tip_after - tip_before) - walked;
+    // **The bound is one tick of the carrier's own travel, and it is not a fudge factor.**
+    // `world::index` reads the `GlobalTransform`, which is propagated in `PostUpdate` — after
+    // the fixed step that moved the titan. So the hull the rope is read against is exactly one
+    // tick old, and while the husk is *turning* towards the player that lag does not cancel: it
+    // leaves a residual of one tick of velocity, 3.0 m/s / 60 Hz = 0.05 m. An anchor nailed to
+    // the world would miss by the **whole** {walked} — sixty times this bound — so the test
+    // still goes red the moment the ride stops working.
+    let one_tick_m = walked.length() / 60.0;
+    assert!(
+        drift.length() <= one_tick_m * 1.2,
+        "the anchor drifted {:.4} m off the body over a second of walking, against one tick of \
+         his travel ({one_tick_m:.4} m): the tip moved {:?} while the titan moved {:?}",
+        drift.length(),
+        tip_after - tip_before,
+        walked
+    );
+    println!(
+        "F-029: anchored after {anchored_after} ticks at local {local_m:?}; the husk walked \
+         {:.3} m in a second and the rope followed to within {:.4} m — one tick of his own \
+         travel is {one_tick_m:.4} m",
+        walked.length(),
+        drift.length()
+    );
+}
+
+#[test]
+fn f029_the_rope_lets_go_when_the_titan_dies_and_says_why() {
+    let mut app = app();
+    app.init_resource::<ReleaseLog>();
+    app.add_systems(Last, record_releases);
+    let (root, player) = a_titan_in_the_crosshair(&mut app);
+    grapple(&mut app, player, 60).expect("the rope found no anchor on the titan");
+    let id = *app.world().get::<TitanId>(root).unwrap();
+    app.world_mut().resource_mut::<ReleaseLog>().0.clear();
+
+    // The cortex is cut. `titan::brain::receive_hits` puts him in `Death` in the same tick.
+    app.world_mut().write_message(TitanHit {
+        titan: id,
+        by: PlayerId(1),
+        zone: HitZone::Cortex,
+        speed_m_s: 30.0,
+    });
+    // `Death` is decided in `Drive`; the `Body` goes with it, the observer files the removal and
+    // `world::index` reports `BodyGone` in the **next** tick's `Spatial`, which is where
+    // `vector::hook` reads it. Two ticks is the whole budget.
+    ticks(&mut app, 2);
+
+    assert!(
+        !arm(&app, player, Side::Left).is_anchored(),
+        "the rope is still taut on a dead titan: {:?}",
+        arm(&app, player, Side::Left)
+    );
+    let reasons: Vec<ReleaseReason> =
+        app.world().resource::<ReleaseLog>().0.iter().map(|r| r.reason).collect();
+    assert!(
+        reasons.contains(&ReleaseReason::BodyGone),
+        "the release carried {reasons:?} instead of BodyGone — the player is told nothing about \
+         why his rope went slack"
+    );
+    println!("F-029: the corpse released the rope with {reasons:?}");
+}
+
+#[test]
+fn f029_without_the_titan_the_same_pull_holds_nothing_that_walks() {
+    // **The refutation.** Same eye, same look, same trigger, **no titan** — and whatever the
+    // 500 m of `hook_range_m` finds out there instead, it does not walk. The pair above claims
+    // a moving carrier; this one shows that the movement came from the titan and not from the
+    // rope code, which is the difference between measuring a husk and measuring a house.
+    let mut app = app();
+    hold_the_player(&mut app, GRAPPLE_PLAYER_M);
+    ticks(&mut app, 2);
+
+    let player = the_player(&mut app);
+    match grapple(&mut app, player, 60) {
+        None => {} // nothing out there at all — the strongest form of the same statement
+        Some(_) => {
+            let before = arm_tip(&app, player, Side::Left);
+            ticks(&mut app, 120);
+            let moved = (arm_tip(&app, player, Side::Left) - before).length();
+            assert!(
+                moved < 1e-3,
+                "with no titan in the world the anchor still travelled {moved:.3} m in two \
+                 seconds — then the ride the test above measures is not the titan's"
+            );
+        }
+    }
+    assert!(
+        titan_roots(&mut app).is_empty(),
+        "this control is only a control while the world really holds no titan"
+    );
+}
+
+use defeated_by_titan::shared::{BodyId, Hook, HookReleased, HookState, ReleaseReason};
+
+/// Every release the two arms reported, in order. A log of the run, not player state.
+#[derive(Resource, Default)]
+struct ReleaseLog(Vec<HookReleased>);
+
+fn record_releases(mut log: ResMut<ReleaseLog>, mut released: MessageReader<HookReleased>) {
+    log.0.extend(released.read().copied());
+}
+
