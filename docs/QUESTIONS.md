@@ -1257,3 +1257,54 @@ this fight after `turn_deg_per_s`, and the two are read together — a wide cone
 turn. **55° and 50 °/s means a husk covers 30° of a 90° error during his wind-up**, so circling
 him works and standing still does not. If that reads as too easy, the cone narrows before the
 turn speeds up.
+
+---
+
+## Q-038 — the aim assist is a machine setting, and multiplayer has no machine
+
+**Raised 2026-08-19 by the round that built `F-024`/`F-025`.** Carried here by the main head
+because `docs/QUESTIONS.md` was not that agent's file — the detail and the rollback point are in
+`docs/FINDINGS.md` **FIND-104**.
+
+### The situation
+
+`F-016`'s two knobs live in `PlayerSettings`, which is a **`Resource`** — one per running program,
+seeded at `Startup` out of `game.ron`. That is right for mouse sensitivity and FOV: they belong to
+the human at the keyboard, not to the character.
+
+**But the assist changes where the rope goes.** So the snap only applies to `With<LocalPlayer>`,
+and a remote player's arms resolve as if his assist were 0 %. Today that is invisible — there is
+one player and `net::local` is the only transport. **On the day the netcode lands it is a
+divergence**, and rule 4 is explicit that nothing gets built now which makes multiplayer expensive
+later: *"player state never as a `Resource`, input is an `Intent`."*
+
+### The three answers, and they are genuinely different games
+
+1. **The assist is part of the Intent.** The resolved point (or the two knob values) rides on the
+   wire, every client simulates every player identically, and a replay reproduces the shot.
+   Costs wire bytes on every tick and makes the setting **cheatable** — a client that claims
+   100 % gets 100 %.
+2. **The assist is presentation only, and the server re-resolves.** The knobs stay local, the
+   *fired direction* goes on the wire, and the assist is a way of choosing that direction rather
+   than a thing the simulation knows about. Cheat-resistant, and it means a replay of somebody
+   else's shot never shows his assist — which is fine, because it never showed his mouse either.
+3. **The assist is a character stat, not a machine setting.** It moves out of `PlayerSettings`
+   into the save profile and becomes something the trait tree can touch. That is a *design*
+   decision with a balance consequence and it would make `F-016` a progression knob rather than a
+   comfort one.
+
+**ASSUMPTION the work continues under: (2).** It is the only one that is both cheat-resistant and
+free today, it matches how `F-016` is worded (*a comfort setting*, `docs/gameplay/world.md`:
+*"Snap wird zur Komfortoption statt zur Notwendigkeit"*), and it needs no wire change now.
+
+**Rollback point:** `PlayerSettings::assist_catch_pct` / `assist_strength_pct` and the
+`With<LocalPlayer>` filter in `vector::aim`. If the answer is (1), those two values move onto
+`Intent` and the filter disappears; if (3), they move into the save profile.
+**Nothing else depends on the choice yet** — the scoring function itself is pure and takes the two
+numbers as arguments, so it survives all three answers unchanged.
+
+### What would settle it
+
+The user playing with the knobs and telling us the number he likes. If a *single* number turns out
+to be right for everybody, (2) becomes trivially correct and the question dies. If he wants it
+different per situation, (1) and (3) get interesting.

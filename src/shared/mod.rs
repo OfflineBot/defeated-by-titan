@@ -51,5 +51,7 @@ pub use state::{MovementState, Gas, Blades, Velocity, Health, HitStop, TitanStat
 pub use layers::{
     GameLayer, LAYER_WORLD, LAYER_PLAYER, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
 };
-pub use anchors::{is_anchor_name, ModelAnchors, ANCHOR_NAMES, CORTEX_ANCHOR, HOOK_PREFIX};
+pub use anchors::{
+    is_anchor_name, ModelAnchors, ModelName, ANCHOR_NAMES, CORTEX_ANCHOR, HOOK_PREFIX,
+};
 pub use terrain::TerrainField;

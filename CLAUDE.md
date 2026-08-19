@@ -61,6 +61,14 @@ went unseen.**
 5. **A bug without evidence is a rumor; a fix without a red test is a guess.**
    First the test that falls over; then the fix; then take the fix back out and watch the test
    go red again. **No repro, no fix.** → [`docs/BUGS.md`](docs/BUGS.md)
+   🔴 **And the assertion has to be able to tell the two apart.** Measured 2026-08-19: a chain
+   test read `32 → 36 → 42 m/s` and looked like proof that the rope accelerates — until a control
+   run with the third `hook` line **deleted** reproduced the same numbers to three decimals. Legs
+   2 and 3 had anchored **nothing**; it was measuring gravity. **`assert speed` cannot tell a
+   swing from a fall.** The fix was one more assert (`rope == 1` on every leg), and the habit is
+   the cheap part: **before believing a measurement, delete the thing it is supposed to be
+   measuring and check the number moves.** Same shape as `FIND-103` — *a test that asks the
+   screen and the function the same question passes when both are wrong.*
 6. **Nothing changes per frame, everything per second**, and nothing runs over all entities to
    answer a question about the ten meters in front of your nose.
    → [`docs/lessons/performance.md`](docs/lessons/performance.md)

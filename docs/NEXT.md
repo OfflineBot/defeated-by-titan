@@ -1174,3 +1174,40 @@ one 16.7 ms sim step can fall entirely between two fixed steps and never be samp
 **Weaker than B-006 and B-007 and listed below them on purpose** — a normal tap is 30–80 ms and
 spans two to five sim steps. Worth one measurement, not a round: log every `Buttons` edge the sim
 sees against every physical key event for a minute of play, and compare the counts.
+
+### §2D update — 🔴 the tower measurement cannot run: its scripts aim where they no longer point
+
+Found 2026-08-19 while measuring `F-025` (`docs/FINDINGS.md` FIND-108).
+
+`scripts/w5-lane.txt` and `scripts/f004-towers.txt` were written on 2026-08-13, when
+`aim_spread_deg` was a **fixed** offset and `side_angle_rad` read it as a half-angle. **Every
+`look` line in both files is hand-compensated by ±28°** for that offset — the header of
+`w5-lane.txt` says so in as many words and explains the pitch correction
+`asin(sin(pitch)·cos 28°)`.
+
+**That offset stopped being fixed on 2026-08-18** (`FIND-096`: the fan is now a resolved
+separation in metres, state- and distance-dependent, 3.4°..28° at 100 m). So the compensation
+now points the shots into nothing:
+
+```
+w5-lane.txt ACT A leg 3:  its own table says 39.250 m/s  ·  measured today 1.202 m/s
+```
+
+**Consequence: the tower question is still unanswered and is now MORE expensive than §2D said.**
+The script is not merely unrun — it is wrong, and re-aiming it is the job. Two honest routes:
+
+1. **Re-aim both files against the resolved fan.** Tedious, and it bakes today's numbers in
+   again — the next tuning of the spread breaks them a second time.
+2. 🟢 **Aim them with the assist instead.** `settings assist_strength 100` now exists as a script
+   verb (2026-08-19), and at full snap **the pitch of a shot barely matters** — 20° to 50° picked
+   the same anchor, because a snap chain is aimed by **release time**, not by angle (FIND-108).
+   That makes a lane script robust against every future spread change, which is exactly the
+   property both files failed to have.
+
+**Route 2 is the recommendation** and it is cheap: `scripts/f025-chain.txt` already proves the
+shape works (5 swaps, 16.9 → 45.2 m/s, `rope == 1` on every leg).
+
+⚠️ **And `f004-towers.txt`'s 16-of-39 red is not a map bug.** It has been misread as one at least
+once (`FIND-096`); it is this same stale compensation. Nothing is wrong with the gantries that
+this explains — which means the user's *"random türme die nicht so sein sollten"* still has to be
+answered by measurement, not by the fact that the old script fails.

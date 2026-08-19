@@ -1662,7 +1662,7 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 ---
 
 ## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
-**NEXT FREE ID: FIND-104.** Claim it by bumping this line in the same `cat >>` that
+**NEXT FREE ID: FIND-109.** Claim it by bumping this line in the same `cat >>` that
 appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
 file separately and both read the same maximum. One line beats a 108 kB grep.
  — and append with `>>`, never with an edit tool
@@ -5673,3 +5673,319 @@ expectation from constants, or assert a literal.
 
 This is the whole argument for CLAUDE.md rule 5's *third* step. The test was written first and
 it was green first; only "break the fix and watch it go red" found that it could not fail.
+
+---
+
+## FIND-104 — the anchor candidate system is a RAY SWEEP, because the spatial index cannot answer the question and `vector` may not ask `world`
+
+**2026-08-19, `F-024` / `F-025` (`src/vector/aim.rs`), measured on `maps.ron: current` (ashgate).**
+
+The brief said: *"`src/world/index.rs` is the spatial index; build the candidate query on it
+rather than iterating the world."* **The index cannot answer it, and no new file in `world/`
+could have been used anyway.** Three measurements, all cheap:
+
+1. `SpatialIndex::aabb_overlaps` and `::cast_ray` are **stubs with empty bodies and no callers**
+   — `src/world/index.rs`'s own header says so and `grep -rn 'aabb_overlaps' src/ tests/`
+   confirms it. The half of the index that is alive is the `BodyId -> IndexEntry` directory.
+2. `docs/architecture.md`'s allow list has **no `vector -> world` edge**, so the planned
+   `src/world/candidates.rs` would have been unreachable from the aiming code. It was not
+   written.
+3. A region query would have been **the wrong shape even if it existed**: it returns points
+   behind walls, and each one would then need a line-of-sight ray to be usable at all —
+   `F-023` forbids hooking through a wall in so many words.
+
+**So the candidate query is `assist_probe_rings * assist_probes_per_ring` extra
+`SpatialQuery::cast_ray` calls per hemisphere, inside the catch cone.** That is avian's BVH,
+the same one `F-002` already trusts at the module header's measured **0.21 us a ray**: 16 extra
+rays at the shipped 2x4 is ~3.4 us per player per tick against a 16 666 us budget, and **zero
+extra rays while the assist is off**, which is the shipped default. Every candidate is an
+unoccluded, anchorable, real surface by construction.
+
+### The measurement that matters to `B-007`: candidate selection routes around a blocker, half the time
+
+`tests/vector_hooks.rs::f024_the_mode_switch_bites_within_one_tick_and_reaches_what_free_aim_cannot`
+sweeps 24 yaw x 4 pitch on the shipped map, two arms each:
+
+| | |
+|---|---|
+| arm-directions swept | **192** |
+| with **no anchor at all** under free aim (`anchorable: false`) | **8** |
+| of those, rescued by SNAP **within one tick** | **4** (50.0 %) |
+
+**So `B-007`'s second half — "a titan BLOCKS the hook, and a perfectly good wall behind him is
+unreachable" — is now half-answered by a feature that was not built for it.** When the thing
+under the crosshair holds nothing there is **no incumbent to beat**, so any valid candidate in
+that hemisphere wins at *any* non-zero strength (`vector::aim::pick_best`, `incumbent: None`).
+What it does **not** do: it cannot reach a wall that is *directly* behind the blocker, only one
+beside it — the probe cone is 20° wide at most. `B-007` still needs `F-029` (a titan as a
+carrier) or a decision that a titan is transparent to the ray; what it no longer needs is the
+claim that a titan in the line of fire is a total blackout.
+
+⚠️ **The 8/192 is on ashgate with no titan spawned.** The titan case is likely worse than 50 %,
+because a 10 m body 15 m away subtends far more than a house edge does. Whoever measures it
+spawns a husk (`scripts/f056-husk.txt`) and re-runs the same sweep.
+
+### And the momentum term does what `F-025` says, measured
+
+Same file, `f025_the_assist_picks_points_that_carry_the_flight_further_than_free_aim`: over 104
+arm-directions with the player flying at 30 m/s, the mean cosine between the published aim
+direction and the flight direction is **free 0.9863 -> SNAP 0.9934**. Small, and it is small
+for a reason worth writing down: free aim on a fast player is *already* nearly aligned, because
+he is looking where he is going. The term earns its 25 % in the cases where he is not.
+
+### The netcode debt this creates, in one line
+
+`PlayerSettings` is a `Resource` — *this machine's* preference — so `vector::aim` applies the
+assist only to entities carrying `LocalPlayer`. A remote player therefore aims with **no
+assist** on our machine and with **his** assist on his. That is invisible today (nothing is
+replicated) and it is a desync the day netcode lands. **The fix is one field:** the two knobs
+move into `Intent` beside `aim_spread_deg`, which is absolute-not-delta for exactly this
+reason.
+
+> **ASSUMPTION (2026-08-19):** aim assist is a *client-side* aid and stays out of the replicated
+> `Intent` until netcode exists. **Rollback point:** `src/vector/aim.rs::aim`, the one line
+> `.filter(|_| is_local)` plus the `Option<Res<PlayerSettings>>` parameter — move both knobs
+> into `src/shared/intent.rs` beside `aim_spread_deg`, fill them in `net::local::read_input`
+> exactly as that field is filled, and read them off the `Intent` here. Nothing else in this
+> feature is machine-local. **Not written into `docs/QUESTIONS.md` by this round** — that file
+> belonged to nobody in the commission; the supervisor carries it over.
+
+---
+
+## FIND-105 — the half-timbered house costs **115 mesh primitives**, and dressing the district triples the frame cost
+
+**The picture this round is evidenced by** is `docs/images/f003-ruins.png`, taken with
+`scripts/f003-ruins.txt` from the same vantage as `docs/images/f003-ashgate.png` — that pair is
+the before and after, frame for frame.
+
+**Measured 2026-08-19**, one pinned binary (`cp target/debug/defeated_by_titan $SCRATCH/dbt-pinned`),
+`--headless`, A/B/A/B interleaved, process CPU out of `getrusage(RUSAGE_CHILDREN)`, 60 and 900
+ticks so that startup and per-tick could be separated. Four states of the same district, the
+same seed, the same binary — only `assets/data/art.ron` and `maps.ron: layout.damage` differ:
+
+| | district | blocks | glTF instances | ms / tick |
+|---|---|---|---|---|
+| A | intact, grey boxes | 5155 | 0 | **13.1** |
+| C | fallen, grey boxes | 3655 | 0 | **9.1** |
+| D | intact, dressed | 3393 | ~590 houses † | **42.4** |
+| B | fallen, dressed (**shipped**) | 2871 | 278 houses + 376 ruins + 134 mounds = 788 | **29.6** |
+
+† derived, not counted: a dressed house emits no cuboid cap, and `roof_steps` is 3, so
+`(5155 − 3393) / 3 ≈ 590`. Every other figure in the table is read off a run.
+
+Two separate results, and they point in opposite directions:
+
+* **The ruin pays for itself.** A → C is **−31 %**: a fallen house grows no roof, and the three
+  stacked caps per house were a third of the district's boxes.
+* **The dressing is expensive, and it is per tick and not per load.** A → B is **+126 %**, and
+  the 60-tick runs place only ~1.5 s of it in startup. So it is not the asset load.
+
+**Why**, and this is the actionable half — node counts straight out of the `.glb` JSON chunks:
+
+```
+a-083-fachwerkhaus-gross.glb      nodes 120  meshes 115
+a-083-fachwerkhaus-stadthaus.glb  nodes 119  meshes 114
+a-089-ruine-*.glb                 nodes  19..27  meshes 14..22
+a-090-schutt-*.glb                nodes  12..16  meshes  8..11
+```
+
+**A house is 115 separate mesh primitives.** The shipped district's 278 dressed houses are
+~33 000 entities whose transforms propagate every frame; its 510 remnants add ~10 000 together.
+That is why D is *worse* than B although both are ~3000 blocks and D has fewer instances:
+~590 × 120 ≈ 71 000 nodes against B's ≈ 43 000. The cost tracks **glTF node count** — not block
+count, and not instance count.
+
+**What this is not:** a render measurement. `--headless` switches the wgpu adapter off
+(`shared::cli`), so these numbers are ECS, transform propagation and physics only — the draw-call
+side of ~40 000 mesh primitives is **unmeasured** and can only be worse. Nobody should read
+"29.6 ms" as a frame time.
+
+**What to do about it — not done in this round, and it is asset work, not code work:** the pack
+is authored unmerged. One merged mesh per house (or a two-material LOD export) would take a house
+from 115 primitives to 1–2 and is the whole finding. Until then the honest lever is *how many*
+houses are dressed, and that is `art.ron` — one line per class, still.
+
+---
+
+## FIND-106 — `hit.min`/`hit.max` on the ruin kit, measured; and the artist thought about the rope
+
+The fourteen unused ruin models of the 2026-08-18 drop, measured out of their own
+`hit.min`/`hit.max` corner pair (⚠️ a **corner** pair: `hit.max.z < hit.min.z` on all 278 files,
+so the extent is taken with `abs`). They now stand in `src/world/map.rs: RUIN_KIT` / `RUBBLE_KIT`
+and `tests/world.rs::f003_the_ruin_catalogue_is_what_the_glb_files_really_measure` holds all
+forty-two numbers down against the files.
+
+```
+a-089-ruine-dach-eingestuerzt  7.04 x 2.62 x 5.16   hook.sparren
+a-089-ruine-dach-haelfte       6.72 x 4.74 x 4.93   hook.dachkante hook.first
+a-089-ruine-giebel             6.47 x 8.49 x 4.01   hook.giebelkante hook.kamin
+a-089-ruine-haufen             7.49 x 2.40 x 5.81   hook.wandplatte
+a-089-ruine-obergeschoss       6.95 x 5.55 x 4.93   hook.balken hook.bruchkante
+a-089-ruine-pfeiler            5.86 x 9.00 x 4.87   hook.gesims hook.pfeiler
+a-089-ruine-wand-ecke          6.47 x 5.60 x 6.80   hook.bruchkante hook.ecke
+a-089-ruine-wand-hoch          6.22 x 6.94 x 3.96   hook.bruchkante hook.sturz
+a-090-schutt-balken            4.10 x 2.10 x 3.70   hook.firstbalken hook.sparren_l/_r
+a-090-schutt-deckung           3.70 x 1.20 x 3.31   hook.balken hook.kante
+a-090-schutt-flach             3.94 x 0.90 x 2.95   hook.platte
+a-090-schutt-haufen-gross      6.20 x 3.00 x 4.80   hook.boeschung hook.gipfel hook.traeger
+a-090-schutt-hoch              4.20 x 1.80 x 3.50   hook.balken hook.wandstueck
+a-090-schutt-wandstueck        4.33 x 2.40 x 2.80   hook.bruchkante hook.reihe
+```
+
+Two things fall straight out of the table and both are decisions, not observations:
+
+1. **Every remnant carries `hook.*` empties, four of them a `hook.bruchkante`** — "break edge".
+   The modeller expected a rope on a broken wall, which is the same answer the user gave
+   (*„überall! ohne ausnahmen!"*). The remnants ship anchorable and
+   `f003_a_fallen_facade_still_holds_a_rope` says so by name.
+2. **Nothing in the `a-090` group reaches 3 m.** That is what makes "rubble takes the ground and
+   leaves the air alone" a property of the pack and not a hope, and
+   `f003_the_ruin_catalogue_is_what_the_glb_files_really_measure` asserts the ceiling so the day
+   somebody files a 9 m ruin under rubble it goes red.
+
+## FIND-107 — the pack was authored unmerged; concatenating primitives took the tick **32.3 → 9.7 ms**
+
+FIND-105 ended with "the pack is authored unmerged … one merged mesh per house would take a
+house from 115 primitives to 1–2 and is the whole finding." This is that, done and measured.
+
+**`tools/glb_merge.py`** (stdlib only, like every tool here) concatenates the primitives of a
+`.glb` that share a material and an attribute set into **one** primitive, baking each node's
+translation into its vertices, and collapses the node tree that existed only to hold them.
+Nothing is decimated: same triangles, same vertices, same texture, fewer nodes.
+
+| | primitives | nodes | glTF entities in Ashgate | ms / tick |
+|---|---|---|---|---|
+| A authored | 10 958 | 12 706 | 43 988 | **32.34** |
+| B merged | **311** | **2 059** | **5 444** | **9.68** |
+
+**60 FPS is back with room: 9.68 ms against the 16.7 ms budget, −70 %.** The `a-083` house goes
+**115 primitives / 120 nodes → 1 / 6**; the 4 rig files had nothing to merge; 274 of 278 were
+rewritten; `assets/3d/glb/` fell 26 MB → 17 MB.
+
+**How it was measured.** One pinned binary (`cp target/debug/defeated_by_titan $SCRATCH/dbt-pinned`),
+two complete asset roots in scratch selected by `BEVY_ASSET_ROOT` so that **no `assets/data/*.ron`
+of the live tree is touched and another agent's edit cannot land inside the run**, `--headless`,
+`getrusage(RUSAGE_CHILDREN)`, 60 and 900 ticks so startup separates from per-tick, **A/B/A/B/A/B
+interleaved**, medians. FIND-105's A was 29.6 ms and this A is 32.3 ms — same method, a slightly
+different `maps.ron` and a shared machine; the delta is the number, not the absolute.
+
+**43 988 → 5 444 entities** is counted, not derived: 788 instances out of the run's own log,
+each multiplied by its file's node count + 1 for Bevy's scene-root wrapper. It confirms
+FIND-105's "≈43 000" estimate to three digits, which is the second useful thing here — **the
+cost really does track glTF node count.**
+
+**The invariants are asserted per file, before the write, from the OUTPUT BYTES, by a path that
+never calls the merge** (FIND-103: a test that asks the screen and the function the same
+question passes when both are wrong): the named empties at the same world transform (all 278
+carry `hit.min`/`hit.max`, 45 a `cortex`, 439 `hook.*` across 144 files — the kill zone and every
+rope anchor read these), every triangle identical in world space as a sorted multiset of
+(position, normal, uv) corner triples, vertex and triangle counts, the material list and the
+`../../texturen/TEX-*.png` URIs, and GLB validity. **Both sides round to float32**, so the
+triangle comparison is *exact* rather than a tolerance argument — baking a translation and
+storing it is float32 rounding, and doing the same on the reference side is what makes bit
+equality the assertion. A file that fails is skipped and reported, never written.
+
+**And then verified again from outside the tool**: a separate script compared all 278 merged
+files against the pristine originals using a **different data path** — the accessors' own
+*declared* `min`/`max` (which the tool's self-check never reads; the merge only writes them),
+the index accessors' declared `count`, and the empties out of the JSON text. **278 checked, 0
+differ.**
+
+**What it is honestly not: pixel-identical.** Merging changes the granularity Bevy sorts opaque
+draws at — per sub-mesh becomes per model — so **coplanar surfaces tie-break differently**.
+`scripts/f003-ruins.txt` at 1280×720: **837 of 921 600 pixels, 0.091 %**, in 498 scattered runs
+no longer than 26 px, mostly ±1..6 per channel. The control says that is real and small: the
+same build against itself differs in **2** pixels, the merged build against itself in **0**, and
+A-vs-B is a stable 837/839 across repeats. If it were geometry, it would be contiguous
+silhouette, and the independent check above says it is not.
+[`docs/images/f003-merged-before.png`](images/f003-merged-before.png) /
+[`f003-merged-after.png`](images/f003-merged-after.png).
+
+**The ratchet**, so the next art drop cannot reintroduce it:
+`tests/render.rs::f030_a_bound_model_is_merged_and_cannot_bring_a_hundred_primitives_back` over
+every bound `art.ron` row, and `f030_the_whole_drop_is_merged_and_not_only_the_rows_that_ship_today`
+over all 278 files — `art.ron` is one line per class, so an unmerged file is bound the moment
+somebody dresses another building. Both were **red first** (`265 of the drop's .glb files carry
+more than 3 mesh primitives — worst first: [("a-072-bulwark-form.glb", 355), …]`), and putting
+the unmerged `a-083` back turns the first one red again in one line.
+
+**What is still unmeasured, and it is the same gap FIND-105 named:** `--headless` switches the
+wgpu adapter off, so 9.68 ms is ECS, transform propagation and physics — **not** a frame time.
+The draw-call side went 10 958 → 311 primitives, which can only have improved, but nobody has
+put a number on it. **Nobody should read "9.68 ms" as 103 FPS.**
+
+**The way back:** the originals were never committed, so they live in the git **index**, not in a
+commit — `git checkout -- assets/3d/glb/` restores them, and a `git add` of that folder by anyone
+else destroys that. The tool is idempotent and deletes nothing, so a re-run after a restore
+reproduces the merged files byte for byte.
+
+Related: FIND-105 (the measurement this answers) · FIND-103 (why the check is independent) ·
+[`docs/models.md`](models.md) "The pack is merged on the way in"
+
+---
+
+---
+
+## FIND-108 — `F-025`'s acceptance holds, and free aim cannot run the same chain at all
+
+**2026-08-19, `scripts/f025-chain.txt`, ashgate gantry lane, measured `[offlinebot]`.**
+
+The acceptance could not be run until this afternoon: `src/debug/script.rs` had 46 verbs and
+none of them reached `shared::PlayerSettings`, so the whole aim assist was unreachable from
+every script in the repository. `settings <key> <value>` is that verb (`assist_catch`,
+`assist_strength`, both `0..100`, an unknown key or an out-of-window value is a **parse
+error**, never a clamp).
+
+Five hook swaps from the beam line at `(0, 58, 257.5)`, identical inputs in all three arms,
+rope only — `gas == 300` at the end of both chain acts:
+
+| leg | 100 % / 100 % SNAP | 0 % / 0 % FREE | 50 % / 50 % |
+|---|---|---|---|
+| 1 | **16.890 m/s** @ 50.862 m, anchored | 16.766 @ 50.964, anchored | 16.832 @ 50.910 |
+| 2 | **27.467** @ 39.010, anchored | 28.098 @ 38.250, **no anchor** | 26.978 @ 39.566 |
+| 3 | **34.828** @ 27.520, anchored | 39.799 @ 18.385, **no anchor** | 35.231 @ 26.723 |
+| 4 | **39.370** @ 19.084, anchored | 27.120 @ 3.000, anchored | 43.102 @ 10.557 |
+| 5 | **45.232** @ 6.670, anchored | 26.628 @ 2.198, **no anchor** | 41.715 @ 1.572 |
+
+**The acceptance holds at full snap: strictly monotone over five swaps, 16.9 -> 45.2 m/s
+(7.5x running), every leg on a real rope, zero gas.** At 50 % it accelerates over four and
+loses leg 5 on the pavement. **With the assist off the same five lines put three of five shots
+into empty air** and the chain is over by leg 4 — the rising speed in its legs 2 and 3 is
+gravity, not a lane.
+
+### ⚠️ The trap this nearly walked into, and it is `FIND-103` again
+
+A first draft measured `32 -> 36 -> 42 m/s` and was **a lie**: legs 2 and 3 anchored nothing
+and the player was in free fall. A control run with the third `hook` line **deleted** produced
+the same numbers to three decimals. `assert speed` cannot tell a swing from a fall. Every leg
+in the shipped script therefore carries `assert rope == 1`, and the arms alternate so that the
+count belongs to the leg that fired it. **A chain script without a rope assert measures
+gravity.**
+
+### The second half — "never a point behind the player" — measured as a consequence, not asked
+
+Same tile on the boulevard `(150, 2, -60)`, same 64° pitch, 100 % / 100 %, reeled 3 s:
+facing the wall he ends at **60.746 m** (the gallery ledge); turned 180° he ends at
+**5.723 m** — a roof in front of his face. The 60 m ledge is eight metres behind his back and
+the assist does not reach for it, because at 100 % the catch cone is 20° wide
+(`ASSIST_CATCH_MAX_DEG`) and a point behind the crosshair is not a candidate at all.
+`tests/vector_hooks.rs::f024_never_a_point_behind_the_player` has the geometry; this is the
+consequence in the running game, and it asks only where the player ended up.
+
+### Two things the round found on the side, and neither is mine to fix
+
+1. **`scripts/w5-lane.txt`'s look angles no longer aim where its header says.** Every shot in
+   it is compensated by ±28° for a side-ray offset that stopped being fixed on 2026-08-18
+   (`FIND-096`: `aim_spread_deg` is a *ceiling*, `effective_spread_rad` resolves it per tick and
+   the rays come out far closer to the centre). Re-run today its ACT A dies at leg 3 —
+   `1.202 m/s` where its own table says `39.250`. The lane is intact; the file's arithmetic is
+   one release out of date. `scripts/f004-towers.txt` carries the same defect from the other
+   direction.
+2. **The pitch of a shot barely matters at 100 % snap.** Leg 3 swept over `40..50°` moved the
+   outcome by `0.5 m/s`, and over `20..50°` it picked the same anchor at every angle. That is
+   the feature working, and it is also the reason a script cannot aim a snap chain by pitch —
+   it aims it by *release time*.
+
+Related: FIND-104 (the probe sweep this measures) · FIND-103 (the independence rule) ·
+FIND-096 (the spread ceiling that stale-dated the older lane scripts) ·
+`scripts/f025-chain.txt` · `src/debug/script.rs`
