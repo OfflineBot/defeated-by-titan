@@ -43,7 +43,12 @@ use defeated_by_titan::shared::{
     HookState, IdCounter, IndexEntry, Intent, LocalPlayer, MissReason, PlayerId, PrevButtons,
     ReleaseReason, RopeLength, Side, SimulationSystems, SpatialIndex, Tick,
 };
-use defeated_by_titan::vector::aim::aim;
+use defeated_by_titan::shared::{LookOverride, PlayerSettings, Velocity};
+use defeated_by_titan::data::VectorTuning;
+use defeated_by_titan::vector::aim::{
+    aim, deviation_rad, hemisphere, look_basis, pick_best, probe_dirs, required_margin,
+    score_candidate, AimCandidate, ScoreContext,
+};
 
 // ---------------------------------------------------------------------------------------
 // The harness
@@ -930,3 +935,605 @@ fn f001_the_anchor_rides_along_when_its_carrier_moves() {
     assert!(arm_state(&app, e, Side::Left).is_anchored(), "and it is still holding");
 }
 
+
+// ===========================================================================================
+// `F-025` Bewertungsfunktion / `F-024` Snap auf Q und E
+//
+// > *„es sollte best match sein"* — the user, 2026-08-18.
+//
+// **Every assertion below computes its expected value out of the backlog's own weights, by
+// hand, and never asks the scoring function what the scoring function thinks.** That is the
+// lesson of `docs/FINDINGS.md` FIND-103: a test that puts the same question to the screen and
+// to the code passes while both are wrong. So the fixtures here are candidates typed out as
+// coordinates, arranged so that four of the five terms are provably equal between them and
+// the score difference is one weight times one number a reader can check on paper.
+// ===========================================================================================
+
+/// The tuning straight out of `assets/data/game.ron` — no app, no plugins.
+fn vector_tuning() -> VectorTuning {
+    GameData::load(std::path::Path::new("assets/data")).game.vector
+}
+
+/// A context with nothing switched on: no motion, no hooks out, a 20° cone.
+fn calm_ctx(look: Vec3) -> ScoreContext {
+    ScoreContext {
+        eye_m: Vec3::ZERO,
+        look,
+        velocity_m_s: Vec3::ZERO,
+        catch_rad: 20.0_f32.to_radians(),
+        in_use: [None, None],
+    }
+}
+
+fn candidate(point_m: Vec3, id: u32) -> AimCandidate {
+    AimCandidate { point_m, body: BodyId(id), distance_m: point_m.length() }
+}
+
+/// The five weights are `F-025`'s own numbers, and they are in the file rather than in Rust.
+///
+/// > *"Faktoren: Winkelabweichung zum Fadenkreuz (Hauptgewicht 45 Prozent), Momentum-Erhalt
+/// > (25 Prozent …), Hoehenvorteil relativ zur Bewegungsrichtung (15 Prozent), Distanz im
+/// > nutzbaren Mittelbereich (10 Prozent), Abwertung des zuletzt genutzten Punktes (5 Prozent
+/// > …). Alle Gewichte liegen in der Config und sind ohne Codeaenderung anpassbar."*
+/// > — `docs/backlog/gameplay.ron`, `F-025`
+///
+/// The numbers here are typed from that line and not read back out of the code (§6 rule 2).
+#[test]
+fn f025_the_five_weights_are_the_backlogs_own_numbers_and_they_live_in_the_file() {
+    let v = vector_tuning();
+    assert_eq!(v.assist_score_angle_w, 0.45, "angle deviation to the crosshair");
+    assert_eq!(v.assist_score_momentum_w, 0.25, "momentum preservation");
+    assert_eq!(v.assist_score_height_w, 0.15, "height advantage");
+    assert_eq!(v.assist_score_distance_w, 0.10, "distance in the usable mid-range");
+    assert_eq!(v.assist_score_recent_w, 0.05, "devaluation of the point last used");
+    // 45 + 25 + 15 + 10 + 5 = 100. The fifth is a **penalty**, so the four rewards are 95 %
+    // and the whole budget is only closed once the devaluation is counted in — which is what
+    // the backlog's list actually adds up to, and the first version of this assertion got it
+    // wrong (it demanded 1.0 of the four and went red on 0.95).
+    let budget = v.assist_score_angle_w
+        + v.assist_score_momentum_w
+        + v.assist_score_height_w
+        + v.assist_score_distance_w
+        + v.assist_score_recent_w;
+    assert!((budget - 1.0).abs() < 1e-6, "the five factors are 100 %, not {budget}");
+}
+
+/// 45 %: the point on the crosshair beats the one at the rim of the catch cone **by exactly
+/// `assist_score_angle_w`**, with the other four terms held equal by construction.
+///
+/// Both points sit at the same distance, both at the eye's own height (so the height term is
+/// the midpoint for both), and the player stands still (so the momentum term is the midpoint
+/// for both). Nothing but the angle can move the number.
+#[test]
+fn f025_the_angle_term_is_worth_exactly_the_files_forty_five_percent() {
+    let v = vector_tuning();
+    let ctx = calm_ctx(Vec3::NEG_Z);
+    let d = 30.0_f32;
+    let on_the_crosshair = candidate(Vec3::new(0.0, 0.0, -d), 1);
+    let (sin_c, cos_c) = ctx.catch_rad.sin_cos();
+    let at_the_rim = candidate(Vec3::new(d * sin_c, 0.0, -d * cos_c), 2);
+
+    let gap = score_candidate(&v, &ctx, &on_the_crosshair) - score_candidate(&v, &ctx, &at_the_rim);
+    assert!(
+        (gap - v.assist_score_angle_w).abs() < 1e-5,
+        "on the crosshair beats the rim by {gap}, and the file says {}",
+        v.assist_score_angle_w
+    );
+}
+
+/// 25 %: *"bevorzugt Punkte, die die aktuelle Flugbahn fortsetzen statt sie zu bremsen"*.
+///
+/// Two candidates 90° apart, both 45° off the crosshair, both level with the eye, both at the
+/// same distance. The player flies straight at the first one. The momentum term runs
+/// `0.5 (1 + cos)`, so the gap is `w · (1.0 − 0.5) = w/2` and nothing else.
+#[test]
+fn f025_a_point_that_continues_the_flight_beats_one_that_brakes_it() {
+    let v = vector_tuning();
+    let ctx_look = Vec3::X;
+    let d = 30.0_f32;
+    let k = std::f32::consts::FRAC_1_SQRT_2;
+    let ahead = candidate(Vec3::new(d * k, 0.0, -d * k), 1);
+    let across = candidate(Vec3::new(d * k, 0.0, d * k), 2);
+    let mut ctx = calm_ctx(ctx_look);
+    // Faster than `assist_momentum_min_speed_m_s`, straight at `ahead`.
+    ctx.velocity_m_s = (ahead.point_m - ctx.eye_m).normalize() * 25.0;
+    ctx.catch_rad = 60.0_f32.to_radians(); // both inside the cone, so the angle term is equal
+
+    let gap = score_candidate(&v, &ctx, &ahead) - score_candidate(&v, &ctx, &across);
+    let expected = v.assist_score_momentum_w * 0.5;
+    assert!(
+        (gap - expected).abs() < 1e-5,
+        "continuing the flight is worth {gap}, expected {expected} from the file's {}",
+        v.assist_score_momentum_w
+    );
+
+    // And a player who is not moving has no trajectory to preserve: the term says nothing and
+    // the two points come out level.
+    ctx.velocity_m_s = Vec3::ZERO;
+    let level = score_candidate(&v, &ctx, &ahead) - score_candidate(&v, &ctx, &across);
+    assert!(level.abs() < 1e-5, "standing still, the two points differ by {level}");
+}
+
+/// 15 %: the height advantage, and it is symmetric about the eye.
+#[test]
+fn f025_the_height_term_is_worth_exactly_the_files_fifteen_percent() {
+    let v = vector_tuning();
+    let ctx = calm_ctx(Vec3::X);
+    let d = 20.0_f32;
+    let k = std::f32::consts::FRAC_1_SQRT_2;
+    let above = candidate(Vec3::new(d * k, d * k, 0.0), 1);
+    let below = candidate(Vec3::new(d * k, -d * k, 0.0), 2);
+    let mut ctx = ctx;
+    ctx.catch_rad = 60.0_f32.to_radians();
+
+    let rise = d * k / v.assist_height_full_m;
+    assert!(rise < 1.0, "the fixture has to stay inside the term's saturation");
+    let gap = score_candidate(&v, &ctx, &above) - score_candidate(&v, &ctx, &below);
+    let expected = v.assist_score_height_w * rise;
+    assert!(
+        (gap - expected).abs() < 1e-5,
+        "up beats down by {gap}, and 0.15 · {rise} is {expected}"
+    );
+}
+
+/// 5 %, subtracted: *"Abwertung des zuletzt genutzten Punktes … verhindert Pendeln zwischen
+/// zwei Punkten"*. The same point, scored twice — once while an arm is hanging on it.
+#[test]
+fn f025_the_point_you_are_hanging_on_is_devalued_by_exactly_five_percent() {
+    let v = vector_tuning();
+    let ctx = calm_ctx(Vec3::NEG_Z);
+    let held = candidate(Vec3::new(0.0, 0.0, -30.0), 77);
+
+    let mut busy = ctx;
+    busy.in_use = [Some(BodyId(77)), None];
+    let gap = score_candidate(&v, &ctx, &held) - score_candidate(&v, &busy, &held);
+    assert!(
+        (gap - v.assist_score_recent_w).abs() < 1e-6,
+        "hanging on it costs {gap}, and the file says {}",
+        v.assist_score_recent_w
+    );
+
+    // A body no arm is on is not devalued — the penalty is about *this* point, not about
+    // having a rope out at all.
+    let other = candidate(Vec3::new(0.0, 0.0, -30.0), 78);
+    assert_eq!(score_candidate(&v, &ctx, &other), score_candidate(&v, &busy, &other));
+}
+
+/// `F-024`'s acceptance, first half: *"das System waehlt **nie** einen Punkt hinter dem
+/// Spieler, wenn ein brauchbarer vor ihm liegt."*
+///
+/// And the stronger statement the catch cone buys: it does not choose one **even when nothing
+/// usable lies ahead**, because a point outside the cone is not a candidate at all. The
+/// forward direction is checked with a dot product the test computes itself.
+#[test]
+fn f024_never_a_point_behind_the_player() {
+    let v = vector_tuning();
+    let look = Vec3::NEG_Z;
+    let ctx = calm_ctx(look);
+    // Behind, and very tempting on every other term: high up and right in the sweet spot of
+    // the distance band.
+    let behind = candidate(Vec3::new(2.0, 18.0, 30.0), 1);
+    let ahead = candidate(Vec3::new(1.0, 0.0, -30.0), 2);
+
+    let picked = pick_best(&v, &ctx, Side::Right, Vec3::X, &[behind, ahead], None, 100.0)
+        .expect("a usable point lies ahead");
+    assert_eq!(picked.body, BodyId(2), "it took the point behind the player");
+    assert!(
+        (picked.point_m - ctx.eye_m).normalize().dot(look) > 0.0,
+        "the chosen point is not in front of the crosshair"
+    );
+
+    // Alone, the point behind is still not chosen — the arm keeps free aim instead.
+    assert_eq!(
+        pick_best(&v, &ctx, Side::Right, Vec3::X, &[behind], None, 100.0),
+        None,
+        "a point 150 deg off the crosshair was accepted as a candidate"
+    );
+}
+
+/// `F-023`'s hemisphere split survives the assist: *"Q bedient ausschliesslich die linke
+/// Menge, E ausschliesslich die rechte"*.
+#[test]
+fn f024_an_arm_never_takes_a_point_from_the_other_hemisphere() {
+    let v = vector_tuning();
+    let ctx = calm_ctx(Vec3::NEG_Z);
+    let right_hand_side = candidate(Vec3::new(6.0, 0.0, -30.0), 1);
+    let left_hand_side = candidate(Vec3::new(-6.0, 0.0, -30.0), 2);
+    let both = [right_hand_side, left_hand_side];
+
+    assert_eq!(
+        pick_best(&v, &ctx, Side::Right, Vec3::X, &both, None, 100.0).map(|c| c.body),
+        Some(BodyId(1))
+    );
+    assert_eq!(
+        pick_best(&v, &ctx, Side::Left, Vec3::X, &both, None, 100.0).map(|c| c.body),
+        Some(BodyId(2))
+    );
+    // And with only the wrong side on offer, the arm keeps what the player aimed at.
+    assert_eq!(pick_best(&v, &ctx, Side::Left, Vec3::X, &[right_hand_side], None, 100.0), None);
+}
+
+/// `F-024`'s three modes are one number, and the number is linear so that he can report it
+/// back (*„damit ich testen kann was am besten waere"*).
+#[test]
+fn f024_the_three_modes_come_out_of_the_strength_knob_alone() {
+    let v = vector_tuning();
+    let full = v.assist_margin_full;
+    // SNAP: the best candidate always wins.
+    assert_eq!(required_margin(full, 100.0), 0.0);
+    // ASSISTIERT: it has to be better, and how much better is the slider.
+    assert!((required_margin(full, 50.0) - full / 2.0).abs() < 1e-6);
+    // The lowest the slider can go while still being on at all.
+    assert!(required_margin(full, 5.0) > required_margin(full, 95.0));
+
+    // And what the margin *does*: a candidate that is better, but not better enough, loses.
+    let ctx = calm_ctx(Vec3::NEG_Z);
+    let aimed_at = candidate(Vec3::new(3.0, 0.0, -30.0), 1);
+    let slightly_better = candidate(Vec3::new(1.0, 0.0, -30.0), 2);
+    let gap = score_candidate(&v, &ctx, &slightly_better) - score_candidate(&v, &ctx, &aimed_at);
+    assert!(gap > 0.0 && gap < full, "the fixture needs a small but real improvement, got {gap}");
+    assert_eq!(
+        pick_best(&v, &ctx, Side::Right, Vec3::X, &[slightly_better], Some(aimed_at), 5.0),
+        None,
+        "a marginal improvement snapped at 5 % strength"
+    );
+    assert_eq!(
+        pick_best(&v, &ctx, Side::Right, Vec3::X, &[slightly_better], Some(aimed_at), 100.0)
+            .map(|c| c.body),
+        Some(BodyId(2)),
+        "SNAP has to take the better point"
+    );
+}
+
+/// `B-007`, and it is the half of the user's complaint that costs him the city: he aims at a
+/// wall, a solid body that holds nothing stands in the way, and free aim comes back empty.
+///
+/// With no incumbent to beat there is nothing to weigh the candidate against, so **any** valid
+/// point in the hemisphere wins at **any** non-zero strength. That is the mechanism; the
+/// measurement in the real map is `f024_the_assist_reaches_anchors_free_aim_cannot`.
+#[test]
+fn b007_with_nothing_to_beat_the_assist_wins_at_the_lowest_strength_there_is() {
+    let v = vector_tuning();
+    let ctx = calm_ctx(Vec3::NEG_Z);
+    let beside_the_blocker = candidate(Vec3::new(4.0, 2.0, -25.0), 9);
+    assert_eq!(
+        pick_best(&v, &ctx, Side::Right, Vec3::X, &[beside_the_blocker], None, 5.0)
+            .map(|c| c.body),
+        Some(BodyId(9))
+    );
+}
+
+/// The probe fan is the candidate query, and two things have to be true of every ray it casts
+/// at every pitch: it stays **inside the catch cone**, and it stays **on its own side**.
+///
+/// Both are checked with arithmetic this test does itself — `Intent::look_dir` and the
+/// horizontal right vector of `docs/conventions.md` — and not by asking `deviation_rad` and
+/// `hemisphere`, which are the functions the system uses.
+#[test]
+fn f024_every_probe_stays_inside_the_catch_cone_and_on_its_own_side() {
+    let v = vector_tuning();
+    for catch_deg in [5.0_f32, 12.5, 20.0] {
+        let catch_rad = catch_deg.to_radians();
+        for yaw_deg in [-170.0_f32, -35.0, 0.0, 91.0, 179.0] {
+            for pitch_deg in [-89.0_f32, -45.0, 0.0, 45.0, 89.0] {
+                let intent = Intent {
+                    yaw: yaw_deg.to_radians(),
+                    pitch: pitch_deg.to_radians(),
+                    ..default()
+                };
+                let look = intent.look_dir();
+                let right =
+                    Vec3::new(intent.yaw.cos(), 0.0, -intent.yaw.sin());
+                for side in Side::ALL {
+                    let mut seen = 0;
+                    for dir in probe_dirs(
+                        look_basis(&intent),
+                        catch_rad,
+                        v.assist_probe_rings,
+                        v.assist_probes_per_ring,
+                        side,
+                    ) {
+                        seen += 1;
+                        let dev = dir.dot(look).clamp(-1.0, 1.0).acos();
+                        assert!(
+                            dev <= catch_rad + 1e-4,
+                            "a probe at yaw {yaw_deg} pitch {pitch_deg} sits {} deg off the \
+                             crosshair, the cone is {catch_deg}",
+                            dev.to_degrees()
+                        );
+                        let lateral = right.dot(dir);
+                        let wanted = match side {
+                            Side::Left => lateral < 0.0,
+                            Side::Right => lateral > 0.0,
+                        };
+                        assert!(
+                            wanted,
+                            "a {side:?} probe has lateral {lateral} at yaw {yaw_deg} \
+                             pitch {pitch_deg}"
+                        );
+                        assert!(dir.is_finite() && (dir.length() - 1.0).abs() < 1e-4);
+                    }
+                    assert_eq!(
+                        seen,
+                        (v.assist_probe_rings * v.assist_probes_per_ring) as usize,
+                        "the fan lost probes"
+                    );
+                }
+            }
+        }
+    }
+    // The hemisphere seam belongs to nobody — a point straight ahead is not silently handed
+    // to one arm by the sign of a float.
+    assert_eq!(hemisphere(Vec3::X, Vec3::NEG_Z), None);
+    assert_eq!(hemisphere(Vec3::X, Vec3::new(-1.0, 0.0, -30.0)), Some(Side::Left));
+    assert_eq!(hemisphere(Vec3::X, Vec3::new(1.0, 0.0, -30.0)), Some(Side::Right));
+    assert!(deviation_rad(Vec3::NEG_Z, Vec3::ZERO).is_infinite());
+}
+
+// ---------------------------------------------------------------------------------------
+// The same two features in the running game — the settings resource, the real map, the real
+// rays. These are the ones that answer "is the knob wired to anything".
+// ---------------------------------------------------------------------------------------
+
+/// Both assist knobs at once. A plain resource write — which is itself half of `F-024`'s
+/// acceptance (*"Moduswechsel ist ohne Neustart wirksam"*): there is nothing to restart.
+fn set_assist(app: &mut App, catch_pct: f32, strength_pct: f32) {
+    let mut s = app.world_mut().resource_mut::<PlayerSettings>();
+    s.assist_catch_pct = catch_pct;
+    s.assist_strength_pct = strength_pct;
+}
+
+/// Points the **local** player, through the same absolute override the `--script` driver's
+/// `look` command uses. Degrees in, radians on the resource (`docs/conventions.md`).
+fn look_at(app: &mut App, yaw_deg: f32, pitch_deg: f32) {
+    *app.world_mut().resource_mut::<LookOverride>() =
+        LookOverride(Some((yaw_deg.to_radians(), pitch_deg.to_radians())));
+    app.update();
+}
+
+fn arms_of(app: &App, e: Entity) -> [AimPoint; 2] {
+    app.world().get::<ArmAim>(e).expect("every player carries an ArmAim from tick 1").arms
+}
+
+/// `F-016`'s own definition, and the safest regression guard this round has: **at 0 % the game
+/// aims exactly as it did before the assist existed.**
+///
+/// > *"Bei 0 verhaelt sich das System wie reines freies Zielen."* — `docs/backlog/gameplay.ron`,
+/// > `F-016`
+///
+/// Not "within a tolerance": the two knobs are `AND`ed by `PlayerSettings::assist_is_on`, so
+/// with either one at zero `vector::aim` never casts a probe ray and never calls a scoring
+/// function. The assertion is therefore `assert_eq!` on the whole [`AimPoint`], bit for bit.
+#[test]
+fn f016_at_zero_percent_the_aim_is_bit_for_bit_the_one_the_game_had_before() {
+    let mut app = app();
+    settle(&mut app);
+    let e = me(&mut app);
+    set_assist(&mut app, 0.0, 0.0);
+    look_at(&mut app, 25.0, -8.0);
+    ticks(&mut app, 40);
+
+    let baseline = arms_of(&app, e);
+    ticks(&mut app, 10);
+    assert_eq!(
+        arms_of(&app, e),
+        baseline,
+        "the fixture is not settled — a standing player's aim still moves, so nothing below \
+         would mean anything"
+    );
+
+    // Full reach, no strength: `F-024`'s FREI. Nothing may move.
+    set_assist(&mut app, 100.0, 0.0);
+    ticks(&mut app, 10);
+    assert_eq!(arms_of(&app, e), baseline, "reach at 100 % moved the aim while strength was 0");
+
+    // Full strength, no reach: the catch cone is 0 deg wide, which is free aim again.
+    set_assist(&mut app, 0.0, 100.0);
+    ticks(&mut app, 10);
+    assert_eq!(arms_of(&app, e), baseline, "strength at 100 % moved the aim while reach was 0");
+
+    // And one click of each is enough to be a different feature — otherwise the two tests
+    // above would pass on a system that is simply never called.
+    set_assist(&mut app, 100.0, 100.0);
+    ticks(&mut app, 10);
+    let snapped = arms_of(&app, e);
+    assert!(
+        snapped != baseline || snapped.iter().all(|a| a.anchorable),
+        "SNAP changed nothing anywhere, and free aim was not already on an anchor — the \
+         assist is not wired to the rays at all"
+    );
+}
+
+/// `F-024`'s acceptance, second half: *"Moduswechsel ist ohne Neustart wirksam"* — and
+/// `B-007`'s measurement, because the two are the same run.
+///
+/// The sweep looks for a direction in the **shipped** map where free aim leaves an arm on
+/// something that holds nothing — a solid body without `ANCHORABLE`, which is exactly the
+/// shape a titan has (`docs/BUGS.md` B-007: no `shared::Body`, and he blocks the ray). Then it
+/// switches to SNAP **in the middle of the run** and gives the game **one** tick.
+///
+/// The numbers it prints are the finding, not the assertion: how many of the swept directions
+/// leave an arm with no anchor under free aim, and how many of those the assist rescues.
+#[test]
+fn f024_the_mode_switch_bites_within_one_tick_and_reaches_what_free_aim_cannot() {
+    let mut app = app();
+    settle(&mut app);
+    let e = me(&mut app);
+
+    let mut swept = 0;
+    let mut dead_free = 0;
+    let mut rescued = 0;
+    let mut first_rescue: Option<(f32, f32, Side)> = None;
+
+    for yaw_deg in (0..360).step_by(15) {
+        for pitch_deg in [-20.0_f32, -5.0, 10.0, 25.0] {
+            set_assist(&mut app, 0.0, 0.0);
+            look_at(&mut app, yaw_deg as f32, pitch_deg);
+            ticks(&mut app, 6);
+            let free = arms_of(&app, e);
+
+            set_assist(&mut app, 100.0, 100.0);
+            app.update(); // ONE tick, no restart
+            let snap = arms_of(&app, e);
+
+            for side in Side::ALL {
+                swept += 1;
+                let i = side.index();
+                if !free[i].anchorable {
+                    dead_free += 1;
+                    if snap[i].anchorable {
+                        rescued += 1;
+                        first_rescue.get_or_insert((yaw_deg as f32, pitch_deg, side));
+                    }
+                }
+                // Whatever it chose, it is a point in front of the player and it holds.
+                if snap[i].anchorable {
+                    assert!(snap[i].point_m.is_some() && snap[i].body.is_some());
+                }
+            }
+        }
+    }
+
+    println!(
+        "B-007 / F-024 sweep: {swept} arm-directions, {dead_free} with no anchor under free \
+         aim, {rescued} of those rescued by SNAP within one tick ({:.1} %), first at {:?}",
+        100.0 * rescued as f32 / dead_free.max(1) as f32,
+        first_rescue
+    );
+    assert!(dead_free > 0, "the shipped map offers no direction where free aim comes back empty");
+    assert!(
+        rescued > 0,
+        "SNAP rescued none of the {dead_free} directions where free aim found no anchor — \
+         the mode switch is not effective without a restart"
+    );
+}
+
+/// `F-025`'s acceptance is about a **chain**: *"Ein geuebter Spieler kann bei aktivem Snap eine
+/// Bahn ueber 5 Wechsel beschleunigen."* The half of it this test can measure honestly is the
+/// mechanism underneath: with the assist on, the point an arm is sent to **continues the
+/// flight** more often than the point free aim would have found.
+///
+/// Measured in the real map, on a moving player, over a sweep of directions — and the
+/// comparison is `u · v̂` computed here out of the published aim point and the player's own
+/// velocity, not out of anything the scoring function returns.
+#[test]
+fn f025_the_assist_picks_points_that_carry_the_flight_further_than_free_aim() {
+    let mut app = app();
+    settle(&mut app);
+    let e = me(&mut app);
+    let eye_height = data(&app).game.player.eye_height_m;
+
+    let mut free_sum = 0.0_f64;
+    let mut snap_sum = 0.0_f64;
+    let mut pairs = 0_u32;
+
+    for yaw_deg in (0..360).step_by(20) {
+        for pitch_deg in [-10.0_f32, 5.0, 20.0] {
+            // A flight, straight along the look direction and fast enough for the momentum
+            // term to have anything to say.
+            let flight = Intent {
+                yaw: (yaw_deg as f32).to_radians(),
+                pitch: pitch_deg.to_radians(),
+                ..default()
+            }
+            .look_dir()
+                * 30.0;
+
+            set_assist(&mut app, 0.0, 0.0);
+            look_at(&mut app, yaw_deg as f32, pitch_deg);
+            app.world_mut().entity_mut(e).insert(Velocity(flight));
+            ticks(&mut app, 4);
+            let free = arms_of(&app, e);
+
+            set_assist(&mut app, 100.0, 100.0);
+            app.world_mut().entity_mut(e).insert(Velocity(flight));
+            app.update();
+            let snap = arms_of(&app, e);
+
+            let eye = app.world().get::<Transform>(e).expect("a transform").translation
+                + Vec3::Y * eye_height;
+            let along = flight.normalize();
+            for side in Side::ALL {
+                let i = side.index();
+                let (Some(f), Some(s)) = (free[i].point_m, snap[i].point_m) else {
+                    continue;
+                };
+                if !free[i].anchorable || !snap[i].anchorable {
+                    continue;
+                }
+                free_sum += (f - eye).normalize_or_zero().dot(along) as f64;
+                snap_sum += (s - eye).normalize_or_zero().dot(along) as f64;
+                pairs += 1;
+            }
+        }
+    }
+
+    assert!(pairs > 20, "only {pairs} usable pairs — the fixture found almost no anchors");
+    let (free_mean, snap_mean) = (free_sum / pairs as f64, snap_sum / pairs as f64);
+    println!(
+        "F-025 momentum: mean cos(aim, flight) over {pairs} pairs — free {free_mean:.4}, \
+         SNAP {snap_mean:.4}"
+    );
+    assert!(
+        snap_mean >= free_mean,
+        "the assist chose points that brake the flight more than free aim did: \
+         {snap_mean:.4} < {free_mean:.4}"
+    );
+}
+
+
+// ---------------------------------------------------------------------------------------
+// The `settings` verb — the driver's route to the two assist knobs (`F-016`/`F-024`/`F-025`).
+// ---------------------------------------------------------------------------------------
+
+/// A `settings` line in a script really moves the running game's `PlayerSettings`.
+///
+/// **End to end and through the real app**, on purpose: `src/debug/script.rs`'s own unit tests
+/// cover the parse and cover `Setting::apply`, and both of them would still pass if the driver
+/// never dispatched the command at all — which is exactly how a verb ends up parsed, tested and
+/// dead (`docs/FINDINGS.md` FIND-103: a test that asks the code and the code the same question).
+/// So this one asks the **resource** after the app has run, and it asks it through
+/// `assist_is_on()` and `assist_catch_deg()`, which are what `vector::aim` itself reads.
+#[test]
+fn f025_a_settings_line_moves_the_running_games_assist_knobs() {
+    use defeated_by_titan::debug::script::parse;
+    use defeated_by_titan::debug::ScriptRun;
+
+    let mut app = defeated_by_titan::app(Cli { headless: true, ticks: 200, ..default() });
+    app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+
+    // Before: the shipped default is pure free aim — `F-016` defines 0 % as the absence of the
+    // feature, and `f024_the_three_modes_come_out_of_the_strength_knob_alone` depends on it.
+    for _ in 0..3 {
+        app.update();
+    }
+    let before = *app.world().resource::<PlayerSettings>();
+    assert!(!before.assist_is_on(), "the game must still start with the assist off");
+
+    let plan = parse("settings assist_catch 100\nsettings assist_strength 100\nmark knobs-set\n")
+        .expect("the `settings` verb has to parse");
+    app.world_mut().resource_mut::<ScriptRun>().plan = plan;
+    for _ in 0..10 {
+        app.update();
+    }
+
+    let after = *app.world().resource::<PlayerSettings>();
+    assert!(
+        after.assist_is_on(),
+        "a script set both knobs to 100 % and the running game is still in free aim — the \
+         verb parses but the driver never dispatched it"
+    );
+    assert_eq!(after.assist_catch_pct, 100.0);
+    assert_eq!(after.assist_strength_pct, 100.0);
+    // 100 % catch is the 20 deg end stop. Read through the accessor `vector::aim` uses, so a
+    // changed end stop moves this test with it instead of leaving it green on a stale number.
+    assert!(
+        (after.assist_catch_deg() - 20.0).abs() < 1e-4,
+        "100 % has to mean the full catch cone, measured {}",
+        after.assist_catch_deg()
+    );
+    // And nothing else moved: the verb names one field per line.
+    assert_eq!(after.fov_deg, before.fov_deg);
+    assert_eq!(after.aim_spread_deg, before.aim_spread_deg);
+    assert_eq!(after.mouse_deg_per_px, before.mouse_deg_per_px);
+}

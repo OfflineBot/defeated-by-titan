@@ -352,6 +352,52 @@ pub struct VectorTuning {
     /// At or above this **horizontal** speed the target is pinned to
     /// [`VectorTuning::aim_sep_floor_m`], in m/s.
     pub aim_sep_fast_speed_m_s: f32,
+
+    // -----------------------------------------------------------------------------------
+    // `F-024` / `F-025` — the anchor candidate system. Every weight below is the backlog's
+    // own number (`docs/backlog/gameplay.ron`, F-025), and it lives here so that the user can
+    // retune the feel without a rebuild — which is the whole reason he asked for the two
+    // sliders (*„damit ich testen kann was am besten wäre"*).
+    // -----------------------------------------------------------------------------------
+    /// How many rings of probe rays the candidate sweep casts **per hemisphere**.
+    ///
+    /// The sweep is the candidate query, and it is a BVH walk and not an iteration over the
+    /// world (§6 rule 6): `rings * probes_per_ring` extra `SpatialQuery::cast_ray` calls per
+    /// hemisphere, at the 0.21 us per ray `vector::aim`'s header measured. **Only cast while
+    /// the assist is on** — at 0 % the game casts exactly the three rays it always did.
+    pub assist_probe_rings: u32,
+    /// How many probes sit on one ring, per hemisphere. Together with
+    /// [`VectorTuning::assist_probe_rings`] this is the resolution of the candidate set: 2x4
+    /// is 8 probes a side, 16 extra rays for a player, ~3.4 us a tick.
+    pub assist_probes_per_ring: u32,
+    /// `F-025`: *"Winkelabweichung zum Fadenkreuz (Hauptgewicht 45 Prozent)"*.
+    pub assist_score_angle_w: f32,
+    /// `F-025`: *"Momentum-Erhalt (25 Prozent, bevorzugt Punkte, die die aktuelle Flugbahn
+    /// fortsetzen statt sie zu bremsen)"*.
+    pub assist_score_momentum_w: f32,
+    /// `F-025`: *"Hoehenvorteil relativ zur Bewegungsrichtung (15 Prozent)"*.
+    pub assist_score_height_w: f32,
+    /// `F-025`: *"Distanz im nutzbaren Mittelbereich (10 Prozent)"*.
+    pub assist_score_distance_w: f32,
+    /// `F-025`: *"Abwertung des zuletzt genutzten Punktes (5 Prozent, verhindert Pendeln
+    /// zwischen zwei Punkten)"* — subtracted, not added.
+    pub assist_score_recent_w: f32,
+    /// Below this speed, in m/s, the momentum term carries no information and scores the
+    /// midpoint of its own axis. A standing player has no trajectory to preserve.
+    pub assist_momentum_min_speed_m_s: f32,
+    /// The height difference, in metres, at which the height term saturates.
+    pub assist_height_full_m: f32,
+    /// The centre of `F-025`'s *"nutzbarer Mittelbereich"*, in metres.
+    pub assist_dist_ideal_m: f32,
+    /// Half the width of that band, in metres: at `ideal +/- this` the distance term is 0.
+    pub assist_dist_span_m: f32,
+    /// **How much better a candidate has to be than the point you are actually aiming at,
+    /// at the very lowest assist strength.** The required margin is
+    /// `this * (1 - strength_pct / 100)`, so 100 % strength is `F-024`'s SNAP mode (the best
+    /// candidate always wins) and anything in between is ASSISTIERT. 0 % never reaches this
+    /// line at all — `PlayerSettings::assist_is_on` is false and the free ray is the whole
+    /// answer, which is FREI and `F-002`'s guarantee.
+    pub assist_margin_full: f32,
     pub reel_speed_m_s: f32,
     pub min_rope_m: f32,
     /// Gauss-Seidel iterations over both rope constraints (`shared::rope::rope_step`).
@@ -643,6 +689,76 @@ pub struct Layout {
     /// Which key of `scale.ron: architecture.heights_m` a tall house is built to. A name and
     /// not a number, so the height itself stays where every other height of this world lives.
     pub tall_height_key: String,
+    /// **How far this district has fallen** — or `None` for a district that still stands.
+    ///
+    /// `docs/gameplay/world.md`: *"the war is already lost … Ashgate has long since fallen;
+    /// the Vanguard runs salvage missions into its own ruins"*. Until 2026-08-19 the
+    /// generator had no notion of damage at all and built that ring as an intact market
+    /// town, which is what the user saw: *„das ist nicht die echte map!"*.
+    ///
+    /// **Explicit, never defaulted** (`docs/conventions.md` §4): the `graybox` fixture writes
+    /// `damage: None` and means it — eight aiming tests in `tests/vector_aiming.rs` are
+    /// pinned to boxes on that map and a ruin would move them.
+    pub damage: Option<Damage>,
+}
+
+/// **The fall of a district, as a distribution.** Every number is a fraction, a metre or a
+/// palette key; which model a given ruin wears is `world::map`'s kit (a measurement of the
+/// files, not a tuning number), and *whether* a given house wears one is decided here.
+///
+/// ## Why a gradient and not a rate
+///
+/// A fallen ring is not uniformly destroyed, and a district that is damaged at one flat rate
+/// everywhere reads as a **texture** over a market town rather than as a history. So the
+/// severity of a house is three terms added together:
+///
+/// 1. the **gradient** — [`Self::core_severity`] at the origin rising to
+///    [`Self::edge_severity`] at the map edge. The Vanguard held the middle longest and the
+///    outer edge is where the wall went;
+/// 2. a draw per **block** ([`Self::block_spread`]) — that is what makes whole streets stand
+///    and whole streets fall, which is the thing worth flying through;
+/// 3. a draw per **house** ([`Self::house_spread`]) — so that a standing row still has gaps
+///    in it and a razed one still has a gable left.
+///
+/// The same shape as `Perimeter::house_spread_m`, and for the same reason: one draw per house
+/// over the whole window is white noise, and white noise averages out over a hundred metres.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Damage {
+    /// Severity at the origin, 0..1. The player spawns here.
+    pub core_severity: f32,
+    /// Severity at the map edge, 0..1. Above `core_severity`, or there is no gradient — and
+    /// `tests/world.rs::f003_the_damage_is_a_gradient_and_the_core_is_what_is_left` measures
+    /// the district that comes out, not this pair.
+    pub edge_severity: f32,
+    /// How far a whole block may sit off the gradient, drawn per **lot**.
+    pub block_spread: f32,
+    /// How far one house may sit off its block, drawn per **house**.
+    pub house_spread: f32,
+    /// Severity from which a house is a standing ruin instead of a house.
+    pub ruin_at: f32,
+    /// Severity from which it has collapsed altogether. `> ruin_at`.
+    pub rubble_at: f32,
+    /// The tallest a ruin may stand, as a fraction of the ridge the intact house would have
+    /// had. The remnant is **cut out of** the house, never added to it — nothing in a fallen
+    /// district is taller than it was standing.
+    pub ruin_height_fraction: f32,
+    /// Below this a remnant is not a ruin but a mound: a ruin model that cannot reach this
+    /// height inside the lot is not used, and the house collapses instead.
+    pub ruin_min_height_m: f32,
+    /// How tall a rubble mound is drawn, in metres — `(min, max)`.
+    pub rubble_height_m: (f32, f32),
+    /// **How far a collapsed house spills past its own frontage line into the road.**
+    ///
+    /// This is the one number in this block that is about traversal and not about looks: a
+    /// mound is under 3 m in a 6 m street, so it takes the **ground** away and leaves the air
+    /// alone. What changes the swing lane is the ruin beside it, which is a 4 m stump where a
+    /// 9 m wall used to hold a rope.
+    pub spill_m: f32,
+    /// Palette key for a standing remnant, and for a mound. Only visible where no model is
+    /// worn (`art.ron` on `Primitive`) — the mesh covers the box everywhere else.
+    pub ruin_color: String,
+    pub rubble_color: String,
 }
 
 /// The closed block: how one grid cell is turned into a ring of houses.

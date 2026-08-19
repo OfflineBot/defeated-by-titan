@@ -336,6 +336,57 @@
         // drop would otherwise pin the fan at the moment a falling player wants the widest
         // sweep. ⚠️ UNTUNED.
         aim_sep_fast_speed_m_s: 43.0,
+
+        // -------------------------------------------------------------------------------
+        // F-024 / F-025 — the anchor candidate system. „es sollte best match sein" (the
+        // user, 2026-08-18). Every weight here is the backlog's own number
+        // (docs/backlog/gameplay.ron, F-025) and not a taste of the implementation:
+        // 45 + 25 + 15 + 10 = 100 % of reward, and a 5 % penalty on top.
+        // -------------------------------------------------------------------------------
+        // Resolution of the candidate sweep, PER HEMISPHERE. 2 rings x 4 probes = 8 rays a
+        // side, 16 extra rays for a player at 0.21 us each = 3.4 us a tick against a
+        // 16 666 us budget — and only while the assist is switched on at all.
+        // 2 rings so that a near ring can catch a roof edge just off the crosshair while the
+        // outer ring reaches the far side of the catch cone; 4 probes so that a hemisphere is
+        // sampled at 22.5 deg steps of azimuth, which is finer than the widest half-fan the
+        // aim wheel can open (22 deg).
+        assist_probe_rings: 2,
+        assist_probes_per_ring: 4,
+        // F-025 verbatim: „Winkelabweichung zum Fadenkreuz (Hauptgewicht 45 Prozent)".
+        assist_score_angle_w: 0.45,
+        // „Momentum-Erhalt (25 Prozent, bevorzugt Punkte, die die aktuelle Flugbahn
+        // fortsetzen statt sie zu bremsen)".
+        assist_score_momentum_w: 0.25,
+        // „Hoehenvorteil relativ zur Bewegungsrichtung (15 Prozent)".
+        assist_score_height_w: 0.15,
+        // „Distanz im nutzbaren Mittelbereich (10 Prozent)".
+        assist_score_distance_w: 0.10,
+        // „Abwertung des zuletzt genutzten Punktes (5 Prozent, verhindert Pendeln zwischen
+        // zwei Punkten)" — SUBTRACTED from the sum above.
+        assist_score_recent_w: 0.05,
+        // Below this the momentum term has nothing to say and scores its own midpoint.
+        // 4 m/s is under a walk (player.walk_speed_m_s) — a player who is moving at all has
+        // a trajectory worth preserving, a player standing on a roof does not.
+        // ⚠️ UNTUNED.
+        assist_momentum_min_speed_m_s: 4.0,
+        // Where the height term saturates. 20 m is roughly two Ashgate houses
+        // (house_large 9.9 m) — past that "higher" stops being more useful, it is just far.
+        // ⚠️ UNTUNED.
+        assist_height_full_m: 20.0,
+        // The usable middle of the range. The first hook of a flight is fired at 6-20 m and
+        // a chained swing at 30-60 m (FIND-096); 30 m sits in the middle of what is actually
+        // flown, far from the 500 m the ray can technically reach. ⚠️ UNTUNED.
+        assist_dist_ideal_m: 30.0,
+        // Half the band. At 30 +/- 60 m the term is 0, so everything from the hand out to
+        // 90 m still scores something and only the far quarter of hook_range_m is written
+        // off. ⚠️ UNTUNED.
+        assist_dist_span_m: 60.0,
+        // How much better a candidate must be than the point the player is really aiming at,
+        // at the lowest non-zero strength. Required margin = this * (1 - strength/100), so
+        // 100 % is F-024's SNAP (best candidate always wins) and 5 % barely ever fires.
+        // 0.25 is a quarter of the whole score range, i.e. "clearly better, not marginally".
+        // ⚠️ UNTUNED — this is the knob to move if he says the assist feels too eager.
+        assist_margin_full: 0.25,
         // ──────────────────────────────────────────────────────────────────────────────────
         reel_speed_m_s: 28.0,        // F-005 Reel-In
         min_rope_m: 3.0,          // any closer would drag the camera into the wall

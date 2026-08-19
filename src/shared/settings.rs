@@ -103,8 +103,14 @@ pub struct PlayerSettings {
     /// found and highlighted and the rope still flies where you pointed, which is `F-024`'s
     /// **FREI** mode. 100 % is its full-snap mode; in between is **ASSISTIERT**.
     ///
-    /// `F-025` reads it as the weight its final score is blended with, so the same number
-    /// selects the aim mode instead of a fourth enum nobody can dial.
+    /// `F-025` reads it as **how much better a candidate has to be than the point you are
+    /// really aiming at** before it is allowed to take the arm:
+    /// `vector::aim::required_margin` is `game.ron: vector.assist_margin_full * (1 - pct/100)`.
+    /// One number, three modes, no fourth enum nobody can dial — 0 % never gets there at all
+    /// (FREI), 100 % needs no margin (SNAP), between is ASSISTIERT.
+    ///
+    /// **Wired since 2026-08-19** (`docs/FINDINGS.md` FIND-104): the consumer is
+    /// `vector::aim::aim`, and it is the only one.
     pub assist_strength_pct: f32,
 }
 
@@ -139,8 +145,8 @@ pub const ASSIST_STEP_PCT: f32 = 5.0;
 /// What [`PlayerSettings::assist_catch_pct`] = 100 % means in degrees off the look direction.
 ///
 /// **A UI end stop and not a game value**, the same class as [`MOUSE_MAX_DEG_PER_PX`]: it is a
-/// property of the control, and the day `F-025` builds the real candidate sweep it will read
-/// the *percentage*, not this number. 20° is a little under half the horizontal half-frustum at
+/// property of the control. `F-025`'s candidate sweep, built on 2026-08-19, reads the
+/// *percentage* through [`PlayerSettings::assist_catch_deg`] and never this constant. 20° is a little under half the horizontal half-frustum at
 /// the file's 60° vertical FOV — past that the "assist" is picking targets the player is not
 /// looking at, which is the failure `F-024` names (*"waehlt nie einen Punkt hinter dem
 /// Spieler"*).

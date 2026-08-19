@@ -42,7 +42,8 @@ use bevy::prelude::*;
 
 use crate::data::{GameData, VectorTuning};
 use crate::shared::{
-    AimPoint, ArmAim, Body, BodyId, BodyMask, Intent, MovementState, Side, Velocity,
+    AimPoint, ArmAim, Body, BodyId, BodyMask, Hook, HookState, Intent, LocalPlayer,
+    MovementState, PlayerSettings, Side, Velocity,
 };
 
 use super::hook::anchor_target;
@@ -335,6 +336,258 @@ pub fn side_dirs(intent: &Intent, half_rad: f32) -> [Vec3; 2] {
     [look * cos - right * sin, look * cos + right * sin]
 }
 
+// ===========================================================================================
+// `F-025` Bewertungsfunktion / `F-024` Snap auf Q und E — **layer 2**, and it never replaces
+// layer 1.
+//
+// > *„es sollte best match sein"* — the user, 2026-08-18.
+//
+// `F-002` writes the rule this whole section lives under: *"this layer stays ALWAYS active and
+// is never replaceable by the snap system"*. It is kept by construction and not by care: with
+// [`PlayerSettings::assist_is_on`] false, [`aim`] never calls a single function below, never
+// casts a probe ray, and writes exactly the [`ArmAim`] it wrote before this section existed.
+// **0 % is not "almost free aim", it is the same code path.**
+//
+// ## The three things that decide the design
+//
+// 1. **The candidate query is a ray sweep, not a region query.** `shared::SpatialIndex` cannot
+//    answer "what is anchorable in this cone" — `aabb_overlaps` is a stub with no callers
+//    (`src/world/index.rs`'s own header says so), and `vector` has no edge to `world` to build
+//    a new one there. But a region query would be the wrong shape anyway: it returns points
+//    behind walls, and every one of them would then need a line-of-sight ray to be usable at
+//    all. The sweep asks avian's BVH the same question `F-002` already trusts (0.21 us a ray),
+//    and every answer is a real, unoccluded, anchorable surface by construction.
+// 2. **The hemisphere split is `F-023`'s and it is checked twice.** The probe directions of a
+//    side are generated inside that side's half of the cone, and the winner is then re-tested
+//    against `u · right` — an assertion about the *point*, not about the loop that produced it.
+// 3. **What the rope flies at and what the marker shows stay ONE number.** The selection
+//    happens *inside* [`aim`], before the single write to [`ArmAim`]; `vector::hook` and
+//    `hud::arm_aim` both read that one component and neither of them knows an assist exists.
+//    A snap that ran at fire time would be the second reading of the same rule that
+//    `user-messages.md` already caught once.
+// ===========================================================================================
+
+/// One anchorable point the assist may consider (`F-025`).
+///
+/// A resolved *world* fact — point, carrier, distance — and not a ray: the scoring function
+/// must be testable against a set of points somebody typed in, or it can only be checked by
+/// asking the code under test the same question twice (`docs/FINDINGS.md` FIND-103).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AimCandidate {
+    pub point_m: Vec3,
+    pub body: BodyId,
+    /// Distance from the eye in metres. Carried rather than recomputed, because the caster
+    /// already paid for it.
+    pub distance_m: f32,
+}
+
+/// Everything [`score_candidate`] needs about the player this tick. Pure data, no `World`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScoreContext {
+    pub eye_m: Vec3,
+    /// The crosshair — `F-025` measures the angle deviation against **this**, not against the
+    /// arm's own side ray. The hemisphere split is what keeps the two arms apart; scoring both
+    /// against their own ray would make the wheel's width a second aim assist.
+    pub look: Vec3,
+    /// The horizontal-plus-vertical velocity, m/s. The momentum term reads its direction.
+    pub velocity_m_s: Vec3,
+    /// The catch cone, radians off [`Self::look`] — `PlayerSettings::assist_catch_deg`.
+    pub catch_rad: f32,
+    /// The bodies this player's two arms are on right now (anchored or in flight). `F-025`'s
+    /// *"Abwertung des zuletzt genutzten Punktes"*, and the reason it needs no memory of its
+    /// own: the point you are hanging on IS the last one you used, and devaluing it is exactly
+    /// what stops the pair of hooks pendling between two facades.
+    pub in_use: [Option<BodyId>; 2],
+}
+
+/// The look basis: `[look, right, up]`, orthonormal at every pitch.
+///
+/// `right` is the horizontal `(cos yaw, 0, -sin yaw)` of `docs/conventions.md` — the same
+/// vector [`side_dirs`] leans against, so a candidate's hemisphere and a side ray's hemisphere
+/// are decided by one axis and never by two. `up = right × look` closes the frame.
+pub fn look_basis(intent: &Intent) -> [Vec3; 3] {
+    let look = intent.look_dir();
+    let (sin_yaw, cos_yaw) = intent.yaw.sin_cos();
+    let right = Vec3::new(cos_yaw, 0.0, -sin_yaw);
+    [look, right, right.cross(look)]
+}
+
+/// Which hemisphere a direction from the eye belongs to — or `None` on the seam.
+///
+/// The seam is not a rounding problem to be papered over: a point exactly on the vertical
+/// plane through the crosshair belongs to neither arm, and handing it to one of them by the
+/// sign of a float is how the two arms end up sharing a point again (FIND-039).
+pub fn hemisphere(right: Vec3, offset_m: Vec3) -> Option<Side> {
+    let lateral = right.dot(offset_m);
+    if lateral < 0.0 {
+        Some(Side::Left)
+    } else if lateral > 0.0 {
+        Some(Side::Right)
+    } else {
+        None
+    }
+}
+
+/// The angle between the crosshair and a direction from the eye, radians.
+pub fn deviation_rad(look: Vec3, offset_m: Vec3) -> f32 {
+    let Some(u) = offset_m.try_normalize() else {
+        return f32::INFINITY;
+    };
+    u.dot(look).clamp(-1.0, 1.0).acos()
+}
+
+/// The probe directions for **one** hemisphere: `rings * per_ring` unit vectors inside the
+/// catch cone, on that side of the vertical plane through the crosshair.
+///
+/// Rings at `catch_rad * (i+1)/rings`, azimuths at the midpoints of `per_ring` equal wedges of
+/// the half-plane — so no probe ever lands **on** the seam, where [`hemisphere`] would refuse
+/// it. Nothing is allocated: the caller casts as it iterates.
+pub fn probe_dirs(
+    basis: [Vec3; 3],
+    catch_rad: f32,
+    rings: u32,
+    per_ring: u32,
+    side: Side,
+) -> impl Iterator<Item = Vec3> {
+    let [look, right, up] = basis;
+    let base_phi = match side {
+        Side::Left => std::f32::consts::FRAC_PI_2,
+        Side::Right => -std::f32::consts::FRAC_PI_2,
+    };
+    let (rings, per_ring) = (rings.max(1), per_ring.max(1));
+    (0..rings).flat_map(move |i| {
+        (0..per_ring).map(move |j| {
+            let theta = catch_rad * (i + 1) as f32 / rings as f32;
+            let phi = base_phi + std::f32::consts::PI * (j as f32 + 0.5) / per_ring as f32;
+            let (sin_t, cos_t) = theta.sin_cos();
+            let (sin_p, cos_p) = phi.sin_cos();
+            (look * cos_t + (right * cos_p + up * sin_p) * sin_t).normalize_or_zero()
+        })
+    })
+}
+
+/// **`F-025`'s weighted score for one candidate.** Higher is better; the reward terms are each
+/// normalised to `0..1` and weighted by the file's five keys, and the recency term is
+/// subtracted.
+///
+/// The five factors are the backlog's, verbatim (`docs/backlog/gameplay.ron`, `F-025`):
+/// angle deviation to the crosshair **45 %**, momentum preservation **25 %**, height advantage
+/// **15 %**, distance in the usable mid-range **10 %**, devaluation of the point last used
+/// **5 %**. *"Alle Gewichte liegen in der Config und sind ohne Codeaenderung anpassbar."* —
+/// they do: `game.ron: vector.assist_score_*`, and there is no `serde(default)` under any of
+/// them, so a missing weight crashes on load instead of quietly scoring zero.
+///
+/// **Pure.** No `Res`, no `World`, no randomness — so a test can hand it points it typed out
+/// itself and check the ordering against arithmetic it did by hand, instead of asking the
+/// selection function whether the selection function is right (FIND-103).
+pub fn score_candidate(v: &VectorTuning, ctx: &ScoreContext, c: &AimCandidate) -> f32 {
+    let offset = c.point_m - ctx.eye_m;
+    let Some(u) = offset.try_normalize() else {
+        return f32::NEG_INFINITY;
+    };
+
+    // 45 % — how far off the crosshair it is, as a fraction of the catch cone the player has
+    // dialled. Straight down the crosshair is 1, at the rim it is 0.
+    let deviation = u.dot(ctx.look).clamp(-1.0, 1.0).acos();
+    let angle = 1.0 - (deviation / ctx.catch_rad.max(f32::MIN_POSITIVE)).clamp(0.0, 1.0);
+
+    // 25 % — does hooking there CONTINUE the flight or brake it? A rope pulls you towards the
+    // anchor, so the useful number is the cosine between the flight direction and the
+    // direction to the point. 0.5 is the midpoint of the axis and means "no evidence": below
+    // `assist_momentum_min_speed_m_s` there is no trajectory to preserve, and a 0 there would
+    // be the claim that standing still makes every anchor a braking one.
+    let speed = ctx.velocity_m_s.length();
+    let momentum = if speed >= v.assist_momentum_min_speed_m_s && speed > 0.0 {
+        0.5 * (1.0 + u.dot(ctx.velocity_m_s / speed))
+    } else {
+        0.5
+    };
+
+    // 15 % — height advantage. Same 0.5 midpoint: level with the eye is neither a gain nor a
+    // loss, `assist_height_full_m` above is the full mark, the same below is zero.
+    let rise = (c.point_m.y - ctx.eye_m.y) / v.assist_height_full_m.max(f32::MIN_POSITIVE);
+    let height = 0.5 + 0.5 * rise.clamp(-1.0, 1.0);
+
+    // 10 % — the usable middle of the range: a triangle centred on `assist_dist_ideal_m`.
+    let off_band =
+        (c.distance_m - v.assist_dist_ideal_m).abs() / v.assist_dist_span_m.max(f32::MIN_POSITIVE);
+    let distance = 1.0 - off_band.clamp(0.0, 1.0);
+
+    // 5 %, subtracted — the point already in use.
+    let in_use = ctx.in_use.iter().flatten().any(|b| *b == c.body);
+
+    v.assist_score_angle_w * angle
+        + v.assist_score_momentum_w * momentum
+        + v.assist_score_height_w * height
+        + v.assist_score_distance_w * distance
+        - if in_use { v.assist_score_recent_w } else { 0.0 }
+}
+
+/// **The margin a candidate has to beat the player's own aim by**, given `F-016`'s strength
+/// knob in per cent.
+///
+/// This one function is `F-024`'s three modes, and it is why there is no fourth enum for the
+/// player to dial: at **0 %** the caller never gets here at all
+/// ([`PlayerSettings::assist_is_on`]) and the free ray is the whole answer — **FREI**. At
+/// **100 %** the margin is 0 and the best candidate always wins — **SNAP**. Everything between
+/// is **ASSISTIERT**, `F-024`'s default and the mode where the assist only fires when it has
+/// something clearly better to offer.
+///
+/// Linear in the slider on purpose: he asked for the knobs so he could *report a number back*
+/// (*„damit ich testen kann was am besten wäre"*), and a number he reports has to mean one
+/// thing.
+pub fn required_margin(margin_full: f32, strength_pct: f32) -> f32 {
+    margin_full * (1.0 - strength_pct.clamp(0.0, 100.0) / 100.0)
+}
+
+/// Pick the best candidate for one hemisphere, or `None` to keep what the player aimed at.
+///
+/// **Every filter is applied to the CANDIDATE and not to the loop that produced it**: a point
+/// is kept only if it really lies in this arm's hemisphere and really lies inside the catch
+/// cone. A probe fan that generated a direction outside its own side would be caught here
+/// rather than silently handing the left arm a point on the right.
+///
+/// `incumbent` is what free aim found for this arm — `None` when the player is pointing at
+/// something that holds nothing (a titan, an untagged wall) or at nothing at all. **That case
+/// is exactly `B-007`**: there is no incumbent to beat, so any candidate wins regardless of
+/// strength, and the arm reaches the wall beside the body that was blocking it.
+pub fn pick_best(
+    v: &VectorTuning,
+    ctx: &ScoreContext,
+    side: Side,
+    right: Vec3,
+    candidates: &[AimCandidate],
+    incumbent: Option<AimCandidate>,
+    strength_pct: f32,
+) -> Option<AimCandidate> {
+    let mut best: Option<(f32, AimCandidate)> = None;
+    for c in candidates {
+        let offset = c.point_m - ctx.eye_m;
+        if hemisphere(right, offset) != Some(side) {
+            continue;
+        }
+        if deviation_rad(ctx.look, offset) > ctx.catch_rad {
+            continue;
+        }
+        let score = score_candidate(v, ctx, c);
+        if best.is_none_or(|(top, _)| score > top) {
+            best = Some((score, *c));
+        }
+    }
+    let (score, winner) = best?;
+    match incumbent {
+        // The player is already pointing at something that holds. It keeps the arm unless the
+        // candidate is better by the margin his strength slider bought.
+        Some(free) => {
+            let margin = required_margin(v.assist_margin_full, strength_pct);
+            (score >= score_candidate(v, ctx, &free) + margin).then_some(winner)
+        }
+        // Nothing to beat — free aim found no anchor at all. `F-028`'s fallback used to end
+        // here as a silent miss; now it ends on the best point in the hemisphere.
+        None => Some(winner),
+    }
+}
+
 /// Writes [`AimPoint`] and [`ArmAim`] for every player, once per fixed step.
 ///
 /// Runs in `SimulationSystems::World`: a question to the world, asked **before** anything
@@ -357,6 +610,7 @@ pub fn aim(
     mut commands: Commands,
     data: Res<GameData>,
     time: Res<Time<Fixed>>,
+    settings: Option<Res<PlayerSettings>>,
     space: SpatialQuery,
     bodies: Query<(&Body, Option<&BodyId>)>,
     mut players: Query<(
@@ -368,6 +622,8 @@ pub fn aim(
         &mut AimPoint,
         &mut ArmAim,
         Option<&mut AimSpread>,
+        Option<&Hook>,
+        Has<LocalPlayer>,
     )>,
 ) {
     let v = &data.game.vector;
@@ -375,7 +631,18 @@ pub fn aim(
     let eye_height_m = data.game.player.eye_height_m;
     let dt_s = time.delta_secs();
 
-    for (player, intent, transform, velocity, state, mut point, mut arms, spread) in &mut players
+    for (
+        player,
+        intent,
+        transform,
+        velocity,
+        state,
+        mut point,
+        mut arms,
+        spread,
+        hook,
+        is_local,
+    ) in &mut players
     {
         let eye_m = eye(transform.translation, eye_height_m);
         let centre = cast(&space, &bodies, player, eye_m, intent.look_dir(), range_m);
@@ -438,6 +705,40 @@ pub fn aim(
                 commands.entity(player).insert(resolved);
             }
         }
+        // **`F-016` / `F-024`: the two knobs, read here and nowhere else.**
+        //
+        // `Option<Res<..>>` because a test app may run without a settings screen, and
+        // `Has<LocalPlayer>` because [`PlayerSettings`] is *this machine's* preference: a
+        // remote player's aim may never be bent by the local user's slider
+        // (`docs/multiplayer.md` rule 3 — the resource is admissible only as long as nothing
+        // in it decides another player's simulation). The day the knobs travel, they travel in
+        // [`Intent`] beside `aim_spread_deg`, and this is the one line that changes.
+        //
+        // ⚠️ **`assist_is_on() == false` is not a shortcut, it is `F-002`'s guarantee.** With
+        // either knob at 0 the block below is skipped in full: no probe ray is cast, no score
+        // is computed, and `sides` is byte-for-byte what this system produced before `F-024`
+        // existed.
+        let assist = settings
+            .as_deref()
+            .filter(|_| is_local)
+            .filter(|s| s.assist_is_on())
+            .copied();
+        let basis = look_basis(intent);
+        let score_ctx = assist.map(|s| ScoreContext {
+            eye_m,
+            look: basis[0],
+            velocity_m_s: velocity.0,
+            catch_rad: s.assist_catch_deg().to_radians(),
+            // What each arm is on right now — `F-025`'s 5 % devaluation of the point last
+            // used, with no memory of its own to go stale (see [`ScoreContext::in_use`]).
+            in_use: Side::ALL.map(|side| {
+                hook.map(|h| h.arm(side).state).and_then(|st| match st {
+                    HookState::Anchored { body, .. } | HookState::Flying { body, .. } => Some(body),
+                    HookState::Idle | HookState::Retracting => None,
+                })
+            }),
+        });
+
         let dirs = side_dirs(intent, spread_rad);
         let sides = Side::ALL.map(|side| {
             let found = cast(&space, &bodies, player, eye_m, dirs[side.index()], range_m);
@@ -451,7 +752,56 @@ pub fn aim(
             // Resolved HERE and not at fire time: what is written into `ArmAim` is what the
             // rope flies at and what the HUD draws, and a rule applied twice in two files is
             // how a marker and a rope end up in two places (`user-messages.md`, 2026-08-12).
-            if anchor_target(&found).is_some() { found } else { centre }
+            let free = if anchor_target(&found).is_some() { found } else { centre };
+
+            // **Layer 2 (`F-024`/`F-025`), and it only ever runs on top of layer 1.**
+            let (Some(s), Some(ctx)) = (assist, score_ctx) else {
+                return free;
+            };
+            let mut candidates = Vec::with_capacity(
+                (v.assist_probe_rings * v.assist_probes_per_ring) as usize,
+            );
+            for dir in probe_dirs(
+                basis,
+                ctx.catch_rad,
+                v.assist_probe_rings,
+                v.assist_probes_per_ring,
+                side,
+            ) {
+                let probe = cast(&space, &bodies, player, eye_m, dir, range_m);
+                if let Some((point_m, body)) = anchor_target(&probe) {
+                    candidates.push(AimCandidate {
+                        point_m,
+                        body,
+                        distance_m: (point_m - eye_m).length(),
+                    });
+                }
+            }
+            let incumbent = anchor_target(&free).map(|(point_m, body)| AimCandidate {
+                point_m,
+                body,
+                distance_m: (point_m - eye_m).length(),
+            });
+            match pick_best(
+                v,
+                &ctx,
+                side,
+                basis[1],
+                &candidates,
+                incumbent,
+                s.assist_strength_pct,
+            ) {
+                // The winner is published as a full [`AimPoint`] — it came out of
+                // [`anchor_target`], so `anchorable` is true by construction and `hud` and
+                // `vector::hook` cannot tell it apart from a free-aim hit. That is the point:
+                // one number for the rope and the marker (`F-023`).
+                Some(best) => AimPoint {
+                    point_m: Some(best.point_m),
+                    body: Some(best.body),
+                    anchorable: true,
+                },
+                None => free,
+            }
         });
 
         // `set_if_neq` and not a plain assignment: a standing player aims at the same point
