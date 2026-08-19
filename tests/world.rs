@@ -44,7 +44,8 @@ use defeated_by_titan::shared::{
     AnchorSurface, Block, Body, BodyGone, BodyId, BodyMask, Cli, IdCounter, SpatialIndex,
 };
 use defeated_by_titan::world::index::mask_from;
-use defeated_by_titan::world::map::{plan_blocks, BlockPlan};
+use defeated_by_titan::data::{Model, ModelSource};
+use defeated_by_titan::world::map::{plan_blocks, BlockPlan, DRESSING};
 use std::path::PathBuf;
 
 /// Builds the **real** app, headless, and runs `Startup` once.
@@ -1631,4 +1632,460 @@ fn f019_every_interior_lamp_stands_in_a_room_with_a_roof_over_it_and_a_floor_und
             );
         }
     }
+}
+
+// =====================================================================================
+// The dressing — a generated house that wears a model out of the pack instead of being a
+// cuboid (2026-08-18).
+//
+// Three things are guarded here and they are three different failures:
+//   1. the catalogue in `world::map` still describes the files it claims to describe;
+//   2. `art.ron` — and nothing else — is the switch that turns dressing on;
+//   3. a dressed house is EXACTLY its model, and it never leaves the slot it was drawn in.
+// =====================================================================================
+
+/// The full extent of a `.glb`'s own `hit.min`/`hit.max` pair, in metres.
+///
+/// A hand-rolled read of the glTF JSON chunk: `magic|version|length`, then chunks of
+/// `length|type|data`, and the first chunk of type `JSON` is the document. No serde_json in
+/// this tree, and pulling one in for eleven numbers would be a dependency for a test.
+///
+/// ⚠️ `hit.max.z < hit.min.z` on all 278 files of the drop — the two empties are a **corner
+/// pair**, not a min/max on every axis — so every extent is taken as an absolute difference.
+fn glb_extent_m(file: &str) -> Vec3 {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/3d/glb").join(file);
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    assert_eq!(&bytes[0..4], b"glTF", "{file} is not a .glb");
+    let mut at = 12usize;
+    let mut json = None;
+    while at + 8 <= bytes.len() {
+        let len = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+        let kind = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap());
+        if kind == 0x4E4F_534A {
+            json = Some(String::from_utf8_lossy(&bytes[at + 8..at + 8 + len]).into_owned());
+            break;
+        }
+        at += 8 + len;
+    }
+    let json = json.unwrap_or_else(|| panic!("{file} has no JSON chunk"));
+
+    // One node per element of `"nodes":[ {..}, {..} ]`. Split on the object boundary rather
+    // than parsing: a node is flat, and `"name"` and `"translation"` are both on it.
+    let nodes = json
+        .split_once("\"nodes\":[")
+        .unwrap_or_else(|| panic!("{file}: no nodes array"))
+        .1;
+    let read = |want: &str| -> Vec3 {
+        for node in nodes.split("},") {
+            if !node.contains(&format!("\"name\":\"{want}\"")) {
+                continue;
+            }
+            let Some(t) = node.split_once("\"translation\":[") else { continue };
+            let nums: Vec<f32> = t
+                .1
+                .split(']')
+                .next()
+                .unwrap_or("")
+                .split(',')
+                .filter_map(|k| k.trim().parse::<f32>().ok())
+                .collect();
+            assert_eq!(nums.len(), 3, "{file}: {want} has {:?}", nums);
+            return Vec3::new(nums[0], nums[1], nums[2]);
+        }
+        panic!("{file}: no node named {want:?} — the pack lost its hit empties");
+    };
+    (read("hit.max") - read("hit.min")).abs()
+}
+
+#[test]
+fn f003_the_dressing_catalogue_is_what_the_glb_files_really_measure() {
+    // ★ `world::map::DRESSING` is eleven numbers copied out of eleven files, and a copied
+    // number rots silently: a re-export that makes the town house 20 cm wider leaves the
+    // generator dressing every house at the old width, and the mesh then stands a hand's
+    // breadth off the collider it is supposed to BE. Nothing about that has a picture.
+    //
+    // The `y` column is checked twice over: against the file, and against
+    // `scale.ron: architecture.heights_m` under the same key. `art.ron` claims in prose that
+    // the pack was authored to our own height bands ("matching scale.ron heights_m house_small
+    // 4.5 / house_town 8.0 / house_large 11.5 exactly") — this is where the claim is measured.
+    let files = [
+        ("house_small", "a-083-fachwerkhaus-klein.glb"),
+        ("house_town", "a-083-fachwerkhaus-stadthaus.glb"),
+        ("house_large", "a-083-fachwerkhaus-gross.glb"),
+    ];
+    let heights = &data().scale.architecture.heights_m;
+    assert_eq!(DRESSING.len(), files.len(), "a class was added without a file beside it");
+
+    for (i, (name, authored_m)) in DRESSING.iter().enumerate() {
+        let (want_name, file) = files[i];
+        assert_eq!(*name, want_name, "DRESSING row {i} is {name:?}, the file list says {want_name:?}");
+        let measured = glb_extent_m(file);
+        let claimed = Vec3::new(authored_m[0], authored_m[1], authored_m[2]);
+        let off = (measured - claimed).abs();
+        assert!(
+            off.max_element() < 0.011,
+            "{name}: {file} measures {measured:?} m, world::map::DRESSING says {claimed:?} — \
+             a dressed house would be built to a size the model does not have"
+        );
+        let class_m = heights
+            .get(*name)
+            .unwrap_or_else(|| panic!("scale.ron: architecture.heights_m has no {name:?}"));
+        assert!(
+            (class_m - authored_m[1]).abs() < 0.011,
+            "{name}: scale.ron says the class is {class_m} m tall, {file} is authored at {} m \
+             — one of the two is wrong and the district would inherit it",
+            authored_m[1]
+        );
+    }
+}
+
+/// `assets/data` with the three house rows switched from `Primitive` to the files behind them
+/// — the one line of RON that turns the district into half-timbered houses.
+///
+/// ⚠️ **`art.ron` has only one of the three rows today** (`house_small`; `house_town` and
+/// `house_large` are named in its prose and are not in its map). Those two are added here so
+/// the mechanism can be measured at all, and the missing rows are printed rather than
+/// swallowed — the day they land in the file this function stops inventing anything and
+/// nothing else about the test changes.
+fn data_with_house_models() -> GameData {
+    let mut d = data();
+    let mut invented: Vec<&str> = Vec::new();
+    for (name, file) in [
+        ("house_small", "3d/glb/a-083-fachwerkhaus-klein.glb"),
+        ("house_town", "3d/glb/a-083-fachwerkhaus-stadthaus.glb"),
+        ("house_large", "3d/glb/a-083-fachwerkhaus-gross.glb"),
+    ] {
+        let on_disk = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets").join(file);
+        assert!(
+            on_disk.is_file(),
+            "{}: art.ron would name a file the repository has not got",
+            on_disk.display()
+        );
+        match d.art.models.get_mut(name) {
+            Some(row) => row.source = ModelSource::Gltf(file.to_string()),
+            None => {
+                invented.push(name);
+                let template = d
+                    .art
+                    .models
+                    .get("house_small")
+                    .expect("art.ron has lost `house_small` as well — the registry is gone")
+                    .clone();
+                d.art.models.insert(
+                    name.to_string(),
+                    Model { source: ModelSource::Gltf(file.to_string()), ..template },
+                );
+            }
+        }
+    }
+    if !invented.is_empty() {
+        eprintln!("art.ron has no row for {invented:?} — added for this test only");
+    }
+    d
+}
+
+#[test]
+fn f003_art_ron_is_the_only_switch_that_dresses_the_district() {
+    // ★ The whole feature has to be one line of RON, and it has to be OFF today.
+    //
+    // Off, because `art.ron` ships all three rows as `Primitive`: a name with no file behind
+    // it is a name with no model, and dressing against one would cost every house its cuboid
+    // roof — a district of flat-topped boxes — in exchange for nothing on screen. So the
+    // shipped plan must be exactly the district it was before this feature existed.
+    //
+    // On, because the moment those three rows name their files the generator has to dress
+    // itself with no code touched. That is what `art.ron`'s own header promises ("ONE line to
+    // swap it") and this is the only place it is measured on something that is not a titan.
+    let shipped = plan();
+    let dressed_today = shipped.iter().filter(|k| k.model.is_some()).count();
+    assert_eq!(
+        dressed_today, 0,
+        "{dressed_today} block(s) of the shipped district wear a model, and art.ron ships \
+         every house row as `Primitive` — a name with no file behind it must never take a \
+         cuboid roof away"
+    );
+
+    let d = data_with_house_models();
+    let map = d.current_map().expect("current map");
+    let now = plan_blocks(&d, map);
+
+    let houses = walls(&now);
+    let dressed: Vec<&BlockPlan> = houses.iter().filter(|k| k.model.is_some()).copied().collect();
+    eprintln!(
+        "{} of {} houses dressed · {} blocks against {} undressed",
+        dressed.len(),
+        houses.len(),
+        now.len(),
+        shipped.len()
+    );
+    // Measured 2026-08-18: 766 of 926 at `DRESS_TOLERANCE` 0.25. A band and not a floor —
+    // half the district is a failure, and all of it means the tolerance stopped being a
+    // tolerance and every house is now whatever the model says.
+    assert!(
+        dressed.len() * 2 > houses.len(),
+        "only {} of {} houses could wear a model — the generator's lots and the pack's \
+         footprints have drifted apart (world::map::DRESS_TOLERANCE)",
+        dressed.len(),
+        houses.len()
+    );
+    for k in &dressed {
+        let name = k.model.expect("dressed");
+        assert!(
+            DRESSING.iter().any(|(n, _)| *n == name),
+            "{}: wears {name:?}, which is not a class in world::map::DRESSING",
+            k.name
+        );
+        assert!(
+            d.model(name).is_some(),
+            "{}: wears {name:?}, which art.ron does not list at all",
+            k.name
+        );
+        // ⚠️ **A dressed house grows no cuboid roof.** The model brings `dach_l`, `dach_r`,
+        // `dach_first`, a chimney and a gable of its own; a stack of stone lids through them
+        // is FIND-059 in its loudest form.
+        let caps = caps_of(&now, k);
+        assert!(
+            caps.is_empty(),
+            "{} wears {name:?} and still carries {} cuboid cap(s) — two roofs on one house",
+            k.name,
+            caps.len()
+        );
+    }
+    // And the converse: what is NOT dressed still has its stepped gable, or this test would
+    // pass just as well on a district that stopped building roofs altogether.
+    let bare_with_caps = houses
+        .iter()
+        .filter(|k| k.model.is_none() && !caps_of(&now, k).is_empty())
+        .count();
+    assert!(
+        bare_with_caps > 20,
+        "only {bare_with_caps} undressed house(s) still carry a cap — the roofscape was \
+         thrown away rather than replaced"
+    );
+}
+
+#[test]
+fn f003_a_dressed_house_is_exactly_its_model_and_never_leaves_its_slot() {
+    // ★ The three ways dressing can go wrong, and none of them has a picture until somebody
+    // flies into it:
+    //
+    //   1. the box is not the model — then the collider, the anchor surface and the mesh are
+    //      three different boxes, and the hook catches a metre off the wall;
+    //   2. the box grew into its neighbour — a model is scaled uniformly and the box gives
+    //      way, so a house CAN come out wider than it was drawn;
+    //   3. the facade moved — every proportion in this file is measured facade to facade, and
+    //      a district that quietly opens its streets by a metre is FIND-058 coming back.
+    let d = data_with_house_models();
+    let map = d.current_map().expect("current map");
+    let now = plan_blocks(&d, map);
+    let bare = plan();
+
+    let by_name = |p: &[BlockPlan], n: &str| p.iter().find(|k| k.name == n).cloned();
+    let houses = walls(&now);
+    let dressed: Vec<&BlockPlan> = houses.iter().filter(|k| k.model.is_some()).copied().collect();
+    assert!(dressed.len() > 100, "only {} dressed houses to measure", dressed.len());
+
+    let mut moved: Vec<f32> = Vec::new();
+    let mut newcomers = 0usize;
+    for k in &dressed {
+        let name = k.model.expect("dressed");
+        let (_, authored_m) = DRESSING
+            .iter()
+            .find(|(n, _)| *n == name)
+            .unwrap_or_else(|| panic!("{}: unknown class {name}", k.name));
+        // 1. The box IS the model, uniformly scaled to the ridge the height band drew.
+        let ridge = ridge_m(&now, k);
+        let scale = ridge / authored_m[1];
+        // The model's own frontage is its x, its depth its z (the front is the ±z face).
+        // Which world axis each of them lands on is the wing's business — north and south
+        // face along z, west and east along x — so both assignments are legal and exactly
+        // one of them has to hold to the millimetre.
+        let long = authored_m[0] * scale;
+        let deep = authored_m[2] * scale;
+        let depth_along_x =
+            (k.size_m.x - deep).abs() < 1e-3 && (k.size_m.z - long).abs() < 1e-3;
+        let depth_along_z =
+            (k.size_m.z - deep).abs() < 1e-3 && (k.size_m.x - long).abs() < 1e-3;
+        assert!(
+            depth_along_x || depth_along_z,
+            "{}: wears {name:?} at ridge {ridge:.2} m, so the model is {long:.2} x {deep:.2} m \
+             either way round — the box is {:.2} x {:.2}",
+            k.name,
+            k.size_m.x,
+            k.size_m.z
+        );
+
+        // 3. The facade stayed where it was drawn — and on the **depth** axis, which is the
+        //    one a street is measured across. A house may only give way backwards, into its
+        //    own courtyard.
+        // A house that is not in the undressed plan is a house the apron veto used to delete
+        // and no longer does: the dressed box is smaller and really does clear the paving it
+        // used to overlap. Legal, counted, and bounded below — a flood of them would mean the
+        // veto had stopped working rather than the houses having got smaller.
+        let Some(before) = by_name(&bare, &k.name) else {
+            newcomers += 1;
+            continue;
+        };
+        let faces = |b: &BlockPlan| {
+            [
+                b.center_m.x - b.size_m.x * 0.5,
+                b.center_m.x + b.size_m.x * 0.5,
+                b.center_m.z - b.size_m.z * 0.5,
+                b.center_m.z + b.size_m.z * 0.5,
+            ]
+        };
+        let (a, b) = (faces(&before), faces(k));
+        let same = |i: usize| (a[i] - b[i]).abs() < 1e-3;
+        let kept_facade = if depth_along_x {
+            same(0) || same(1)
+        } else {
+            same(2) || same(3)
+        };
+        assert!(
+            kept_facade,
+            "{}: {a:?} became {b:?} and no face on the depth axis survived — the facade line \
+             moved instead of the courtyard side",
+            k.name
+        );
+        moved.push((before.size_m.x - k.size_m.x).abs().max((before.size_m.z - k.size_m.z).abs()));
+    }
+    moved.sort_by(f32::total_cmp);
+    eprintln!(
+        "{} dressed houses · footprint moved by a median {:.2} m, at most {:.2} m · \
+         {newcomers} house(s) the apron veto no longer deletes",
+        dressed.len(),
+        moved[moved.len() / 2],
+        moved[moved.len() - 1]
+    );
+    assert!(
+        newcomers * 20 < dressed.len(),
+        "{newcomers} of {} dressed houses did not exist before — a smaller box may clear an \
+         apron it used to overlap, but not that many of them",
+        dressed.len()
+    );
+
+    // ⚠️ And the one thing the aprons exist for: a house under a gallery. The apron is
+    // 0.30 m of paving that deletes whatever would stand beneath the 14 m and 60 m
+    // structures, so a house that just squeezed past one has to be checked directly —
+    // `f003_no_anchorable_block_has_another_block_sitting_on_its_roof_centre` measures the
+    // SHIPPED plan and would never see it.
+    let placed_n = map.blocks.len();
+    for k in &dressed {
+        let top = k.center_m.y + k.size_m.y * 0.5;
+        for g in now.iter().take(placed_n) {
+            let over = g.center_m.y - g.size_m.y * 0.5 >= top - 1e-3;
+            let covers = (g.center_m.x - k.center_m.x).abs() < g.size_m.x * 0.5
+                && (g.center_m.z - k.center_m.z).abs() < g.size_m.z * 0.5;
+            assert!(
+                !(over && covers),
+                "{} wears {:?} and now stands under {} — the dressing let a house back in \
+                 beneath a gallery the aprons exist to keep clear",
+                k.name,
+                k.model,
+                g.name
+            );
+        }
+    }
+
+    // 2. Nothing overlaps: not two houses of the same ring, and not a hand-placed block.
+    let hits = |a: &BlockPlan, b: &BlockPlan| {
+        let (ac, ah) = (a.center_m, a.size_m * 0.5);
+        let (bc, bh) = (b.center_m, b.size_m * 0.5);
+        (ac.x - bc.x).abs() < ah.x + bh.x - 1e-3
+            && (ac.y - bc.y).abs() < ah.y + bh.y - 1e-3
+            && (ac.z - bc.z).abs() < ah.z + bh.z - 1e-3
+    };
+    let mut clashes = Vec::new();
+    for (i, a) in houses.iter().enumerate() {
+        for b in houses.iter().skip(i + 1) {
+            if lot_of(a) != lot_of(b) {
+                continue;
+            }
+            if hits(a, b) {
+                clashes.push(format!("{} x {}", a.name, b.name));
+            }
+        }
+    }
+    assert!(
+        clashes.is_empty(),
+        "{} pair(s) of houses in one ring stand inside each other after dressing — the \
+         tolerance ate the alley between them: {:?}",
+        clashes.len(),
+        &clashes[..clashes.len().min(6)]
+    );
+    for a in &dressed {
+        for g in now.iter().take(placed_n) {
+            assert!(
+                !hits(a, g),
+                "{} wears {:?} and grew into the hand-placed {} — the veto was taken before \
+                 the dressing instead of after it",
+                a.name,
+                a.model,
+                g.name
+            );
+        }
+    }
+}
+
+#[test]
+fn f003_the_districts_ground_comes_from_the_map_and_barely_from_the_seed() {
+    // ★ Written 2026-08-18, after `shared::terrain`'s own `assert_ne!` ("two seeds give two
+    // grounds") turned out to be false and to have never been run — its five unit tests live
+    // inside `src/shared/terrain.rs` and only `--lib` executes those.
+    //
+    // The rule behind it is exact (`docs/FINDINGS.md` FIND-101): the relaxation's fixed point
+    // is the L1 distance transform from every pinned cell and from the outside of the grid,
+    // capped by the cell's own draw `levels - 1 - notch`. So the seed can move a cell **only**
+    // where that cell is `levels - 1` or more away from every pin and from the rim. This test
+    // measures how much of the shipped district that is, because the answer is what the number
+    // "6 levels" is worth: on 2026-08-18 it was **one cell out of 256**, and that one cell is
+    // the district's only level-5 cell.
+    //
+    // Two things are asserted, and the second one is the interesting half:
+    //   * the shipped seed reproduces its ground exactly — the desync guard, at map level and
+    //     through the whole pin pipeline rather than on a 12 x 12 fixture;
+    //   * the seed stays a footnote. If a later `cell_m`, `levels` or a thinned-out set of
+    //     hand-placed blocks lets the draw take over the district, this goes red — and it
+    //     should, because from that point on the ground is noise and not the town.
+    let d = data();
+    let map = d.current_map().expect("current map");
+    let (_, base) = defeated_by_titan::world::map::terrain_of(&d, map);
+    let (nx, nz) = (base.field.nx() as i32, base.field.nz() as i32);
+    let cells = (nx * nz) as f32;
+
+    let (_, again) = defeated_by_titan::world::map::terrain_of(&d, map);
+    assert_eq!(base.field, again.field, "the same map planned twice gave two grounds");
+
+    let mut worst = 0;
+    for seed in [1u64, 2, 7, 12_345, 0xDEAD_BEEF, 999_999_999] {
+        let mut m = map.clone();
+        m.seed = seed;
+        let (_, other) = defeated_by_titan::world::map::terrain_of(&d, &m);
+        let moved = (0..nz)
+            .flat_map(|iz| (0..nx).map(move |ix| (ix, iz)))
+            .filter(|(ix, iz)| base.field.level_at(*ix, *iz) != other.field.level_at(*ix, *iz))
+            .count();
+        eprintln!(
+            "seed {seed}: {moved} of {} cells move, levels used {:?}",
+            nx * nz,
+            other.field.levels_used()
+        );
+        worst = worst.max(moved);
+    }
+    eprintln!(
+        "shipped ground: {}x{nz} cells, levels used {:?}, at most {worst} cells ({:.1} %) \
+         depend on the seed",
+        nx,
+        base.field.levels_used(),
+        100.0 * worst as f32 / cells
+    );
+    assert!(
+        worst as f32 <= 0.05 * cells,
+        "{worst} of {} terrain cells ({:.1} %) change when only the seed changes — the ground \
+         of this district is supposed to be the shape of its hand-placed geometry \
+         (FIND-090, FIND-101), not a draw. Either the pins thinned out or `levels` grew past \
+         the distance transform",
+        nx * nz,
+        100.0 * worst as f32 / cells
+    );
 }

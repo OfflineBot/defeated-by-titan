@@ -35,6 +35,16 @@
 //! almost no rng — the draw only breaks the plateau that the distance transform would
 //! otherwise leave on top.
 //!
+//! **And "almost no rng" is a number, measured 2026-08-18** (`docs/FINDINGS.md` FIND-101).
+//! The relaxation's fixed point is `min` over every pinned cell and the outside of the L1
+//! distance to it, capped by the cell's own draw `levels - 1 - notch`. So the seed changes a
+//! cell **if and only if that cell lies `levels - 1` or more away from every pinned cell and
+//! from the rim** — nearer than that the distance transform is already below the draw and
+//! erases it. On the shipped Ashgate (16 x 16 cells, 34 % of them pinned, `levels: 6`) that is
+//! **one cell out of 256**, and it is the district's only level-5 cell. `rng` and `stream` are
+//! therefore real parameters by a hair, not decorative ones — and the sixth level of that map
+//! is one cell wide and seed-dependent, which is a property of `maps.ron`, not of this file.
+//!
 //! No Bevy, no `data`, no side effects: `shared` is free for every domain, and a field that
 //! can be built without an app is a field `tests/world.rs` can measure value by value.
 
@@ -182,14 +192,27 @@ mod tests {
     use super::*;
 
     fn field(levels: u32, flat: impl Fn(u32, u32) -> bool) -> TerrainField {
-        TerrainField::new(12, 12, levels, 0.9, &Rng::new(3405691582), 0xF003_000D, flat)
+        seeded(3405691582, levels, flat)
+    }
+
+    /// The same fixture with the seed spelled out — the only thing two grounds may differ in.
+    fn seeded(seed: u64, levels: u32, flat: impl Fn(u32, u32) -> bool) -> TerrainField {
+        TerrainField::new(12, 12, levels, 0.9, &Rng::new(seed), 0xF003_000D, flat)
     }
 
     #[test]
     fn f003_no_two_neighbours_differ_by_more_than_one_level() {
         // ★ The invariant the stairs are built on. Red the moment somebody drops the
-        // relaxation: the raw draw alone puts a level-4 cell next to a level-2 one, and a
-        // 1.8 m riser in a 6 m street is a wall the player walks into and stops at.
+        // relaxation: measured 2026-08-18 on this very fixture, the pre-relaxation field puts a
+        // level-4 cell **against the rim and against the pinned column**, a gap of 4 levels =
+        // 3.6 m, and a riser like that in a 6 m street is a wall the player walks into and
+        // stops at.
+        //
+        // ⚠️ This comment used to say *"the raw draw alone puts a level-4 cell next to a
+        // level-2 one"*, and that was never true: `START_SPREAD` is 2, so the draw only ever
+        // hands out `ceiling` or `ceiling - 1` and two **unpinned** neighbours never differ by
+        // more than one level. What the relaxation carves is the slope down to the pins and the
+        // rim — nothing else (`docs/FINDINGS.md` FIND-101).
         let f = field(5, |ix, iz| ix == 5 || iz % 7 == 3);
         for iz in 0..12i32 {
             for ix in 0..12i32 {
@@ -254,11 +277,49 @@ mod tests {
     #[test]
     fn f003_the_same_seed_yields_exactly_the_same_ground() {
         // Same argument as the city itself: a terrain that differs between two machines is a
-        // desync, and it surfaces on the most expensive day there is.
+        // desync, and it surfaces on the most expensive day there is. Both fixtures, because
+        // the draw reaches into the second one and is erased in the first (the test below) —
+        // reproducibility has to hold on either side of that line, and only one of the two
+        // would have caught a `HashMap` iteration order sneaking into the generator.
         assert_eq!(field(5, |ix, _| ix == 5), field(5, |ix, _| ix == 5));
+        assert_eq!(field(5, |ix, iz| ix == 0 || iz == 0), field(5, |ix, iz| ix == 0 || iz == 0));
+    }
+
+    #[test]
+    fn f003_the_draw_reaches_only_cells_the_relaxation_leaves_room_for() {
+        // ★ This replaces an `assert_ne!` that was **wrong about this file** and had never been
+        // executed: the five tests in this module are only run by `--lib`, and the round that
+        // wrote them was commissioned with `--test world --test data --test render`, so the
+        // restriction excluded the binary its own tests live in. It asserted that two seeds
+        // give two grounds on the `ix == 5` fixture below — they give byte-identical ones, and
+        // that is not a bug, it is the mechanism this module is built on.
+        //
+        // The rule is exact, measured 2026-08-18 (`docs/FINDINGS.md` FIND-101): the fixed point
+        // of the relaxation is the L1 distance transform from every pinned cell and from the
+        // outside, capped by the cell's own draw `levels - 1 - notch`. So **the seed can change
+        // a cell if and only if that cell lies `levels - 1` or more away from every pin and
+        // from the rim.** Both halves below are that one sentence, from both sides.
+        //
+        // ⚠️ On the shipped Ashgate exactly **one cell of 256** clears that bar. The parameters
+        // are not decorative, but they are one cell away from it — see FIND-101 before reading
+        // any variety into that map's ground.
+        let tight = |ix: u32, _: u32| ix == 5;
+        assert_eq!(
+            seeded(3405691582, 5, tight),
+            seeded(1, 5, tight),
+            "two seeds gave two grounds although no cell of this fixture is `levels - 1` = 4 \
+             away from the pinned column or the rim — either START_SPREAD grew or the \
+             relaxation stopped being a distance transform, and the terrain's shape no longer \
+             comes from the map's geometry"
+        );
+
+        let roomy = |ix: u32, iz: u32| ix == 0 || iz == 0;
         assert_ne!(
-            field(5, |ix, _| ix == 5),
-            TerrainField::new(12, 12, 5, 0.9, &Rng::new(1), 0xF003_000D, |ix, _| ix == 5)
+            seeded(3405691582, 5, roomy),
+            seeded(1, 5, roomy),
+            "two seeds gave the same ground on a 12 x 12 field whose middle is 6 cells from \
+             any pin, with a ceiling of 4 — then `rng` and `stream` do nothing anywhere and \
+             they are a lie in the signature of a public function"
         );
     }
 }
