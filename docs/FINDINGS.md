@@ -1662,7 +1662,7 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 ---
 
 ## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
-**NEXT FREE ID: FIND-109.** Claim it by bumping this line in the same `cat >>` that
+**NEXT FREE ID: FIND-114.** Claim it by bumping this line in the same `cat >>` that
 appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
 file separately and both read the same maximum. One line beats a 108 kB grep.
  — and append with `>>`, never with an edit tool
@@ -5989,3 +5989,357 @@ consequence in the running game, and it asks only where the player ended up.
 Related: FIND-104 (the probe sweep this measures) · FIND-103 (the independence rule) ·
 FIND-096 (the spread ceiling that stale-dated the older lane scripts) ·
 `scripts/f025-chain.txt` · `src/debug/script.rs`
+
+---
+
+## FIND-109 — the attack is not missing. **It lands, it is written down, and nobody reads it.**
+
+*2026-08-19, `scripts/f032-swords.txt`, first run, 11 of 11 asserts held, exit 0.*
+
+The user, after playing: *"attack fehlt aber noch (mit schwertern..)"*. `docs/NEXT.md` §2B offered
+three possible causes and called them a hypothesis: the swing never fires, it fires and books
+nothing, or it books something invisible. **It is the third.** The same fall, the same husk, the
+same 1.80 m stand-off, the same slash — only the height changes:
+
+| act | the blade passes through | what `blades::cut` logged | what happened to the titan |
+|---|---|---|---|
+| A | the **nape** (cortex, y 8.90) | `tick 154: cut titan 1 Torso at 20.67 m/s` **then** `tick 157: … Cortex at 21.00 m/s` | dead |
+| B | the **torso** box (y 6.85) | `tick 327: cut titan 2 Torso at 20.67 m/s` | **nothing at all** |
+| C | the **left arm** box (y 6.00) | `tick 500: cut titan 3 Torso at 20.67 m/s` | **nothing at all** |
+| D | the **left leg** box (y 3.50) | `tick 673: cut titan 4 Torso at 20.67 m/s` | **nothing at all** |
+| E | **nothing**, 150 m from any titan | *(no line)* | — |
+
+So the swing fires, the swept cast finds the body, the closing speed is right, the message is
+written and the blade is even charged `wear_torso_factor` for it. Then:
+`titan::brain::receive_hits` opens with `if hit.zone != HitZone::Cortex { continue; }`,
+`render::camera` kicks on `Cortex` only, `hud` has no reader at all — and the one remaining
+reaction was `gear.ron: feel.hit_stop_normal_s` = **2 ticks = 33 ms**, which no player can see.
+
+**Three further facts fall out of the same run:**
+
+1. **Arm, leg and torso are one zone, and always have been.** A titan has exactly ONE collider
+   on his body — the root capsule of radius `width_m / 2` (`src/titan/rig.rs:358`). The pelvis,
+   torso, arm, leg and head entities carry `Mesh3d` and `PartExtent` and **no `Collider`**, and
+   every one of them sits *inside* that capsule (arms reach `w × 0.375`, legs `w × 0.5`, against
+   a radius of `w × 0.5`). `HitZone::ArmLeft`, `LegLeft`, `Head` and `Eye` have therefore never
+   been produced by anything in this game — `cut::sweep` can only ever return `Cortex` or the
+   honest catch-all `Torso`.
+2. **The graze precedes the nape by three ticks** (154 → 157), not by zero. Anything that reacts
+   to a hit has to survive being called twice, three ticks apart, with the kill *second*.
+3. **Two more dead numbers.** `gear.ron: blades.damage_per_m_s` (1.4) and
+   `titan.ron: <kind>.regen_per_s` have **no reader anywhere in `src/`** — the same shape as
+   `wear_per_hit` in `FIND-075`. `<kind>.health` is written once at spawn and never touched
+   again by anything except a player's own `Health`.
+
+### What was built on top of it, and what is still blocked
+
+`F-032`'s backlog row is not a damage feature: *"Arme, Beine, Augen mit eigenen Hitboxen.
+**Kein Kill, sondern Stagger, Bewegungs-Debuff oder Blendung.**"* Of its three options exactly
+one is reachable from `blades/` + `combat/`, and that one is built:
+`titan.ron: <kind>.stagger_s` → `combat::hitstop::Stagger` → the titan's advance stops
+(`titan::brain::walk` already reads `HitStop`; `titan::brain::advance` does **not**, so a cut can
+never interrupt a telegraphed wind-up).
+
+**The other two need `src/titan/`, which was not this job's:**
+
+- **the hitboxes** — a `Collider` + `CollisionLayers` on each limb entity in
+  `titan::rig::build_rig`, and a way for `blades::cut` to learn *which* limb it hit. The zone
+  cannot be resolved geometrically from `blades/` without rebuilding the rig's box layout there
+  (a second truth about the body), and it cannot be read off `TitanPart` without a
+  `blades → titan` edge. **The project's own answer is the one `docs/NEXT.md` §2C gives for
+  `ModelName`: a shared marker (`shared::HitZoneOf(HitZone)`) written by `titan::rig` onto each
+  limb collider and read by `blades::cut`, so the receiver needs no edge to its sender.**
+- **the fall and the blindness** (`Beintreffer lässt Titan stürzen`, `Augentreffer` = 3 s
+  disorientation) are `TitanState` variants and belong to `titan::brain`.
+
+⚠️ **A limb hit must never become a way to kill.** `F-030` and `Q-030`/`Q-031` are 🟧 with
+red-checked evidence and the nape-on-the-back rule is the design's core, so whoever adds the
+hitboxes keeps `receive_hits`' `zone != Cortex` guard exactly where it is.
+
+Related: FIND-075 (the same "a number with no reader" shape) · FIND-012 · FIND-110 ·
+`scripts/f032-swords.txt` · `docs/NEXT.md` §2B · `docs/backlog/gameplay.ron` F-032/F-036/F-038/F-060
+
+---
+
+## FIND-110 — 🔴 `f030-cortex.txt` and `f034-hitstop.txt` are RED, and were red before today
+
+*2026-08-19, measured against a binary built from `HEAD` with today's work reverted.*
+
+Both scripts end on `assert titans == 0` and both now report **`measured 1.000`**: the run logs
+`tick 154: cut titan 1 Torso at 20.67 m/s` and then **no `Cortex` line at all**. The husk is
+grazed and never napped.
+
+**It is not today's `stagger_s`.** Two independent controls:
+
+1. The stagger was swept over `0.04 / 0.08 / 0.12 / 0.16 / 0.22` s straight in `titan.ron` (no
+   rebuild — the value is loaded at runtime) and the cortex was cut **zero** times at every one
+   of them, including `0.04`, which is bit-for-bit the old `feel.hit_stop_normal_s` behaviour.
+2. `src/combat/hitstop.rs`, `src/data/mod.rs` and `assets/data/titan.ron` were reverted to `HEAD`,
+   the binary rebuilt, and **both scripts fail identically on that binary**.
+
+**`scripts/q030-reach.txt` passes** on the same binary and cuts the cortex at tick 157 — the same
+fall, the same husk, the same slash. The only difference is the stand-off: q030 flies at
+**1.80 m** from the axis and f030 at **1.75 m**. f030-cortex's own header says why that matters:
+*"`reach_m` and the body radius are 1.60 m and 1.60 m: there is no margin at all in these
+numbers"*, and `q030-reach.txt` was written afterwards precisely because 0.15 m of air is not a
+margin anybody can hold. Something in the last week moved the pass by less than five centimetres
+and took the older of the two files with it.
+
+**Consequence, and it is a stage question, not a script question:** `F-030` and `F-034` are 🟧
+rows whose named evidence includes these two runs and the two PNGs taken out of them. **Doubt
+moves the stage down, not up.** The claims themselves are *not* dead — `q030-reach.txt`,
+`tests/combat.rs::f030_the_cut_kills_the_real_husk` and
+`tests/titan.rs::q030_a_flying_player_reaches_the_nape_of_a_solid_husk` all still hold — but the
+two scripts that carry the pictures do not run, and a picture whose run is red is not evidence.
+
+**The cheap repair, for whoever owns `scripts/`:** move `f030-cortex.txt`'s pass from
+`warp 15.75 …` to the q030 stand-off (`17.5 − 1.80 = 15.70`) and re-take both PNGs — they are the
+same simulation photographed six ticks apart, so it is one re-aim and two `--screenshot` runs.
+**Do not re-aim it to the last centimetre again**; that is what expired.
+
+Related: FIND-096 · FIND-108 (the same class of failure: a script aimed at numbers that moved) ·
+`docs/QUESTIONS.md` Q-030 · `scripts/q030-reach.txt`
+
+---
+
+## FIND-111 — two patches for files this job was not allowed to touch
+
+*2026-08-19. Reported, deliberately not applied — `src/render/*` and `assets/data/art.ron` were
+another agent's this round.*
+
+1. **`src/render/camera.rs:100` — *"Only the kill kicks."*** The line is right and the comment's
+   reason has now expired: it argues *"`hit_stop_normal_s` already says a non-lethal hit is the
+   small event"*, and since today a non-lethal hit is `titan.ron: <kind>.stagger_s` = 13 ticks on
+   a husk, not 2. If the camera is still to stay quiet on a body cut, the comment should say so
+   against the new number. If a *small* kick on a body hit is wanted (`F-043`: *"drei Trefferarten
+   sind akustisch und visuell unterscheidbar"*), this is the one line it goes in, and the knob
+   would be a second `camera_kick_deg` in `gear.ron: feel` — **not** a factor in Rust.
+2. **`assets/data/art.ron: "blade"` is still `source: Primitive`** while the pack ships
+   `a-023-klingengriffe`, `a-024-klingen-paar-neu`, `a-024-klingen-paar-gebrochen` and **ten**
+   `a-025-klinge-kosmetik-*` finishes. The player has never seen a blade. There are **zero**
+   animation clips in the pack, so a swing still has no motion to play either — `F-043`'s visual
+   half and `docs/NEXT.md` §2B's first two bullets are both waiting on this row, not on `blades/`.
+
+Related: FIND-109 · `docs/NEXT.md` §2B
+
+---
+
+## FIND-112 — the sky and the fog were BUILT and did not read: the haze was darker than the city it hazed
+
+*2026-08-19 · `assets/data/art.ron: lighting.sky` + `lighting.fog`, `tests/render.rs` (+2),
+`scripts/f003-sky.txt` + `scripts/f003-sky-lane.txt` (new).*
+**Evidence:** `docs/images/f003-sky-before.png` / `-after.png` (the district vantage) and
+`docs/images/f003-sky-fog-before.png` / `-after.png` (the gantry lane).
+**Same binary** (`target/debug/defeated_by_titan`, pinned before the round), same map, same tick,
+same `titan.ron` — the RON is read at startup, so the only difference between the two frames of
+each pair is the `lighting:` block, and no rebuild sits between them.
+
+### The report, and what was actually wrong
+
+Two rounds looking at 2026-08-18/19 frames said *"the lighting is still flat/harsh"* and
+*"a flat grey sky"*, and `docs/gameplay/world.md` asks for *"a strong directional light and
+aggressive distance fog for depth layering"*. **Nothing was missing.** The dome spawns, it is
+wound so you see it from inside, it carries its gradient, and the `DistanceFog` really does reach
+the camera — all four were re-checked against the frame and all four were fine. The numbers were
+the fault, and both of them in the same direction:
+
+**1. The fog did nothing you could see.** Ten identical stone_gray gantry columns down one 315 m
+lane (`scripts/f003-sky-lane.txt`), the same +Z face, the same normal, the same NdotL — so every
+difference down the row is the fog and can be nothing else. Pixels labelled by ray-casting the
+box list out of `maps.ron`, not by eye:
+
+| distance | before | after |
+|---|---|---|
+| 17.8 m | 131.3 | 131.3 |
+| 50.8 m | 131.6 | 131.6 |
+| 84.9 m | 131.2 | 133.0 |
+| 119.8 m | 131.7 | 135.9 |
+| 154.8 m | 133.2 | 140.6 |
+| 189.5 m | 130.8 | 141.7 |
+| 224.3 m | 132.5 | 146.6 |
+| **259.2 m** | **124.9** | **143.9** |
+
+**Eight samples over 241 m inside 8 levels of each other, and the far one the wrong way round.**
+`start_m 120 / end_m 780` puts 300 m — the far side of the district — at **27 %** of a linear
+ramp, and the file's own comment claimed "the wall sits at 50 %" for a range in which 450 m is
+36 %. The arithmetic was never done.
+
+**2. And the half that did happen read as dimming, not as air.** The fog colour (= the sky's
+horizon stop) was `(0.115, 0.112, 0.104)`, linear luminance **0.112** — *below* the district's own
+mid-tone (a stone_gray wall at a grazing angle is 0.265). A haze darker than what it hazes turns
+distance into shadow. On the standard vantage the sky measured rgb **(90.9, 90.2, 88.4)** at
+**2.8 %** saturation over a 230-row band with an 11-level spread, and the 120 m wall in front of it
+measured **107.6** — **the sky was 17 levels darker than the wall standing against it**, so the
+game's one vertical reference had no silhouette. That is the "flat grey sky", exactly.
+
+**3. Why the blue in `zenith` never showed.** `dome_mesh` mixes zenith into horizon by
+`sin(elevation)`, and a flyer looks through roughly −15..+30 degrees. `sin 30 = 0.5`, so half the
+ramp lives above the top of the frame and the visible part is nearly all horizon stop. Measured
+straight up: at 84 degrees the dome reads (36, 45, 63) — the blue is real, it is just 60 degrees
+above where anybody looks. **The horizon stop has to carry the hue, because it is almost the whole
+sky.**
+
+### What changed — `art.ron` only, no mechanism
+
+`sky.horizon` / `fog.color` `(0.115,0.112,0.104)` -> **`(0.470, 0.412, 0.335)`** (linear luminance
+0.419 = 1.58x the grazing wall, warmth R−B 0.135), `sky.zenith` -> `(0.025, 0.058, 0.150)`,
+`sky.nadir` -> `(0.210, 0.184, 0.150)` (held near the horizon so the fog's target and the dome
+below the horizon do not draw a seam), `fog` `120/780` -> **`60/470`**.
+
+Two brighter hazes were rendered and rejected. `0.500/0.440/0.360` with `start_m 25` reaches the
+same depth and takes the near quarter's contrast with it: distinct tones in the frame
+22 156 -> 15 836, against 19 769 for the one that shipped. **`start_m` is the knob that decides
+whether haze is depth or wash** — at 25 m the haze already sits on the foreground from a 62 m
+vantage, at 60 it starts past the street the player is in.
+
+### The acceptance, measured — `docs/gameplay/world.md`'s own sentence plus the fourth
+
+Same material (stone_gray, `maps.ron: palette`), one frame, one light:
+
+| | before | after |
+|---|---|---|
+| a roof — beam top, horizontal, NdotL 0.588, 71.6 m | 165.5 | **165.3** |
+| a wall in the sun — +X face, NdotL 0.769, 88.3 m | 189.8 | **188.2** |
+| a wall in the shade — −X face, NdotL 0, 19.8 m | 51.5 | **51.5** |
+| **the same wall at 17.8 m and at 259.2 m** | 131.3 / 124.9 (**−6.4**) | 131.3 / 143.9 (**+12.6**) |
+
+**FIND-071's separation is not traded, it is untouched** — the three near values move by at most
+1.6 levels, because `start_m 60` leaves everything the player is standing in alone. And the sky,
+same vantage: rgb (90.9, 90.2, 88.4) sat 0.028 -> **(156.0, 148.6, 138.9) sat 0.109**, against a
+wall face 107.6 -> 140.0. The sky went from 17 levels *darker* than the wall to 10 levels
+*brighter*.
+
+### The control, because a fog you cannot switch off is a claim
+
+Third run, same binary, same frame, `fog` pushed out to `start_m 810 / end_m 815` so the **sky
+stays new and the fog stops acting**: the series goes flat again — 131.3 at 17.8 m, **131.0** at
+259.2 m, and the shaded face back to 51.5 / 51.5 / 51.5 at 19.8 / 53.1 / 87.1 m. So the +12.6 is
+the fog and not the sky, and the two halves are separated by measurement and not by argument.
+
+### Two things this round did not fix, and one to be careful of
+
+1. 🔴 **`scripts/f003-ashgate.txt` no longer reaches its own vantage.** Run today at `--ticks 1720`
+   it reports six red asserts (ACT 3 arc bottom 32.853 < 33, ACT 4 `rope == 0` and `height 0.050`
+   where it wants 110, ACT 5 speed 2.853 and height 8.952) and the screenshot comes out from
+   **inside a wall** — the map moved under it with the fall of Ashgate. Foreign territory
+   (`world` / `vector`), reported not fixed. It is why `scripts/f003-sky.txt` warps to the vantage
+   directly: a picture whose camera position depends on 25 asserts holding is not evidence about
+   light.
+2. **The tonemapper eats the top of every gap.** `TonyMcMapface` (Bevy's default, never set
+   explicitly) maps a sunlit sand_brown roof at 0.60 linear to **165**, not the 203 the plain sRGB
+   curve says. So aerial perspective bites hardest in the darks — a wall in shade moves 51.5 ->
+   69.2 over the first 87 m — and least in the brights, and any arithmetic done in linear output
+   units is an **upper** bound on what the frame shows, never a lower one.
+3. ⚠️ **The dome is `unlit`, so it is the one surface `exposure_ev100` does not touch**, and the
+   fog colour is likewise applied after exposure. Both are therefore authored in *exposed* units
+   and are only correct against the current `exposure_ev100 12.85`. Moving the exposure moves the
+   whole district and leaves the sky and the haze where they are.
+
+Related: FIND-071 (the sun and the exposure, which this does not touch) · FIND-103 (why the test
+reads `art.ron` and the evidence reads the PNG) · `docs/gameplay/world.md` "Lighting"
+
+**Still open after this round, and it is a shape and not a number.** The dome's ramp is linear in
+`sin(elevation)`, so even with the stops this far apart the band a flyer actually sees (−15..+30
+degrees) is a *warm field*, not a *gradient you can point at*: 30 degrees is only half the ramp.
+Measured on the after frame, the sky patch still spans only rgb (156.0, 148.6, 138.9) with a
+~20-level top-to-bottom swing. Fixing that properly wants a shaping exponent on the mix — a
+number, so `art.ron: lighting.sky`, e.g. `horizon_bias:` applied as `ct.powf(bias)` in
+`render::light::dome_mesh` — and that needs a new field on `data::Sky` in `src/data/mod.rs`,
+which was **not this job's file**. Left undone on purpose rather than smuggled in.
+
+---
+
+## FIND-113 — 🟢 FIND-110 solved: it was a `look` fired **inside** the swing, not the stand-off
+
+*2026-08-19. Cause found, both scripts green, both PNGs re-taken. Supersedes FIND-110's
+diagnosis; FIND-110's **measurement** was right and its **repair** would not have worked.*
+
+`src/blades/cut.rs: blade_segment` builds the blade out of `intent.look_dir()` —
+`right = look × Y` — so at yaw 0 the right blade lies on **+X** and at yaw −90 it lies on Z and
+points at nothing. `scripts/f030-cortex.txt` and `scripts/f034-hitstop.txt` both carried
+
+```
+slash right 0.40
+wait 0.08
+look -90 -6      # ← fires on tick 154, while the swing is still active
+```
+
+and the cortex is crossed on **tick 157**. The camera turn swung the blade off the nape three
+ticks before it got there. The scripts' own headers already said the rule they were breaking:
+*"the look has to stay at yaw 0 until the blade is through"*.
+
+**The one-variable control, both directions.** Delete that single line: `tick 154: cut titan 1
+Torso` → `tick 157: cut titan 1 Cortex at 21.00 m/s`, `2 asserts held`, exit **0**. Put it back:
+red again. Sweeping the delay before it is the same statement as a function — the look at tick
+149 kills the run before even the graze, at 154 leaves the graze and kills the cortex, and from
+157 on the run is green:
+
+| `wait` before the `look` | look lands | result |
+|---|---|---|
+| 0.00 | 149 | no cut at all |
+| **0.08 (shipped)** | **154** | Torso only — **RED** |
+| 0.12 | 157 | Torso 154 + Cortex 157 — green |
+| 0.40 | 173 | Torso 154 + Cortex 157 — green |
+
+**FIND-110's proposed repair would have failed.** `warp 15.75 → 15.70` was a hypothesis about
+the stand-off; the stand-off was never the fault. Swept over 15.50 / 15.60 / 15.70 / 15.75 /
+15.80 **all five are red** with the `look` in the file. Without it, four of the five are green
+and only 15.50 (a 2.00 m stand-off, past the blade's 1.60 m reach) is not — so the pass is
+**0.20 m wide, not one centimetre**, and there was never a last-centimetre aim to lose.
+
+**The district did NOT move under these scripts.** Terrain, the collapse and the model dressing
+were the strongest prior suspicion and all three are refuted by moving the geometry instead of
+the numbers: f030's exact geometry translated to `x = 0` (q030's spot) is **still red**, and
+q030's exact geometry translated to `x = 17.5` (f030's spot) is **still green**. The location is
+irrelevant; the script line is everything.
+
+**What did drift, and it is real: the cortex crossing moved 154 → 157**, one metre further down
+the same fall. Both files' headers, and `scripts/q030-reach.txt`'s (*"It logs `tick 154: cut
+titan 1 Cortex`"*), were written against 154. `q030-reach.txt` survived the drift because it
+flies 0.20 m of air and does not touch its camera until after `assert titans == 1`; f030 did not
+because it turned its camera on exactly the tick that stopped being the cut. On tick 154 the
+blade now meets the **shoulder** (`Torso`, a graze, `has_grazed`) and only on 157 the nape —
+consistent with the husk still coming out of his lean at 154, but **not chased to its cause this
+round**: the mechanism is intact, so this is drift to be aware of, not a bug. Whoever aims a new
+script at a husk should read the crossing tick out of the log and never assume 154.
+
+**The freeze itself did not change, and that was checked before the pictures were re-taken.**
+Player y, probed per tick on the repaired run: 7.815 (154) · 7.468 (157) · 7.468 (160) · 7.468
+(163) · 6.756 (166). Seven frozen ticks = `round(gear.ron: feel.hit_stop_cortex_s 0.12 × 60)`,
+exactly as `F-034` claims. Only **where** the window sits moved, 155..161 → **158..164**.
+
+**Both PNGs re-taken, 1280x720, and they are strictly better than the pair they replace.** The
+old pair proved "the body did not move" by two identical `pos` strings and "the clock did run"
+by eyeballing the husk's scale. The new pair says both in figures, and gets the husk into frame
+as a bonus — which the old yaw −90 camera never managed:
+
+| | `docs/images/f030-cortex.png` | `docs/images/f034-hitstop.png` |
+|---|---|---|
+| tick | 158 (cut + 1) | 164 (last frozen tick) |
+| `pos` | 15.8 7.5 0.8 | 15.8 7.5 0.8 — identical to the digit |
+| `spd` | 0.0 | 0.0 |
+| husk | `husk#1 Death 1/60` | `husk#1 Death 7/60` — the clock kept running |
+
+**Stage: `F-030` and `F-034` stay 🟧.** They were at risk, not wrong: the mechanism was never
+broken (`tests/combat.rs::f030_the_cut_kills_the_real_husk`, `tests/titan.rs::q030_…` and
+`scripts/q030-reach.txt` all held throughout), and the evidence runs are green again with fresh
+pictures. Rule 5 control on the repaired file: delete the `slash` line and the run goes red
+(`assert Titans == 0 — measured 1.000`, exit **1**). `--lib` 206 · `--test combat` 34 ·
+`--test titan` 25 · `--test world` 31, all green; `cargo check --tests` clean; `tools/norms.py`
+clean (1646 checks).
+
+**🔴 Two evidence strings in `docs/features.ron` are now stale and are NOT mine to edit.** For
+whoever owns that file:
+- `F-034`: *"docs/images/f034-hitstop.png, tick 161 of the same run as f030-cortex.png at 155,
+  both showing pos 15.8 7.8 0.8 identical to the digit"* → **tick 164 … at 158 … pos
+  15.8 7.5 0.8**, and it can now also cite `spd 0.0` and `husk#1 Death 1/60 → 7/60`.
+- `F-030`: the `docs/images/f030-cortex.png sha256 951aff7b` no longer matches — the file was
+  re-taken today.
+
+**The lesson, and it is the same one as FIND-096 and FIND-108 with a new face:** a script that
+issues a `look` between the trigger and the hit is aiming the weapon, not the camera. In this
+game the blade is a function of the look direction, so **the camera is part of the shot** — any
+script that turns it inside an active swing is one tick of drift away from red.
+
+Related: FIND-110 (measured the failure, mis-diagnosed the cause) · FIND-096 · FIND-108 ·
+`docs/QUESTIONS.md` Q-030 · `scripts/q030-reach.txt`

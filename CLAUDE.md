@@ -351,6 +351,23 @@ lineages, raids, cosmetics do **not get started** while the movement does not ye
 The gate is a blind test against **Attack on Titan Revolution** with ten testers, in which our
 movement has to score at least level ([`docs/gameplay/pillars.md`](docs/gameplay/pillars.md)).
 
+## Push — always, and it changes what may be rewritten
+
+**The user, 2026-08-19: *„pushe immer. immer aktuell halten."*** So a closed round ends
+`gate → commit → push`, not `gate → commit`. `origin` is
+`git@github.com:OfflineBot/defeated-by-titan.git`; the working branch is pushed as itself.
+
+🔴 **And therefore: no history rewrite after a push.** On 2026-08-19, while nothing was pushed
+yet, two commit messages had to be repaired and the repair `git reset --hard`'d six commits — a
+chained command whose destructive half ran and whose restorative half did not, because
+`cherry-pick` has no `-q` flag. The work survived only because the SHAs were still in the reflog.
+**Now that the branch is public, that move is off the table**: a rewrite would break the remote,
+and a rewrite *plus* a mistake would break it irrecoverably.
+**So the message has to be right the FIRST time** — run
+`python3 tools/norms.py --commit-msg .git/COMMIT_EDITMSG` **before** committing, not after
+(the 72-character subject limit is the one that bit twice), and never chain a destructive git
+command with anything.
+
 ## Commit messages
 
 ```
