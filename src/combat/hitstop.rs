@@ -96,6 +96,8 @@ use bevy::prelude::*;
 use crate::data::GameData;
 use crate::shared::{HitStop, HitZone, PlayerId, SimulationSystems, TitanHit, TitanId};
 
+use super::strike::kind_of;
+
 /// How many ticks one hit freezes for. **Seconds in the file, ticks in the code, converted
 /// once, at the boundary** — `round(s * simulation_hz)`.
 pub fn stop_ticks(zone: HitZone, data: &GameData) -> u32 {
@@ -106,6 +108,58 @@ pub fn stop_ticks(zone: HitZone, data: &GameData) -> u32 {
     };
     let n = (seconds as f64 * data.game.simulation_hz).round();
     if n.is_finite() && n > 0.0 { n as u32 } else { 0 }
+}
+
+/// `F-032` — **what a non-lethal cut costs THIS body, in ticks.**
+///
+/// The backlog's own sentence for the feature is *"Kein Kill, sondern Stagger,
+/// Bewegungs-Debuff oder Blendung"*, and this is the middle one: `titan::brain::walk` reads
+/// [`HitStop`] and stops the titan's advance for as long as it lasts. His state clock, his
+/// wind-up and his pose do **not** read it (`titan::brain::advance`), so a cut can never
+/// interrupt an attack that is already telegraphed — the stagger takes his ground, not his
+/// turn.
+///
+/// Baked onto the body and not looked up per hit, for the same reason
+/// [`super::strike::StrikeTuning`] is: resolving it means matching a string against every key
+/// of `titan.ron`, and that is a thing to do once per titan and not once per blade.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stagger {
+    pub ticks: u32,
+}
+
+/// Seconds from `titan.ron` into ticks. **Rounded, once, at the boundary** — the same
+/// arithmetic as [`stop_ticks`] and `blades::swing::ticks`.
+pub fn stagger_ticks(seconds: f32, simulation_hz: f64) -> u32 {
+    let n = (seconds as f64 * simulation_hz).round();
+    if n.is_finite() && n > 0.0 { n as u32 } else { 0 }
+}
+
+/// Hangs [`Stagger`] on every titan that does not have it yet.
+///
+/// The same shape and the same fallback as [`super::strike::resolve_tuning`]: a body carrying a
+/// [`TitanId`] whose [`Name`] no kind of `titan.ron` can be read off gets **zero and one
+/// warning**. Zero is honest here — a fixture has no kind, and a silent
+/// `feel.hit_stop_normal_s` would hide the very hole `F-032` was opened for.
+pub fn resolve_stagger(
+    mut commands: Commands,
+    data: Res<GameData>,
+    fresh: Query<(Entity, &Name), (With<TitanId>, Without<Stagger>)>,
+) {
+    for (entity, name) in &fresh {
+        let ticks = match kind_of(name.as_str(), &data) {
+            Some((_, kind)) => stagger_ticks(kind.stagger_s, data.game.simulation_hz),
+            None => {
+                warn!(
+                    "combat: entity {:?} carries a TitanId but no kind of titan.ron can be read \
+                     off its name — a cut into its body staggers it for nothing. titan::rig \
+                     names a titan `titan_<kind>_<id>` (src/combat/hitstop.rs).",
+                    name.as_str()
+                );
+                0
+            }
+        };
+        commands.entity(entity).insert(Stagger { ticks });
+    }
 }
 
 /// Reads [`TitanHit`] and freezes the two bodies involved.
@@ -122,22 +176,27 @@ pub fn begin(
     // ask for `&mut HitStop` are only disjoint if the filters say so (`B0001`). And they are
     // disjoint by construction — nothing is a player and a titan at once.
     mut players: Query<(Entity, &PlayerId, Option<&mut HitStop>), Without<TitanId>>,
-    mut titans: Query<(Entity, &TitanId, Option<&mut HitStop>), Without<PlayerId>>,
+    mut titans: Query<(Entity, &TitanId, Option<&mut HitStop>, Option<&Stagger>), Without<PlayerId>>,
     // `B-004`: the joints the frozen body is an end of. Read-only — the joint stays where it
     // is and keeps its length; only avian's own `JointDisabled` marker is written here.
     joints: Query<(Entity, &DistanceJoint)>,
 ) {
     for hit in hits.read() {
+        // **The two bodies do not pay the same price any more** — `F-032`, 2026-08-19. The
+        // player's impact frame is a matter of feel and comes out of `gear.ron: feel`, where it
+        // always did. What the TITAN loses is a game value about that kind of titan, and it
+        // comes out of `titan.ron: <kind>.stagger_s`. Until this split a body cut froze the
+        // husk for the same 2 ticks it froze the player for, which is 33 ms and is why the
+        // whole feature read as "nothing happened" (`scripts/f032-swords.txt`).
         let ticks = stop_ticks(hit.zone, &data);
-        if ticks == 0 {
-            continue;
-        }
-        for (entity, id, stop) in &mut players {
-            if *id == hit.by {
-                freeze(&mut commands, entity, stop, ticks, &joints);
+        if ticks > 0 {
+            for (entity, id, stop) in &mut players {
+                if *id == hit.by {
+                    freeze(&mut commands, entity, stop, ticks, &joints);
+                }
             }
         }
-        for (entity, id, stop) in &mut titans {
+        for (entity, id, stop, stagger) in &mut titans {
             if *id == hit.titan {
                 // The titan gets the component but **no `RigidBodyDisabled`**: his position is
                 // written by `titan::brain::walk` and not by avian (he is
@@ -145,10 +204,33 @@ pub fn begin(
                 // would freeze nothing. What the component does today is gate `combat`'s own
                 // systems; the titan's own drive reading it is one line in `titan/`, and that
                 // file belongs to another job (`docs/FINDINGS.md`).
+                //
+                // **A kill ASSIGNS its frame; a stagger takes the longer of two.** Every
+                // successful pass reports `[Torso, Cortex]` — every titan is wider than his own
+                // neck — so the graze and its stagger always land first. If the kill then took
+                // `max(stagger, kill)`, a corpse would stand still for `stagger_s` instead of
+                // `feel.hit_stop_cortex_s`, and the dissolve of `scripts/f034-hitstop.txt` (a
+                // 🟧 row with two photographed ticks) would be a different length for a reason
+                // nobody would connect to F-032.
+                // `tests/combat.rs::f032_a_cortex_hit_assigns_the_kill_frame_over_any_stagger`
+                // is what goes red on `max`.
+                let (want, assign) = match hit.zone {
+                    HitZone::Cortex => (ticks, true),
+                    // No `Stagger` component yet — the titan appeared this very tick and
+                    // `resolve_stagger` is chained before this system, so this is a fixture
+                    // without a kind. It is warned about there, not silently given a number.
+                    _ => (stagger.map_or(0, |s| s.ticks), false),
+                };
+                if want == 0 {
+                    continue;
+                }
                 match stop {
-                    Some(mut existing) => existing.ticks_left = existing.ticks_left.max(ticks),
+                    Some(mut existing) => {
+                        existing.ticks_left =
+                            if assign { want } else { existing.ticks_left.max(want) };
+                    }
                     None => {
-                        commands.entity(entity).insert(HitStop::new(ticks));
+                        commands.entity(entity).insert(HitStop::new(want));
                     }
                 }
             }
@@ -219,6 +301,13 @@ pub fn advance(
 /// The two systems, in the two stages the header argues for. Registered from
 /// [`super::CombatPlugin`].
 pub fn register(app: &mut App) {
-    app.add_systems(FixedUpdate, begin.in_set(SimulationSystems::Spatial))
-        .add_systems(FixedUpdate, advance.in_set(SimulationSystems::PostStep));
+    app.add_systems(
+        FixedUpdate,
+        // `.chain()`, because a titan that appeared this tick has to carry his [`Stagger`]
+        // before [`begin`] reads it — Bevy's automatic sync point between two chained systems
+        // is what makes that true in the same tick (the same reasoning as
+        // `super::strike::register` and `blades::swing::equip`).
+        (resolve_stagger, begin).chain().in_set(SimulationSystems::Spatial),
+    )
+    .add_systems(FixedUpdate, advance.in_set(SimulationSystems::PostStep));
 }

@@ -1969,3 +1969,257 @@ fn every_kind_carries_a_strike_half_angle_in_range() {
             .join(" · ")
     );
 }
+
+// ---------------------------------------------------------------------------
+// F-032 — a blade in the body is not a kill. It is a stagger.
+// ---------------------------------------------------------------------------
+
+/// The husk, the tick count `titan.ron: husk.stagger_s` asks for, and the one the player's own
+/// impact frame gives. Spelled out here so a change to either file shows up as a red test and
+/// not as a silently different feel.
+fn stagger_and_normal_ticks(app: &App) -> (u32, u32) {
+    let d = data(app);
+    let husk = d.titan("husk").expect("titan.ron has a husk");
+    let hz = d.game.simulation_hz;
+    (
+        (husk.stagger_s as f64 * hz).round() as u32,
+        (d.gear.feel.hit_stop_normal_s as f64 * hz).round() as u32,
+    )
+}
+
+/// Spawns a real husk 120 m away — out of `aggro_radius_m: 45`, so he stands still while the
+/// blade is brought up to its active window — and returns `(root, cortex position)`.
+fn a_standing_husk(app: &mut App) -> (Entity, Vec3) {
+    app.world_mut().write_message(SpawnTitan {
+        kind: "husk".into(),
+        pos_x: 0.0,
+        pos_y: 0.0,
+        pos_z: -120.0,
+    });
+    ticks(app, 2);
+    let root = {
+        let mut q = app.world_mut().query_filtered::<Entity, With<TitanId>>();
+        q.iter(app.world()).next().expect("a husk was spawned")
+    };
+    let cortex = rig_part(app, root, TitanPart::Cortex).expect("the husk has a cortex");
+    let at = app
+        .world()
+        .get::<GlobalTransform>(cortex)
+        .expect("the cortex has a GlobalTransform")
+        .translation();
+    // ⚠️ The player passes through the solid husk for these tests, exactly as
+    // `f030_the_cut_kills_the_real_husk` does and for the same measured reason: the body
+    // capsule is 2.5 m wide and `gear.ron: reach_m` is 1.60 m, so a 30 m/s pass slams into him
+    // and is thrown sideways before the blade is anywhere near. That is a finding about the
+    // numbers; these tests are about what a landed cut MEANS.
+    let me = player(app);
+    app.world_mut()
+        .entity_mut(me)
+        .insert(CollisionLayers::new(LAYER_PLAYER, LayerMask::NONE));
+    (root, at)
+}
+
+/// How many consecutive ticks `who` carries a [`HitStop`], sampled at the end of every step.
+fn ticks_held_still(app: &mut App, who: Entity, budget: u64) -> u32 {
+    let mut held = 0;
+    let mut seen = false;
+    for _ in 0..budget {
+        app.update();
+        match app.world().get::<HitStop>(who).is_some() {
+            true => {
+                seen = true;
+                held += 1;
+            }
+            false if seen => break,
+            false => {}
+        }
+    }
+    held
+}
+
+/// ★ **`F-032` — the first consequence a non-lethal cut has ever had in this game.**
+///
+/// The backlog's own words for this feature: *"Kein Kill, sondern Stagger, Bewegungs-Debuff
+/// oder Blendung."* Measured on 2026-08-19 with `scripts/f032-swords.txt`: a blade through the
+/// husk's chest, his arm and his leg all wrote `TitanHit { zone: Torso }` at 20.67 m/s — and
+/// **nothing in the repository read it.** `titan::brain::receive_hits` drops every non-cortex
+/// hit on the floor, `render::camera` kicks on `Cortex` only, and the single reaction left was
+/// `gear.ron: feel.hit_stop_normal_s` = 2 ticks = 33 ms. The mechanism was there; the meaning
+/// was not.
+///
+/// So: a body cut takes `titan.ron: <kind>.stagger_s` off the titan's **advance**, and no
+/// number of them ever kills him.
+#[test]
+fn f032_a_body_cut_staggers_the_titan_and_never_kills_him() {
+    let mut app = app();
+    let (expected, normal) = stagger_and_normal_ticks(&app);
+    assert!(
+        expected > normal,
+        "titan.ron: husk.stagger_s resolves to {expected} ticks and the player's own impact \
+         frame to {normal} — a stagger that is no longer than the frame it comes with is not a \
+         stagger, and a body cut still reads as nothing"
+    );
+    let d = data(&app);
+    let husk_r = d.titan("husk").expect("husk").cortex_radius_m;
+    let (root, cortex) = a_standing_husk(&mut app);
+
+    // 2.4 m below the nape: inside the torso box (`leg_m` 4.80 .. `cortex` 8.90 for a 10 m
+    // husk) and far outside a cortex sphere of 0.55 m that the blade's own 0.12 m cannot
+    // bridge. `fly_past` with `count: 0` only PLACES the pass — the flying is done below, so
+    // that the freeze can be sampled tick by tick.
+    let gaps = fly_past(&mut app, cortex, husk_r, 30.0, cortex.y - 2.4, 2, 0);
+    let held = ticks_held_still(&mut app, root, 40);
+
+    let zones: Vec<HitZone> = hits(&app).into_iter().map(|(_, h)| h.zone).collect();
+    assert!(!zones.is_empty(), "the pass through the husk's chest cut nothing at all: {gaps:?}");
+    assert!(
+        !zones.contains(&HitZone::Cortex),
+        "a pass 2.4 m below the nape reported {zones:?} — this test no longer measures a BODY cut"
+    );
+
+    // 1. The stagger itself. One tick of slack in either direction: the freeze is inserted by
+    //    `Commands` in `Spatial` and counted down in `PostStep`, and where exactly the sync
+    //    point falls is Bevy's business, not this feature's.
+    assert!(
+        held.abs_diff(expected) <= 1,
+        "the husk carried a HitStop for {held} ticks, titan.ron: husk.stagger_s asks for \
+         {expected}. Before F-032 this number was {normal} — the player's own impact frame — \
+         because every non-cortex hit fell through to `feel.hit_stop_normal_s`."
+    );
+
+    // 2. **And it is never a kill.** Only the cortex kills, by rule
+    //    (`titan::brain::receive_hits`), and a stagger that could finish a titan would throw
+    //    the whole nape design away.
+    ticks(&mut app, 400);
+    assert_ne!(
+        app.world().get::<TitanState>(root),
+        Some(&TitanState::Death),
+        "a body cut killed the husk — only the Cortex may do that"
+    );
+    assert_eq!(titans(&mut app).len(), 1, "the husk is gone after a body cut");
+    println!("F-032 body cut: zones {zones:?}, husk held still for {held} ticks (file: {expected})");
+}
+
+/// **The control run**, and it is the half that makes the test above worth anything.
+///
+/// `docs/FINDINGS.md` FIND-103: a test that asks the screen and the function the same question
+/// passes when both are wrong. The mirror of that here is a stagger test that would pass with
+/// no blade in it at all — so this is the same husk, the same speed, the same tick budget, with
+/// the pass moved out of `reach_m`. No hit, no freeze, and the number above therefore came out
+/// of the blade and not out of gravity.
+#[test]
+fn f032_a_pass_out_of_reach_staggers_nothing() {
+    let mut app = app();
+    let d = data(&app);
+    let husk_r = d.titan("husk").expect("husk").cortex_radius_m;
+    let (root, cortex) = a_standing_husk(&mut app);
+
+    // `fly_past` puts the hand at `cortex.x - REACH_X`; 6 m further out is well past
+    // `reach_m` 1.60 m plus the body capsule's 1.25 m.
+    let far = cortex + Vec3::new(-6.0, 0.0, 0.0);
+    fly_past(&mut app, far, husk_r, 30.0, cortex.y - 2.4, 2, 0);
+    let held = ticks_held_still(&mut app, root, 40);
+
+    assert!(hits(&app).is_empty(), "a pass 6 m wide of the husk cut him: {:?}", hits(&app));
+    assert_eq!(held, 0, "the husk was staggered by a blade that never touched him");
+    println!("F-032 control: no hit, no stagger — the {held} ticks are the blade's, not gravity's");
+}
+
+/// **`F-034` may not be paid for by `F-032`.** A cortex hit is a kill, not a stagger.
+///
+/// Every successful pass reports `[Torso, Cortex]` — every titan is wider than his own neck
+/// (`f030_the_cortex_wins_over_the_body_it_hides_in`), so the graze lands first and the stagger
+/// with it. **And it lands EARLIER, not in the same tick:** the run of `scripts/f032-swords.txt`
+/// on 2026-08-19 measured `Torso` on tick 154 and `Cortex` on tick 157 of the same fall. If the
+/// kill then merely took the LONGER of the two freezes, the corpse would stand still for what
+/// was left of `stagger_s` instead of `feel.hit_stop_cortex_s`, and the dissolve of
+/// `scripts/f034-hitstop.txt` — a 🟧 row whose evidence is two photographed ticks 0.983 and
+/// 0.883 of the way through — would be a different length.
+///
+/// The two hits are written as messages three ticks apart, exactly as that run produced them.
+/// A flown pass cannot be used here: at 30 m/s the graze and the nape land on the **same** tick,
+/// both `Commands` inserts race, and the test measures the order of two inserts instead of the
+/// rule (measured — the flown version passed identically with `max` and with `assign`).
+#[test]
+fn f032_a_cortex_hit_assigns_the_kill_frame_over_any_stagger() {
+    let mut app = app();
+    let d = data(&app);
+    let cortex_ticks = (d.gear.feel.hit_stop_cortex_s as f64 * d.game.simulation_hz).round() as u32;
+    let (stagger, _) = stagger_and_normal_ticks(&app);
+    assert!(
+        stagger > cortex_ticks + 3,
+        "the husk's stagger ({stagger} ticks) is not more than three ticks longer than the kill \
+         frame ({cortex_ticks}) — then `max` and `assign` cannot be told apart three ticks after \
+         the graze and this test proves nothing"
+    );
+    let (root, _) = a_standing_husk(&mut app);
+    let husk_id = *app.world().get::<TitanId>(root).expect("the husk has a TitanId");
+    let entity = player(&mut app);
+    let me = *app.world().get::<PlayerId>(entity).expect("the player has an id");
+
+    let graze = TitanHit { titan: husk_id, by: me, zone: HitZone::Torso, speed_m_s: 20.67 };
+    app.world_mut().write_message(graze);
+    ticks(&mut app, 3);
+    assert!(
+        app.world().get::<HitStop>(root).is_some(),
+        "the graze's stagger was already over after three ticks — it is {stagger} ticks long, \
+         so there is nothing for the kill to have to override"
+    );
+
+    app.world_mut().write_message(TitanHit { zone: HitZone::Cortex, ..graze });
+    app.update();
+    let left = app.world().get::<HitStop>(root).map(|s| s.ticks_left);
+    assert!(
+        left.is_some_and(|n| n <= cortex_ticks),
+        "three ticks after a graze the nape was cut, and the husk carries {left:?} ticks of \
+         freeze against a kill frame of {cortex_ticks} (the graze's stagger is {stagger}) — the \
+         kill took `max(stagger, kill)` instead of assigning its own frame, so the corpse \
+         dissolves on the wrong schedule and F-034's two photographed ticks move"
+    );
+    println!(
+        "F-032/F-034: graze +3 ticks, then the nape — freeze {left:?}, kill frame {cortex_ticks}, \
+         stagger {stagger}"
+    );
+}
+
+/// **The bound that is arithmetic and not taste.** One player's two blades land a hit every
+/// `(swing_s + cooldown_s) / 2`; a `stagger_s` at or above that number is a titan who never
+/// gets a tick to move in — a permanent lock, and the design's *"Kein Kill"* turned into a kill
+/// by another name.
+///
+/// It reads both numbers out of the two files instead of repeating them, so tuning either one
+/// is what moves this test.
+#[test]
+fn f032_no_kind_can_be_tuned_into_a_permanent_stagger_lock() {
+    let app = app();
+    let d = data(&app);
+    let b = &d.gear.blades;
+    let cadence_s = (b.swing_s + b.cooldown_s) / 2.0;
+    assert!(!d.titans.kinds.is_empty(), "titan.ron has no kinds — the loop below is vacuous");
+    for (key, kind) in &d.titans.kinds {
+        assert!(
+            kind.stagger_s > 0.0,
+            "titan.ron: {key}.stagger_s is {} — a cut into this kind's body means nothing at \
+             all, which is the hole F-032 was opened for",
+            kind.stagger_s
+        );
+        assert!(
+            kind.stagger_s < cadence_s,
+            "titan.ron: {key}.stagger_s is {} against a blade cadence of {cadence_s:.3} s \
+             (gear.ron: (swing_s {} + cooldown_s {}) / 2) — one player alone locks this kind in \
+             place forever",
+            kind.stagger_s,
+            b.swing_s,
+            b.cooldown_s
+        );
+    }
+    println!(
+        "F-032 stagger_s vs a {cadence_s:.3} s cadence: {}",
+        d.titans
+            .kinds
+            .iter()
+            .map(|(k, v)| format!("{k} {}", v.stagger_s))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    );
+}

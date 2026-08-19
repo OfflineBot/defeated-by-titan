@@ -1,0 +1,151 @@
+# F-032 — **what a swing does today, at five different targets.**
+#
+# This file is a MEASUREMENT before it is a regression test. The user says *"attack fehlt aber
+# noch (mit schwertern..)"*, and `docs/NEXT.md` §2B calls the diagnosis a hypothesis, not a
+# claim: it may be that the swing never fires, that it fires and books nothing, or that it
+# books something invisible. Those are three different bugs. So this run swings the same blade,
+# out of the same fall, at the same husk geometry, at five heights — and the log says which.
+#
+#   cargo run -q -- --headless --script scripts/f032-swords.txt --ticks 1200
+#   # the exit code needs its OWN run — a pipeline's $? is the LAST command's:
+#   ./target/debug/defeated_by_titan --headless --script scripts/f032-swords.txt --ticks 1200 >/dev/null 2>&1; echo $?
+#
+# ## The five acts, and why each one stands where it does
+#
+# Every act is the SAME pass: the player falls 11.20 m (−20 m/s² ⇒ 21.2 m/s, 1.058 s), stands
+# 1.80 m off the husk's axis, looks at yaw 0 so the RIGHT blade lies on +X
+# (`src/blades/cut.rs: blade_segment`), and slashes 0.90 s into the fall so that the blade's
+# active window (`gear.ron`: 0.08..0.22 s of a 0.35 s swing) brackets the crossing.
+# **Only the HEIGHT changes** — and with it which part of the husk the blade passes through.
+#
+# A husk is the `medium` class: height 10.00 m, width `width_fraction × h` = 2.50 m
+# (`scale.ron`), so his ONE body collider is a capsule of radius 1.25 m about his axis
+# (`src/titan/rig.rs:358`). Everything below is derived from those two numbers:
+#
+# | act | the part the blade passes through | its metres | blade y | player y at warp |
+# |---|---|---|---|---|
+# | A | the **nape** — the cortex sphere, r 0.55, 0.55 m behind the neck | y 8.90 | 8.90 | 18.50 |
+# | B | the **torso** box, `leg_m` 4.80 .. `cortex` 8.90, centre 6.85 | y 4.80..8.90 | 6.85 | 16.45 |
+# | C | the **left arm** box, shoulder 8.20 down `arm_m` 4.40 to 3.80 | y 3.80..8.20 | 6.00 | 15.60 |
+# | D | the **left leg** box, ground to `leg_fraction × h` | y 0..4.80 | 3.50 | 13.10 |
+# | E | **nothing at all** — 150 m from the nearest titan | — | 8.90 | 18.50 |
+#
+# `player y at warp` is always `blade y − eye_height_m 1.60 + 11.20` of fall.
+# The five titans stand 150 m apart in z so that no husk of a finished act is inside the
+# `aggro_radius_m: 45` of the next one — a husk walks 3 m/s and the whole run is 14 s.
+#
+# ## What the asserts claim, and what they deliberately do NOT claim
+#
+# They claim only the **outcome a player can see**: the nape kills, the other three do not.
+# Which `HitZone` each act reports, at what closing speed, and whether a `TitanHit` is written
+# at all is read off `src/blades/cut.rs`'s own `info!` line —
+#
+#   tick 154: cut titan 1 Cortex at 20.67 m/s (player 1)
+#
+# — because no `assert` metric in `src/debug/script.rs` can see a zone, a titan's health or a
+# titan's freeze. That is the table this run exists to produce, and **this is what it produced**
+# on 2026-08-19, first run, 11 of 11 asserts held:
+#
+# | act | target | what the log said | what happened to the titan |
+# |---|---|---|---|
+# | A | nape | `tick 154: cut titan 1 Torso at 20.67 m/s` **then** `tick 157: … Cortex at 21.00 m/s` | dead |
+# | B | torso | `tick 327: cut titan 2 Torso at 20.67 m/s` | **nothing** |
+# | C | arm | `tick 500: cut titan 3 Torso at 20.67 m/s` | **nothing** |
+# | D | leg | `tick 673: cut titan 4 Torso at 20.67 m/s` | **nothing** |
+# | E | air | *(no line)* | — |
+#
+# **So it is the third of the three bugs `docs/NEXT.md` §2B listed: the swing fires, the cast
+# lands, a `TitanHit` IS written — and nothing in the repository reads it.** Not "the swing never
+# fires" and not "it fires and books nothing". Two further facts fall out of the same table:
+#
+#  * **arm, leg and torso are one zone.** A titan has exactly ONE body collider, the root capsule
+#    (`src/titan/rig.rs:358`); the limb boxes carry meshes and no colliders at all, and every limb
+#    sits inside a capsule of radius `width_m / 2`. `HitZone::ArmLeft`/`LegLeft`/`Head` have never
+#    been produced by anything in this game.
+#  * **the graze precedes the nape by three ticks** (154 → 157) and not by zero, which is why
+#    `combat::hitstop` has to ASSIGN the kill frame rather than take the longer of the two
+#    (`tests/combat.rs::f032_a_cortex_hit_assigns_the_kill_frame_over_any_stagger`).
+#
+# Since 2026-08-19 acts B, C and D additionally **stagger** the husk for
+# `titan.ron: husk.stagger_s` = 0.22 s = 13 ticks (`F-032`). That is not assertable from a script
+# — no metric reaches a titan's `HitStop` — and it is carried by
+# `tests/titan.rs::f032_a_grazed_titan_holds_still_for_his_whole_stagger`, which measures the
+# ground he does NOT cover.
+#
+# ⚠️ **The control run this file owes** (rule 5 / `FIND-103`): act A must go RED when the blade
+# is taken away. `settings` cannot dull a blade from a script, so the control is done in Rust —
+# `tests/combat.rs` casts the same geometry with `reach_m` at 0 and gets no hit. A run that
+# would pass with no blade in it is measuring gravity, not swordplay.
+
+# 1.5 s of lead-in: the world's blocks are still coming up in the first second.
+wait 1.5
+
+# ---- ACT A — the nape. The one hit the game already has. --------------------------------
+spawn titan husk 0 0 0
+warp -1.80 18.50 0.55
+look 0 0
+wait 0.90
+slash right 0.40
+mark A-cortex
+# The crossing is ~0.16 s after the button. 0.60 s covers the whole active window with room.
+wait 0.60
+assert titans == 1
+# `death_s: 1.0` — the body dissolves for a second before it is gone.
+wait 1.30
+assert titans == 0
+
+# ---- ACT B — the torso, dead centre of the body box. -------------------------------------
+spawn titan husk 0 0 150
+warp -1.80 16.45 150
+look 0 0
+wait 0.90
+slash right 0.40
+mark B-torso
+wait 0.60
+assert titans == 1
+wait 1.30
+# **The claim of this act:** a blade through the chest does not kill. That is the design
+# ("only the Cortex kills") and it must survive F-032.
+assert titans == 1
+
+# ---- ACT C — the left arm. -----------------------------------------------------------------
+spawn titan husk 0 0 300
+warp -1.80 15.60 300
+look 0 0
+wait 0.90
+slash right 0.40
+mark C-arm
+wait 0.60
+assert titans == 2
+wait 1.30
+assert titans == 2
+
+# ---- ACT D — the left leg. -----------------------------------------------------------------
+spawn titan husk 0 0 450
+warp -1.80 13.10 450
+look 0 0
+wait 0.90
+slash right 0.40
+mark D-leg
+wait 0.60
+assert titans == 3
+wait 1.30
+assert titans == 3
+
+# ---- ACT E — the same swing at nothing. ----------------------------------------------------
+# The null case. Without it "the blade reports a hit" is not a measurement of the blade — it
+# could be a measurement of the swing firing at all.
+warp -1.80 18.50 600
+look 0 0
+wait 0.90
+slash right 0.40
+mark E-air
+wait 0.60
+assert titans == 3
+wait 1.30
+assert titans == 3
+# `assert kills` is deliberately NOT here: the tally is `mission`'s and this run carries no
+# `--mission`, so the line reported "measured nothing" rather than a number (measured, first run
+# 2026-08-19). `titans` already carries the whole claim — one husk gone, three standing.
+assert health > 0
+end

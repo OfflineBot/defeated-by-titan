@@ -1042,6 +1042,25 @@ pub struct TitanKind {
     /// and the approach angle stops meaning anything again.
     pub strike_half_angle_deg: f32,
     pub attack_cooldown_s: f32,
+    /// **What a non-lethal cut into this kind's body costs him, in seconds of standing still**
+    /// — `F-032`'s *"Kein Kill, sondern Stagger, Bewegungs-Debuff oder Blendung"*.
+    ///
+    /// It is a **movement debuff and nothing more**: `combat::hitstop::begin` puts a
+    /// [`HitStop`](crate::shared::HitStop) on the body, and the only two systems that read one
+    /// on a titan are `titan::brain::walk` (his advance stops) and `titan::brain::dissolve`.
+    /// His state clock, his wind-up and his pose keep running — `titan::brain::advance` does
+    /// **not** read `HitStop` — so a cut can never interrupt an attack that is already
+    /// telegraphed, and no amount of slashing turns a titan into a harmless statue.
+    ///
+    /// ⚠️ **There is an upper bound and it is not a matter of taste.** One player's two blades
+    /// land a hit every `(swing_s + cooldown_s) / 2` = 0.325 s (`gear.ron: blades`). A
+    /// `stagger_s` at or above that number is a permanent lock: the titan never gets a tick to
+    /// move in. `tests/combat.rs::f032_no_kind_can_be_tuned_into_a_permanent_stagger_lock`
+    /// falls over on it, and it reads both numbers out of the files rather than repeating them.
+    ///
+    /// ⚠️ **UNTUNED**, and differentiated by mass on purpose: the scuttler is 4.2 m and gets
+    /// thrown off his line, the bellower is 21 m and barely notices. Nothing here is measured.
+    pub stagger_s: f32,
     /// How close the target has to be before `Idle → Pursue` fires. Stands in for the whole
     /// perception model `F-051`, which is not built.
     pub aggro_radius_m: f32,

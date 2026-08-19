@@ -1474,14 +1474,26 @@ fn f053_the_wind_up_moves_the_hand_far_enough_to_see() {
 /// Goes red the moment the gate in [`walk`](defeated_by_titan::titan::brain::walk) is taken out
 /// again: the titan then covers a full `speed_m_s` worth of ground during a freeze the player
 /// spends standing still.
+///
+/// ⚠️ **The number moved on 2026-08-19 and this test is where it showed** (`F-032`). Until then
+/// both bodies were frozen for `gear.ron: feel.hit_stop_normal_s` — 2 ticks, 33 ms, which is why
+/// a body cut read as nothing at all. Since the split, `feel.hit_stop_normal_s` is the
+/// **player's** impact frame and `titan.ron: <kind>.stagger_s` is what the TITAN loses. This
+/// test read the wrong one of the two and went red on "did not pick his walk back up" — the
+/// husk was still frozen, for eleven more ticks than it expected.
 #[test]
-fn f034_a_grazed_titan_holds_still_for_the_impact_frame() {
+fn f032_a_grazed_titan_holds_still_for_his_whole_stagger() {
     let mut app = app_with_hits();
     let d = data(&app);
     let husk = d.titan("husk").expect("husk");
     let hz = d.game.simulation_hz;
-    let stop_ticks = expected_ticks(d.gear.feel.hit_stop_normal_s, hz) as u64;
-    assert!(stop_ticks > 0, "gear.ron: feel.hit_stop_normal_s rounds to zero ticks");
+    let stop_ticks = expected_ticks(husk.stagger_s, hz) as u64;
+    assert!(stop_ticks > 0, "titan.ron: husk.stagger_s rounds to zero ticks");
+    assert!(
+        stop_ticks > expected_ticks(d.gear.feel.hit_stop_normal_s, hz) as u64,
+        "husk.stagger_s is no longer than the player's own impact frame — then a body cut buys \
+         the player nothing he can see, which is the hole F-032 was opened for"
+    );
 
     // Far enough that he walks instead of attacking: `attack_range_m` is 6 m, `aggro_radius_m`
     // is 45 m.
@@ -1521,16 +1533,23 @@ fn f034_a_grazed_titan_holds_still_for_the_impact_frame() {
          in the same number of free ticks — the freeze does not reach the titan"
     );
     // And it is a freeze, not a stumble: he leaves it at the speed he had.
-    ticks(&mut app, 4);
+    // Two ticks of slack for the end of the freeze — it is inserted by `Commands` and counted
+    // down in `PostStep`, and where the sync point falls is Bevy's business — and then the same
+    // window again, so that "he is walking" is measured against the same distance "he walked"
+    // was. A fixed six ticks is not enough any more: the stagger is 13 and the free window it is
+    // compared with grew with it.
+    ticks(&mut app, stop_ticks + 2);
     let moving_again = app.world().get::<Transform>(root).expect("transform").translation;
     assert!(
         (moving_again - frozen_after).length() > walked_m * 0.5,
-        "the husk did not pick his walk back up after the hit stop"
+        "the husk did not pick his walk back up after the stagger — a stagger that does not end \
+         is a lock, and `titan.ron: husk.stagger_s` = {} s is supposed to be {stop_ticks} ticks",
+        husk.stagger_s
     );
     println!(
-        "F-034 titan side: {walked_m:.4} m in {stop_ticks} free ticks, {crept_m:.4} m in \
-         {stop_ticks} frozen ticks (gear.ron feel.hit_stop_normal_s = {} s)",
-        d.gear.feel.hit_stop_normal_s
+        "F-032 titan side: {walked_m:.4} m in {stop_ticks} free ticks, {crept_m:.4} m in \
+         {stop_ticks} staggered ticks (titan.ron husk.stagger_s = {} s)",
+        husk.stagger_s
     );
 }
 

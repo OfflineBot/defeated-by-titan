@@ -32,6 +32,25 @@
 // took exactly what a player in his face took (docs/FINDINGS.md FIND-012), which is why
 // `turn_deg_per_s` above governed nothing. Range [30, 90], guarded by
 // tests/combat.rs::every_kind_carries_a_strike_half_angle_in_range.
+// ⚠️ `stagger_s` is NEW (2026-08-19, F-032) and it is the FIRST consequence a non-lethal cut
+// has ever had in this game. Measured the same day (scripts/f032-swords.txt): a blade through
+// the chest, the arm and the leg all wrote `TitanHit { zone: Torso }` at 20.67 m/s and NOTHING
+// in the repository read it — titan::brain::receive_hits drops every non-cortex hit and the
+// only reaction left was `gear.ron: feel.hit_stop_normal_s` = 2 ticks = 33 ms, which no player
+// can see. This number is what a body cut buys instead: seconds in which the titan's ADVANCE
+// stops. It is the backlog's own middle option ("Kein Kill, sondern Stagger, Bewegungs-Debuff
+// oder Blendung") and deliberately not the other two — a fall (Beintreffer) and a blinding
+// (Augentreffer) are TitanState work in src/titan/, and the per-limb hitboxes they would have
+// to be triggered from do not exist yet either (docs/FINDINGS.md FIND-109).
+//
+// ⚠️ HARD UPPER BOUND, not taste: one player's two blades land every
+// `(swing_s + cooldown_s) / 2` = 0.325 s (gear.ron). At or above that a titan never gets a
+// tick to move in and the stagger is a permanent lock —
+// tests/combat.rs::f032_no_kind_can_be_tuned_into_a_permanent_stagger_lock reads both files
+// and falls over on it. Every value below sits under 0.27.
+// The spread is by mass: the 4.2 m scuttler is thrown off his line, the 21 m bellower shrugs.
+// ⚠️ UNTUNED — nobody has played any of these eight numbers.
+//
 // The per-kind spread is the obvious next tuning pass: a bellower who swings a tree should
 // probably cover more arc than a scuttler, and the warden's shielding hand argues the other
 // way. Nothing here is measured, so nothing here is differentiated.
@@ -45,6 +64,7 @@
                      turn_deg_per_s: 50.0, accel_m_s2: 3.0,
                      strike_s: 0.2, recover_s: 0.4,
                      attack_range_m: 6.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 1.5,
+                     stagger_s: 0.22,
                      aggro_radius_m: 45.0, death_s: 1.0, health: 100.0, damage: 34.0,
                      model: "titan_husk"),
         // Unpredictable changes of direction -> leading your shots. Stays husk-sized:
@@ -55,6 +75,7 @@
                      turn_deg_per_s: 100.0, accel_m_s2: 6.0,
                      strike_s: 0.18, recover_s: 0.37,
                      attack_range_m: 6.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 1.2,
+                     stagger_s: 0.20,
                      aggro_radius_m: 50.0, death_s: 1.0, health: 100.0, damage: 30.0,
                      model: "titan_husk"),
         // Very fast, jump attack -> vertical evasion. **The fast small one.**
@@ -72,6 +93,7 @@
                      turn_deg_per_s: 150.0, accel_m_s2: 12.0,
                      strike_s: 0.2, recover_s: 0.4,
                      attack_range_m: 2.5, strike_half_angle_deg: 55.0, attack_cooldown_s: 0.9,
+                     stagger_s: 0.26,
                      aggro_radius_m: 60.0, death_s: 0.8, health: 60.0, damage: 18.0,
                      model: "titan_husk"),
         // Evasive roll with i-frames -> timing instead of spam. A roll needs a short
@@ -86,6 +108,7 @@
                      turn_deg_per_s: 120.0, accel_m_s2: 8.0,
                      strike_s: 0.18, recover_s: 0.37,
                      attack_range_m: 2.5, strike_half_angle_deg: 55.0, attack_cooldown_s: 1.1,
+                     stagger_s: 0.24,
                      aggro_radius_m: 50.0, death_s: 0.8, health: 70.0, damage: 22.0,
                      model: "titan_husk"),
         // Shields the cortex with his hand -> arms first, then cortex. The cover only works
@@ -96,6 +119,7 @@
                      turn_deg_per_s: 40.0, accel_m_s2: 3.0,
                      strike_s: 0.22, recover_s: 0.48,
                      attack_range_m: 8.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 2.0,
+                     stagger_s: 0.14,
                      aggro_radius_m: 40.0, death_s: 1.4, health: 220.0, damage: 55.0,
                      model: "titan_large"),
         // Motionless ambush, grab out of the air -> changes of height, attention.
@@ -107,6 +131,7 @@
                      turn_deg_per_s: 45.0, accel_m_s2: 2.0,
                      strike_s: 0.2, recover_s: 0.45,
                      attack_range_m: 8.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 1.8,
+                     stagger_s: 0.16,
                      aggro_radius_m: 25.0, death_s: 1.4, health: 200.0, damage: 48.0,
                      model: "titan_large"),
         // Reacts to the sound of gas, calls in reinforcements -> resource discipline.
@@ -118,6 +143,7 @@
                      turn_deg_per_s: 30.0, accel_m_s2: 2.0,
                      strike_s: 0.25, recover_s: 0.55,
                      attack_range_m: 12.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 2.5,
+                     stagger_s: 0.10,
                      aggro_radius_m: 70.0, death_s: 1.6, health: 320.0, damage: 70.0,
                      model: "titan_large"),
         // Pairs cover each other -> target prioritization, separation. Two equally large
@@ -128,6 +154,7 @@
                      turn_deg_per_s: 55.0, accel_m_s2: 4.0,
                      strike_s: 0.2, recover_s: 0.4,
                      attack_range_m: 6.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 1.4,
+                     stagger_s: 0.20,
                      aggro_radius_m: 45.0, death_s: 1.0, health: 100.0, damage: 30.0,
                      model: "titan_husk"),
 
