@@ -336,6 +336,28 @@
         // drop would otherwise pin the fan at the moment a falling player wants the widest
         // sweep. ⚠️ UNTUNED.
         aim_sep_fast_speed_m_s: 43.0,
+        // ──────────────────────────────────────────────────────────────────────────────────
+        // B-008. How far a side ray's REAL hit may sit from the crosshair's point before that
+        // arm falls back to the centre ray, as a multiple of what the fan asked for
+        // (d * sin(half) per side). Only bites when the two hits are on different bodies —
+        // a facade seen at a grazing angle is still the facade the crosshair is on.
+        //
+        // ⚠️ UNTUNED, but not invented: it is a bound on the surface family, and both ends
+        // are geometry (tests/vector_aiming.rs holds them).
+        //
+        //   * A plane through the crosshair point, tilted phi away from perpendicular to the
+        //     view, puts the side hit at cos(phi) / cos(half + phi) times what the fan asked
+        //     for. phi = 0 (a wall you face) gives 1.02 at the shipped fan, phi = 45° gives
+        //     1.27, phi = 59° gives 1.50. So 1.5 accepts EVERY surface through the point the
+        //     crosshair stands on up to 59° of grazing, and refuses a hit that has left that
+        //     surface family.
+        //   * Measured against it, 2026-08-19, from over the street at (168.19, ., -50.12):
+        //     looking down at -70° both arms land at 1.02x — kept. Straight down from 30 m
+        //     they land at 1.84x and 1.96x on the two roof caps beside the street while the
+        //     crosshair stands on the pavement — refused, which is B-008.
+        //   * The floor is 1 / cos(aim_spread_max_deg / 2) = 1.079: below it a side ray on
+        //     the very wall the crosshair is on would be thrown away.
+        aim_side_coherence_k: 1.5,
 
         // -------------------------------------------------------------------------------
         // F-024 / F-025 — the anchor candidate system. „es sollte best match sein" (the
@@ -389,6 +411,42 @@
         assist_margin_full: 0.25,
         // ──────────────────────────────────────────────────────────────────────────────────
         reel_speed_m_s: 28.0,        // F-005 Reel-In
+        // ──────────────────────────────────────────────────────────────────────────────────
+        // B-003. How much LONGER than it is a `warp` may leave a rope and still keep it.
+        //
+        // Since 2026-08-10 a warp released EVERY rope, whatever the distance. That is right
+        // for the case it was written for (55 m off a 9 m rope = 47.93 m of drag in one tick)
+        // and wrong for the 35 scripts that use `warp` to put a player somewhere — it cost the
+        // F-029 round two runs and it is documented nowhere a script author looks (FIND-116).
+        //
+        // The rule is not a taste, it is what the joint does: `limits = (0, L)` corrects only
+        // when the distance EXCEEDS L, so a teleport that leaves the rope no longer than it
+        // already is has nothing to correct. A warp TOWARD the anchor, along it, or onto the
+        // same spot therefore keeps the rope — which is exactly the case that cost F-029 its
+        // two runs, a warp that SHORTENED the rope from 62 m to 23 m and let go anyway.
+        //
+        // ⚠️ **And the other direction has no usable budget at all — measured, 2026-08-19,
+        // `tests/vector_rope.rs::probe`, a 9.00 m rope with gravity off:**
+        //
+        //   excess   drag in one tick   speed the player leaves at
+        //   0.0000            0.0000 m                    0.000 m/s
+        //   0.0001            0.0024 m                    0.143 m/s
+        //   0.0100            0.2401 m                   14.403 m/s
+        //   0.0500            1.2001 m                   72.004 m/s
+        //   0.2500            1.4479 m                   75.000 m/s   (= vector.max_speed_m_s)
+        //
+        // The solver corrects the whole excess inside ONE substep, so it comes out as a
+        // velocity of `excess * simulation_hz * substeps` = excess * 1440 /s. There is no
+        // "small enough to be harmless" metre budget: one centimetre is already 2.4x running
+        // speed. So this key is a FLOAT TOLERANCE and not a distance the player may be moved.
+        //
+        // The bound, held by tests/vector_rope.rs: the kick a kept warp may deliver stays
+        // below player.run_speed_m_s (6.0) — slower than the player moves himself —
+        // i.e. `<= 6.0 / (60 * 24)` = 0.00417 m. 0.004 is 5.8 m/s of worst case.
+        // The first version of this key said 0.25 (derived from player.max_substep_m, which
+        // bounds a POSITION step and says nothing about a solver impulse). The table above is
+        // what that guess was worth, and it is why the table is in the file.
+        warp_rope_slack_m: 0.004,
         min_rope_m: 3.0,          // any closer would drag the camera into the wall
         // Gauss-Seidel iterations over both rope constraints. With one iteration the second
         // constraint violates the first again; two are enough in the normal case (two roofs,

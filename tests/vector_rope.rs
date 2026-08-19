@@ -162,10 +162,10 @@ fn hold_reel_in(app: &mut App) {
 /// fell in the meantime. It stops the moment the hook bites.
 ///
 /// ⚠️ **`place`, not `warp`, and this used to be a `warp`.** Since `B-003` a warp lets go of
-/// every rope of the player it moves — including one anchored in the very tick of the warp
-/// (`player::rope::attach_ropes`). Pinning a player with a warp while his hook is in the air is
-/// therefore a way to build a rope that is destroyed the moment it exists. `place` writes
-/// `Position` and does what this harness actually means: move the body, touch nothing else.
+/// every rope it leaves longer than it is (`player::rope::warp_keeps_the_rope`), and the warp
+/// this harness used pinned the player against a hook that was still flying *outwards* — so the
+/// rope grew under it every tick. `place` writes `Position` and does what this harness actually
+/// means: move the body, touch nothing else.
 fn hang(app: &mut App, e: Entity, player_pos: Vec3, nominal_length_m: f32) -> f32 {
     let anchor = player_pos + Vec3::Y * nominal_length_m;
     let body = BodyId(80_001);
@@ -1100,5 +1100,165 @@ fn b004_a_frozen_player_does_not_spool_rope() {
     println!(
         "B-004 second face: {before:.3} m -> {at_freeze:.3} m at the freeze, {inside:.3} m five \
          frozen ticks later, {after:.3} m six ticks after it lifted"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// `B-003`, the second half — WHICH warps let go, and which do not
+// ---------------------------------------------------------------------------------------
+//
+// The fix of 2026-08-10 released **every** rope on **every** `warp`, whatever the distance.
+// That is right for the case it was written for — a 55 m teleport off a 9 m rope dragged the
+// player 47.93 m back in one tick — and wrong for the 35 scripts that use `warp` as a way to
+// put a player somewhere: it cost the `F-029` round two runs, and it is written down nowhere a
+// script author looks (`docs/FINDINGS.md` FIND-116).
+//
+// The rule is not a taste, it is what the joint does. `limits = (0, L)` corrects only when the
+// distance **exceeds** `L` (`avian3d-0.7.0/src/dynamics/joints/mod.rs:329-343`), so a teleport
+// that leaves the player inside his own rope length cannot yank him at all — the rope is slack,
+// and `shorten_ropes` spools the slack in. Only the excess is a drag, and it is a drag of
+// roughly its own size: 55.73 m off a 9.00 m rope is 46.73 m of excess and measured 47.93 m of
+// drag. `vector.warp_rope_slack_m` is how much excess is allowed to survive.
+
+/// The distance from the warp destination to the one anchor in the world.
+fn distance_to_anchor(app: &mut App, to: Vec3) -> f32 {
+    (to - anchor_point(app).expect("a rope has an anchor")).length()
+}
+
+#[test]
+fn b003_a_warp_inside_the_rope_length_keeps_the_rope() {
+    // ★ The bug half that is being fixed today. Five centimetres sideways off a 9 m rope
+    // leaves the player 9.0001 m from his anchor — 0.0001 m of excess on a rope that is
+    // allowed `vector.warp_rope_slack_m` of it — so there is nothing for the joint to correct
+    // and nothing that could pull him anywhere. Cutting it is a rope lost for free.
+    let mut app = app();
+    let e = me(&mut app);
+    let d = data(&app);
+    let id = player_id(&app, e);
+    kill_gravity(&mut app);
+
+    let home = Vec3::new(0.0, 120.0, 0.0);
+    let l = hang(&mut app, e, home, d.game.vector.min_rope_m * 3.0);
+    assert_eq!(joint_count(&mut app), 1, "one hook, one joint");
+    let before = app.world().resource::<Releases>().0.len();
+
+    let nudge = home + Vec3::X * 0.05;
+    let reach_m = distance_to_anchor(&mut app, nudge);
+    let excess_m = reach_m - l;
+    println!(
+        "b003 nudge: rope {l:.4} m, the warp leaves him {reach_m:.4} m from the anchor — \
+         {excess_m:.4} m of excess against a slack of {:.4} m",
+        d.game.vector.warp_rope_slack_m
+    );
+    assert!(
+        excess_m < d.game.vector.warp_rope_slack_m,
+        "the fixture does not test what it says it does"
+    );
+    warp(&mut app, e, nudge);
+    ticks(&mut app, 3);
+
+    assert_eq!(
+        joint_count(&mut app),
+        1,
+        "a warp of 0.05 m cut a rope of {l:.2} m. The joint had {excess_m:.4} m to correct, \
+         which the solver returns as 0.14 m/s — a fortieth of the speed the player runs at. \
+         That is B-003's second half."
+    );
+    assert!(
+        hook_state(&app, e, Side::Left).is_anchored(),
+        "the arm let go although its rope is still there — {:?}",
+        hook_state(&app, e, Side::Left)
+    );
+    assert!(
+        rope_length(&app, e, Side::Left) > 0.0,
+        "`RopeLength` reports no constraint on an arm that is still holding on"
+    );
+    let said: Vec<_> = app.world().resource::<Releases>().0[before..].to_vec();
+    assert!(
+        !said.iter().any(|(p, s, _, _)| *p == id && *s == Side::Left),
+        "the arm was told to let go of a rope that survived: {said:?}"
+    );
+    // §12c still holds *within what the solver can do with 0.0001 m*: the rope has 0.0001 m
+    // of excess, the solver corrects it in one substep, and that comes back out as 0.143 m/s.
+    // What must not happen is the thing `B-003` was written for — being pulled back toward the
+    // old anchor. The drift stays under the nudge itself, and the speed under the bound the
+    // key is chosen by.
+    let drift_m = (position(&app, e) - nudge).length();
+    let speed_m_s = velocity(&app, e).length();
+    println!("b003 nudge: {drift_m:.4} m of drift, {speed_m_s:.3} m/s three ticks later");
+    assert!(
+        drift_m < 0.05,
+        "he is {drift_m:.4} m off the coordinate he was warped to — further than the 0.05 m \
+         the warp moved him, so something is pulling him somewhere"
+    );
+    assert!(
+        speed_m_s < d.game.player.run_speed_m_s,
+        "a kept rope kicked him to {speed_m_s:.3} m/s, faster than he runs — \
+         `vector.warp_rope_slack_m` is too big"
+    );
+}
+
+#[test]
+fn b003_a_warp_past_the_rope_length_still_lets_go() {
+    // The other side of the same line, and the reason the 2026-08-10 fix exists at all. Ten
+    // metres sideways off a 9 m rope is 4.45 m of excess — 17 times the slack — and every
+    // centimetre of it is a yank the player never asked for.
+    let mut app = app();
+    let e = me(&mut app);
+    let d = data(&app);
+    kill_gravity(&mut app);
+
+    let home = Vec3::new(0.0, 120.0, 0.0);
+    let l = hang(&mut app, e, home, d.game.vector.min_rope_m * 3.0);
+    let far = home + Vec3::X * 10.0;
+    let reach_m = distance_to_anchor(&mut app, far);
+    println!(
+        "b003 past: rope {l:.4} m, the warp leaves him {reach_m:.4} m from the anchor — \
+         {:.4} m of excess",
+        reach_m - l
+    );
+    assert!(reach_m - l > d.game.vector.warp_rope_slack_m, "the fixture has no excess to cut on");
+    warp(&mut app, e, far);
+    ticks(&mut app, 3);
+
+    assert_eq!(
+        joint_count(&mut app),
+        0,
+        "a warp that leaves the player {:.2} m outside a {l:.2} m rope kept the joint — and a \
+         joint with {:.2} m to correct drags him back in one tick",
+        reach_m - l,
+        reach_m - l
+    );
+    let drift_m = (position(&app, e) - far).length();
+    assert!(drift_m < 0.05, "he was dragged {drift_m:.2} m off the coordinate he was warped to");
+}
+
+#[test]
+fn b003_the_warp_slack_is_bounded_by_the_files_own_numbers() {
+    // Not a taste and not `serde(default)` — a bound, at both ends, out of the same file.
+    let d = GameData::load(std::path::Path::new("assets/data"));
+    let slack_m = d.game.vector.warp_rope_slack_m;
+    assert!(
+        slack_m > 0.0,
+        "at 0.00 m every warp is 'outside the rope' by one float ULP and the rule is the old \
+         cut-everything again"
+    );
+    // ★ The bound, and it is a **speed** bound, not a distance one. The solver corrects the
+    // whole excess inside ONE substep, so it comes back out as a velocity of
+    // `excess * simulation_hz * substeps` — measured 2026-08-19 on a 9.00 m rope: 0.0001 m of
+    // excess leaves at 0.143 m/s, 0.0100 m at 14.403 m/s, 0.0500 m at 72.004 m/s. There is no
+    // metre budget that is "small enough to be harmless"; one centimetre is already twice
+    // running speed. The first version of this key was 0.25, derived from
+    // `player.max_substep_m` — which bounds a position step and says nothing about a solver
+    // impulse — and the measurement is what took it apart.
+    let per_substep_hz = d.game.simulation_hz as f32 * d.game.substeps as f32;
+    let kick_m_s = slack_m * per_substep_hz;
+    println!("b003 slack {slack_m} m -> a kick of {kick_m_s:.2} m/s at {per_substep_hz} /s");
+    assert!(
+        kick_m_s <= d.game.player.run_speed_m_s,
+        "a warp that keeps a rope {slack_m} m too long kicks the player at {kick_m_s:.2} m/s, \
+         faster than he runs ({} m/s). This key is a float tolerance, not a distance a player \
+         may be moved",
+        d.game.player.run_speed_m_s
     );
 }

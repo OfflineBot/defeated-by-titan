@@ -176,15 +176,42 @@ pub struct Rope {
     pub body_entity: Entity,
 }
 
+/// **`B-003` — does this teleport leave the rope something it can still be?**
+///
+/// The 2026-08-10 fix released **every** rope on **every** `warp`, whatever the distance. It is
+/// right for the case it was written for — 55.73 m off a 9.00 m rope dragged the player 47.93 m
+/// back in a single tick — and wrong for the 35 scripts that use `warp` as the way to put a
+/// player somewhere. It cost the `F-029` round two runs and it was written down nowhere a
+/// script author looks (`docs/FINDINGS.md` FIND-116).
+///
+/// **The rule is not a taste, it is what the joint does.** `limits = (0, L)` corrects only when
+/// the distance *exceeds* `L` (`avian3d-0.7.0/src/dynamics/joints/mod.rs:329-343`), so a
+/// teleport that lands the player inside his own rope length cannot move him at all: the rope
+/// goes slack, and [`shorten_ropes`]'s take-up spools the slack in like any other. Only the
+/// excess is a drag, and it is a drag of roughly its own size — 46.73 m of excess measured
+/// 47.93 m of drag. So the only question left is how much excess may survive, and that number
+/// is `game.ron: vector.warp_rope_slack_m` with both of its bounds derived there.
+///
+/// A warp *toward* the anchor keeps the rope by the same rule and on purpose: nothing is pulled,
+/// the player stands exactly where he was put (§12c), and the length ratchets down to the
+/// distance that now really exists (`B-004`).
+///
+/// Pure — four numbers in, a `bool` out. Non-finite input answers `false`, i.e. cuts, which is
+/// the safe direction.
+pub fn warp_keeps_the_rope(dest_m: Vec3, anchor_m: Vec3, length_m: f32, slack_m: f32) -> bool {
+    (dest_m - anchor_m).length() <= length_m + slack_m
+}
+
 /// `F-004` — creates the joint the moment a hook bites.
 ///
 /// `L` is the **current** player-to-anchor distance, floored at `vector.min_rope_m`: the rope
 /// starts at the length it really has, so anchoring never yanks the player.
 ///
-/// A player who is warped in this same tick gets **no** rope at all (`B-003`): the `Position`
-/// read here is the one from before the teleport, so the length would be measured from a spot
-/// the player is about to leave — and `apply_warps` runs one stage later, in `Integrate`. The
-/// arm is let go of through `RopeLength::overextended` like every other warped one.
+/// A player who is warped in this same tick has his rope measured **from where the warp puts
+/// him** (`B-003`): the `Position` read here is the one from before the teleport, and
+/// `apply_warps` runs one stage later, in `Integrate`. Until 2026-08-19 such a hook got no rope
+/// at all, which threw the shot away even when the teleport was five centimetres — see
+/// [`warp_keeps_the_rope`].
 pub fn attach_ropes(
     mut commands: Commands,
     data: Res<GameData>,
@@ -194,26 +221,25 @@ pub fn attach_ropes(
     ropes: Query<(Entity, &Rope)>,
 ) {
     let min_rope_m = data.game.vector.min_rope_m;
-    let warped: Vec<PlayerId> = if warped.is_empty() {
+    let warped: Vec<(PlayerId, Vec3)> = if warped.is_empty() {
         Vec::new()
     } else {
-        warped.read().map(|m| m.player).collect()
+        warped.read().map(|m| (m.player, Vec3::new(m.pos_x, m.pos_y, m.pos_z))).collect()
     };
 
     for anchored in messages.read() {
-        if warped.contains(&anchored.player) {
-            info!(
-                "hook {:?} of player {} bit in the tick its player was warped — no rope (B-003)",
-                anchored.side, anchored.player.0
-            );
-            continue;
-        }
         let Some((body_entity, _, position, frozen)) =
             players.iter().find(|(_, id, _, _)| **id == anchored.player)
         else {
             // A hook whose player vanished between `Intent` and `Drive`. Nothing to hang.
             continue;
         };
+        // The spot the length is measured from: where the player will stand at the end of this
+        // tick, not where he stands while the message is read.
+        let from_m = warped
+            .iter()
+            .find(|(id, _)| *id == anchored.player)
+            .map_or(position.0, |(_, dest)| *dest);
 
         // Defensive: `vector::hook` only anchors out of `Idle`, so a second rope on the same
         // side cannot happen — but two joints on one side would fight each other silently,
@@ -227,7 +253,7 @@ pub fn attach_ropes(
         }
 
         let point_m = anchored.point();
-        let length_m = (point_m - position.0).length();
+        let length_m = (point_m - from_m).length();
         if !length_m.is_finite() {
             // NaN in a `Transform` reads as "the player has vanished" (§9d). A rope that
             // cannot be measured is not built.
@@ -302,12 +328,18 @@ pub fn attach_ropes(
 /// where the teleport happens: this system runs in `SimulationSystems::Drive`, one stage before
 /// `player::apply_warps` moves the body in `Integrate`, so the joint is already gone by the
 /// time avian's first system of that same tick looks for one. See the module header, `B-003`.
+///
+/// ⚠️ **Not every warp**, since 2026-08-19: only the ones that leave the player further from
+/// his anchor than his rope is long, plus `vector.warp_rope_slack_m`. [`warp_keeps_the_rope`]
+/// is the whole rule and the reason it is that one.
 pub fn detach_ropes(
     mut commands: Commands,
+    data: Res<GameData>,
     mut released: MessageReader<HookReleased>,
     mut gone: MessageReader<BodyGone>,
     mut warped: MessageReader<WarpPlayer>,
-    ropes: Query<(Entity, &Rope)>,
+    ropes: Query<(Entity, &Rope, &DistanceJoint)>,
+    anchors: Query<&Transform>,
 ) {
     // Collected once instead of read per rope: a `MessageReader` has one cursor, and the
     // second rope would find it empty. `Vec::new()` does not allocate.
@@ -321,27 +353,39 @@ pub fn detach_ropes(
     } else {
         gone.read().map(|m| m.body).collect()
     };
-    let warped: Vec<PlayerId> = if warped.is_empty() {
+    let warped: Vec<(PlayerId, Vec3)> = if warped.is_empty() {
         Vec::new()
     } else {
-        warped.read().map(|m| m.player).collect()
+        warped.read().map(|m| (m.player, Vec3::new(m.pos_x, m.pos_y, m.pos_z))).collect()
     };
     if released.is_empty() && gone.is_empty() && warped.is_empty() {
         return;
     }
+    let slack_m = data.game.vector.warp_rope_slack_m;
 
-    for (entity, rope) in &ropes {
-        let by_warp = warped.contains(&rope.player);
-        if released.contains(&(rope.player, rope.side)) || gone.contains(&rope.body) || by_warp {
-            if by_warp {
+    for (entity, rope, joint) in &ropes {
+        // The rule, and the only place it is decided: a teleport that lands inside the rope's
+        // own length has nothing for the joint to correct, so the rope survives it. A missing
+        // anchor transform counts as "cut" — the safe direction.
+        let by_warp = warped.iter().find(|(id, _)| *id == rope.player).is_some_and(|(_, dest)| {
+            let keep = anchors.get(rope.anchor).is_ok_and(|a| {
+                warp_keeps_the_rope(*dest, a.translation, joint.limits.max, slack_m)
+            });
+            if !keep {
+                let reach_m =
+                    anchors.get(rope.anchor).map_or(f32::NAN, |a| (*dest - a.translation).length());
                 // The line `B-003` did not have. A rope that is cut by something the player
                 // did not ask for has to leave a trace — `scripts/game-full.txt` lost two of
-                // three kills to exactly this happening in silence.
+                // three kills to exactly this happening in silence. Since 2026-08-19 it also
+                // says by how much, so a script author can see whether he was 5 cm or 55 m out.
                 info!(
-                    "rope {:?} of player {} cut: the player was warped away (B-003)",
-                    rope.side, rope.player.0
+                    "rope {:?} of player {} cut: the warp left him {reach_m:.2} m from his                      anchor on a {:.2} m rope (B-003)",
+                    rope.side, rope.player.0, joint.limits.max
                 );
             }
+            !keep
+        });
+        if released.contains(&(rope.player, rope.side)) || gone.contains(&rope.body) || by_warp {
             // `B-004`, the third face: this is the release the player actually makes, and on
             // seven of every sixty ticks its player is frozen. `despawn_rope` is the only
             // ordering that survives both states — see its own doc comment.
@@ -484,12 +528,13 @@ pub fn sync_rope_length(
     mut players: Query<(&PlayerId, &Position, &Hook, &mut RopeLength)>,
 ) {
     let hook_range_m = data.game.vector.hook_range_m;
+    let slack_m = data.game.vector.warp_rope_slack_m;
     // Collected once instead of read per player — a `MessageReader` has one cursor, and the
     // second player would find it empty. `Vec::new()` does not allocate.
-    let warped: Vec<PlayerId> = if warped.is_empty() {
+    let warped: Vec<(PlayerId, Vec3)> = if warped.is_empty() {
         Vec::new()
     } else {
-        warped.read().map(|m| m.player).collect()
+        warped.read().map(|m| (m.player, Vec3::new(m.pos_x, m.pos_y, m.pos_z))).collect()
     };
 
     for (id, position, hook, mut length) in &mut players {
@@ -508,13 +553,32 @@ pub fn sync_rope_length(
                     (anchor.translation - position.0).length() > hook_range_m;
             }
         }
-        if warped.contains(id) {
+        if let Some((_, dest_m)) = warped.iter().find(|(w, _)| w == id) {
             // `B-003`. Only the arms that really hold on: an `Idle` arm would carry a flag
             // nobody reads, and `RopeLength` would be marked changed for every player every
-            // `warp` (§11). The joint itself is already gone — `detach_ropes` took it one
-            // stage earlier in this same tick — so this loop found nothing to set it from.
+            // `warp` (§11).
+            //
+            // ⚠️ **And only the arms whose rope the warp really cut.** Since 2026-08-19 a
+            // teleport inside the rope's own length keeps it ([`warp_keeps_the_rope`]), and an
+            // arm flagged here would be let go of by `vector::hook` in the next tick with the
+            // joint still standing. The predicate is asked a second time rather than the
+            // absence of the rope being read off the query: `detach_ropes`' despawn is a
+            // `Command` and whether it has been applied by the time this system runs is not a
+            // thing this file gets to depend on.
             for side in Side::ALL {
-                if hook.arm(side).state.is_anchored() {
+                if !hook.arm(side).state.is_anchored() {
+                    continue;
+                }
+                let survives = ropes
+                    .iter()
+                    .find(|(rope, _)| rope.player == *id && rope.side == side)
+                    .and_then(|(rope, joint)| {
+                        anchors.get(rope.anchor).ok().map(|a| (a.translation, joint.limits.max))
+                    })
+                    .is_some_and(|(anchor_m, length_m)| {
+                        warp_keeps_the_rope(*dest_m, anchor_m, length_m, slack_m)
+                    });
+                if !survives {
                     next.overextended[side.index()] = true;
                 }
             }

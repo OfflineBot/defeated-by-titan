@@ -336,6 +336,60 @@ pub fn side_dirs(intent: &Intent, half_rad: f32) -> [Vec3; 2] {
     [look * cos - right * sin, look * cos + right * sin]
 }
 
+/// **`B-008` — is what this side ray found the thing the crosshair is standing on?**
+///
+/// `F-028`'s fallback used to ask *"did this side ray find anything anchorable?"* and hand the
+/// arm the centre ray when the answer was no. In Ashgate the answer is **never** no: the
+/// district is 100 % anchorable (the user: *„ueberall! ohne ausnahmen!"*) and the ground is
+/// always under the cone, so a side ray that has left the surface the crosshair stands on does
+/// not come back empty — it carries on and bites whatever it meets next. Two decisions that are
+/// individually right, fighting each other.
+///
+/// Measured 2026-08-19 from 30 m over the street at `(168.19, ., -50.12)`, looking **straight
+/// down**: the crosshair stands on the pavement 30.1 m below, the fan asks for 5.85 m of
+/// separation — and the two arms landed **11.50 m** and **10.77 m** off it, on the two roof
+/// caps beside the street. From every height over that street the same two roofs win, so the
+/// pavement under the crosshair is unhookable and nothing says so (`docs/BUGS.md` B-008,
+/// `docs/FINDINGS.md` FIND-116).
+///
+/// So the question is generalised, not replaced: *"did this side ray find the thing the
+/// crosshair is on?"*, and it is answered twice over —
+///
+/// 1. **The same body is always the same thing.** A facade seen at a grazing angle is still the
+///    facade the crosshair is on, however far along it the side ray lands, and straddling it is
+///    exactly what the spread is for.
+/// 2. **Otherwise, within what the fan asked for.** The model resolved `half_rad` this tick and
+///    thereby asked for `d * sin(half_rad)` metres per side; `coherence_k` says how many times
+///    that a real hit may be off before it is a different part of town
+///    (`game.ron: vector.aim_side_coherence_k`, and the geometry that bounds it is written out
+///    there).
+///
+/// **A crosshair on nothing has nothing to be coherent with.** `F-023`'s promise is that the
+/// rope and the marker are one number; a centre ray that found no anchor has no number to be,
+/// and the arm that flew 429 m to a tower top the player never pointed at is FIND-116's second
+/// measured case. It becomes a clean `F-028` miss with a reason instead.
+///
+/// Pure — five values in, a `bool` out, no `World` and no `Res`, so it is testable against
+/// points somebody typed by hand rather than by asking the code under test the same question
+/// twice (`docs/FINDINGS.md` FIND-103). Non-finite input answers `false`, i.e. falls back,
+/// which is the safe direction.
+pub fn side_hit_is_coherent(
+    centre: Option<(Vec3, BodyId)>,
+    side: (Vec3, BodyId),
+    eye_m: Vec3,
+    half_rad: f32,
+    coherence_k: f32,
+) -> bool {
+    let Some((crosshair_m, centre_body)) = centre else {
+        return false;
+    };
+    if side.1 == centre_body {
+        return true;
+    }
+    let asked_m = (crosshair_m - eye_m).length() * half_rad.sin();
+    (side.0 - crosshair_m).length() <= coherence_k * asked_m
+}
+
 // ===========================================================================================
 // `F-025` Bewertungsfunktion / `F-024` Snap auf Q und E — **layer 2**, and it never replaces
 // layer 1.
@@ -743,16 +797,36 @@ pub fn aim(
         let sides = Side::ALL.map(|side| {
             let found = cast(&space, &bodies, player, eye_m, dirs[side.index()], range_m);
             // **The fallback, and it is the difference between a feature and a regression.**
-            // A side ray that finds nothing to hook — off the roof edge, into the sky, or
-            // onto an untagged wall — hands the arm the centre ray instead of nothing. Aiming
-            // at a lone tower has to keep working exactly as well as it did when both arms
-            // shared one point; without this line the spread would cost hit rate on every
-            // target narrower than the spread itself.
+            // A side ray that does not find the thing the crosshair is on — off the roof edge,
+            // into the sky, onto an untagged wall, or **onto whatever it met next** — hands the
+            // arm the centre ray instead. Aiming at a lone tower has to keep working exactly as
+            // well as it did when both arms shared one point; without this line the spread
+            // would cost hit rate on every target narrower than the spread itself.
+            //
+            // ⚠️ **The test used to be "did it find anything anchorable", and in Ashgate that
+            // is always true** — the district is 100 % anchorable and the ground is always
+            // under the cone, so an arm aimed straight down bit a roof cap beside the street
+            // and never the pavement the crosshair stood on (`B-008`).
+            // [`side_hit_is_coherent`] is the same question asked so that a world without holes
+            // can still answer it.
             //
             // Resolved HERE and not at fire time: what is written into `ArmAim` is what the
             // rope flies at and what the HUD draws, and a rule applied twice in two files is
             // how a marker and a rope end up in two places (`user-messages.md`, 2026-08-12).
-            let free = if anchor_target(&found).is_some() { found } else { centre };
+            let free = match anchor_target(&found) {
+                Some(hit)
+                    if side_hit_is_coherent(
+                        anchor_target(&centre),
+                        hit,
+                        eye_m,
+                        spread_rad,
+                        v.aim_side_coherence_k,
+                    ) =>
+                {
+                    found
+                }
+                _ => centre,
+            };
 
             // **Layer 2 (`F-024`/`F-025`), and it only ever runs on top of layer 1.**
             let (Some(s), Some(ctx)) = (assist, score_ctx) else {

@@ -1,0 +1,50 @@
+# B-008 — a downward hook has to land where the crosshair points.
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/b008-down.txt --ticks 900
+#   ./target/debug/defeated_by_titan --headless --script scripts/b008-down.txt --ticks 900 \
+#       >/dev/null 2>&1; echo $?
+#
+# ## The place, and why it is this one
+#
+# (168.19, ., -50.12) is `scripts/f003-ashgate.txt` ACT 5's spot: the middle of a 4.30 m
+# street between two ridges of 10.84 m (west) and 10.00 m (east). Straight down from 30 m the
+# crosshair stands on the **street** at (168.19, 1.50, -50.12) — 30.1 m away, body 573.
+#
+# ## What it measures
+#
+# `F-023` puts the two arms on a fan around the look direction. Measured on 2026-08-19 from
+# this very spot (`tests/vector_aiming.rs::probe`), the resolved fan is 11.21° per side, so the
+# model asks for **5.85 m** of separation at 30 m — and the two rays really landed
+# **11.50 m** and **10.77 m** away, on the two ROOF CAPS beside the street (bodies 2154 and
+# 2156), at y = 12.34 and y = 11.50. From every height over this street the same two roofs
+# win: the street under the crosshair is unhookable, and nothing says so.
+#
+# So the run reels both arms in and asks WHERE THE PLAYER ENDS UP. Two ropes reeled to
+# `vector.min_rope_m` (3 m) put him within 3 m of his anchors:
+#
+#   * anchored on the two roof caps  ->  he hangs at roof level, height 9..15
+#   * anchored on the street         ->  he is set down on the street, height < 6
+#
+# Gravity is on and pulls the same way in both cases; it is the ROPES that decide, because two
+# 3 m ropes to an anchor at y = 12 cannot be honoured at y = 2.
+wait 1.5
+
+warp 168.19 30 -50.12
+look 0 -90               # straight down at the street, 30 m below
+wait 0.25                # `vector.aim_spread_settle_s` is 0.10 s — the fan has settled
+mark b008-aim-down
+assert height > 28.0
+assert height < 30.5
+
+hook left 3.0
+hook right 3.0
+wait 0.2
+mark b008-anchored
+assert rope == 2         # both arms hold something
+
+key Ctrl 2.0             # reel both ropes in to `vector.min_rope_m`
+wait 2.2
+mark b008-reeled-in
+# ★ THE ASSERT. Both ropes are 3 m long now, so the player is within 3 m of what he hooked.
+# On the street that is the pavement; on the roof caps it is 12 m up.
+assert height < 6.0

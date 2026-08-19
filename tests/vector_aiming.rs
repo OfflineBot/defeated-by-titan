@@ -56,8 +56,8 @@ use defeated_by_titan::net::Inbox;
 use defeated_by_titan::player::spawn_player;
 use defeated_by_titan::shared::Velocity;
 use defeated_by_titan::vector::aim::{
-    effective_spread_rad, separation_m, settle_distance_m, side_dirs, slew_spread_rad,
-    wheel_half_rad, AimSpread, SpreadContext,
+    effective_spread_rad, separation_m, settle_distance_m, side_dirs, side_hit_is_coherent,
+    slew_spread_rad, wheel_half_rad, AimSpread, SpreadContext,
 };
 use defeated_by_titan::shared::{
     AimPoint, AnchorSurface, ArmAim, Body, BodyId, BodyMask, Buttons, Cli, Hook, HookState,
@@ -1476,4 +1476,127 @@ fn f023_a_wheel_the_player_turns_down_binds_on_the_very_next_tick() {
     // And the floor still wins over a target under it, after the slew as before it.
     let under = slew_spread_rad(Some(floor), 0.0, step_rad, ceiling, floor);
     assert!(under >= floor - 1e-6, "the slew walked {:.3}° under the floor", under.to_degrees());
+}
+
+// ---------------------------------------------------------------------------------------
+// 12. `B-008` — a side ray that finds SOMETHING ELSE is a miss, not a target
+// ---------------------------------------------------------------------------------------
+//
+// `F-028`'s fallback asks *"did this side ray find anything anchorable?"* and hands the arm
+// the centre ray when the answer is no. In Ashgate the answer is **never** no: the district is
+// 100 % anchorable (the user: *„ueberall! ohne ausnahmen!"*) and the ground is always under
+// the cone, so a side ray that has left the surface the crosshair stands on carries on and
+// bites whatever it meets. Measured from 30 m over the street at (168.19, ., -50.12), looking
+// straight down: the crosshair is on the pavement at 30.1 m, the fan asks for **5.85 m** of
+// separation — and the two arms landed **11.50 m** and **10.77 m** away, on the two roof caps
+// beside the street. From every height over that street the same two roofs win.
+//
+// So the question is generalised: *"did this side ray find the thing the crosshair is on?"*
+
+#[test]
+fn b008_a_side_hit_that_left_the_crosshairs_surface_is_not_a_target() {
+    // The predicate on its own, against points typed out by hand (`docs/FINDINGS.md`
+    // FIND-103: a test that asks the code under test the same question twice proves nothing).
+    // Eye at the origin looking along -Z, the crosshair 30 m out, the fan 11.21° per side —
+    // the numbers the run above measured.
+    let eye_m = Vec3::ZERO;
+    let half = 11.21_f32.to_radians();
+    let k = data(&app()).game.vector.aim_side_coherence_k;
+    let crosshair = Vec3::new(0.0, 0.0, -30.0);
+    let centre = Some((crosshair, BodyId(573)));
+    // The fan's own ask at 30 m: 30 * sin(11.21°).
+    let asked_m = 30.0 * half.sin();
+    assert!((asked_m - 5.83).abs() < 0.05, "the fixture drifted: {asked_m}");
+
+    // 1. On the same body, however far along it — a facade seen at a grazing angle is still
+    //    the facade the crosshair is on, and that is the whole point of the spread.
+    assert!(
+        side_hit_is_coherent(centre, (Vec3::new(0.0, 0.0, -120.0), BodyId(573)), eye_m, half, k),
+        "a hit on the very body the crosshair stands on is the thing that was aimed at"
+    );
+    // 2. Another body, but inside the separation the fan asked for.
+    assert!(
+        side_hit_is_coherent(
+            centre,
+            (Vec3::new(asked_m * 1.02, 0.0, -30.0), BodyId(999)),
+            eye_m,
+            half,
+            k
+        ),
+        "a hit one fan-width off the crosshair is what F-023 asked for"
+    );
+    // 3. ★ The bug: another body, roughly twice as far off as the fan asked for. That is the
+    //    11.50 m the roof cap sat at against the 5.85 m the model wanted.
+    assert!(
+        !side_hit_is_coherent(
+            centre,
+            (Vec3::new(asked_m * 1.97, 0.0, -18.0), BodyId(2154)),
+            eye_m,
+            half,
+            k
+        ),
+        "a hit {:.2} m off a crosshair that asked for {asked_m:.2} m is a different part of \
+         town — that is B-008",
+        asked_m * 1.97
+    );
+    // 4. The crosshair on nothing at all. `F-023`'s promise is that the rope and the marker
+    //    are one number; a centre ray that found nothing has no number to be, and a side ray
+    //    that flies 429 m to a tower the player never saw is exactly what FIND-116 measured.
+    assert!(
+        !side_hit_is_coherent(None, (Vec3::new(30.0, 100.0, -420.0), BodyId(77)), eye_m, half, k),
+        "with nothing under the crosshair there is nothing for a side ray to be coherent with"
+    );
+}
+
+#[test]
+fn b008_a_shot_aimed_straight_down_lands_on_what_the_crosshair_stands_on() {
+    // **The bug, in the shipped district and nowhere else** — it exists *because* Ashgate is
+    // 100 % anchorable, so it cannot be built in the graybox, where the ground carries no
+    // anchor bit at all and the fallback therefore still fires.
+    //
+    // Gravity off, so the shot is measured from the height it is fired at and not from
+    // wherever the player has fallen to by the time the fan has settled.
+    use avian3d::prelude::Gravity;
+    let mut app = app_on_current_map();
+    app.insert_resource(Gravity(Vec3::ZERO));
+    let (e, id) = test_player(&mut app, Vec3::new(168.19, 30.0, -50.12));
+    let spread_deg = data(&app).game.vector.aim_spread_deg;
+    let k = data(&app).game.vector.aim_side_coherence_k;
+    // Straight down over the middle of the 4.30 m street of `scripts/f003-ashgate.txt` ACT 5.
+    for _ in 0..30 {
+        look_and_press(&mut app, id, 0.0, -90.0, Buttons::NONE, spread_deg);
+    }
+
+    let eye_m = eye(&app, e);
+    let half = app
+        .world()
+        .get::<AimSpread>(e)
+        .and_then(|s| s.half_rad)
+        .expect("a player who has aimed for thirty ticks carries a resolved fan");
+    let centre = aim_of(&app, e);
+    let crosshair = centre.point_m.expect("the street stands 30 m under him");
+    assert!(centre.anchorable, "the whole district is anchorable — the pavement included");
+    let d_m = (crosshair - eye_m).length();
+    let asked_m = d_m * half.sin();
+    let arms = *app.world().get::<ArmAim>(e).expect("every player that aims carries an ArmAim");
+    println!(
+        "b008: fan {:.2}°, crosshair {crosshair:?} at {d_m:.2} m, the fan asks for {asked_m:.2} m",
+        half.to_degrees()
+    );
+    for side in Side::ALL {
+        let arm = arms.side(side);
+        let point = arm.point_m.expect("every ray in this district ends on something");
+        let off_m = (point - crosshair).length();
+        println!("  {side:?} -> {point:?} body {:?}, {off_m:.2} m off the crosshair", arm.body);
+        // ★ Red before the fix: `Left -> 11.50 m off`, `Right -> 10.77 m off`, both on roof
+        // caps (bodies 2154 and 2156) while the crosshair stood on the street (body 573).
+        assert!(
+            arm.body == centre.body || off_m <= k * asked_m,
+            "the {side:?} arm aims at {point:?} on body {:?} — {off_m:.2} m off a crosshair \
+             that stands on body {:?} and asked for {asked_m:.2} m. That is B-008: the arm \
+             flies at something the player never pointed at.",
+            arm.body,
+            centre.body
+        );
+    }
 }

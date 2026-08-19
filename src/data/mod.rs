@@ -352,6 +352,20 @@ pub struct VectorTuning {
     /// At or above this **horizontal** speed the target is pinned to
     /// [`VectorTuning::aim_sep_floor_m`], in m/s.
     pub aim_sep_fast_speed_m_s: f32,
+    /// **`B-008` — how far a side ray's real hit may sit from the crosshair's point before
+    /// that arm falls back to the centre ray, as a multiple of what the fan asked for.**
+    ///
+    /// The fan asks for `d * sin(half)` metres per side ([`crate::vector::aim::separation_m`]
+    /// is the same number doubled). A side hit further off than `this * d * sin(half)` — and
+    /// on a different body than the crosshair's — is not the surface the player pointed at,
+    /// and `F-028`'s fallback takes over. Bounded in `tests/vector_aiming.rs`:
+    ///
+    /// - `> 1 / cos(aim_spread_max_deg / 2)`, or a side ray on the very same flat wall as the
+    ///   crosshair would be refused (a plane perpendicular to the view puts the hit at
+    ///   `d * tan(half)`, which is `1 / cos(half)` times what the fan asked for);
+    /// - `<= 2.0`, or a hit twice as far off as the fan's whole ask still counts as coherent
+    ///   and the guard stops guarding anything.
+    pub aim_side_coherence_k: f32,
 
     // -----------------------------------------------------------------------------------
     // `F-024` / `F-025` — the anchor candidate system. Every weight below is the backlog's
@@ -399,6 +413,23 @@ pub struct VectorTuning {
     /// answer, which is FREI and `F-002`'s guarantee.
     pub assist_margin_full: f32,
     pub reel_speed_m_s: f32,
+    /// **`B-003` — how much LONGER than it is a `warp` may leave a rope and still keep it,
+    /// in metres.**
+    ///
+    /// A [`DistanceJoint`](avian3d::prelude::DistanceJoint) with `limits = (0, L)` corrects
+    /// only when the distance *exceeds* `L`, so a teleport that leaves the rope no longer than
+    /// it already is has nothing to correct at all: a warp toward the anchor, along it, or onto
+    /// the same spot keeps the rope, and the length ratchets down to the distance that now
+    /// really exists (`B-004`).
+    ///
+    /// ⚠️ **The other direction has no usable budget.** Measured 2026-08-19 on a 9.00 m rope:
+    /// the solver corrects the whole excess inside one *substep*, so it leaves as a velocity of
+    /// `excess * simulation_hz * substeps` — 0.01 m of excess is **14.40 m/s**, 0.05 m is
+    /// **72.00 m/s**. So this is a float tolerance, not a distance a player may be moved, and
+    /// the bound in `tests/vector_rope.rs::b003_the_warp_slack_is_bounded_by_the_files_own_numbers`
+    /// says so: `0 < this <= player.run_speed_m_s / (simulation_hz * substeps)`, i.e. the kick a
+    /// kept warp may deliver stays below the speed the player walks at.
+    pub warp_rope_slack_m: f32,
     pub min_rope_m: f32,
     /// Gauss-Seidel iterations over both rope constraints (`shared::rope::rope_step`).
     pub rope_iterations: u32,
@@ -936,6 +967,21 @@ pub struct FeelTuning {
     pub hit_stop_normal_s: f32,
     pub camera_kick_deg: f32,
     pub camera_kick_s: f32,
+    /// `F-043` — how long the hit mark stays on screen, in seconds.
+    ///
+    /// **`0.0` switches the whole element off**, which is the row's *"vollstaendig
+    /// abschaltbar"* answered in data instead of in a settings screen
+    /// ([`crate::hud::hit_mark`]). Read on the frame clock and never converted to ticks: it is
+    /// view state, not simulation.
+    pub hit_mark_s: f32,
+    /// `F-043` — the closing speed at or above which a body cut reads as `CUT` and below which
+    /// it reads as `GRAZE`.
+    ///
+    /// A **feedback** threshold and not a damage threshold: `F-031` (the damage formula) is
+    /// unbuilt, and `blades.damage_per_m_s` still has no reader. It lives in `feel` for the
+    /// same reason the hit stop does — what the player is told about a hit is not what the hit
+    /// does.
+    pub strong_hit_m_s: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1126,6 +1172,17 @@ pub struct TitanBehaviour {
     pub ambush: bool,
     /// When the nape can be cut at all. See [`CortexGuard`].
     pub cortex_guard: CortexGuard,
+    /// `F-059` — how long the whole backward roll lasts, in seconds. **0 = this kind does not
+    /// roll**, and seven of the eight do not.
+    pub roll_s: f32,
+    /// How much of [`roll_s`](Self::roll_s) is the **readable startup**, during which the nape
+    /// is still a target. The rest is the guaranteed invulnerability the design asks for. A
+    /// startup of 0 would be i-frames with no tell, which is the one thing pillar P4 forbids —
+    /// `tests/data.rs` falls over on it.
+    pub roll_startup_s: f32,
+    /// How fast the body carries itself **backwards** through the roll, in m/s. It is the half
+    /// that makes the roll cost the player position and not just time.
+    pub roll_speed_m_s: f32,
 }
 
 /// **When a kind's cortex is a target.** The cortex is the only lethal spot in the game
@@ -1244,6 +1301,10 @@ pub struct TitanScale {
     /// the code; the conversion happens at the boundary (`docs/conventions.md`).
     pub windup_arm_deg: f32,
     pub windup_lean_deg: f32,
+    /// `F-059` — how far the torso tips **forward** through the roll's startup. Negative, and
+    /// that is the sign convention of `titan::rig`: `windup_lean_deg` is positive and tips the
+    /// shoulders back, so a crouch is the other way round.
+    pub roll_lean_deg: f32,
     /// Negative: the strike carries the arm back down past the rest pose.
     pub strike_arm_deg: f32,
     /// The largest class that may spawn this session. A key in [`Self::classes`].
