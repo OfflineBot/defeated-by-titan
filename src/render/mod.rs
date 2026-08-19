@@ -174,7 +174,15 @@ fn attach_camera(
     mut commands: Commands,
     data: Res<GameData>,
     settings: Res<PlayerSettings>,
-    new_players: Query<Entity, (With<LocalPlayer>, Without<Children>)>,
+    // 🔴 **`Without<Children>` stood here until 2026-08-19, and it was a mine.** It said "a
+    // player who has children already has his camera" — which was true for exactly as long as
+    // the camera was the only thing anybody ever hung on a player. `blades::hold::equip_blades`
+    // now hangs a pair of blades on him, and whichever of the two lands first would have taken
+    // the other's place: a game with a sword and no camera, black screen, exit code 0, no
+    // warning. The `existing` guard above already says "there is a camera" and it says it about
+    // the whole world, which is the question this system actually asks (§6 rule 3: there is one
+    // camera, and it is mine).
+    new_players: Query<Entity, With<LocalPlayer>>,
     existing: Query<(), With<Camera3d>>,
 ) {
     if !existing.is_empty() {

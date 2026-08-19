@@ -1662,7 +1662,7 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 ---
 
 ## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
-**NEXT FREE ID: FIND-127.** Claim it by bumping this line in the same `cat >>` that
+**NEXT FREE ID: FIND-135.** Claim it by bumping this line in the same `cat >>` that
 appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
 file separately and both read the same maximum. One line beats a 108 kB grep.
  — and append with `>>`, never with an edit tool
@@ -7125,3 +7125,796 @@ aim a chain by release time) · FIND-103 (a chain script without `assert rope ==
 gravity — every new leg here carries one) · `docs/NEXT.md` §2D update
 
 ---
+
+## FIND-127 · The blade is an object now — and the two things the picture still cannot say
+
+*2026-08-19. `F-033` · `src/blades/hold.rs` (new) · `assets/data/art.ron: "blade"` ·
+`docs/images/f033-blade.png`. Closes the first of `FIND-120`'s three items.*
+
+`FIND-120` measured that `art.ron: "blade"` could not be dressed because **the blade was not an
+entity** — `blades::cut::blade_segment` built two `Vec3` per tick, cast a capsule between them
+and threw both away, so there was no transform for a `ModelName` to sit on, and exactly two
+things in `src/` inserted one.
+
+**That is cleared.** `blades::hold::equip_blades` hangs one entity per player, a child of him,
+carrying `ModelName("blade")`; `render::model::spawn_models` dresses it out of the registry with
+no change to `render` at all. The row is bound to `a-024-klingen-paar-neu.glb` and the running
+game says so: `model "blade": 4 anchor(s) read out of the file, drawn at scale 1.0000`. A player
+**can see a sword in his hands** — `docs/images/f033-blade.png`, 1280x720, tick 85: grip and
+blade fill the lower left of the frame.
+
+### The three claims, separated on purpose
+
+The commission asked which of *exists* / *is held* / *moves along the arc* was achieved. All
+three, but the third one is a transform curve and not an animation, and that distinction is the
+whole of item 3 below.
+
+1. **Exists** — one entity per player, `HeldBlades`, `BladeHand(entity)` on the player.
+2. **Held** — a child of the player, lifted by `eye_height_m − hand`, where `hand` is the mean y
+   of the model's own `hand.l`/`hand.r` empties (0.8376 m on this pair). That puts the file's
+   hands on the exact point `blade_segment` casts from, so the picture and the cut share one
+   hand and not two. **`render::rope` takes the opposite decision for a rope and it is not a
+   contradiction:** a rope from the eye lies *along* a view ray and renders as one dot, a blade
+   from the eye stands *across* it.
+3. **Moves** — `swing_sweep` is a quarter turn out of the file's authored ready pose onto
+   `blade_right(look)`, and it is `1.0` on **exactly** the ticks `Swing::is_active` is true
+   (8 of 21) and below 1.0 on every other tick. The direction comes out of
+   `blades::cut::blade_right`, pulled out of `blade_segment` for this — **one expression, so the
+   drawn blade and the cast capsule cannot drift apart.**
+
+### 🔴 The two things it still cannot say, and both are measured
+
+* **The drawn blade is 0.93 m of steel where `gear.ron: blades.reach_m` casts 1.60 m.** The pair
+  is authored hand-to-tip 0.928 m (`hand.l` at z 0.236, mesh to z 1.164); the capsule is 1.60 m.
+  So the picture **under-promises the reach by 0.67 m** — a player who aims by what he sees will
+  stand too close, and every one of `scripts/f030-cortex.txt`'s hard-won centimetres is inside
+  that gap. Scaling the model is not the fix (`art.ron: scale` is pinned at 1.0 by a test, and
+  it would inflate the grips too); the honest fixes are a longer blade model or a `reach_m` that
+  matches the steel. **Neither was taken here** — this round did not touch `gear.ron`.
+* **At full sweep the blade is off-screen, and that is the cut's geometry, not the drawing's.**
+  `blade_segment` puts the blade horizontally *sideways* at eye height. `game.ron:
+  camera.fov_deg` is 60 vertical ⇒ 91.5° horizontal on 16:9 ⇒ ±45.7°, and the cut lies at 90°.
+  So on the eight ticks that actually cut, the steel is outside the frustum by 44°, and what a
+  player sees is the pair leaving frame and coming back
+  (`docs/images/f033-blade-swing.png`, tick 151, the right blade entering from the bottom-right
+  corner). **The blade being invisible at the moment of the cut is a design fact about a
+  sideways static capsule, and it is a candidate cause for the user's *„attack fehlt aber noch
+  (mit schwertern..)"* that survives this round.** A forward arc would fix both this and the
+  reach gap at once — and it is a change to `F-030`'s cast, which is 🟧 and photographed to the
+  tick, so it belongs to a round of its own with `scripts/f030-cortex.txt` and
+  `scripts/q030-reach.txt` re-measured.
+
+### And one latent mine that was found on the way
+
+`render::attach_camera` selected the local player with `Without<Children>` — "a player with
+children already has his camera". True for exactly as long as the camera was the only thing
+anybody hung on a player. The blade is the second, and whichever landed first would have taken
+the other's place: **a game with a sword and no camera, black screen, exit code 0, no warning.**
+The `existing: Query<(), With<Camera3d>>` guard one line above already answers the real
+question, so the filter is gone.
+`tests/render.rs::f033_a_player_carries_a_blade_entity_and_it_hangs_on_him` asserts the camera
+survives the child.
+
+### What it costs
+
+Below the noise floor. Pinned binary, `scripts/f003-ashgate.txt`, `--offscreen`,
+`DBT_FRAMETIME=1`, A/B/A/B interleaved with the row bound and the same row back on `Primitive`
+(RON only, no rebuild): **bound 4.255 ms/frame over 7 windows, primitive 4.259 ms over 6**, and
+the spread inside each arm is ±0.03 ms. One entity and one `Transform` write per player per
+frame; `equip_blades`'s query is empty from the second frame on; the mesh is 280 vertices in one
+merged primitive. Budget 16.7.
+
+Related: FIND-120 (the measurement this closes) · FIND-113 (the camera is part of the shot) ·
+`assets/data/art.ron` the `"blade"` row · `docs/models.md` "The blades" · `F-033` · `F-030`
+
+---
+
+## FIND-128 — the seam held: a player arrived over a UDP socket and nothing behind it moved
+
+**2026-08-19, the round that built the socket transport.** `docs/multiplayer.md` had been a
+promise for ten days — *"the netcode is not part of this commission, but every decision that
+would make multiplayer expensive later is avoided today"*. This is the invoice, and it is worth
+writing down because the answer is not obvious in advance: **avoiding those decisions cost
+nothing and paid for itself in one round.**
+
+### What was measured
+
+**One line of production code changed outside `net/` to make a remote player arrive.** The
+`Transport` enum grew a variant and `player::spawn_player` was split so an id can come from
+outside. That is all. No system behind `net::deliver_intents` was touched, no domain grew an
+edge in either direction, `.single()` never had to be removed from anything, and no field had
+to be moved off a `Resource` — because none of those mistakes were ever made.
+
+The three decisions that turned out to be load-bearing, each of which looked like overhead when
+it was taken:
+
+1. **`Intent` as bare `f32` with no `Vec3` and no `Entity`** (rule 8). `net::wire::encode` is a
+   straight line of `to_le_bytes`: **37 bytes, fixed**, with nothing in the struct it cannot
+   carry. A single `Vec3` field would have made this a serde format decision instead of a
+   constant.
+2. **`PlayerId` instead of `Entity`** (rule 7). A seat exists *before* its body does — the
+   intents of the packet that opened it are already in the inbox — and a scheme keyed on
+   `Entity` has nothing to address at that moment.
+3. **The `Inbox` as the one channel** (rule 2). The keyboard, the script driver and a datagram
+   all `push` into it, in `IntentSystems::Source`/`Collect`, and the simulation cannot tell
+   which was which. **That is why the socket is 200 lines and not a rewrite.**
+
+### The evidence
+
+A headless host, two `python3` senders on real UDP sockets, 900 ticks
+(`--host --port 34199 --headless --ticks 900`, exit 0 from its own run):
+
+```
+net: tick 600 player 1 [you]              at  0.0 0.0   0.0
+net: tick 600 player 2 [127.0.0.1:35480]  at  3.0 0.0 -57.7
+net: tick 600 player 3 [127.0.0.1:52130]  at 42.8 0.0   0.0
+net: tick 900 player 2 [...:35480 quiet]  at  3.0 0.0 -88.0
+```
+
+Three bodies, three different things: the local player has no keyboard and stands still, peer A
+holds forward and runs 88 m down −Z, peer B holds strafe-right and runs into a hub building at
+x = 42.8. **Neither peer moved the local player and neither moved the other.**
+
+### The two things that were wrong, and one of them was measured at 0.194 m
+
+- 🔴 **Players shoved each other.** `LAYER_PLAYER` had been *"a label without a wearer"* since
+  the day it was written, so two player capsules collided like any other pair of bodies. Two of
+  them standing 0.1 m apart pushed each other **0.194 m each in one second** with nobody
+  touching a key — at 75 m/s that shove ends a flight, and it is the bible's ground rule F-163a
+  (*"at this speed the single biggest source of frustration there is"*). Fixed with
+  `shared::PLAYER_COLLIDES_WITH` on the player's collider; red test first
+  (`tests/multiplayer.rs::f163a_two_players_in_the_same_spot_do_not_push_each_other`).
+- 🟢 **No damage between players held already, and nobody had checked.** `blades::cut::sweep`
+  casts against `LAYER_TITAN_CORTEX` and `LAYER_TITAN_BODY` only, so a player was never a
+  candidate. It is now a guard (`f162a_a_player_is_not_a_member_of_any_mask_a_blade_cuts`) and
+  not a coincidence — the rule was true by accident of an unrelated decision, which is exactly
+  the kind of truth that stops being true without anybody noticing.
+
+### What this does NOT show — and the sentence that has to stay attached to it
+
+**There is no netcode.** Nothing is sent back: no snapshots, no replication, no client. A peer
+drives a body in the host's process and **cannot see the world he is playing in**, so two copies
+of this game still do not make a co-op session. And 🔴 **a run over this transport is not
+reproducible** — the ingredients are all there (`FixedUpdate`, stable ids, `Intent` on the wire)
+but a datagram is read on whichever tick it arrives on. `--lag 200` is deterministic; the socket
+is not. `docs/multiplayer.md` §What this is NOT is the long form and it is not decoration.
+
+Related: `docs/multiplayer.md` · `docs/QUESTIONS.md` Q-038 (decided by this round, and decided
+*because* the frame became a measurable object) · FIND-103 (a test that reaches both players
+through the same local function proves nothing about a wire — which is why the socket test goes
+through `recv_from`) · `src/net/wire.rs` · `src/net/socket.rs`
+
+---
+
+## FIND-129 — the marker was 150 px / 47.7 m from the rope on the common case, and `F-170`'s keep-out box was the whole of it
+
+*2026-08-19. The user's whole commission was one sentence: „wichtig wäre nur dass diese auch genau
+da sind visuell wo das seil auch landen würde!" — the marker must be exactly where the rope would
+land. It was not, and it was the third instance in four days after FIND-098 and FIND-099.*
+
+### The sweep, and it is the finding
+
+`tests/hud.rs::f023_the_drawn_pixel_is_the_projection_of_the_point_the_rope_flies_to` lays the
+**real HUD** out in the running app over 3 stands × 9 look angles (including +89° and −89°) ×
+5 assist settings (0/25/50/75/100 on both knobs) × 4 arm states × 2 arms, on the shipped Ashgate
+map with real raycasts, and compares the **laid-out rectangle** against the rope's world point
+which it projects itself with `Camera::world_to_viewport`. Before the fix:
+
+| arm state / bearing | samples | lying by > 1 px | worst px | worst m |
+|---|---|---|---|---|
+| idle, own side ray (`Bearing::Fan`) | 135 | **0** | 0.7 | 0.57 |
+| idle, fell back to the centre ray | 16 | **16** | 146.0 | 10.88 |
+| flying | 151 | 125 | **150.0** | **47.69** |
+| anchored | 151 | 134 | 146.0 | 46.26 |
+| retracting | 151 | 125 | 150.0 | 47.69 |
+
+**FIND-098's fan held up perfectly — 135 of 135 honest.** Everything that was not a fan lied:
+**400 of 469 samples**, worst case a marker 150.0 px from a tip in flight and 47.69 m from the
+point that tip was flying to (100 % assist is not required — the worst px case is at assist 0/0).
+
+### The cause is one line, and it is `F-170`'s box
+
+`hud::arm_aim::layout_for` step 3 pushed any `Bearing::World` cluster that touched the central
+20 % × 20 % box out to a fixed side slot at ±146/150 px. **The place a player aims at is the
+middle of his screen by construction**, so that push fires on the common case and not on the
+corner one: look at a wall 14 m ahead in the market square, both arms fall back to the centre ray,
+and both markers are drawn 146 px from where the ropes go. That is the first sample the guard hit.
+
+FIND-098 exempted the fan and left this arm inside the box on two arguments. **Both are wrong:**
+
+1. *"`render::rope` is already drawing the rope to that point, so the box costs nothing."* It
+   costs the promise. The rope being visible does not make a marker standing somewhere else true,
+   and the marker is the bigger, brighter element.
+2. *"A fallback marker is a state badge with no position of its own"* (FIND-087 §2). It has a
+   position — the centre ray's hit, i.e. exactly where the shot will go — and in that state
+   **there is no rope on screen at all**, so the glyph was the player's only reading of where the
+   hook would land. 16 of 16 of those samples were wrong. `B-008`'s coherence rule (FIND-121) made
+   this state *more* common, not less: a side ray that has left the crosshair's own surface now
+   falls back instead of biting a roof cap.
+
+### The fix, and what it costs
+
+**A marker that carries a place is not chrome.** `layout_for` now applies the box only to a
+marker with **no** point at all (`at == None` — the arm found nothing, it parks in its side slot
+and claims nothing about the world). A marker with a projected point stands on that pixel and
+gives up only `SIGHT_CORE_PX`, the 6 px square the player is cutting — `Bearing::Fan` by stepping
+**down** (its y carries nothing, landed FIND-099), `Bearing::World` by stepping to the **nearer**
+vertical edge (both of its axes carry a place, and a *horizontal* step would put the letter, which
+hangs inboard on one side, on the core).
+
+After: **772 samples, 674 exact, 98 at the sight-core step, worst 20.0 px** — and 20.0 px is the
+bounded dodge, not a residue. The bearing-flip table of FIND-099 §1, same test, same screen:
+
+| step | FIND-099 | now |
+|---|---|---|
+| fan, own side ray | 61.0 px | 61.0 px |
+| fell back to the centre ray | 146.0 (+85.0) | **0.0** (−61.0, and 0.0 is where the centre ray projects) |
+| back on its own side ray | 61.0 | 61.0 |
+| fired at that same point | 150.0 (**+89.0**) | 61.0 (**+0.0**) |
+| anchored on it | 146.0 (−4.0) | 61.0 (**+0.0**) |
+
+**Firing now moves the marker 0.0 px and anchoring moves it 0.0 px.** The glyph sits on the point
+from the preview through the flight to the anchor, which is the requirement in one line.
+
+### ⚠️ This is a trade against a landed 🟧 claim, and it is deliberate
+
+`F-170` ("nothing covers the middle of the screen") and `F-023` ("the marker is where the rope
+lands") are in **direct conflict** for this one element, and no third option exists: hiding the
+marker over the box breaks `F-171`'s requirement 1 (both markers visible ALWAYS), and shrinking
+the box collapses `F-171`'s photographed crosshair (FIND-098 measured that: `KEEP_OUT_PCT` 20 → 3.4).
+The user's sentence of 2026-08-19 decides it.
+
+**What `F-170` keeps, unchanged and still green:** `f170_nothing_covers_the_middle_of_the_screen`
+and `f170_the_arm_markers_stay_out_of_the_middle_in_every_state` — both run on a bare app where
+neither arm has a point, which is exactly the badge case the box still owns. Bars, pips, banner,
+letters and the crosshair never moved.
+
+> **ASSUMPTION (2026-08-19):** the player would rather have a marker standing on his anchor,
+> inside the keep-out box, than a marker parked 150 px away that never covers anything.
+> **Rollback point:** `hud::arm_aim::layout_for`, the `Bearing::World` match arm — change
+> `Some(p) if p.is_finite()` to `Some(p) if !p.is_finite()` and the old picture is back, with the
+> guard going red on its first sample at 146.0 px (that is the one-line re-break this round ran).
+
+### Three tests were rewritten because they *encoded* the old rule, and each is named
+
+- `f170_no_projected_point_can_push_a_marker_into_the_middle` → **`f170_a_world_marker_keeps_its_pixel_and_a_badge_keeps_out_of_the_box`**
+  (unit, whole-screen sweep): a badge still clears the box; a marker with a place keeps its x
+  **exactly**, never sits on the sight core, and its vertical step is bounded.
+- `f170_an_anchor_dead_ahead_does_not_cover_the_middle` → **`f170_an_anchor_dead_ahead_stands_on_the_anchor_and_off_the_sight_core`**
+  (integration): the anchor 30 m dead ahead projects to (640.0, 360.0) and both glyphs are drawn
+  at (640.0, 376.0) — on its x, 16 px below it, off the core.
+- `f171_a_marker_never_claims_the_wrong_half_of_the_screen`: the claim is now met by arithmetic
+  (x is untouched) instead of by a push, and **two arms holding the same point are drawn on the
+  same pixel** — one place, two ropes, told apart by `Q` hanging left and `E` hanging right. The
+  old clause asserted they were shoved to opposite slots, which drew two places that do not exist.
+
+### Evidence, and neither half is evidence alone
+
+- `scripts/f023-truth.txt` — **9 asserts held, exit 0**, 752 ticks. Six legs from
+  `scripts/f-001-hooks.txt`'s measured stand: free aim, 25/25, 50/50, 100/100, both arms, and
+  straight down from 60 m (`B-008`'s case). The snap really does move the point — free aim
+  anchors `body 938 at 53.85 11.09 -1.00`, 25/25 takes **`body 937 at 51.58 22.23 -15.00`**, a
+  different building 11 m higher — so a HUD drawing the *fan angle* instead of the *point* would
+  be right at 0 % and wrong at 25 %.
+- ⚠️ **A script cannot see a pixel** (there is no `Metric` for a UI rectangle), and that is
+  exactly where both previous lies lived. The pixel half is the test above. Neither is evidence
+  on its own, and a round that runs only the script would have reported all three instances green.
+- 🔴 **The first version of that script was silently useless:** `hook right <s>` starts a hold and
+  does **not** consume script time, and `update_hooks` fires on the edge — so two legs' holds
+  overlapped, the second press was no edge, and four of nine asserts read `Rope 0.000` about shots
+  that never left. Nothing in the log said so; the leg simply had no `anchored on body` line among
+  the ones that did. Every future script that fires twice needs a `wait` longer than the hold.
+
+### Foreign territory, not touched
+
+- `tests/vector_aiming.rs::f002_a_side_ray_that_finds_nothing_falls_back_to_the_centre_ray` and
+  `::f002_q_and_e_can_target_two_different_points` are **red**, and they are red with this round's
+  two files checked back out to `HEAD` (measured, not assumed). *"the centre ray landed at
+  Vec3(0.0, 1.5999687, 0.0)"* — the aim ray is hitting something at zero distance from the eye,
+  and the live change under it is the multiplayer round's `src/player/mod.rs` +
+  `src/shared/layers.rs` putting the player body on `LAYER_PLAYER` / `PLAYER_COLLIDES_WITH`.
+  `vector::aim::cast` excludes only `[player]` — the entity it is called for — so a **second**
+  player body is a legal hit at the eye. Whoever owns that change owns this.
+- `src/hud/mod.rs` was edited by this round for **documentation only** (its §"The middle of the
+  screen stays free" described the rule that changed). It is not in the round's file list; nothing
+  else in it moved.
+- FIND-098's two label repairs (`src/shared/settings.rs:59`, `src/menu/settings.rs:99`) are still
+  owed by somebody. Third round in a row.
+
+### What went unseen
+
+The sweep is three stands. It does not include a **titan** — `F-029` moves an anchor with its
+carrier, and `target_of` reads `tip_m` for an anchored arm precisely so the marker rides along, but
+nothing here fired that path. It does not include a **second local player** (there is at most one
+`LocalPlayer`, so `place_arm_aim`'s `players.iter().next()` is untested against two). And the
+20.0 px sight-core step is bounded and measured but has **never been looked at in a running
+window**: a marker sitting 16 px under the crosshair may read as "slightly below the anchor" to a
+player, and only a screenshot can say. That is 🟨 on the look and 🟧 on the number.
+
+Related: FIND-098 (the fan, still exactly right) · FIND-099 (the 608 px teleport, whose §2
+decision this round extends to the other three states) · FIND-104 (the snap, which is why the
+assist knobs are an axis of the sweep) · FIND-121 / `B-008` (which made the fallback state common)
+· FIND-103 (do not compare a function to itself — the guard projects the point itself) ·
+`F-170` / `F-171` (the claim this round trades against, with the rollback point above)
+
+---
+
+## FIND-130 — three scripts are red in the working tree, and a controlled experiment says whose
+
+**2026-08-19, measured by the net round while two other rounds were live.** Reported rather than
+fixed: every file involved belongs to somebody else right now
+(`git status --short`: `src/blades/cut.rs`, `src/blades/mod.rs`, `src/blades/hold.rs` (new),
+`src/hud/arm_aim.rs`, `src/render/mod.rs` all modified and uncommitted).
+
+| script | invocation | result |
+|---|---|---|
+| `f-001-hooks` | `--headless --ticks 800` | **2 of 14** — `Height > 12` measured 9.840, `Speed > 35` measured 21.724 |
+| `f-flight-cut` | `--headless --ticks 400` | red |
+| `f171-crosshair` | `--headless --ticks 600` | **1 of 8** — `Height < 0.1` measured 1.303 |
+
+**The experiment, because "it is not mine" is a claim like any other:** this round's only physics
+change is one line — `CollisionLayers::new(LAYER_PLAYER, PLAYER_COLLIDES_WITH)` on the player's
+collider. It was **removed, rebuilt, and all three scripts were re-run: identical failures,
+identical numbers.** So the cause is elsewhere. (It could not have been this line anyway — the
+filter only removes player↔player contacts and each of these scripts has exactly one player —
+but that is an argument, and the rebuild is a measurement.)
+
+**Everything else in `scripts/` is green.** All 45 were swept; the other apparent failures were
+the sweep's own fault, not the game's: several script headers put the `--offscreen` *screenshot*
+command before the `--headless` *verdict* command, and a screenshot run is documented to report
+red because it is cut off at the shutter tick (`scripts/f070-hub.txt` says so in its header). Run
+with their verdict lines, `f030-cortex`, `f034-hitstop`, `f050-states`, `f053-windup`, `f056-husk`,
+`f070-lost`, `f170-hud`, `f170-objective`, `q030-reach`, `t007-physics` and `game-full`
+(`--mission tutorial --ticks 1600`) are all exit 0. `p4-cursor` is not a verdict script at all —
+its header says its job is to make the frame boring for ten minutes and that P4 can only be seen
+from outside the process.
+
+⚠️ **For whoever writes the next script sweep:** take the line labelled *the verdict*, not the
+first `cargo run` in the file. A sweep that guesses will report five false reds and hide two real
+ones — which is exactly what happened here on the first pass.
+
+Related: FIND-128 (the round that measured this) · `docs/BUGS.md`
+
+---
+
+## FIND-131 — the three red scripts: one was never broken, two warped into the new ground
+
+**2026-08-19. FIND-130 measured that the three are red and proved the net round did not cause
+it. This is the diagnosis, and none of the three is the blade round's or the marker round's.**
+
+| script | verdict now | what was actually wrong |
+|---|---|---|
+| `f-001-hooks` | **red by design, 2 of 14** | nothing. The two failing asserts carry a 12-line ⚠️ note in the file itself: *"`height > 12.0` and `speed > 35.0` ARE RED AS OF 2026-08-10 AND ARE LEFT RED"* — `B-004`'s reel take-up. Measured then 9.881 m / 19.344 m/s, on ashgate 2026-08-12 9.980 / 20.147, **today 9.840 / 21.724**. Same shortfall, and the other 12 hold, roof included |
+| `f-flight-cut` | **green, 25/25, exit 0** | the stand `(0, 0, 232)` is inside a house since `a5a49e5` rebuilt Ashgate. Re-aimed to `x = -4` |
+| `f171-crosshair` | **green, 8/8, exit 0** | the stand `(17.5, 0.05, 76.5)` is 1.45 m under the terrace since Ashgate got terrain. Re-aimed to `y = 1.55` |
+
+**The two real ones are the same failure, and it is `B-009`'s** — a body placed inside geometry.
+Neither said so. `f-flight-cut` said it in the most misleading way available: the rope
+*anchored*, one tick after the shot, 0.28 m in front of the player's face. Instrumented, the aim
+point equalled the eye **to the last decimal, at every yaw from 0 to 270 and every pitch from
+45 to 85**:
+
+```
+eye=Vec3(0.2686, 1.6500, 232.0599)   centre=Some(Vec3(0.2686, 1.6500, 232.0599))
+```
+
+⚠️ **An aim point that ignores where you look is not "the aim is broken" — it is "your eye is
+inside a collider"**, because `vector::aim::cast` uses `solid: true` and a ray that starts
+inside a shape returns distance 0 whichever way it points. That reading cost four wrong
+hypotheses here (a degenerate look basis, the assist cone, a second writer on `ArmAim`, the
+side-ray fallback) before one `info!` settled it in one run. **Log the eye and the look before
+theorising about the ray.** It is the same sentence as `B-010`, one file over: there, the eye
+was inside *another player*.
+
+**The re-aims are re-aims and not repairs of the claim.** `f-flight-cut` keeps all 25 asserts
+untouched and reproduces the header's three numbers: rope **56.15 m** (was 56.15), cortex cut at
+**t=153** (was 153), at **28.10 m/s** (was 28.09). The beam it hooks was never gone — probed
+from `x = -4` and `x = -8` it answers at `(x, 56.00, 226.96)`; only `x >= -2` is built over now.
+`f171-crosshair` keeps its claim (*"bare ground, not a lot"*) and moves only the number, from
+`-0.10 .. 0.10` to `1.40 .. 1.60`: dropped from `y = 8` at that column the player comes to rest
+at **1.500** with speed 0.000, and `maps.ron: ashgate.terrain.step_m` is **1.5** — one level, to
+the millimetre.
+
+**Still unseen:** `f171`'s third panel framing. The eye rose 1.5 m and `look 0 17` was aimed at a
+husk's cortex from the old height; the verdict run cannot test it (`CrosshairState` is view state
+and no script metric reads it), so the file now carries a ⚠️ for whoever retakes the image.
+
+Related: FIND-130 (the measurement) · `docs/BUGS.md` B-009, B-010 · `cb3e918` (three more
+scripts, same cause, same day)
+
+---
+
+## FIND-132 — the buildings floated by **half their own height**, and the fix moves the picture, never the collider
+
+**The user, 2026-08-19, after playing: „zudem sind die gebäude nicht auf dem boden sondern in
+der luft!"** He is right, and the amount is exact: `size_m.y / 2`.
+
+* `BlockPlan::spawn` (`src/world/map.rs`) positions a block by its **centre** — `center_m` is
+  where the `Block`, the `Body`, the avian collider and `AnchorSurface` sit, and it is the frame
+  `world::index` and every raycast in the game read.
+* **Every model in the pack is authored on its feet.** Measured over all 278 files of the drop:
+  `min(hit.min.y, hit.max.y) = 0.000` on **204** of them, including all 3 house files, all 8
+  ruins, all 6 rubble mounds and all `a-042` titan bodies. The 74 that differ are *parts*
+  authored in a parent rig's space — `a-045` heads at y ≈ 8.9, `a-012` cloaks at 0.15,
+  `a-024` blades at 0.45.
+* `ModelName` went on the same entity as the collider, so the model's feet landed on the box's
+  middle. **5.75 m of air under `a-083-fachwerkhaus-gross`**, 5.18 m under the house as the
+  generator actually scales it (10.36 m), 4.50 m under `ruin_pillar`, 1.50 m under
+  `rubble_heap_large`. Every dressed class, not only the houses.
+
+### Which of the two things to move, and why they stay in agreement
+
+The choice was between offsetting the **drawing** and moving the **block's own transform**, and
+they are not equivalent: the entity at `center_m` also carries the collider, the anchor bit and
+the body the spatial index hands out. **Moving the collider moves the world**; moving only the
+drawing puts the picture and the physics in different places — `FIND-098`, `-099`, `-127`,
+`-129` are all that one defect and all from this session.
+
+**So neither, exactly: the drawing moves *together with the model's anchors*, by one vector.**
+`shared::ModelName` gained `feet_y_m: Option<f32>` — *"where, in this entity's own frame, the
+model's floor belongs"*. `world::map` writes `Some(-size_m.y * 0.5)`; `render::model` writes
+`None` for a titan (its origin already **is** the ground — that is the frame `cortex_height_m` is
+measured in), and `ModelName::new` is `None`, so blades in a hand and every hand-placed model are
+untouched. `render::model::feet_offset_m` turns it into one `Vec3` that is applied to the scene
+child's `Transform` **and** to every entry of `ModelAnchors` in the same breath, in
+`read_the_models_anchors`. A rope therefore bites where the eye sees, and the collider never
+moved: **`scripts/f003-ashgate.txt` still holds all 40 asserts, unchanged**, which is the
+cheapest possible proof that no physics number shifted.
+
+⚠️ **The offset is scaled.** `fit_to_class` brings a model to the block's own height, and the
+floor is in model units — subtracting it unscaled is right at 1.0 and wrong everywhere else. The
+houses fit at ≈1.0 today and the remnants do not, so
+`tests/world.rs::f003_every_dressed_class_stands_on_the_floor_of_its_own_block` checks every one
+of the seventeen classes at its authored size **and at double it**, out of the seventeen `.glb`
+files themselves.
+
+### Evidence
+
+Red first, message captured, and broken again afterwards in one line (`Vec3::ZERO` in
+`feet_offset_m`, and `feet_y_m: None` in `map.rs` for the world half):
+
+```
+tests/render.rs::f003_a_dressed_block_stands_on_its_own_floor_and_not_in_the_air
+  the model's floor is drawn at y = 40.000 m and the block's floor is at 34.250 m
+  — the building hangs 5.750 m in the air
+tests/world.rs::f003_every_dressed_block_in_the_real_map_names_its_own_floor
+  the dressed block wearing "house_large" is 10.36 m tall and tells the renderer its floor
+  is at None
+```
+
+Pictures, both 1280x720, same vantage, same script (`scripts/f003-ground.txt`, street mark at
+t=129, aerial at t=140), the *before* one shot from a binary built with that one-line control:
+[`docs/images/f003-ground-before.png`](images/f003-ground-before.png) ·
+[`docs/images/f003-ground-after.png`](images/f003-ground-after.png) ·
+[`docs/images/f003-ground-aerial.png`](images/f003-ground-aerial.png).
+Decoded: the nearest facade's roof edge sits at **row 55** before and **row 187** after at two
+independent columns (x = 300 and x = 420) — **132 px down**, which at that facade's distance is
+the half-ridge, and the wall's foot now meets the pavement instead of ending in mid-air.
+`--lib` 238 · `--test world` 33 · `--test render` 46 · `--test data` 55 · `--test titan` 31, all
+green; `--test titan` was run although it was not on the list, because the change is in the file
+its 0.0389 m fit measurement lives on.
+
+### Three things in the same frames that are **not** this bug and are not mine
+
+1. **A large white/pale-blue spike hangs in the frame in both images**, low-left at pitch −2 and
+   high-left at pitch −16 — it moves with the view, so it is carried by the player, and
+   `src/blades/hold.rs` (live, another agent, 2026-08-19) puts `ModelName::new(BLADE_MODEL)` on a
+   hand. `a-024-klingen-paar-neu` is authored 0.45..1.32 m in the rig's space and gets no
+   `height_m`, so nothing brings it to a size. **It is metres long in the picture.**
+2. **The placed blocks are still bare cuboids** standing among dressed houses — one grey monolith
+   in the middle of the district, a navy box beside a row of houses, the wall as a flat grey mass.
+   Only *generated* houses are dressed (`dress_for`/`remnant_for`); `maps.ron`'s 215 placed blocks
+   wear nothing, and the mixture is most of what reads as "die map passt nicht".
+3. **The ground is one flat sand-coloured plane.** The 3 m of terracing is invisible from the air,
+   so the district reads as a mosaic laid on a table rather than a town on a slope.
+
+`tests/player.rs:901` has an unused `let d = data(&app);` — foreign file, left alone.
+
+Related: `docs/NEXT.md` §1F · FIND-098/-099/-127/-129 (the drawn thing that is not where the real
+thing is) · FIND-106/-107 (the pack's own measurements)
+
+---
+
+## FIND-133 — the snap searched a 2D cone and could move a rope **9.23° / 3.41 m** off the crosshair's row; it is a 1D line now and the number is **0.000006° / 0.000 m**
+
+**2026-08-19, `F-024`/`F-025`, `src/vector/aim.rs::probe_dirs`.** The user's whole commission was
+one sentence:
+
+> *„ok von snapping. die seile sollen immer auf der horzontalen fest sein. also wenn das
+> fadenkreuz 0, 0 ist sollen die seile nur auf der x achse snappen (objekte finden) also
+> seitlich! dann ist es auch besser einzuschätzen."*
+
+**The last clause is the requirement.** A snap that can move in two axes cannot be predicted; one
+that moves along a single named axis can be learned. Legibility beats a marginally better anchor,
+and every trade below was decided against that sentence and not against a score.
+
+### What changed, in one line
+
+`probe_dirs` cast `assist_probe_rings × assist_probes_per_ring` (2 × 4) directions over the
+half-disc around the look direction (FIND-104). It now casts `assist_probe_steps` (8) directions
+on the **screen-horizontal line through the crosshair**, `look·cos θ ± right·sin θ` with
+`θ = catch · (i+1)/steps`. Same 16 rays a player, same 3.4 µs; the resolution along the one axis
+that is left went from 2 samples to 8.
+
+**`right` is `basis[1]`, the camera's own horizontal** — the same axis `side_dirs` leans against.
+So "sideways" is left and right *of the crosshair* at every pitch, not of the world. A
+world-horizontal sweep would satisfy his sentence at pitch 0 and violate it everywhere else; the
+alternative and its rollback point are `docs/QUESTIONS.md` **Q-040**.
+
+### The measurements, A/B on the same tree (the cone was restored for the B half, then reverted)
+
+| | 2D cone | 1D line |
+|---|---|---|
+| worst camera-vertical deviation of a **published** arm point, 313 points over yaw × pitch × 3 assist settings | **9.232° / 3.414 m** | **0.000006° / 0.0000 m** |
+| worst vertical movement of the **drawn marker** between free aim and snap, 136–142 pairs, real camera | **117.9 px** | **0.041 px** |
+| probe elevation off the crosshair, arithmetic, 3 catch widths × 5 yaw × 6 pitch | up to 2.31° | 0.000007° |
+| `B-007` rescue (free aim finds no anchor, SNAP does within one tick) | 10 of 14 (71.4 %) | 9 of 14 (64.3 %) |
+| `F-025` momentum, mean cos(aim, flight) over 98 pairs at 30 m/s | free 0.9894 → snap 0.9945 | free 0.9894 → snap **0.9992** |
+
+**The line costs one rescue in fourteen and buys back a better trajectory match.** ⚠️ The
+`dead_free` denominator is 14 here and FIND-104 measured 8 on the same sweep; it is counted at
+assist 0/0, where no probe is cast, so **that drift is not this round's** — the tree has moved
+under it (player layers, `art.ron`, `map.rs` are all dirty from other rounds).
+
+### `F-025`'s five weights survive, and the **height term now separates nothing at all**
+
+Measured, not argued: run the sweep twice and delete `assist_score_height_w` at run time. If the
+term separates candidates, a winner moves.
+
+```
+arm-directions whose published point moves when the 15 % height weight is deleted
+  2D cone:  pitch −60: 8/24 · −25: 0/24 · 0: 9/24 · +25: 8/24 · +60: 0/24   → 25 of 120
+  1D line:  pitch −60: 0/24 · −25: 0/24 · 0: 0/24 · +25: 0/24 · +60: 0/24   →  0 of 120
+```
+
+The arithmetic behind it: on a screen-horizontal sweep every probe leaves the eye at world
+elevation `asin(sin pitch · cos α)`, so **at pitch 0 every candidate is at eye height exactly** and
+`height` is 0.5 for all of them. Off level the elevations do differ — but only by up to 5.5° at
+pitch −60 with `assist_height_full_m: 20.0`, and the 45 % angle term's step between two adjacent
+probes (0.056) is larger than anything the height term can produce across that gap. **`F-025`'s
+15 % is now dead weight in practice.** It is **not retuned here**: the five weights are the
+backlog's own numbers and they are the user's to judge (rule 2). Guarded by
+`tests/vector_hooks.rs::f025_the_height_term_stops_separating_candidates_when_the_player_looks_level`,
+which asserts only the level case — the case the arithmetic proves — so a future retune is free to
+move the rest.
+
+### The cost, and it is a real one: the sight-core dodge fires **4× as often**
+
+Every candidate now projects onto the crosshair's own screen row, so a marker near the middle of
+the screen collides with `SIGHT_CORE_PX` far more often. `tests/hud.rs::f023_the_drawn_pixel_...`:
+
+| | 2D cone | 1D line |
+|---|---|---|
+| samples | 768 | 708 |
+| drawn **exactly** on the projection | 667 | 406 |
+| stepped out of the sight core | **101** | **302** |
+| worst step | 20.0 px | 21.5 px |
+
+That is the bounded dodge (`full_h/2 + SIGHT_CORE_PX`), not a lie — but it is the one place where
+a marker still moves vertically, and it now happens on 43 % of samples instead of 13 %.
+**`docs/QUESTIONS.md` Q-041** carries it.
+
+### One HUD rule changed with it, and it is a no-op on the case FIND-129 decided
+
+`hud::arm_aim::layout_for`'s `Bearing::Fan` arm stepped **always down** out of the sight core, on
+FIND-099's argument that a fan marker's `y` carries nothing. Under the sideways-only sweep an idle
+arm's point is a **snapped world place** at a real distance, and the render camera is one stage
+behind the transform `vector::aim` cast from, so the projection lands a few pixels *off* the row
+rather than on it. Measured at `(168.19, 0, −50.12)`, yaw 90 pitch 10, assist 25/25: the point
+projects to `(633.0, 356.8)`, always-down drew it at `(633.0, 376.0)` — **19.2 px from its own
+point, over the 17.0 px the guard allows** — and the nearer-edge step draws it at `(633.0, 344.0)`,
+**12.8 px**. So `Bearing::Fan` takes the same nearer-edge step as `Bearing::World`. **A point
+exactly on the row finds the two edges equidistant and the tie still resolves downwards**, so
+FIND-099's and FIND-129's pictures are unchanged; `f023_the_drawn_pixel_...`'s allowance was always
+written for the nearer-edge rule and was simply never applied to this arm.
+
+### The one-step parallax, which is NOT this feature and cost an hour
+
+`vector::aim` casts from the eye **before** avian integrates; the camera is a child of the player
+and renders from the eye **after**. A moving player therefore carries one step of parallax between
+the ray and the picture — 0.5 m at 30 m/s — and because it is a *translation*, it moves a near
+point and a far point by different amounts. Uncontrolled, that showed up as **8.6 px** of vertical
+marker movement in the screen test (a 60 m stand in free fall accelerating across the sweep);
+zeroing `LinearVelocity` left **1.4 px**, and it moved when another round's map landed underneath,
+because it scales with the distance to what you hit. The test now also puts the eye back where the
+ray was cast from before it asks the camera, and the residue is **0.041 px**. **Nothing in the game
+does that**, so the honest statement of the promise is: exact in the aim's own frame, 0.041 px on
+screen from the same eye, and a few pixels of distance-dependent parallax while flying fast.
+Whoever measures the flying case owns it; it predates `F-024`.
+
+### Evidence, and neither half is evidence alone
+
+- `scripts/f024-sideways.txt` — **12 asserts held, exit 0**, 972 ticks. It stands where both
+  exist inside the catch. On the market square facing the church wall: free aim at pitch +18
+  reaches `body 950 at 53.49 6.20 −1.00` (**4.55 m above** the eye), and at pitch 0 the snap takes
+  `body 950 at 51.61 1.65 −1.00` — **1.76 m along x** off free aim's `53.37 1.65 −1.00`, **y
+  unchanged at the eye's own 1.65**. Down the long street the temptation is a whole other building
+  **12.84 m up** (`body 817 at 168.16 14.44 −98.03`, found by free aim at +15°) and the snap still
+  takes `body 830 at 168.19 1.60 −97.50`. Both arms at once: `166.12` and `168.19`, **two places,
+  one row**.
+- ⚠️ **The map moved under this script while it was being written.** Its first stand was
+  `(168.19, 0, −50.12)` at yaw 200, where free aim used to reach 7 m; the §3B building fix landed
+  mid-round and the same leg started hitting a wall **0.09 m** away, and `assert height > −0.1`
+  went red at −0.144. The legs are re-probed and the coordinates in the file are the map as of
+  this evening. **The asserts themselves depend on none of them** — they assert that the shot left
+  and reached something — but a script pinned to world coordinates is only ever as settled as the
+  world.
+- ⚠️ **A script cannot see the camera**, and "horizontal" is a *screen* axis. That half is
+  `tests/hud.rs::f024_a_snap_moves_the_marker_sideways_on_the_screen_and_never_up_or_down` and
+  `tests/vector_hooks.rs::f024_a_published_snap_point_never_sits_above_or_below_the_crosshair_in_the_running_game`.
+  Both go red on the restored cone (117.9 px, 9.23°), which is the rule-5 re-break this round ran.
+- 🔴 **FIND-103 was live here.** The vertical axis is `right × look`, which is what `look_basis`
+  returns — a test asking `look_basis` for the frame it is checking `probe_dirs` against cannot see
+  the frame being wrong. Both new tests derive `up = (sin y · sin p, cos p, cos y · sin p)` by hand
+  from `docs/conventions.md` instead.
+
+### What went unseen
+
+**No screenshot.** The 302 markers that now step out of the sight core have never been looked at
+in a window, and whether a marker 12–24 px above the crosshair reads as "the snap went up" is
+exactly the question a number cannot answer (Q-041). The sweep has **no titan** in it, and `F-029`
+will move an anchor with its carrier off the row between two ticks. And the line was measured on
+Ashgate only, which is 100 % anchorable — a world with holes in it will lose candidates the cone
+would have found, and this round has no number for that.
+
+Related: FIND-104 (the cone this replaced) · FIND-129 / FIND-099 / FIND-098 (the marker-vs-rope
+promise this must not break) · FIND-121 / `B-008` (the steep case) · FIND-103 (the frame trap) ·
+`docs/QUESTIONS.md` Q-039 (answered by the same sentence), Q-040, Q-041
+
+---
+
+## FIND-134 — the spike was never a scale, the wall cannot be dressed at all, and the ground is honestly a 3.6 % grade
+
+**2026-08-19, the round that took the user's second *„die map passt aber immernoch nicht."*
+apart.** `FIND-132` closed with three things "in the same frames that are not this bug". This
+round measured all three. **One of them was misdiagnosed, one turns out to be structural, and
+one is not a bug.** Files: `src/blades/hold.rs` · `src/world/map.rs` · `assets/data/art.ron` ·
+`tests/world.rs` · `tests/render.rs` · `scripts/f003-map.txt`.
+
+Pictures, all 1280x720, same script, same two vantages:
+[`f003-map-before-street.png`](images/f003-map-before-street.png) ·
+[`f003-map-after-street.png`](images/f003-map-after-street.png) ·
+[`f003-map-before-aerial.png`](images/f003-map-before-aerial.png) ·
+[`f003-map-after-aerial.png`](images/f003-map-after-aerial.png) ·
+[`f003-map-after-blade.png`](images/f003-map-after-blade.png) (the same camera as
+[`f003-ground-aerial.png`](images/f003-ground-aerial.png), which is the blade's *before*).
+
+### 1 · 🔴 The blade: **it is the right size and always was.** It was drawn inside the camera
+
+`FIND-132` read the pale spike as "no `height_m`, so nothing brings it to a size — it is metres
+long in the picture". Measured out of the file, that is not what happened:
+
+* `a-024-klingen-paar-neu` is authored **0.63 × 0.87 × 2.08 m** (`hit.min`/`hit.max`). It is
+  2.08 m long because it is a **pair held fore-and-aft** — 0.93 m of steel per hand, which is a
+  blade. Drawn at scale **1.0000**, which is the measurement and not a fallback: the pair is a
+  costume part of `a-001-basis-rig-vanguard` (**1.80 m** tall) and `game.ron: player.height_m`
+  is **1.8**.
+* What put it across the frame was `blades::hold::held_pose`, which lifted the pair by
+  `eye_height_m − hand` — i.e. **put the model's hands on the camera**. At sweep 0 the pair lies
+  *along* the look direction, so one blade ran from behind the eye to **1.17 m in front of it**,
+  through Bevy's 0.1 m near plane (`bevy_camera-0.19.0/src/projection.rs:421`), dead centre.
+  `FIND-127`'s argument — *a rope lies along the view ray, a blade stands across it* — is true
+  at full sweep and exactly false at rest, and rest is nearly every frame.
+
+**Fix: nothing lifts it.** `held_pose` is `Vec3::ZERO`, so the file is drawn where its rig
+authors it — hands at y 0.8376 on a 1.80 m body, 46.5 % of his height, which is where a hanging
+arm ends. **No number was invented; two files that already agreed were believed.** Red first:
+
+```
+src/blades/hold.rs::f033_the_steel_hangs_at_the_hands_and_never_across_the_camera
+  the highest steel is drawn at y = 2.083 m and the eye is at 1.600 m — -0.483 m apart,
+  and the near plane is 0.1 m. The pair is inside the camera.
+```
+
+`tests/render.rs::f033_the_pairs_own_hands_land_on_a_1_80_m_bodys_hands` is the same claim
+against the real `.glb` and the real `game.ron`, so a swapped pair authored for another rig goes
+red instead of hanging in the air.
+
+**The two `None`s were checked, not inherited.** `feet_y_m: None` is right — `FIND-132` moves a
+*dressed block* onto its box floor; a blade is the **other** class in that same finding, a part
+authored in its parent rig's space (`a-024`'s own floor is 0.45), and moving one is the bug the
+field exists to avoid. `height_m: None` is right — `fit_to_class` scales by the model's `hit`
+**height**, and the pair's is its 0.87 m *thickness*; its length is on z. A `height_m` here is a
+yardstick laid across the blade instead of along it.
+
+⚠️ **What it costs, and it is not free.** The drawn hand is now 0.76 m below the eye while
+`blades::cut::blade_segment` still casts *from* the eye — on top of the 0.67 m of reach
+`FIND-127` measured. At level pitch the steel is therefore **below the frame** (vertical FOV is
+±30°, the forward tip sits 37° down) and comes in when he looks down (visible at the bottom of
+`f003-map-after-blade.png`, pitch −16). `F-033`'s *"a player can see a sword in his hands"* is
+weaker than it was on `f033-blade.png`. **ASSUMPTION: a blade drawn where a hand is beats a
+blade drawn inside the camera**, and the real repair is one change and not two — the cut is cast
+from a camera rather than from a hand. That is `F-030`'s round, with `scripts/f030-cortex.txt`
+and `q030-reach.txt` re-measured. **Rollback point:** `held_pose`'s `translation`.
+
+### 2 · 🔴 The placed blocks: **12 of 215 dressed, and the other 203 cannot be, for a structural reason**
+
+`maps.ron`'s 215 hand-placed cuboids wore nothing. The hop is built —
+`world::map::placed_dress_for` + `PLACED_DRESSING`, matching on the two things the file already
+says (size and palette key), since `maps.ron: blocks` has no `model:` field and `src/data/` was
+not this round's to touch. **Dressed: the 8 market stalls** (`a-087-marktstand-zeltdach`, 20 %/4 %
+inside `DRESS_TOLERANCE`) **and the 4 gas bottles in the HQ bay** (`a-132-fass-stehend`, 1.5 %).
+The before/after at street level is the whole point: a dark `brick_red` cuboid filling the middle
+of the frame becomes a stall with an awning, posts, a bench and crates — 19.6 % of the frame
+changed, 18.95 % of it by more than 3 sRGB levels.
+
+**And the measurement that says the rest is not laziness.** The 215 blocks fall into **80
+distinct size classes**; every one was matched against all 279 files of the drop at a uniform
+height fit, inside a 25 % window on both footprint axes:
+
+* **no candidate at all** for the 700 × 15 × 43.94 m wall bands, the 44 × 4 × 8 m gantry beams,
+  the 36 × 1 × 8 m bridges, the 8 × 35 × 8 m bell towers, the 2.5 × 12 × 2.5 m trees;
+* **an absurd candidate** everywhere else — the 8 × 35 m bell tower's best fit in the entire drop
+  is `a-027-gaskanister` at 4 %, the 20 × 120 × 55 m gatehouse's is `a-051-hand-ab-l` (a severed
+  arm) at 8 %, the 8 × 56 × 8 m gantry column's is a street lamp at 7 %. **Proportion is not
+  meaning**, and a table built from the fit alone would have dressed the district in canisters.
+* **the reason, and it is the useful part:** the pack's wall vocabulary — `a-095-mauersegment-*`
+  (11.20 × 120.00 × 46.8..51.1), `a-096-mauerkrone-*` (11.20 × 3.40 × 28.4), `a-101-bresche-*`
+  — is a **tile set authored at one module: 11.20 m wide and the wall's full 120 m height.**
+  Ashgate's wall is built as **monolithic bands 700 / 336 / 285 m wide and 15 m tall**.
+  `render::model::fit_to_class` scales **uniformly**: it can fit one tile to one box, it cannot
+  repeat one along it. **Dressing the wall therefore means re-cutting it into 11.20 m tiles in
+  `maps.ron`** — 700/11.2 is 62.5, so the runs do not even divide — and that is every collider
+  in the district's silhouette, `scripts/f003-ashgate.txt`'s 40 asserts and the whole `hook.
+  gesims_*` anchor ladder. **A round of its own, and it is a level-design round, not a
+  rendering one.**
+
+⚠️ A placed block's **box does not give way** the way `dress_for` re-plans a house's: it is
+gameplay geometry the aprons, the terrain pins and `f003-ashgate.txt` are measured against. So a
+row is only allowed when the overhang that leaves is something the object may physically have
+(the stall's canopy reaches 0.31 m past its box; stall pitch is 8 m).
+
+### 3 · The ground: **it is drawn, and it is genuinely nearly flat.** Not a rendering bug
+
+`FIND-132`: *"the ground is one flat sand-coloured plane; the 3 m of terracing is invisible from
+the air."* The terrain is there — 1236 terrace blocks, six levels, **7.50 m** of relief, p10→p90
+under houses **4.50 m**. What is flat is the arithmetic: **`terrain.step_m` 1.50 m per
+`terrain.cell_m` 42 m is a 3.6 % grade**, under houses `scale.ron` allows **11.50 m** of. The
+largest readable feature is 13 % of one roof.
+
+The obvious fix was built and thrown away, and that is the finding: a plateau was split into a
+**retaining wall in `stair_color` under a cap in `terrain.color`** — `FIND-071`'s rule applied to
+a terrace edge, masonry holding earth. It moved **5 of 921 600 pixels, max delta 3**, at a cost of
+**255 blocks (2871 → 3126, +8.9 %)**. The reason is three lines above the split in `world::map`:
+**a five-tread flight is emitted on every side the ground falls away**, so there is no bare riser
+anywhere for a second colour to land on. `docs/lessons/performance.md` rule 6 — it is out, and
+`tests/world.rs::f003_the_ground_of_this_district_is_a_3_6_percent_grade_and_that_is_the_whole_relief`
+pins the number so nobody re-derives it.
+
+⚠️ **The aerial matters here.** `art.ron: fog` is 60..470 m and deliberately aggressive
+(`FIND-112`, measured the same day). A vantage 130 m up looking 400 m across the district is
+**85 % hazed by design** and says nothing about the ground — the first aerial taken this round
+was exactly that and was thrown away. `scripts/f003-map.txt` looks ~150 m, i.e. 26 % in.
+
+**So making the district read as a town on a slope is `maps.ron: terrain.step_m` / `levels`, and
+those are the user's numbers.** They are not free: `step_m` must stay a whole multiple of
+`stair_rise_m` **and** the flight it implies has to fit `street_m / 2 − cell_jitter_m` (two
+asserts in `plan_terrain`, both measured on 2026-08-13 against a player who got wedged three
+risers up). → `docs/QUESTIONS.md`.
+
+### Evidence
+
+`--lib` 239 · `--test world` 35 · `--test render` 47 · `--test data` 55 · `--test combat` 38 ·
+`cargo check --tests` clean. `scripts/f003-ashgate.txt`: **40 asserts held, exit 0, 2871 blocks**
+— unchanged, so no collider moved. Each fix broken again in one line and watched go red
+(`held_pose`'s lift; `wall: None`; `model: None`).
+Cost, pinned binary, A/B/A/B interleaved, `f003-ashgate.txt`, `--offscreen`, `DBT_FRAMETIME=1`:
+**4.288 vs 4.290 ms/frame** over three pairs, spread ±0.003 inside each arm. Budget 16.7.
+
+⚠️ `tests/render.rs::f030_the_shipped_registry_binds_exactly_the_rows_that_have_a_home` went red
+on the two new rows and was **right**: it pins the set of names anything can ask for, and there
+is a fifth asker now (`PLACED_DRESSING`). The test was edited deliberately, which is what its own
+header asks for.
+
+### What went unseen
+
+**Nobody has played this.** The blade's new place is judged from two stills; whether a pair you
+only see when you look down feels like *holding* a weapon is exactly what a screenshot cannot
+say, and it is the one thing this round made worse before it made anything better. The 203
+undressed blocks were measured against **fit**, not against **look** — a stall that fits at 20 %
+was accepted and never seen from a rope at 40 m/s. And the ground conclusion rests on one
+vantage: a 3.6 % grade may still read from a low, sun-raking angle that this round never took.
+
+Related: FIND-132 (the three items this closes) · FIND-127 / FIND-120 (the blade) · FIND-071 (the
+value rule) · FIND-112 (the fog these vantages had to respect) · FIND-059 (a cap must carry its
+wall's anchor bit) · `F-003` · `F-033` · `docs/models.md`

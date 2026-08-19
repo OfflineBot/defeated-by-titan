@@ -1,0 +1,51 @@
+# f003-map — does the district read as a TOWN, or as a mosaic on a table?
+#
+#   cargo run -- --headless --script scripts/f003-map.txt --ticks 400
+#   cargo run -- --offscreen --screenshot docs/images/f003-map-<before|after>-<mark>.png \
+#                --script scripts/f003-map.txt --ticks <the tick of that mark>
+#
+# ⚠️ Two runs, and they are two runs on purpose: `--screenshot` together with `--script`
+# swallows the verdict (`docs/FINDINGS.md` FIND-073), so the exit code comes from the headless
+# run and only the picture comes from the offscreen one.
+#
+# **What it is evidence for.** The user, twice on 2026-08-19: „die map passt aber immernoch
+# nicht." Three separate things were measured behind that sentence (`FIND-132`'s last section)
+# and this file stands in front of each of them:
+#
+#   1. the blade that hung across the frame — every shot here is first person, so it is in all
+#      of them or in none of them;
+#   2. the hand-placed blocks that wear no model — the market square is where they stand
+#      thickest next to dressed houses;
+#   3. the ground, which is one flat sand plane although `maps.ron: terrain` builds six levels
+#      of it. The aerial is chosen so a terrace RISER is side-on and not edge-on.
+
+wait 1.5                # world, camera, meshes and the render pipelines come up
+
+# ---------------------------------------------------------------------------------------
+# MARKET SQUARE, street level — standing on the main street looking EAST down the south row
+# of stalls (x = 32 / 40 / 48 at z = -50), with the church tower and the dressed house rows
+# behind them. If a hand-placed block is a bare cuboid among modelled roofs, it is bare here.
+# ---------------------------------------------------------------------------------------
+warp 26 2 -50    # on the market square, clear of the gantry column at x 10..18
+look -90 -3      # yaw -90 = +x, straight down the south row of stalls
+wait 0.6
+mark f003-map-street
+assert height > -1.0   # the market square paving is 0.05 m: he stands ON it
+assert height < 2.0
+
+# ---------------------------------------------------------------------------------------
+# THE MARKET QUARTER from 45 m, looking south-west across the square and the terraces behind
+# it — NOT from 130 m and NOT across the whole district. `art.ron: fog` is 60..470 m and
+# deliberately aggressive (FIND-112, measured 2026-08-19): a vantage that looks 400 m sideways
+# is 85 % hazed BY DESIGN, and nothing about the ground can be read out of one. From here the
+# far side is ~150 m out, i.e. 26 % into the haze.
+#
+# The quarter behind the square climbs from level 0 on the main street to level 5
+# (`tests/world.rs`, terrain row 11: `1232100123454321`). What that looks like from the air is
+# the question FIND-134 answers with a number: 1.50 m of step per 42 m of cell is a 3.6 %
+# grade, and 3.6 % under an 11.5 m roofscape is not a slope anybody can see.
+# ---------------------------------------------------------------------------------------
+warp 150 45 60
+look 48 -17
+wait 0.15               # ⚠️ SHORT: he is airborne and every tick is 20 m/s more of falling
+mark f003-map-aerial

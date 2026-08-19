@@ -262,6 +262,11 @@ pub fn name_the_titans_model(
             name: kind.model.clone(),
             cortex_height_m: data.titan_cortex_height_m(kind),
             height_m: data.titan_height_m(kind),
+            // `None` — a titan's own origin **is** the ground under its feet: that is the frame
+            // `cortex_height_m` is measured in (`scale.ron` puts the husk's cortex at 8.90 m
+            // *above the entity*), and the `a-042` bodies are authored on their feet as well
+            // (`hit.min.y = 0` on all of them, measured 2026-08-19). Nothing to bring anywhere.
+            feet_y_m: None,
         });
     }
 }
@@ -714,11 +719,26 @@ pub fn read_the_models_anchors(
     // Taken here, while `found` is still in model units — after the loop below it would be
     // multiplied by `scale` a second time.
     let stands = fitted_height_m(&found, scale);
+    // **And down onto the floor the entity names, mesh and anchors by the same vector.**
+    //
+    // `feet_y_m` is `None` for a titan and for everything hand-placed, and the offset is then
+    // `Vec3::ZERO` — nothing about those moved on 2026-08-19. It is `Some(-size.y / 2)` for a
+    // dressed block, whose entity sits at the box's CENTRE while the model is authored on its
+    // feet; without this the building floats by half its own height and the user sees it
+    // („die gebäude sind nicht auf dem boden sondern in der luft!").
+    //
+    // ⚠️ **Taken from `found` while it is still in model units** — for the same reason the
+    // scaling below is: after the loop it would be measured in the game's frame and scaled a
+    // second time. And it is added to the anchors *after* the scale, because it is already a
+    // distance in the game's metres.
+    let feet = feet_offset_m(&found, scale, wanted.feet_y_m);
     let into_the_game = Quat::from_rotation_y(MODEL_FACES);
     for anchor in found.values_mut() {
-        *anchor = into_the_game * (*anchor * scale);
+        *anchor = into_the_game * (*anchor * scale) + feet;
     }
-    commands.entity(instance_root).insert(model_transform(scale));
+    commands
+        .entity(instance_root)
+        .insert(model_transform(scale).with_translation(feet));
 
     match found.get(CORTEX_ANCHOR) {
         // ⚠️ **Only for something that is supposed to have one.** `cortex_height_m` is `Some`
@@ -832,6 +852,45 @@ pub fn authored_height_m(anchors: &BTreeMap<String, Vec3>) -> Option<f32> {
     let lo = anchors.get("hit.min")?;
     let hi = anchors.get("hit.max")?;
     Some((hi.y - lo.y).abs())
+}
+
+/// **The model's own floor**, in model units: the lower of its two `hit` corners on y.
+///
+/// ⚠️ Not `hit.min.y` — the pair is a **corner** pair and not an ordered AABB (`hit.max.z <
+/// hit.min.z` on all 278 files; see [`fit_to_class`]), so the floor is a `min` of the two and
+/// never one of them by name.
+///
+/// `None` when the model states no size at all, and that stays `None` all the way out: a model
+/// that says nothing about where its floor is does not get one invented for it.
+pub fn authored_floor_m(anchors: &BTreeMap<String, Vec3>) -> Option<f32> {
+    let lo = anchors.get("hit.min")?;
+    let hi = anchors.get("hit.max")?;
+    Some(lo.y.min(hi.y))
+}
+
+/// **Where the scene child has to sit so the model's floor lands on the entity's floor.**
+///
+/// The one offset that moves the mesh *and* the anchors — see
+/// [`ModelName::feet_y_m`](crate::shared::ModelName) for what the two answers mean and why the
+/// field exists at all. Two properties this signature is shaped by:
+///
+/// * **It is in the same space as the scale.** `scale` is what [`fit_to_class`] worked out
+///   times `art.ron: scale`, and the authored floor is in model units — so the floor has to be
+///   scaled *before* it is subtracted, or the offset is right at 1.0 and wrong everywhere
+///   else. (`a-083-fachwerkhaus-gross` is authored at exactly its class height and therefore
+///   fits at 1.0; the ruin kit does not, and that is where an unscaled offset would show.)
+/// * **`Vec3::ZERO` is the honest answer twice**: for an entity that names no floor, and for a
+///   model that states none. Both mean "draw it where it was authored", which is what every
+///   model in this game did before 2026-08-19 and what a titan still does.
+pub fn feet_offset_m(
+    anchors: &BTreeMap<String, Vec3>,
+    scale: f32,
+    feet_y_m: Option<f32>,
+) -> Vec3 {
+    let (Some(feet), Some(floor)) = (feet_y_m, authored_floor_m(anchors)) else {
+        return Vec3::ZERO;
+    };
+    Vec3::new(0.0, feet - floor * scale, 0.0)
 }
 
 /// How tall the model actually stands once it is drawn at `scale`.

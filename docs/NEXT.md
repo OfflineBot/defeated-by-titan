@@ -1297,3 +1297,126 @@ district to `FIND-026`'s dead rope, which is the state the whole feature exists 
 **3 legs now, not 5**: at 44° leg 4 takes the beam two stations ahead and its arc bottom goes under
 the raised floor; at 48–52° it snaps to the mast of the gantry it is swinging on. So even the
 baseline degraded when Ashgate gained relief — nobody noticed until the file was re-aimed.
+
+### §2H — 🔴 the swing leaves the screen exactly when it cuts
+
+`FIND-127`, 2026-08-19, and it is the strongest surviving candidate for the user's
+*"attack fehlt aber noch (mit schwertern..)"* — stronger than the missing model was, because the
+model landed and the complaint would survive it.
+
+**The cut is cast at 90° from the view direction.** `fov_deg` 60 on 16:9 gives a horizontal
+half-frustum of **45.7°**. So on the **eight ticks out of twenty-one** where `Swing::is_active` is
+true — i.e. exactly the ticks that can land a hit — **the steel is outside the frustum by 44°.**
+The player swings, the blade leaves the frame, a titan dies. Nothing he can see connects the two.
+
+**This is the cut's geometry, not the drawing's.** `blades::cut::blade_segment` has always cast
+sideways; the blade round only made it visible that it does. A **forward arc** would fix the
+picture and the feel together — and it changes what `F-030` casts, so it is its own round:
+`scripts/f030-cortex.txt` and `q030-reach.txt` have to be re-measured against it, and both are the
+evidence behind 🟧 rows (`FIND-113` is the warning that they go stale silently).
+
+**Two smaller things from the same finding:**
+- **The drawn blade is 0.93 m where `reach_m` casts 1.60 m** — the picture under-promises the reach
+  by 0.67 m, so a player learns a shorter weapon than he has. `gear.ron`'s `reach_m` is 🟧-adjacent
+  and was not traded.
+- **The pair is one merged mesh** (`a-024-klingen-paar-neu`) with no single-blade file in the drop,
+  so both sides swing together and only one reads in frame. That is an **asset** question for the
+  user, not a code one.
+
+**And a latent mine the round removed on the way**, worth recording because it would have been
+maddening: `render::attach_camera` selected on `Without<Children>`, and the blade is the **second**
+thing ever hung on a player. Whichever landed first would have taken the other's place — **a sword
+and no camera: black screen, exit 0, no warning.**
+
+---
+
+# §3 — the user, 2026-08-19, after playing with the assist
+
+> *"ok von snapping. die seile sollen immer auf der horzontalen fest sein. also wenn das
+> fadenkreuz 0, 0 ist sollen die seile nur auf der x achse snappen (objekte finden) also seitlich!
+> dann ist es auch besser einzuschätzen. zudem sind die gebäude nicht auf dem boden sondern in der
+> luft! die map passt aber immernoch nicht."*
+
+## §3A — 🟢 the snap searches SIDEWAYS ONLY
+
+**The spec, and it is a constraint that makes the feature legible:** the candidate search is
+**locked to the horizontal**. At a crosshair of `(0, 0)` the two ropes may only find anchors along
+the **x axis** — laterally, left and right. The snap must never move a rope **up or down** relative
+to where the player is looking.
+
+**His reason is the important part: *"dann ist es auch besser einzuschätzen."*** A snap that can
+move in two axes is unpredictable; one that moves in a single, named axis can be learned. That is
+worth more than a marginally better anchor.
+
+**What that changes.** Today `vector::aim` casts a **probe fan** — `assist_probe_rings ×
+assist_probes_per_ring` (2×4) rays per hemisphere, a 2D cone around the look direction
+(`FIND-104`). It has to collapse to a **1D horizontal sweep** in the camera's own right axis — and
+note `side_dirs` already yaws around the **camera's** up axis on purpose, so "horizontal" here means
+**screen-horizontal at every pitch**, not world-horizontal. Looking 60° down, "sideways" is still
+left and right of the crosshair.
+
+⚠️ **`F-025`'s scoring survives** — angle deviation, momentum, height advantage — but the candidate
+SET is now a line, not a cone, so the height-advantage term will rarely differ between candidates.
+Say what that does to the weights.
+⚠️ **`assist_catch_pct` keeps its meaning** (0–100 % → 0–20° off the crosshair) but now describes a
+half-width, not a radius.
+⚠️ This also bears on **`B-008`** (a downward shot resolving onto a roof aside) and on **`Q-039`**,
+which asked whether the fan should collapse as pitch steepens. **His instruction answers a related
+question and may answer that one too — check before assuming it does.**
+
+## §3B — ✅ the buildings float, cause found
+
+**Measured by the main head, do not re-derive:** every model in the pack has its origin at its
+**feet** (`hit.min.y = 0.000`; `a-083-fachwerkhaus-gross` spans y 0.000..11.500), while
+`BlockPlan::spawn` positions by the block's **centre** (`src/world/map.rs:283`,
+`Transform::from_translation(self.center_m)`, with `ModelName` on the same entity at `:300`).
+**So every dressed building floats by half its own height** — 5.75 m for a large house. A round is
+fixing it.
+
+## §3C — ⬜ *"die map passt aber immernoch nicht"* — NOT YET DIAGNOSED
+
+He has said it twice now (§1F was the first) and has not said what. §3B is very likely part of it —
+a district of buildings hovering half their height over a terraced ground reads as broken however
+good the models are — but **that must not be assumed to be the whole answer.**
+
+**Do not redesign the map on a guess.** The cheap, honest next step is the one that has worked all
+session: **take a street-level and an aerial frame, read them, and list what is wrong** — then ask
+him which of those he means. The §3B round has been told to do exactly that.
+
+### §3C answered — *"die map passt aber immernoch nicht"*, measured
+
+`FIND-134`, 2026-08-19. Three causes were proposed, all three were measured, and **two of them were
+not what they looked like.**
+
+**1 · Street level now reads as a town; from the air it does not.** That split is the finding. The
+roofscape and the dressed houses are good; **what is bare is everything the model vocabulary cannot
+dress**, and that is the large hand-placed geometry: the wall, the gates, the HQ, the gantries.
+
+**2 · 🔴 THE WALL CANNOT BE DRESSED BY THIS MECHANISM AT ALL.** The pack's wall vocabulary
+(`a-095`, `a-096`, `a-101`) is a **tile set authored at one module — 11.20 m wide, 120 m tall.**
+Ashgate's wall is **monolithic 700 / 336 / 285 m bands**, and `fit_to_class` scales **uniformly**:
+it can fit a tile to a box, it **cannot repeat one along it** (700 / 11.2 = 62.5 — the runs do not
+even divide). **Dressing the wall means re-cutting it in `maps.ron`** — every collider in the
+silhouette, the 40 asserts of `f003-ashgate.txt`, and the whole `hook.gesims_*` anchor ladder.
+**That is a level-design round and it is the biggest single remaining visual item.**
+
+⚠️ **And the proof that a shortcut would have been a disaster:** matching all **80** placed size
+classes against all **279** files, the bell tower's best fit in the drop is a **gas canister (4 %)**
+and the gatehouse's is a **severed arm (8 %)**. A fit-only dressing table would have filled the
+district with nonsense that no test could have caught.
+
+**3 · The ground is flat because it IS flat.** `terrain.step_m` **1.50 m** per `cell_m` **42 m** is
+a **3.6 % grade** under 11.50 m houses. A retaining-wall/cap split was built to make the terraces
+read, measured at **5 of 921 600 pixels** for **+255 blocks (+8.9 %)**, and reverted. The relief is
+not hidden by the renderer — it is below the threshold of visibility. **Both numbers are the
+user's** and both are constrained by `plan_terrain`'s stair asserts, so changing them is his call:
+a steeper step reads from the air and costs walkability, which is exactly the trade
+`FIND-091` measured once already (*a 0.36 m tread is a wall with a texture*).
+
+**So the honest queue for the map, in order of what it would buy:**
+1. **Re-cut the wall into modules** so the tile set can dress it — biggest aerial win, and it
+   unlocks `hook.gesims_*` anchors along the wall as a side effect.
+2. **A `model:` field on `maps.ron: blocks`** so a placed block can NAME its dress instead of being
+   matched by size and palette. 12 of 215 are dressed today because only stalls and barrels had an
+   honest match; the HQ, the gates and the towers need to be told, not guessed.
+3. **Ask him about `step_m`** — 1.5 m over 42 m is his number and it is why the slope is invisible.

@@ -234,6 +234,83 @@ pub const RUBBLE_KIT: [(&str, [f32; 3]); 6] = [
 /// move.
 const DRESS_TOLERANCE: f32 = 0.25;
 
+/// **What a HAND-PLACED cuboid may wear** — one row per `art.ron` name, with the palette key
+/// the block has to carry and the full extent of that file's own `hit.min`/`hit.max` pair in
+/// metres (x / y / z, `abs`, because the pair is a corner pair — see [`REMNANTS`]).
+///
+/// ## 🔴 It is two rows long, and that is the measurement of 2026-08-19, not laziness
+///
+/// The user, twice: *„die map passt aber immernoch nicht."* `FIND-132` measured that only
+/// *generated* houses are dressed and that the **215 hand-placed blocks wear nothing** — the
+/// grey monolith mid-district, the navy box beside a house row, the wall as a flat grey mass.
+/// This table is the hop that was missing. What it is **not** is a way to dress the wall, and
+/// that was measured before it was written (`docs/FINDINGS.md` FIND-134):
+///
+/// * the 215 placed blocks fall into **80 distinct size classes**;
+/// * matching every one of them against all 279 files of the drop at a uniform scale, inside
+///   [`DRESS_TOLERANCE`], leaves **two** classes where the fit is also the thing the block
+///   actually is. The rest either have no candidate at all (the 700 x 15 x 43.9 m wall bands,
+///   the 44 x 4 x 8 m gantry beams, the 36 x 1 x 8 m bridges) or find one that is absurd —
+///   the 8 x 35 m bell tower's best fit in the whole drop is a **gas canister** at 4 %, the
+///   20 x 120 x 55 m gatehouse's is a **severed arm** at 8 %. Proportion is not meaning.
+/// * and the reason is structural rather than an oversight: the pack's wall vocabulary
+///   (`a-095-mauersegment-*`, `a-096-mauerkrone-*`, `a-101-bresche-*`) is a **tile set**
+///   authored at one module — 11.20 m wide, 120.00 m tall, 46.8..69.0 m deep — while
+///   `maps.ron` builds Ashgate's wall as monolithic bands 700 / 336 / 285 m wide and 15 m
+///   tall. `render::model::fit_to_class` scales a model **uniformly**: it can
+///   fit one tile to one box, it cannot repeat one along it. Dressing the wall therefore means
+///   re-cutting it into 11.20 m tiles in `maps.ron` — every collider in the district's
+///   silhouette, `scripts/f003-ashgate.txt`'s 40 asserts and the whole anchor ladder — and
+///   that is a round of its own.
+///
+/// ⚠️ **A placed block's box does NOT give way.** [`dress_for`] may re-plan a house's footprint
+/// to the model, because a generated house is only ever a box the layout invented; a placed
+/// block is gameplay geometry that the aprons, the terrain pins and `f003-ashgate.txt` are all
+/// measured against. So the model is fitted to the box and never the other way round, and a
+/// row is only allowed here when the overhang that leaves is something the object may
+/// physically have (a market awning) or is nothing (1.5 % on a barrel).
+pub const PLACED_DRESSING: [(&str, &str, [f32; 3]); 2] = [
+    // a-087-marktstand-zeltdach — the eight stalls of the market square, 3.0 x 2.5 x 3.0 m.
+    ("market_stall", "brick_red", [4.20, 2.91, 3.64]),
+    // a-132-fass-stehend — the four gas bottles in the headquarters' bay, 1.3 x 1.8 x 1.3 m.
+    ("gas_drum", "olive_green", [0.66, 0.90, 0.66]),
+];
+
+/// **Which model dresses this hand-placed cuboid** — or `None`, which is the answer for 203 of
+/// the 215 (see [`PLACED_DRESSING`] for why, and `docs/FINDINGS.md` FIND-134 for the numbers).
+///
+/// Three conditions, the same three [`dress_for`] uses minus the one that cannot apply:
+///
+/// 1. **`art.ron` has to say the name comes out of a file.** A `Primitive` row is a name with
+///    no model behind it, and dressing against one would hide the cuboid
+///    (`render::model::hide_the_primitive_under_a_model`) and draw nothing in its place — an
+///    invisible solid wall. This is what keeps the whole feature *one line of RON*.
+/// 2. **The block has to carry the row's palette key.** Size alone is not identity: a 3.0 x
+///    2.5 x 3.0 m box is a market stall here because it is `brick_red` on the market square,
+///    and the day somebody places a stone one of the same size it should not silently grow a
+///    canvas awning.
+/// 3. **The model, scaled uniformly to the box's height, has to fit both footprint axes
+///    within [`DRESS_TOLERANCE`]** — and unlike a house, the box does not move to meet it.
+fn placed_dress_for(data: &GameData, size_m: Vec3, color_key: &str) -> Option<&'static str> {
+    for (name, wants_color, authored_m) in PLACED_DRESSING {
+        if wants_color != color_key || authored_m[1] <= f32::EPSILON || size_m.y <= 0.0 {
+            continue;
+        }
+        if !matches!(data.model(name).map(|m| &m.source), Some(ModelSource::Gltf(_))) {
+            continue;
+        }
+        let scale = size_m.y / authored_m[1];
+        let (fit_x, fit_z) = (authored_m[0] * scale, authored_m[2] * scale);
+        if (fit_x - size_m.x).abs() > DRESS_TOLERANCE * size_m.x
+            || (fit_z - size_m.z).abs() > DRESS_TOLERANCE * size_m.z
+        {
+            continue;
+        }
+        return Some(name);
+    }
+    None
+}
+
 /// A planned cuboid, **before** it is an entity.
 ///
 /// The plan is separate from the spawning so that `tests/world.rs` can generate the city
@@ -301,6 +378,16 @@ impl BlockPlan {
                 name: model.to_string(),
                 cortex_height_m: None,
                 height_m: Some(self.size_m.y),
+                // **And the floor of the box, because the box is positioned by its CENTRE.**
+                // Every model in the pack stands on its own origin (`hit.min.y = 0` on all
+                // eleven house files and all fourteen remnants), so hanging one on an entity
+                // that sits at `center_m` put the building's feet on the box's middle and it
+                // floated by half its own height — 5.75 m for `a-083-fachwerkhaus-gross`, which
+                // is exactly what the user reported on 2026-08-19. The collider does NOT move:
+                // it is what `world::index` and every raycast in the game read, and moving it
+                // would move the world. What moves is the drawing *and its anchors together*
+                // (`shared::ModelName::feet_y_m`).
+                feet_y_m: Some(-self.size_m.y * 0.5),
             });
         }
     }
@@ -702,10 +789,18 @@ fn placed_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
             color: color_of(data, &k.color),
             anchorable: k.anchorable,
             solid: k.solid,
-            // A hand-placed cuboid names no model **yet**: `maps.ron: blocks` has no field for
-            // it, and that field belongs in `src/data/`, which this round did not own. The wall
-            // segments, the city gates and the headquarters are what wants it next.
-            model: None,
+            // **And since 2026-08-19 a hand-placed cuboid may wear one too.** The name still
+            // does not stand in `maps.ron` — `blocks` has no `model:` field and `src/data/`
+            // was not this round's to change — so the match is by the two things the file
+            // already says about a block, its size and its palette key
+            // ([`placed_dress_for`]). 12 of the 215 come out dressed and 203 do not, and the
+            // reason the number is that small is measured rather than shrugged at:
+            // [`PLACED_DRESSING`].
+            model: placed_dress_for(
+                data,
+                Vec3::new(k.size_m.0, k.size_m.1, k.size_m.2),
+                &k.color,
+            ),
         })
         .collect()
 }
@@ -1040,6 +1135,27 @@ pub fn plan_terrain(
             // One slab, cut around every pillar it meets, and named per piece: `_p1`, `_p2`.
             // The first piece keeps the bare name, so that a reader who greps for
             // `terrace_3_9` finds the terrace and not a suffix.
+            //
+            // ## \u26a0\ufe0f A plateau is ONE box, and on 2026-08-19 that was MEASURED rather than assumed
+            //
+            // The user, twice: *„die map passt aber immernoch nicht."* One of the three things
+            // `FIND-132` measured behind it: from the air this district — six levels, 7.50 m
+            // of relief, 1236 terrace blocks — reads as *a mosaic laid on a table*. The
+            // obvious cause is `FIND-071`'s rule (a terrace top and the pavement beside it are
+            // the same albedo AND the same normal, i.e. the same pixel), and the obvious fix
+            // is to split the slab into a retaining wall in `stair_color` under a cap in
+            // `terrain.color` — masonry holding earth.
+            //
+            // **It was built, and it moved 5 of 921 600 pixels at a delta of 3** (FIND-134,
+            // same binary, same vantage, `scripts/f003-map.txt`). The reason is three lines
+            // below: a flight of stairs is emitted on **every** side the ground falls away, so
+            // there is no bare riser anywhere in the district for a second colour to land on.
+            // 255 more blocks (+8.9 %) for five pixels — `docs/lessons/performance.md` rule 6
+            // says take it back out, and it is out.
+            //
+            // What is actually flat here is the terrain: `step_m` 1.50 m over `cell_m` 42 m is
+            // a **3.6 % grade**, under 11.5 m houses. That is a number in `maps.ron`, and a
+            // decision the user makes — not a rendering bug (FIND-134).
             let mut emit = |name: String, color: [f32; 3], rect: Rect, top_m: f32| {
                 for (j, piece) in cut(rect, &obstacles).into_iter().enumerate() {
                     pads.push(BlockPlan {

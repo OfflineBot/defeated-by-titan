@@ -460,6 +460,43 @@ and they were seen red first with the systems unregistered:
 a bug; there is **one** place that reads the registry (`data/`), everybody else asks for the
 logical name. `tools/norms.py` checks it.
 
+## The blades — the fourth thing that asks for a model, and the first that is a **player's**
+
+**Since 2026-08-19** (`src/blades/hold.rs`). Until that day exactly three things in the running
+game inserted a `ModelName`: `render::model::name_the_titans_model` (a titan), and
+`world::map::BlockPlan::spawn` (a dressed house, a ruin). `art.ron: "blade"` therefore could not
+be bound, and the reason was not "no wiring yet" — `FIND-120` measured that **the blade was not
+an object at all**: `blades::cut::blade_segment` built two `Vec3` a tick, cast a capsule between
+them and threw both away.
+
+`blades::hold::equip_blades` now hangs **one entity per player**, a child of him, carrying
+`ModelName("blade")`. Everything else is the chain that already existed — `spawn_models` puts
+the scene on it, `read_the_models_anchors` reads its empties, `fit_to_class` leaves it at 1.0
+because a pair of blades has neither a cortex nor a size class.
+
+Three things are worth knowing before swapping that row:
+
+* **The drop has no single-blade file.** `a-024-klingen-paar-neu` is a PAIR in one merged mesh
+  with `hand.l` and `hand.r`; so are `-gebrochen` (the broken pair, `F-033`'s endpoint) and all
+  ten `a-025-klinge-kosmetik-*` finishes. So the two sides cannot be drawn apart, and the pair
+  follows whichever of the player's two swings is further out.
+* **The model's own `hand.l` / `hand.r` decide where it is held.** `blades::hold::hand_height_m`
+  takes the mean of the two and lifts the pair by `eye_height_m − that`, which puts the file's
+  hands on the exact point `blade_segment` casts the cut from. A model that names no hand is not
+  lifted — never a substituted number. **So a swapped blade needs those two empties**, and every
+  candidate in the drop already carries them.
+* **There is no swing clip and there will not be one out of this pack.** All 278 files carry an
+  empty `animations` array. The swing is a transform curve — `swing_sweep`, a quarter turn out
+  of the file's authored ready pose onto `blade_right(look)`, `1.0` on exactly the eight ticks
+  of twenty-one that cut. Naming a clip in the row is a loud warning at load *and* brings the
+  primitive back, by design.
+
+Swapping the finish is one word:
+
+```ron
+"blade": (source: Gltf("3d/glb/a-025-klinge-kosmetik-02-nachtblende.glb"), scale: 1.0, ...),
+```
+
 ## The drop of 2026-08-18 — 278 models, and what it taught the loader
 
 `assets/3d/glb/` holds **278 .glb (26 MB)** and `assets/texturen/` **17 atlases (16 MB)**, both

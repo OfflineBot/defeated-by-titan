@@ -180,6 +180,21 @@ pub fn blade_segment(
     reach_m: f32,
 ) -> (Vec3, Vec3) {
     let hand = from_m + Vec3::Y * eye_height_m;
+    let out = match side {
+        Side::Left => -blade_right(look),
+        Side::Right => blade_right(look),
+    };
+    (hand, hand + out * reach_m)
+}
+
+/// **The one direction the blade lies on**, for a given look — the right blade's, and the
+/// left one's negated.
+///
+/// Pulled out of [`blade_segment`] on 2026-08-19 so that [`super::hold`] can point the *drawn*
+/// pair at exactly what the cast uses, out of the same expression. Two functions that both
+/// "work out where the blade is" are two blades, and the picture would be the one that lies
+/// (`FIND-113`: the camera is part of the shot).
+pub fn blade_right(look: Vec3) -> Vec3 {
     // Right-hand rule on Bevy's axes: for `look = −Z` this gives `+X`, which is the right
     // hand of a body whose forward is −Z (`docs/conventions.md`, same convention as
     // `titan::rig::shoulder_in_torso`).
@@ -187,12 +202,7 @@ pub fn blade_segment(
     // Looking straight up or straight down leaves no horizontal "right". The blade then
     // stays on the world X axis instead of collapsing to a point — a zero-length capsule is
     // a sphere at the hand, and the cut would silently lose its whole reach.
-    let right = if right.length_squared() > 0.0 { right } else { Vec3::X };
-    let out = match side {
-        Side::Left => -right,
-        Side::Right => right,
-    };
-    (hand, hand + out * reach_m)
+    if right.length_squared() > 0.0 { right } else { Vec3::X }
 }
 
 /// What one **reported** hit costs the pair in the harness, in sharpness — `F-033`.

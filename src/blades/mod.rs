@@ -42,6 +42,9 @@
 //! | the cut at the tick of contact | `scripts/f030-cortex.txt` → `docs/images/f030-cortex.png` |
 
 pub mod cut;
+/// **The steel itself** — the entity `art.ron: "blade"` hangs on, in the player's hands, since
+/// 2026-08-19. Until then the blade was two `Vec3` a tick and nothing else (`FIND-120`).
+pub mod hold;
 /// **The way back.** `F-033`: blades go blunt and break, and until 2026-08-12 nothing in the
 /// game ever gave one back. The arithmetic stands in this domain because `blades` is the only
 /// writer of `Blades`; the rack that asks for it is `mission`'s and sends
@@ -97,6 +100,17 @@ impl Plugin for BladesPlugin {
             // `shared::Velocity` agree (`src/lib.rs:120-131`). Asking one stage earlier would
             // sweep along a displacement the player has not made yet.
             cut::cut.in_set(SimulationSystems::PostStep),
+        )
+        .add_systems(
+            // **`Update` and not `FixedUpdate`, and it is the only pair of systems in this
+            // domain that is not simulation.** The held pair writes nothing the game reads
+            // back — no `Blades`, no `Swings`, no message — it only turns a `Transform` that
+            // exists to be looked at. It belongs beside `render::camera::rotate_camera`, off
+            // the same `Intent`: at 60 Hz it would lag the view it is held in by a whole
+            // frame at any frame rate above the tick rate. `chain()`, so a pair spawned this
+            // frame is posed this frame and not one frame later at the world origin's yaw.
+            Update,
+            (hold::equip_blades, hold::hold_the_blades).chain(),
         );
     }
 }

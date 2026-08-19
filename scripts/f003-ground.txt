@@ -1,0 +1,41 @@
+# f003-ground — do the buildings stand ON the ground?
+#
+#   cargo run -- --headless --script scripts/f003-ground.txt --ticks 400
+#   cargo run -- --offscreen --screenshot docs/images/f003-ground-after.png \
+#                --script scripts/f003-ground.txt --ticks <the tick of f003-ground-street>
+#
+# ⚠️ Two runs, and they are two runs on purpose: `--screenshot` together with `--script`
+# swallows the verdict (`docs/FINDINGS.md` FIND-073), so the exit code comes from the headless
+# run and only the picture comes from the offscreen one.
+#
+# **What it is evidence for.** The user, 2026-08-19, after playing: „zudem sind die gebäude
+# nicht auf dem boden sondern in der luft!" — `BlockPlan::spawn` positions a block by its
+# CENTRE and every model in the pack is authored on its FEET, so a house floated by half its
+# own height (5.75 m for `a-083-fachwerkhaus-gross`). This file stands in the street the
+# ashgate script's ACT 5 measures (x 114.5..143.5 at z ≈ -50, a 7.00 m gap between two wings)
+# and looks along it, so the eye can put the base of a facade against the pavement it stands
+# on. Then it goes up for the same question at district scale.
+
+wait 1.5                # world, camera, meshes and the render pipelines come up
+
+# ---------------------------------------------------------------------------------------
+# STREET LEVEL — in the canyon between two blocks, eye height, looking down the street.
+# The pavement of this street measures 1.500 m (f003-ashgate ACT 5), so a house standing on
+# it has its sill at 1.5 and a floating one has it at 1.5 + half a ridge.
+# ---------------------------------------------------------------------------------------
+warp 129 4 -14
+look 0 -2               # yaw 0 = -Z, down the street; 2 degrees down so the pavement is in
+wait 0.6                # the lower third of the frame and the eaves stay in it
+mark f003-ground-street
+assert height > 1.0     # standing on the street, not falling through it
+assert height < 3.0
+
+# ---------------------------------------------------------------------------------------
+# AERIAL — the same district from 55 m, shallow enough that the houses keep their sides.
+# A floating district reads here as a second, brighter horizon under every roof.
+# ---------------------------------------------------------------------------------------
+warp 150 55 90
+look -22 -16
+wait 0.15               # ⚠️ SHORT: he is airborne and every tick is 20 m/s more of falling
+mark f003-ground-aerial
+wait 2.0                # keep the run alive so the image is written before the process ends

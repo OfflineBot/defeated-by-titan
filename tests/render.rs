@@ -53,8 +53,9 @@ use defeated_by_titan::render::model::{
     PendingScene, MODEL_FACES,
     PrimitiveFallback, CORTEX_ANCHOR,
 };
+use defeated_by_titan::blades::hold::BLADE_MODEL;
 use defeated_by_titan::render::rope::rope_color;
-use defeated_by_titan::world::map::{DRESSING, RUBBLE_KIT, RUIN_KIT};
+use defeated_by_titan::world::map::{DRESSING, PLACED_DRESSING, RUBBLE_KIT, RUIN_KIT};
 use defeated_by_titan::shared::{
     BodyId, Cli, Hook, HookArm, HookState, Intent, LocalPlayer, Side, TitanKindName, TitanState,
 };
@@ -972,6 +973,7 @@ fn f030_the_fit_reaches_the_anchors_and_not_only_the_mesh() {
                 name: "husk_stand_in".to_string(),
                 cortex_height_m: Some(3.7),
                 height_m: Some(4.2),
+                feet_y_m: None,
             },
             Transform::default(),
         ))
@@ -1004,6 +1006,124 @@ fn f030_the_fit_reaches_the_anchors_and_not_only_the_mesh() {
         "the mesh is drawn at scale {:.3} and the anchors were computed for 3.7/8.9 — the \
          picture and the hit zone must not be able to disagree",
         drawn.scale.x
+    );
+}
+
+#[test]
+fn f003_a_dressed_block_stands_on_its_own_floor_and_not_in_the_air() {
+    // ★ **The user, 2026-08-19, after playing: „zudem sind die gebäude nicht auf dem boden
+    // sondern in der luft!"** — and the arithmetic says he is right by exactly half a house.
+    //
+    // `world::map::BlockPlan::spawn` positions a block by its **centre** (`center_m`), because
+    // that is the frame the collider, `Body::half_size_m` and the whole spatial index are
+    // written in. Every model in the pack is authored on its **feet** (`hit.min.y = 0` on all
+    // eleven house files and all fourteen remnants). Hang the second on the first and the mesh
+    // starts where the box's middle is: the building floats by `size.y / 2`.
+    //
+    // The fix must not be "draw it lower". A drawn thing that is not where the real thing is
+    // has been this session's recurring defect (`FIND-098`, `-099`, `-127`, `-129`), so the
+    // test asserts **both halves in one breath**: the mesh's floor lands on the box's floor,
+    // AND the anchors the model brought moved with it — a rope bites what the eye sees.
+    let mut app = app();
+    // A stand-in for `a-083-fachwerkhaus-gross`: authored on its feet, 11.5 m tall, with a
+    // ridge hook where the pack puts one.
+    register_loaded(
+        &mut app,
+        "house_stand_in",
+        &[],
+        &[
+            ("hit.min", Vec3::new(-4.15, 0.0, 4.95)),
+            ("hit.max", Vec3::new(4.15, 11.5, -4.95)),
+            ("hook.first", Vec3::new(0.0, 11.5, 0.0)),
+        ],
+        &[],
+    );
+    let size = Vec3::new(8.30, 11.50, 9.90);
+    let centre = Vec3::new(12.0, 40.0, -7.0);
+    let block = app
+        .world_mut()
+        .spawn((
+            ModelName {
+                name: "house_stand_in".to_string(),
+                cortex_height_m: None,
+                height_m: Some(size.y),
+                // What `world::map` writes: "my floor is half my height below my origin".
+                feet_y_m: Some(-size.y * 0.5),
+            },
+            Transform::from_translation(centre),
+        ))
+        .id();
+    for _ in 0..4 {
+        app.update();
+    }
+
+    let ModelBody::Scene(scene) = *app.world().get::<ModelBody>(block).expect("a scene child")
+    else {
+        panic!("a configured row has to produce a scene child");
+    };
+    let drawn = app.world().get::<Transform>(scene).expect("the scene child carries a transform");
+    let floor_m = centre.y - size.y * 0.5;
+    // The model's own floor is at y = 0 in its file, so where the scene child sits IS where
+    // the mesh's bottom edge sits, in the block's own frame.
+    let mesh_floor_m = centre.y + drawn.translation.y + drawn.scale.y * 0.0;
+    assert!(
+        (mesh_floor_m - floor_m).abs() < 0.01,
+        "the model's floor is drawn at y = {mesh_floor_m:.3} m and the block's floor is at \
+         {floor_m:.3} m — the building hangs {:.3} m in the air. A block is positioned by its \
+         CENTRE and the pack authors every model on its feet",
+        mesh_floor_m - floor_m
+    );
+
+    let anchors = app.world().get::<ModelAnchors>(block).cloned().expect("anchors are read");
+    let ridge = anchors.get("hook.first").expect("the stand-in carries a ridge hook");
+    let ridge_m = centre.y + ridge.y;
+    assert!(
+        (ridge_m - (floor_m + size.y)).abs() < 0.01,
+        "the ridge hook came back at y = {ridge_m:.3} m while the roof is drawn at \
+         {:.3} m. The mesh and the anchors have to be moved by ONE offset or the rope bites \
+         where the house is not (FIND-098)",
+        floor_m + size.y
+    );
+}
+
+#[test]
+fn f030_a_model_whose_entity_names_no_floor_is_drawn_exactly_where_it_was_authored() {
+    // **The counterweight to the test above, and the reason `feet_y_m` is an `Option`.**
+    //
+    // 74 of the 278 files are authored in a parent rig's space on purpose — a head at
+    // y = 8.9, a cloak at y = 0.15, the blades in a hand at y = 0.45. Normalising every model
+    // onto its own `hit.min` would slam those onto the floor, and a titan (whose origin is
+    // already the ground, the frame `cortex_height_m` is measured in) would not move but would
+    // start depending on an anchor pair it does not need. `None` therefore means *nothing
+    // happens*, and this is where that is nailed down.
+    let mut app = app();
+    register_loaded(
+        &mut app,
+        "head_part_stand_in",
+        &[],
+        &[
+            ("hit.min", Vec3::new(-0.6, 8.82, 0.6)),
+            ("hit.max", Vec3::new(0.6, 10.15, -0.6)),
+        ],
+        &[],
+    );
+    let body = app
+        .world_mut()
+        .spawn((ModelName::new("head_part_stand_in"), Transform::default()))
+        .id();
+    for _ in 0..4 {
+        app.update();
+    }
+    let ModelBody::Scene(scene) = *app.world().get::<ModelBody>(body).expect("a scene child")
+    else {
+        panic!("a configured row has to produce a scene child");
+    };
+    let drawn = app.world().get::<Transform>(scene).expect("the scene child carries a transform");
+    assert!(
+        drawn.translation.abs().max_element() < 1e-4,
+        "a model whose entity names no floor was moved to {:?}. `ModelName::new` says nothing \
+         about a floor, so the file has to be drawn where it was authored",
+        drawn.translation
     );
 }
 
@@ -2317,8 +2437,10 @@ fn f030_every_glb_art_ron_names_even_in_a_comment_is_a_file_that_exists() {
 /// and since the fall of Ashgate `world::map::BlockPlan::spawn` writes it too, for every
 /// dressed house and every remnant (`docs/NEXT.md` §1F and §2C). So the list is no longer
 /// `titan.ron` alone; it is **every name something in the running game asks for**, derived
-/// from the three places that ask, and a hard-coded row list would have to be re-typed every
-/// time the district learns a shape.
+/// from the five places that ask — the fourth is `blades::hold`, which since 2026-08-19 hangs
+/// a pair of blades on every player, and the fifth is `world::map::PLACED_DRESSING`, which
+/// since the same day lets a HAND-PLACED cuboid wear one — and a hard-coded row list would have
+/// to be re-typed every time the district learns a shape.
 ///
 /// This pins the set in **both** directions, because both directions have already been wrong:
 ///
@@ -2348,18 +2470,38 @@ fn f030_the_shipped_registry_binds_exactly_the_rows_that_have_a_home() {
         .map(|(name, _)| name)
         .collect();
 
-    // Everything the running game can ask for, out of the three places that ask: the titan
-    // kinds, the house classes a lot may be dressed with, and the remnants a fallen one wears.
+    // Everything the running game can ask for, out of the FOUR places that ask: the titan
+    // kinds, the house classes a lot may be dressed with, the remnants a fallen one wears —
+    // and, since 2026-08-19, the pair of blades every player carries in his hands
+    // (`blades::hold::equip_blades`, the fourth and first non-`render` writer of `ModelName`
+    // outside `world::map`).
     let mut asked: Vec<String> = data.titans.kinds.values().map(|k| k.model.clone()).collect();
     asked.extend(DRESSING.iter().map(|(n, _)| n.to_string()));
     asked.extend(RUIN_KIT.iter().chain(RUBBLE_KIT.iter()).map(|(n, _)| n.to_string()));
+    asked.push(BLADE_MODEL.to_string());
+    // **The fifth asker, since 2026-08-19: a HAND-PLACED block.** `maps.ron` places 215
+    // cuboids by hand and until today not one of them wore a model — `FIND-132` names that
+    // mixture as most of what the user reads as „die map passt nicht". 12 of the 215 do now
+    // (`world::map::placed_dress_for`), and the reason it is 12 and not 215 is measured in
+    // `FIND-134`: the pack's wall vocabulary is a tile set and `fit_to_class` cannot tile.
+    asked.extend(PLACED_DRESSING.iter().map(|(n, _, _)| n.to_string()));
     let orphans: Vec<&&String> = bound.iter().filter(|n| !asked.contains(n)).collect();
     assert!(
         orphans.is_empty(),
         "the shipped art.ron binds {orphans:?} to a file, and nothing in the running game ever \
          asks for that name — that is a glTF loaded for an empty screen (art.ron's header). \
-         The three askers are `titan.ron: kinds.*.model`, `world::map::DRESSING` and the ruin \
-         kit"
+         The five askers are `titan.ron: kinds.*.model`, `world::map::DRESSING`, the ruin \
+         kit, `blades::hold::BLADE_MODEL` and `world::map::PLACED_DRESSING`"
+    );
+    // And the pair really is bound. It is the one row whose asker is a PLAYER and not the
+    // world, so an unbinding here takes the sword out of his hands and nothing else changes —
+    // the swing still fires, the cut still lands, and the picture goes back to what the user
+    // was complaining about on 2026-08-19 (*„attack fehlt aber noch (mit schwertern..)"*).
+    assert!(
+        bound.iter().any(|n| n.as_str() == BLADE_MODEL),
+        "the shipped art.ron binds {bound:?}. `blade` has to be there — `blades::hold` puts an \
+         entity carrying that name in every player's hands, and an unbound row makes it an \
+         invisible one (FIND-120, FIND-127)"
     );
     assert!(
         bound.iter().any(|n| n.as_str() == "titan_husk"),
@@ -2571,5 +2713,122 @@ fn f030_the_whole_drop_is_merged_and_not_only_the_rows_that_ship_today() {
          FIND-105/FIND-107); `--check` first if you want to see what it would do.",
         worst.len(),
         &worst[..worst.len().min(6)]
+    );
+}
+
+// =====================================================================================
+// F-033 · **the blade is an entity now** — the user, after playing: *"attack fehlt aber
+// noch (mit schwertern..)"*.
+//
+// Until 2026-08-19 there was no sword anywhere in this game's picture, and `FIND-120` measured
+// why: `blades::cut::blade_segment` built two `Vec3` per tick, cast a capsule between them and
+// threw both away in the same tick. No entity, no mesh, no transform — and therefore nothing a
+// `ModelName` could sit on, which is why `art.ron: "blade"` had to stay `Primitive`.
+//
+// These four tests are the other end of that. They run the **real** app, not a similar one, and
+// the first two go red the moment the holder stops being spawned or the row goes back to
+// `Primitive`.
+// =====================================================================================
+
+/// The one entity the pair hangs on, found the way the renderer finds it: by `ModelName`.
+fn blade_holder(app: &mut App) -> Option<Entity> {
+    let mut q = app.world_mut().query::<(Entity, &ModelName)>();
+    let found: Vec<Entity> = q
+        .iter(app.world())
+        .filter(|(_, name)| name.name == "blade")
+        .map(|(e, _)| e)
+        .collect();
+    found.first().copied()
+}
+
+#[test]
+fn f033_a_player_carries_a_blade_entity_and_it_hangs_on_him() {
+    // **The claim `FIND-120` said was false.** A blade is a thing in the world, parented to the
+    // player, or there is nothing for a model, a material or a transform to sit on.
+    let mut app = app();
+    let player = local_player(&mut app);
+    let holder = blade_holder(&mut app).expect(
+        "no entity in the running game carries `ModelName(\"blade\")` — the blade is still only \
+         two Vec3 that blades::cut::blade_segment throws away every tick (FIND-120). \
+         blades::hold::equip_blades is what puts one there",
+    );
+    assert_eq!(
+        app.world().get::<ChildOf>(holder).map(|c| c.parent()),
+        Some(player),
+        "the blade exists but hangs on nothing — a pair that is not a child of the player does \
+         not follow him, and `docs/multiplayer.md` rule 3 forbids a second notion of where he is"
+    );
+    // And the camera survived it. `attach_camera` used to select on `Without<Children>`, so the
+    // FIRST child ever given to the local player would have cost him his camera — silently, with
+    // a black screen and exit code 0.
+    assert!(
+        app.world_mut().query_filtered::<(), With<Camera3d>>().iter(app.world()).next().is_some(),
+        "the local player has a blade and no camera — attach_camera selected him away"
+    );
+}
+
+#[test]
+fn f033_the_blade_row_is_bound_because_something_spawns_it_now() {
+    // `art.ron`'s own rule: **do not bind a row nothing can spawn.** The test above is the
+    // "something spawns it" half; this is the binding, and it is what puts steel on screen.
+    let app = app();
+    let data = app.world().resource::<GameData>();
+    let model = data.model("blade").expect("art.ron carries a `blade` row");
+    let ModelSource::Gltf(path) = &model.source else {
+        panic!(
+            "art.ron: `blade` is still `Primitive`, so the player holds an entity with nothing \
+             drawn on it. The drop's pair is 3d/glb/a-024-klingen-paar-neu.glb"
+        )
+    };
+    assert!(
+        assets_dir().join(path).is_file(),
+        "art.ron: `blade` points at {path:?} and that file is not on disk"
+    );
+    assert_eq!(model.scale, 1.0, "the pair is authored in metres like the rest of the drop");
+}
+
+#[test]
+fn f033_the_pairs_own_hands_land_on_a_1_80_m_bodys_hands() {
+    // **The yardstick `blades::hold::hand_height_m` exists for since 2026-08-19.** The pair is
+    // no longer lifted onto anything — it is drawn where its file authors it — so the claim
+    // "that IS his hand" is now a claim about two files agreeing, and this is where it is
+    // checked against the real `.glb` and the real `game.ron` instead of against a constant.
+    //
+    // Swap `art.ron: blade` for a pair authored for a 2.4 m rig and this goes red; nothing in
+    // the running game would otherwise say a word about it.
+    let app = app();
+    let data = app.world().resource::<GameData>();
+    let ModelSource::Gltf(path) = &data.model("blade").expect("art.ron carries a blade row").source
+    else {
+        return;
+    };
+    let json = gltf_json(&assets_dir().join(path));
+    let nodes = nodes_array(&json);
+    let l = node_translation(nodes, "hand.l").expect("the pair names hand.l");
+    let r = node_translation(nodes, "hand.r").expect("the pair names hand.r");
+    let hand_m = (l.y + r.y) * 0.5;
+    let body_m = data.game.player.height_m;
+    let share = hand_m / body_m;
+    assert!(
+        (0.40..0.55).contains(&share),
+        "the pair's hands are authored at {hand_m:.4} m and game.ron gives the player \
+         {body_m:.2} m — that is {share:.3} of his height, and a hanging arm ends between 0.40 \
+         and 0.55. This file is authored for another rig, so drawing it unmoved puts the steel \
+         in the air (blades::hold, module header)"
+    );
+
+    // And the second half of the same claim: unmoved, no steel reaches the eye. The pair's own
+    // hit box is the whole of it, and the camera sits at `eye_height_m` on the player.
+    let lo = node_translation(nodes, "hit.min").expect("the pair carries hit.min");
+    let hi = node_translation(nodes, "hit.max").expect("the pair carries hit.max");
+    let top_m = lo.y.max(hi.y);
+    let eye_m = data.game.player.eye_height_m;
+    // Bevy's default `PerspectiveProjection::near` — bevy_camera-0.19.0/src/projection.rs:421.
+    assert!(
+        eye_m - top_m > 0.1,
+        "drawn unmoved, the pair's highest point is {top_m:.3} m and the eye is {eye_m:.3} m — \
+         {:.3} m apart against a 0.1 m near plane. The steel is inside the camera and fills \
+         the frame (docs/images/f003-map-before-aerial.png)",
+        eye_m - top_m
     );
 }

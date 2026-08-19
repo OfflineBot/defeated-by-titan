@@ -46,7 +46,9 @@ use defeated_by_titan::shared::{
 use defeated_by_titan::world::index::mask_from;
 use defeated_by_titan::data::{Model, ModelSource};
 use defeated_by_titan::shared::ModelName;
+use defeated_by_titan::render::model::{feet_offset_m, fit_to_class};
 use defeated_by_titan::world::map::{plan_blocks, BlockPlan, DRESSING, RUBBLE_KIT, RUIN_KIT};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// Builds the **real** app, headless, and runs `Startup` once.
@@ -1117,6 +1119,126 @@ fn f003_the_street_is_narrower_than_the_houses_are_tall() {
 }
 
 #[test]
+fn f003_the_hand_placed_blocks_that_have_a_model_in_the_drop_wear_it() {
+    // 🔴 `FIND-132`, on the frames the user was shown: *"the placed blocks are still bare
+    // cuboids standing among dressed houses — one grey monolith in the middle of the district,
+    // a navy box beside a row of houses, the wall as a flat grey mass. Only GENERATED houses
+    // are dressed; `maps.ron`'s 215 placed blocks wear nothing, and the mixture is most of
+    // what reads as `die map passt nicht`."*
+    //
+    // `world::map::placed_dress_for` is the hop that was missing. This test is both halves of
+    // it: what wears a model wears one that **exists as a file** and **fits its own collider**
+    // — and there is at least one, so deleting the table cannot make the test greener.
+    let d = data();
+    let plan = plan();
+    let placed: Vec<&BlockPlan> = plan.iter().filter(|k| k.name.starts_with("block_")).collect();
+    assert!(placed.len() > 100, "only {} placed blocks — is this ashgate?", placed.len());
+
+    let dressed: Vec<&BlockPlan> = placed.iter().copied().filter(|k| k.model.is_some()).collect();
+    assert!(
+        !dressed.is_empty(),
+        "not one of the {} hand-placed blocks wears a model, although the drop has a file for \
+         the market stalls and one for the gas bottles (world::map::PLACED_DRESSING)",
+        placed.len()
+    );
+
+    for b in &dressed {
+        let name = b.model.expect("filtered");
+        let model = d
+            .model(name)
+            .unwrap_or_else(|| panic!("{}: wears {name:?}, which is not in art.ron", b.name));
+        let ModelSource::Gltf(path) = &model.source else {
+            panic!(
+                "{}: wears {name:?} and that row is still `Primitive` — the cuboid is hidden \
+                 under a model that draws nothing, i.e. an invisible solid wall",
+                b.name
+            )
+        };
+        assert!(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets").join(path).is_file(),
+            "{}: wears {name:?} -> {path:?}, and that file is not on disk",
+            b.name
+        );
+        // And it fits the box it is standing in. `render::model::fit_to_class` brings the file
+        // to `size_m.y`; both footprint axes then have to land inside the same tolerance a
+        // dressed house is held to, because a placed block's collider does NOT give way.
+        let (_, _, authored) = defeated_by_titan::world::map::PLACED_DRESSING
+            .iter()
+            .find(|(n, _, _)| *n == name)
+            .copied()
+            .unwrap_or_else(|| panic!("{name:?} is dressed but not in PLACED_DRESSING"));
+        let scale = b.size_m.y / authored[1];
+        for (axis, fit, box_m) in [
+            ('x', authored[0] * scale, b.size_m.x),
+            ('z', authored[2] * scale, b.size_m.z),
+        ] {
+            let off = (fit - box_m).abs() / box_m;
+            assert!(
+                off <= 0.25,
+                "{}: {name:?} brought to {:.2} m measures {fit:.2} m on {axis} against a \
+                 {box_m:.2} m collider — {:.0} % out, and a placed block's box may not move",
+                b.name,
+                b.size_m.y,
+                off * 100.0
+            );
+        }
+    }
+    eprintln!("{} of {} hand-placed blocks are dressed", dressed.len(), placed.len());
+}
+
+#[test]
+fn f003_the_ground_of_this_district_is_a_3_6_percent_grade_and_that_is_the_whole_relief() {
+    // \u26a0\ufe0f **The measurement that stopped a fix from being built on 2026-08-19.** `FIND-132`
+    // reported the ground as "one flat sand plane — the 3.00 m of terracing is invisible from
+    // the air", and the natural reading is that the terrain is not drawn. It IS drawn:
+    // `f003_the_terrain_...` counts 1236 terrace blocks over six levels and 7.50 m of relief.
+    //
+    // What is true instead is arithmetic, and this test is the arithmetic: **one step of
+    // `terrain.step_m` per `terrain.cell_m` of ground.** At 1.50 m per 42 m that is a 3.6 %
+    // grade, under houses `scale.ron` allows 11.50 m of — so the largest thing the eye could
+    // read is 13 % of one roof, and every one of those steps is covered by a five-tread flight
+    // in `stair_color` (there is no bare riser in the district). A district that reads as *a
+    // mosaic on a table* is therefore not a rendering bug: it is this number, and it is the
+    // user's (`docs/FINDINGS.md` FIND-134, `docs/QUESTIONS.md`).
+    //
+    // The test exists so the number cannot drift silently: change `step_m` or `cell_m` and the
+    // grade this file claims has to be re-measured together with it.
+    let d = data();
+    let map = d.current_map().expect("current map");
+    let t = &map.terrain;
+    if t.levels <= 1 || t.step_m <= 0.0 {
+        return;
+    }
+    let grade = t.step_m / t.cell_m;
+    let relief_m = t.step_m * (t.levels - 1) as f32;
+    eprintln!(
+        "terrain: {:.2} m step per {:.1} m cell = {:.1} % grade · {} levels = {relief_m:.2} m \
+         of relief · tallest house {:.2} m",
+        t.step_m,
+        t.cell_m,
+        grade * 100.0,
+        t.levels,
+        d.scale.architecture.heights_m.values().copied().fold(0.0, f32::max)
+    );
+    assert!(
+        grade < 0.10,
+        "the terrain now climbs {:.1} % — that is no longer the district FIND-134 measured, \
+         and the flight geometry (stair_tread_m against street_m) has to be re-checked with it",
+        grade * 100.0
+    );
+    // And the other half: it really is six levels and not one, so "flat" is a statement about
+    // the STEP and never about the field being switched off.
+    let (_, ground) = defeated_by_titan::world::map::terrain_of(&d, map);
+    assert!(
+        ground.field.levels_used().len() >= 4,
+        "only {:?} of {} terrain levels are used — the field, not the grade, is the problem \
+         then, and FIND-134's conclusion does not apply",
+        ground.field.levels_used(),
+        t.levels
+    );
+}
+
+#[test]
 fn f003_no_anchorable_block_has_another_block_sitting_on_its_roof_centre() {
     // ★ `FIND-059`: 28 of ashgate's tagged row houses were built as body + a **narrower,
     // untagged ridge cap** standing exactly on the centre of the body's roof. The highest
@@ -1701,7 +1823,7 @@ fn f019_every_interior_lamp_stands_in_a_room_with_a_roof_over_it_and_a_floor_und
 ///
 /// ⚠️ `hit.max.z < hit.min.z` on all 278 files of the drop — the two empties are a **corner
 /// pair**, not a min/max on every axis — so every extent is taken as an absolute difference.
-fn glb_extent_m(file: &str) -> Vec3 {
+fn glb_hit_corners_m(file: &str) -> (Vec3, Vec3) {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/3d/glb").join(file);
     let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     assert_eq!(&bytes[0..4], b"glTF", "{file} is not a .glb");
@@ -1743,8 +1865,143 @@ fn glb_extent_m(file: &str) -> Vec3 {
         }
         panic!("{file}: no node named {want:?} — the pack lost its hit empties");
     };
-    (read("hit.max") - read("hit.min")).abs()
+    (read("hit.min"), read("hit.max"))
 }
+
+/// The full extent of that corner pair, in metres — `abs`, because it is a **corner** pair.
+fn glb_extent_m(file: &str) -> Vec3 {
+    let (lo, hi) = glb_hit_corners_m(file);
+    (hi - lo).abs()
+}
+
+/// Every class the generator can dress a block with, and the file behind it: the three houses
+/// of [`DRESSING`], the eight remnants of [`RUIN_KIT`], the six mounds of [`RUBBLE_KIT`].
+///
+/// One list, so that a seventeenth class cannot be added without landing in the floor test
+/// below — `f003_every_dressed_class_stands_on_the_floor_of_its_own_block` asserts the length
+/// against the three tables.
+fn every_dressed_file() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("house_small", "a-083-fachwerkhaus-klein.glb"),
+        ("house_town", "a-083-fachwerkhaus-stadthaus.glb"),
+        ("house_large", "a-083-fachwerkhaus-gross.glb"),
+        ("ruin_roof_collapsed", "a-089-ruine-dach-eingestuerzt.glb"),
+        ("ruin_roof_half", "a-089-ruine-dach-haelfte.glb"),
+        ("ruin_gable", "a-089-ruine-giebel.glb"),
+        ("ruin_heap", "a-089-ruine-haufen.glb"),
+        ("ruin_upper_floor", "a-089-ruine-obergeschoss.glb"),
+        ("ruin_pillar", "a-089-ruine-pfeiler.glb"),
+        ("ruin_wall_corner", "a-089-ruine-wand-ecke.glb"),
+        ("ruin_wall_high", "a-089-ruine-wand-hoch.glb"),
+        ("rubble_beams", "a-090-schutt-balken.glb"),
+        ("rubble_cover", "a-090-schutt-deckung.glb"),
+        ("rubble_flat", "a-090-schutt-flach.glb"),
+        ("rubble_heap_large", "a-090-schutt-haufen-gross.glb"),
+        ("rubble_high", "a-090-schutt-hoch.glb"),
+        ("rubble_wall_piece", "a-090-schutt-wandstueck.glb"),
+    ]
+}
+
+#[test]
+fn f003_every_dressed_class_stands_on_the_floor_of_its_own_block() {
+    // ★ **„zudem sind die gebäude nicht auf dem boden sondern in der luft!"** (user,
+    // 2026-08-19). A block is positioned by its **centre** — that is the frame the collider,
+    // `Body::half_size_m` and the spatial index are written in, and moving it would move the
+    // world. Every model in the pack is authored on its **feet**. So the model, hung on that
+    // entity, started at the box's middle and the building floated by half its own height.
+    //
+    // The fix moves the drawing and the model's anchors by one offset
+    // (`shared::ModelName::feet_y_m` -> `render::model::feet_offset_m`) and leaves the
+    // collider alone. This is the arithmetic of it, for **all seventeen** classes the
+    // generator can put down, out of the seventeen files themselves — not out of the
+    // catalogue, so that a re-export that lifts a model off its own origin lands here.
+    //
+    // ⚠️ The scale matters: a remnant is planned at the size its file has, but the fit is a
+    // ratio and an offset computed before it would be right at 1.0 and wrong everywhere else
+    // (`feet_offset_m`'s own header). The classes below fit at 1.0 today — the second half of
+    // the test therefore checks a deliberately *rescaled* block, where an unscaled offset is
+    // off by metres.
+    let files = every_dressed_file();
+    assert_eq!(
+        files.len(),
+        DRESSING.len() + RUIN_KIT.len() + RUBBLE_KIT.len(),
+        "a dressable class was added to a catalogue without a file beside it here — and would \
+         then never be checked for standing on its own floor"
+    );
+
+    for (name, file) in files {
+        let (lo, hi) = glb_hit_corners_m(file);
+        let floor_m = lo.y.min(hi.y);
+        assert!(
+            floor_m.abs() < 0.001,
+            "{name}: {file} is authored with its floor at y = {floor_m:.4} m instead of 0. \
+             `world::map` tells the renderer the model's floor is `-size.y / 2` below the \
+             block's centre, and that is only the box's own floor while the file stands on \
+             its origin"
+        );
+
+        let mut anchors: BTreeMap<String, Vec3> = BTreeMap::new();
+        anchors.insert("hit.min".to_string(), lo);
+        anchors.insert("hit.max".to_string(), hi);
+        let authored_m = (hi.y - lo.y).abs();
+
+        // A block of exactly this class's size, and one of double it — the second is what
+        // separates a scaled offset from an unscaled one.
+        for size_y_m in [authored_m, authored_m * 2.0] {
+            let scale = fit_to_class(&anchors, Some(size_y_m), None);
+            let offset = feet_offset_m(&anchors, scale, Some(-size_y_m * 0.5));
+            // Where the mesh's lowest point lands in the block's own frame.
+            let drawn_floor_m = offset.y + floor_m * scale;
+            assert!(
+                (drawn_floor_m + size_y_m * 0.5).abs() < 0.01,
+                "{name} in a {size_y_m:.2} m block: the mesh's floor is drawn at \
+                 {drawn_floor_m:.3} m in the block's frame and the block's floor is at \
+                 {:.3} m — {:.3} m of air under a building",
+                -size_y_m * 0.5,
+                drawn_floor_m + size_y_m * 0.5
+            );
+            let drawn_ridge_m = drawn_floor_m + authored_m * scale;
+            assert!(
+                (drawn_ridge_m - size_y_m * 0.5).abs() < 0.01,
+                "{name} in a {size_y_m:.2} m block: the mesh reaches {drawn_ridge_m:.3} m and \
+                 the box's lid is at {:.3} m. The collider and the picture are one box \
+                 (`BlockPlan::model`), so a roof through the ceiling is the same defect \
+                 upside down",
+                size_y_m * 0.5
+            );
+        }
+    }
+}
+
+#[test]
+fn f003_every_dressed_block_in_the_real_map_names_its_own_floor() {
+    // The other end of the same wire: the arithmetic above is worth nothing if `BlockPlan`
+    // does not actually tell the renderer where the floor is. This is the shipped map, built
+    // by the real app, walked entity by entity.
+    let mut app = built_world();
+    let mut dressed = 0usize;
+    let world = app.world_mut();
+    let mut q = world.query::<(&Block, &ModelName)>();
+    for (block, model) in q.iter(&world) {
+        dressed += 1;
+        assert_eq!(
+            model.feet_y_m,
+            Some(-block.size.y * 0.5),
+            "the dressed block wearing {:?} is {:.2} m tall and tells the renderer its floor \
+             is at {:?}. A block sits at its CENTRE, so the only floor it has is half its \
+             height below that — anything else is the building in the air again",
+            model.name,
+            block.size.y,
+            model.feet_y_m
+        );
+    }
+    assert!(
+        dressed > 0,
+        "not one block on the shipped map wears a model, so this test measured nothing. \
+         Either the district lost its dressing or `art.ron` put every row back to `Primitive`"
+    );
+}
+
 
 #[test]
 fn f003_the_dressing_catalogue_is_what_the_glb_files_really_measure() {

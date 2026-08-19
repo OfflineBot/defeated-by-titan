@@ -204,33 +204,43 @@
         // thing in the world.
         "vector_gear":    (source: Primitive, scale: 1.0, attribution: None, animations: {}),
 
-        // WOULD BE: 3d/glb/a-024-klingen-paar-neu.glb (a PAIR, authored already in hand
-        // position, 2.08 m along Z, matching the body's hand.l/hand.r; -gebrochen is the
-        // broken pair, a-023-klingengriffe the empty grips, and there are ten
-        // a-025-klinge-kosmetik-* skins). There is no single-blade file in the drop.
+        // ✅ **UNBLOCKED 2026-08-19 and BOUND.** `FIND-120` had this row down as the worst of
+        // the three: the blade was not an entity at all — `blades::cut::blade_segment` built two
+        // `Vec3` per tick, cast a capsule between them and threw both away in the same tick, so
+        // there was no transform for a `ModelName` to sit on and pointing this row at a file
+        // would have loaded 2 MB and rendered nothing.
         //
-        // BLOCKER, **re-verified 2026-08-19 and it is worse than "no entity yet"**: the blade
-        // is not an object in this game at all. `blades::cut::blade_segment` computes two
-        // points — hand and tip — out of the player's position, look direction and
-        // `gear.ron: blades.reach_m`, casts a capsule between them, and throws them away in
-        // the same tick. There is no entity, no mesh, no transform and nothing for a
-        // `ModelName` to sit on; the only two things in `src/` that insert one are
-        // `render::model::name_the_titans_model` (a titan) and `world::map` (a dressed
-        // block). Switching this row to `Gltf(...)` today would load 2 MB and render nothing —
-        // which is precisely the failure this whole file exists to prevent, and the reason it
-        // stays `Primitive`.
+        // `src/blades/hold.rs` is what cleared it. One entity per player, a child of him,
+        // carrying `ModelName("blade")`; `render::model::spawn_models` dresses it out of this
+        // row like any titan. So the rule this file lives by — **do not bind a row nothing can
+        // spawn** — is satisfied by a spawner and not by an argument, and
+        // `tests/render.rs::f033_a_player_carries_a_blade_entity_and_it_hangs_on_him` goes red
+        // the day the spawner goes.
         //
-        // WHAT WOULD HAVE TO HAPPEN, in order:
-        //  1. a decision on first vs third person (`docs/QUESTIONS.md`) — the camera is a
-        //     CHILD of the local player at eye height, so a pair authored in hand position is
-        //     seen from inside the head. This blocks `vanguard` and `vector_gear` too.
-        //  2. a `blades` (or `render`) system that spawns ONE entity per player carrying the
-        //     pair, parented to the player and offset to the hand.
-        //  3. a swing pose for it. ⚠️ **The pack ships zero animation clips** — measured over
-        //     all 278 files — so `animations: {}` is honest and stays; the blade would swing
-        //     by a hand-written transform curve or not at all. Naming a clip here is a loud
-        //     warning at load, by design.
-        "blade":          (source: Primitive, scale: 1.0, attribution: None, animations: {}),
+        // 3d/glb/a-024-klingen-paar-neu.glb — a PAIR in ONE merged mesh (280 vertices, one
+        // primitive), authored in the body's own frame: `hand.l` at (0.203, 0.844, 0.236) with
+        // its blade forward, `hand.r` at (-0.220, 0.831, -0.026) with its blade back, hit box
+        // 0.63 x 0.87 x 2.08 m out of `hit.min`/`hit.max` (a CORNER pair — `hit.max.z <
+        // hit.min.z`, so read it with `.abs()`). Those two `hand.*` empties are what
+        // `blades::hold` reads: the pair is lifted by `eye_height_m - hand`, which puts the
+        // model's own hands on the exact point `blade_segment` casts the cut from.
+        //
+        // `-gebrochen` is the same pair broken (`F-033`'s endpoint, ⬜ today),
+        // `a-023-klingengriffe` the empty grips, and there are ten `a-025-klinge-kosmetik-*`
+        // finishes — every one of them the same 6 nodes and the same two hand empties, so a
+        // cosmetic swap is one word in this line and no code at all.
+        //
+        // ⚠️ **Still `animations: {}` and it is not laziness.** The pack ships ZERO clips over
+        // all 278 files, so the swing is a transform curve in `blades::hold::swing_sweep` —
+        // a quarter turn out of the file's ready pose onto the cast's own line, `1.0` on
+        // exactly the eight ticks of twenty-one that cut. Naming a clip here would be a loud
+        // warning at load AND would bring the cuboid back, by design.
+        //
+        // ⚠️ **What it does NOT yet carry** (measured, not guessed): the drawn blade is 0.93 m
+        // of steel from the hand where `gear.ron: blades.reach_m` casts 1.60 m, so the picture
+        // under-promises the reach by 0.67 m; and there is no single-blade file in the drop, so
+        // the two sides swing as one pair. Both stand in `docs/FINDINGS.md` FIND-127.
+        "blade":          (source: Gltf("3d/glb/a-024-klingen-paar-neu.glb"), scale: 1.0, attribution: None, animations: {}),
 
         // ---- the three half-timbered houses: the pack is exact, the wiring is one hop short
         //
@@ -333,6 +343,37 @@
         // this changes a silhouette that was measured on purpose and needs its own
         // before/after picture — plus the same `ModelName`-on-a-block hop.
         "crate_resupply": (source: Primitive, scale: 1.0, attribution: None, animations: {}),
+
+        // ---- the two rows a HAND-PLACED block may wear (2026-08-19) ---------------------
+        //
+        // Until today only *generated* houses were dressed (`world::map::dress_for` /
+        // `remnant_for`); the 215 cuboids `maps.ron: blocks` places by hand wore nothing, and
+        // `FIND-132` names that mixture as most of what the user reads as „die map passt
+        // nicht". `world::map::PLACED_DRESSING` is the placed half of that table, and it is
+        // **two rows long, which is a measurement and not laziness** — see FIND-134: of the
+        // 215 placed blocks, in 80 distinct size classes, exactly these two classes have a
+        // file in the drop that a UNIFORM scale brings within `DRESS_TOLERANCE` of the box
+        // AND is the thing the block actually is. The wall, the gatehouses, the gantries and
+        // the bell towers do not, and the reason is structural: the pack's wall vocabulary
+        // (`a-095`/`a-096`/`a-101`) is a **tile set** authored at one module — 11.20 m wide,
+        // 120 m tall — while Ashgate's wall is built as monolithic 700 / 336 / 285 m bands.
+        // `render::model::fit_to_class` scales uniformly, so it can fit a tile to a box; it
+        // cannot repeat one along it.
+
+        // The eight stalls of the market square, 3.0 x 2.5 x 3.0 m. Brought to 2.5 m the
+        // awning measures 3.61 x 3.13 m — 20 % over the box on x and 4 % on z, inside
+        // `DRESS_TOLERANCE` (0.25). ⚠️ The COLLIDER stays the map's 3.0 m: a placed block is
+        // gameplay geometry and `placed_blocks` may not re-plan it the way `dress_for`
+        // re-plans a house. So the canopy overhangs its box by 0.31 m per side — which is
+        // what a canopy does, and 8 m of stall pitch means it reaches nothing.
+        "market_stall":   (source: Gltf("3d/glb/a-087-marktstand-zeltdach.glb"), scale: 1.0, attribution: None, animations: {}),
+
+        // The four gas bottles in the headquarters' resupply bay, 1.3 x 1.8 x 1.3 m. Brought
+        // to 1.8 m the standing barrel measures 1.32 x 1.32 m — **1.5 %** off the box, the
+        // closest fit anywhere in the placed set. `a-027-gaskanister` is NOT the row: it is
+        // the 0.34 m canister a soldier carries on his rig, and scaling it 5.3x to fill a
+        // depot bottle is the exact mistake `art.ron`'s header forbids.
+        "gas_drum":       (source: Gltf("3d/glb/a-132-fass-stehend.glb"), scale: 1.0, attribution: None, animations: {}),
     },
     // How far a model's own `cortex` empty may sit from the height scale.ron names for that
     // size class before the loader shouts. 0.15 m is a fifth of a stone course — visible in
