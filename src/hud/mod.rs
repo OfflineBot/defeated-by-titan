@@ -45,6 +45,15 @@
 //! crosshair four ticks around a hole instead of one node — `tests/hud.rs` computes every
 //! element's rect out of `ComputedNode` and falls over if one of them creeps inward.
 //!
+//! **One exception, and it is the aim itself** (`docs/FINDINGS.md` FIND-098): an idle arm's
+//! landing preview, whose x *is* the resolved fan half-angle
+//! ([`arm_aim::Bearing::Fan`]). The whole reachable fan lives inside this box — 2°..22° of
+//! half-angle is 21.8..252 px of a 1280 px screen — so applying the box to it pinned both
+//! markers to one fixed slot and the mouse wheel stopped reaching the screen. That marker is
+//! held out of [`arm_aim::SIGHT_CORE_PX`] instead: the pixels the player is cutting, which is
+//! what the box was protecting in the first place. Everything else — bars, pips, banner,
+//! letters, the crosshair, and any marker tracking a world position — still obeys the full box.
+//!
 //! ## The evidence
 //!
 //! | what | run → picture |
@@ -217,6 +226,14 @@ fn hide_while_a_menu_is_up(
 pub struct HudElement;
 
 /// The forbidden box in the middle: 20 % of the width by 20 % of the height.
+///
+/// **Sized to the crosshair's arms, not to the target under them** — it is what makes
+/// [`crosshair`] four ticks around a hole. The distinction matters since FIND-098: the one
+/// element whose position is an *angle* rather than a *place* is measured against
+/// [`arm_aim::SIGHT_CORE_PX`] instead, because the whole angular range it can occupy fits inside
+/// this rectangle and being pushed out of it destroyed the reading. Widening this constant is
+/// therefore free for chrome and costs nothing for the fan; **narrowing it is what would break
+/// the crosshair**, and that is why the fix was an exemption and not a smaller box.
 pub const KEEP_OUT_PCT: f32 = 20.0;
 /// Left/top edge of the forbidden box, in percent of the screen.
 pub const KEEP_OUT_LOW_PCT: f32 = 50.0 - KEEP_OUT_PCT * 0.5;

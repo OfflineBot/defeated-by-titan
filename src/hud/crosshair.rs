@@ -7,6 +7,11 @@
 //! pixels the player is aiming at. So the crosshair is four ticks standing **outside** the
 //! keep-out box ([`KEEP_OUT_LOW_PCT`]..[`KEEP_OUT_HIGH_PCT`]), and the box itself is the hole.
 //!
+//! That sentence is the reason the box is 20 % and not 3 %: the number is **the crosshair's own
+//! reach**, and it is why FIND-098 exempted the two arm-aim glyphs from the box instead of
+//! shrinking it. Shrinking it to a width the resolved fan clears would have collapsed this
+//! element to a 44 px cross and moved every pixel of `F-171`'s photographed geometry.
+//!
 //! That makes the crosshair wide — at 1280 × 720 the ticks stand 128 px left and right of
 //! centre and 72 px above and below, because 20 % of the width is not 20 % of the height. It
 //! is a deliberate consequence of the acceptance criterion, not an accident of layout.

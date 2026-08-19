@@ -74,14 +74,45 @@
 //! The push is applied **last**, after the screen clamp: on a viewport small enough for the two to
 //! disagree, the proven claim wins and a few pixels of the marker leave the screen instead.
 //!
-//! **The rule does not bend and the marker does not fade**, and the reason is that the price is
-//! bounded and the case is degenerate. It is a *slide to the box edge*, never a jump: the
-//! displacement is at most half the box (128 px of 1280) and it grows continuously as the point
-//! walks in, so nothing teleports. Measured at the two ends of the wheel
-//! (`tests/hud.rs::f026_two_idle_arms_preview_two_different_points`): at `aim_spread_deg: 28`
-//! the two markers stand **331 px** off the crosshair and the push never runs; at the narrowest
-//! 10° the side ray projects to 110 px, inside the box, and the marker is held at **146** — a
-//! bounded 36 px, and *which side* the arm shoots at is still true.
+//! ## …and why an idle arm's marker is exempt from it (`docs/FINDINGS.md` FIND-098)
+//!
+//! **That rule, applied to the fan, made the HUD lie.** On 2026-08-18 `vector::aim` learned to
+//! resolve the spread from what the player is doing instead of handing back the wheel, and the
+//! resolved half-angle is small: at the shipped wheel 28 it is at most **9.594°** grounded,
+//! **11.212°** airborne, **3.716°** tethered. On the design aspect that is |NDC_x| 0.165 / 0.193
+//! / 0.063, and the box edge is 0.2 — so *every* fan, in *every* state, at *every* distance and
+//! *every* wheel notch below the top, touched the box and was pushed to the same fixed slot at
+//! 146 px. The player paid for a 65 % narrower fan and the picture did not move a pixel. `F-023`'s
+//! whole claim is that the rope and the marker are **one number**; a marker that cannot move is
+//! not that number.
+//!
+//! So step 3 now asks **what the marker's x means** ([`Bearing`]) rather than where it landed:
+//!
+//! - [`Bearing::World`] — a tip in flight, an anchor being held, or an arm that fell back to the
+//!   centre ray. Unchanged: pushed out of the whole box. The box costs nothing here, because
+//!   `render::rope` is already drawing the rope to that point, or because a fallback marker is a
+//!   *state badge* with no position of its own to be honest about (FIND-087 §2).
+//! - [`Bearing::Fan`] — an idle arm on its **own** side ray. The glyph's x *is* the resolved
+//!   half-angle. It keeps that angle exactly — **at every field of view** — and gives up only
+//!   [`SIGHT_CORE_PX`], the little square the player is actually cutting, by stepping *down* out
+//!   of it. It may stand inside the box; it may not stand on the target.
+//!
+//! **What the box loses, measured rather than argued:** an idle glyph is 20 px wide, and the
+//! narrowest angle the model can reach (`aim_spread_floor_deg` 2°) projects 21.8 px off centre on
+//! a 1280 px screen at the file's 60° FOV — so the glyph's inner edge is 11.8 px clear of the aim
+//! pixel at the *worst* angle. The crosshair, the bars, the pips, the banner and the letters are
+//! all still held out of the full box; nothing that F-170 was written against moved.
+//!
+//! **And the FOV is a live setting** (`shared::PlayerSettings`, 55..110°, `docs/FINDINGS.md`
+//! FIND-099): at 110° that same 2° projects **8.8 px**, so a guard that clamped the *x* would
+//! turn the whole band below 3.63° back into a fixed slot for any player who widened his view.
+//! That is why the sight-core guard moves the **y**, which for a fan marker is the crosshair's y
+//! at every angle and carries nothing, and never the x, which carries everything.
+//!
+//! **For a [`Bearing::World`] marker the rule does not bend and the marker does not fade**, and
+//! the reason is that the price is bounded and the case is degenerate. It is a *slide to the box
+//! edge*, never a jump: the displacement is at most half the box (128 px of 1280) and it grows
+//! continuously as the point walks in, so nothing teleports.
 //!
 //! ⚠️ **The one case where that costs truth is written down and not hidden**: an arm whose side
 //! ray found nothing falls back to the centre ray, and the centre ray projects into the box — so
@@ -133,7 +164,7 @@ use bevy::text::FontSize;
 use crate::data::GameData;
 use crate::hud::crosshair::NEUTRAL;
 use crate::hud::{signal, HudElement, KEEP_OUT_HIGH_PCT, KEEP_OUT_LOW_PCT};
-use crate::shared::{ArmAim, Hook, HookState, LocalPlayer, Side};
+use crate::shared::{AimPoint, ArmAim, Hook, HookState, LocalPlayer, Side};
 
 /// Which arm this node belongs to, and which of its two nodes it is.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -209,9 +240,22 @@ pub fn target_of(hook: &Hook, aim: &ArmAim, side: Side) -> Option<Vec3> {
     let arm = hook.arm(side);
     match arm.state {
         HookState::Idle => aim.target_of(side),
-        HookState::Flying { .. } | HookState::Retracting | HookState::Anchored { .. } => {
-            Some(arm.tip_m)
-        }
+        // **Where it lands, not where it is** (`docs/FINDINGS.md` FIND-099). `vector::hook::fire`
+        // freezes the destination into `Flying { target_m }` and starts the tip **in the hand**
+        // (its decision 5) — so for the first ticks of every shot the tip sits on the camera's
+        // own near plane, `Camera::world_to_viewport` refuses it, and [`edge_pixel`] answers with
+        // a bearing that the clamp turns into the edge of the screen. Measured: a marker
+        // standing 155 px off centre jumped to **608 px** the frame the key went down, about a
+        // target 40 m dead ahead that had not moved, and then crawled back in over the flight.
+        //
+        // `target_m` is the exact `Vec3` the idle marker was already standing on
+        // (`tests/hud.rs::f026_the_rope_flies_at_the_point_the_marker_stood_on`), so this is
+        // also the only reading under which firing does not move the preview at all — which is
+        // the requirement: *"dass man direkt sieht wo man landet"*.
+        HookState::Flying { target_m, .. } => Some(target_m),
+        // Retracting and anchored keep the **tip**: there `render::rope` really is drawing to
+        // that point, and a retracting arm has no destination to show.
+        HookState::Retracting | HookState::Anchored { .. } => Some(arm.tip_m),
     }
 }
 
@@ -319,6 +363,75 @@ const LABEL_W_PX: f32 = 12.0;
 /// (146 px for a 20 px glyph, 150 for the 28 px one) and costs nothing else: the push only ever
 /// runs for a point that is inside the box anyway.
 const KEEP_OUT_GAP_PX: f32 = 8.0;
+/// **The pixels the player is actually aiming at**, and the only part of the middle a fan
+/// marker may not cover.
+///
+/// `F-170`'s keep-out box is 20 % of the width — 128 px either side at 1280 — and that number
+/// exists to make the crosshair *four ticks around a hole* ([`crate::hud::crosshair`]): it is
+/// sized to the crosshair's arms, not to the thing under them. A marker whose x **is** the
+/// resolved fan angle ([`Bearing::Fan`]) is measured against this instead, because the fan lives
+/// entirely inside the box: 22° — the widest half-angle the wheel can permit — projects to
+/// 252 px, and 2° (`aim_spread_floor_deg`) to 21.8 px, both of them well inside 128.
+///
+/// **6 px on both axes — a little square, not a margin.** It is the hole the crosshair's four
+/// ticks stand around, and a fan marker clears it by stepping **down**, never sideways
+/// (`docs/FINDINGS.md` FIND-099). Sideways was the first shape of this guard and it was a fixed
+/// slot in miniature: it binds whenever the fan projects under `SIGHT_CORE_PX + glyph_w/2` =
+/// 16 px, which on a 1280 px viewport is every angle below **3.63° at 110° FOV** and below 2.5°
+/// already at 80° — and the FOV is a live setting the player has a slider for. Down costs
+/// nothing: `vector::aim::side_dirs` yaws the two rays around the **camera's** up axis, so their
+/// camera-space y is exactly 0 and their projected y is the middle of the screen at every angle
+/// and every pitch. The x is the entire message and it is never touched.
+///
+/// `tests/hud.rs::f023_the_drawn_marker_is_strictly_monotone_in_the_resolved_fan` sweeps the
+/// whole reachable band at 55, 60, 90 and 110° and would see a clamp on the x as a flat step.
+pub const SIGHT_CORE_PX: f32 = 6.0;
+
+/// **What a marker's x MEANS this frame** — and therefore which rule keeps the sight line clear.
+///
+/// The keep-out box was written against *chrome*: a gas bar, a banner, a letter creeping inward
+/// over the thing the player is about to cut. Two of the six nodes this module draws are not
+/// chrome at all, and treating them as such is what
+/// [`FIND-098`](../../../docs/FINDINGS.md) is about — see the module header.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bearing {
+    /// **An idle arm previewing its own side ray.** The glyph's x is the resolved fan half-angle
+    /// and nothing else — it carries no distance, no world position, only *how wide the two
+    /// ropes are aiming right now*. Exempt from `F-170`'s box, held out of [`SIGHT_CORE_PX`].
+    Fan,
+    /// **A position in the world, which can be anywhere**: a tip in flight, an anchor being held,
+    /// or the shared centre ray an arm with nothing of its own falls back to. Pushed out of
+    /// `F-170`'s box, exactly as before.
+    World,
+}
+
+/// Which of the two rules this arm's marker obeys this tick.
+///
+/// Three ways to land on [`Bearing::World`], and each of them is a case where the box costs
+/// nothing the player cannot get elsewhere:
+///
+/// - **the tip is out** — `render::rope` is drawing the rope to that exact point in the world, so
+///   the glyph is a second telling of something already on screen;
+/// - **the arm fell back to the centre ray** (`vector::aim`: a side ray that finds nothing is
+///   handed `centre`) — then the marker is a *state badge* and has no position of its own to be
+///   honest about, which is `docs/FINDINGS.md` FIND-087 §2's decision, kept;
+/// - **the arm has nothing at all** — the side slot, as before.
+///
+/// The fallback is detected by comparing this arm's point with the shared
+/// [`AimPoint`](crate::shared::AimPoint) **by value and with no tolerance**: `vector::aim` assigns
+/// the very same `AimPoint` into the arm, so the two are bit-identical when and only when the
+/// fallback ran. Same choice, same reason as
+/// `tests/hud.rs::f026_the_marker_stands_exactly_where_that_arm_fires`.
+pub fn bearing_of(hook: &Hook, aim: &ArmAim, centre_m: Option<Vec3>, side: Side) -> Bearing {
+    if !matches!(hook.arm(side).state, HookState::Idle) {
+        return Bearing::World;
+    }
+    match (aim.target_of(side), centre_m) {
+        (Some(own), Some(shared)) if own == shared => Bearing::World,
+        (Some(_), _) => Bearing::Fan,
+        (None, _) => Bearing::World,
+    }
+}
 
 /// Where one arm's three nodes stand this frame, in logical UI pixels (top-left corners).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -341,12 +454,28 @@ pub struct ArmLayout {
 /// Three steps, in this order and the order is the design:
 /// 1. put the glyph's centre on the projected point, or in the arm's side slot if there is none;
 /// 2. clamp the cluster into the viewport, so a marker never leaves the screen entirely;
-/// 3. push the cluster out of `F-170`'s keep-out box, towards the side the point is already on.
+/// 3. keep the sight line clear — and **which** sight line depends on [`Bearing`]:
+///    [`World`](Bearing::World) is pushed out of `F-170`'s whole keep-out box towards the side
+///    the point is already on, [`Fan`](Bearing::Fan) only out of [`SIGHT_CORE_PX`].
 ///
 /// Step 3 is last on purpose: it is the proven 🟧 claim
 /// (`tests/hud.rs::f170_nothing_covers_the_middle_of_the_screen`) and step 2 is a courtesy, so on
 /// a viewport small enough for the two to fight, the claim wins.
-pub fn layout_for(side: Side, shape: ArmShape, at: Option<Vec2>, viewport: Vec2) -> ArmLayout {
+///
+/// **Why the fan is not pushed** (`docs/FINDINGS.md` FIND-098): the whole reachable fan lives
+/// inside the box — 2°..22° of half-angle is 21.8..252 px of a 1280 px screen against a 128 px
+/// box edge — so a box push turns *every* fan into the same fixed slot and the wheel stops
+/// reaching the screen. `F-023`'s claim is that the rope and the marker are one number; a marker
+/// that cannot move is not that number. The box loses nothing it was built to protect: an idle
+/// glyph is 20 px wide and the narrowest fan puts its inner edge 11.8 px clear of the aim pixel,
+/// so the pixels the player is cutting stay uncovered at every angle he can reach.
+pub fn layout_for(
+    side: Side,
+    shape: ArmShape,
+    at: Option<Vec2>,
+    viewport: Vec2,
+    bearing: Bearing,
+) -> ArmLayout {
     let vw = viewport.x.max(1.0);
     let vh = viewport.y.max(1.0);
     let box_min_x = vw * KEEP_OUT_LOW_PCT / 100.0;
@@ -397,12 +526,43 @@ pub fn layout_for(side: Side, shape: ArmShape, at: Option<Vec2>, viewport: Vec2)
     // 3. out of the middle. The cluster is the glyph plus its letter; the tether hangs inside
     // the glyph's own width, so it adds nothing horizontally and its length is already in
     // `full_h`.
-    let hits_box = x - lo_extra < box_max_x
-        && x + shape.glyph_w_px + hi_extra > box_min_x
-        && y < box_max_y
-        && y + full_h > box_min_y;
-    if hits_box {
-        x = slot_x(label_right);
+    match bearing {
+        Bearing::World => {
+            let hits_box = x - lo_extra < box_max_x
+                && x + shape.glyph_w_px + hi_extra > box_min_x
+                && y < box_max_y
+                && y + full_h > box_min_y;
+            if hits_box {
+                x = slot_x(label_right);
+            }
+        }
+        // **The fan keeps its exact angle at every field of view and gives up the axis that
+        // carries nothing.** A fan marker's y is the crosshair's y at every angle — `side_dirs`
+        // yaws the two rays around the *camera's* up axis, so their camera-space y is exactly
+        // zero and their projected y is exactly the middle of the screen, whatever the pitch.
+        // Its x is the whole message. So when the two would meet over the sight core the glyph
+        // steps **down** out of it and holds its x: the marker stays honest and the pixels the
+        // player is cutting stay uncovered.
+        //
+        // The clamp this replaces was an `x.max(centre + SIGHT_CORE_PX)`, and it was a fixed
+        // slot in miniature: it binds whenever the fan projects under
+        // `SIGHT_CORE_PX + glyph_w/2` = 16 px, which at 1280 logical px is **every angle below
+        // 3.63° once the player sets his FOV to 110** — measured, and 80° is already enough
+        // (`docs/FINDINGS.md` FIND-099). The FOV is a live setting since 2026-08-18
+        // (`shared::PlayerSettings`, 55..110), so that band is not a corner case.
+        //
+        // The letter sits outboard by construction and moves with `y`, and the tether hangs
+        // inside the glyph's width — the glyph's own rectangle is the whole rule.
+        Bearing::Fan => {
+            let core = Vec2::new(vw * 0.5, vh * 0.5);
+            let over_the_core = x < core.x + SIGHT_CORE_PX
+                && x + shape.glyph_w_px > core.x - SIGHT_CORE_PX
+                && y < core.y + SIGHT_CORE_PX
+                && y + full_h > core.y - SIGHT_CORE_PX;
+            if over_the_core {
+                y = core.y + SIGHT_CORE_PX;
+            }
+        }
     }
 
     ArmLayout {
@@ -610,7 +770,7 @@ fn put(node: &mut Node, at: Vec2) {
 /// `Camera3d` without a further filter is enough because there is at most one 3D camera:
 /// `render::attach_camera` bails out as soon as one exists.
 pub fn place_arm_aim(
-    players: Query<(&Hook, &ArmAim), With<LocalPlayer>>,
+    players: Query<(&Hook, &ArmAim, Option<&AimPoint>), With<LocalPlayer>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     mut markers: Query<(&ArmMarker, &ArmAimState, &mut Node), Without<ArmMarkerLabel>>,
     mut labels: Query<(&ArmMarkerLabel, &mut Node), Without<ArmMarker>>,
@@ -629,9 +789,15 @@ pub fn place_arm_aim(
     }
 
     let aim = players.iter().next();
+    // The shared centre ray, if the player has one at all: `bearing_of` needs it to tell an arm
+    // aiming down its own side ray from an arm that found nothing and fell back to the middle.
+    let centre_m = aim.and_then(|(_, _, centre)| centre.and_then(|c| c.point_m));
     let mut layout = [ArmLayout::default(); 2];
     for side in Side::ALL {
-        let world = aim.and_then(|(hook, point)| target_of(hook, point, side));
+        let world = aim.and_then(|(hook, point, _)| target_of(hook, point, side));
+        let bearing = aim.map_or(Bearing::World, |(hook, point, _)| {
+            bearing_of(hook, point, centre_m, side)
+        });
         // Not an `expect` and not a drop: a target behind the near plane is a normal thing to be
         // holding — half a swing looks like that — and `world_to_viewport` reports it as an
         // error. It keeps its **bearing** through [`edge_pixel`], and the clamp in `layout_for`
@@ -640,7 +806,7 @@ pub fn place_arm_aim(
             Ok(px) => px,
             Err(_) => edge_pixel(camera_at.affine().inverse().transform_point3(p), viewport, side),
         });
-        layout[side.index()] = layout_for(side, shapes[side.index()], at, viewport);
+        layout[side.index()] = layout_for(side, shapes[side.index()], at, viewport, bearing);
     }
 
     for (marker, _, mut node) in &mut markers {
@@ -814,7 +980,7 @@ mod tests {
 
             // And through the layout: the marker sits ON the edge, not off it.
             let shape = shape_of(ArmAimState::Anchored);
-            let laid = layout_for(side, shape, Some(r), SCREEN);
+            let laid = layout_for(side, shape, Some(r), SCREEN, Bearing::World);
             assert!(
                 laid.glyph.x + shape.glyph_w_px <= SCREEN.x && laid.glyph.x > SCREEN.x * 0.5,
                 "{side:?} behind-right was laid out at {:?}",
@@ -859,7 +1025,7 @@ mod tests {
                             SCREEN.y * step_y as f32 / 36.0,
                         );
                         for target in [Some(at), None] {
-                            let l = layout_for(side, shape, target, SCREEN);
+                            let l = layout_for(side, shape, target, SCREEN, Bearing::World);
                             // The cluster: the letter's outer edge to the glyph's other edge.
                             let (lo, hi) = if l.label_right {
                                 (l.glyph.x, l.label.x + LABEL_W_PX)
@@ -887,6 +1053,74 @@ mod tests {
     }
 
     #[test]
+    fn f023_a_fan_marker_keeps_its_angle_and_clears_the_aim_pixel() {
+        // ★ **The other half of the trap.** `f170_no_projected_point_can_push_a_marker_into_the_middle`
+        // proves a WORLD-tracked marker never reaches the box; this proves a FAN marker never
+        // reaches the aim pixel — which is the only part of the middle it was ever protecting.
+        // Swept over the whole screen, both idle shapes, both arms.
+        //
+        // **Since FIND-099 the x is never touched at all.** The sight core is a little square
+        // and the marker steps *down* out of it, because a fan marker's y is the crosshair's y
+        // at every angle and its x is the entire message. The old rule clamped the x, which
+        // made a fixed slot out of every fan under 16 px — i.e. out of the whole low end of the
+        // band as soon as the player widened his FOV.
+        let centre = SCREEN * 0.5;
+        for state in [ArmAimState::Free, ArmAimState::Ready] {
+            let shape = shape_of(state);
+            let size = Vec2::new(shape.glyph_w_px, shape.glyph_h_px);
+            let mut dodged = 0;
+            for side in Side::ALL {
+                for step_x in 0..=256 {
+                    let at = Vec2::new(SCREEN.x * step_x as f32 / 256.0, SCREEN.y * 0.5);
+                    let l = layout_for(side, shape, Some(at), SCREEN, Bearing::Fan);
+                    let lo = l.glyph;
+                    let hi = l.glyph + size;
+                    let clear = hi.x <= centre.x - SIGHT_CORE_PX
+                        || lo.x >= centre.x + SIGHT_CORE_PX
+                        || hi.y <= centre.y - SIGHT_CORE_PX
+                        || lo.y >= centre.y + SIGHT_CORE_PX;
+                    assert!(
+                        clear,
+                        "{state:?} {side:?} aimed at {at:?} put the glyph at {lo:?}..{hi:?}, \
+                         over the {SIGHT_CORE_PX} px square the player is actually cutting"
+                    );
+                    if l.glyph.y != at.y - shape.glyph_h_px * 0.5 {
+                        dodged += 1;
+                    }
+                    // **The x is the projection and nothing else** — no slot, no clamp, no
+                    // rounding, at any angle. This is the assertion the fixed slot could never
+                    // satisfy, and since FIND-099 it holds over the sight core too. Skipped
+                    // within 60 px of either edge, where step 2's viewport clamp is the thing
+                    // moving the glyph — the reachable fan reaches 252 px of 1280, so that band
+                    // is 130 px of screen the fan can never be on anyway.
+                    if at.x > 60.0 && at.x < SCREEN.x - 60.0 {
+                        assert_eq!(
+                            l.glyph.x,
+                            at.x - shape.glyph_w_px * 0.5,
+                            "{state:?} {side:?} aimed at {at:?} was moved to {:.1} — a fan \
+                             marker's x is the projection and nothing else",
+                            l.glyph.x
+                        );
+                    }
+                }
+            }
+            assert!(
+                dodged > 0,
+                "{state:?}: the sweep crossed the middle of the screen and the glyph never once \
+                 stepped out of the sight core — the guard is dead code and the test proved \
+                 nothing about it"
+            );
+        }
+
+        // And the dodge is exactly out of the core and not a hand-wave: the glyph's top edge
+        // lands on the bottom of the square, so it touches and never overlaps.
+        let shape = shape_of(ArmAimState::Ready);
+        let l = layout_for(Side::Right, shape, Some(centre), SCREEN, Bearing::Fan);
+        assert_eq!(l.glyph.x, centre.x - shape.glyph_w_px * 0.5, "the x was moved");
+        assert_eq!(l.glyph.y, centre.y + SIGHT_CORE_PX, "the glyph did not step out of the core");
+    }
+
+    #[test]
     fn f171_a_marker_never_claims_the_wrong_half_of_the_screen() {
         // The push has a direction, and the direction is the point's own. A left arm holding
         // something on the right has to be drawn on the right — a marker shoved to "its" side
@@ -894,7 +1128,8 @@ mod tests {
         let shape = shape_of(ArmAimState::Anchored);
         let middle_y = SCREEN.y * 0.5;
         for side in Side::ALL {
-            let right = layout_for(side, shape, Some(Vec2::new(SCREEN.x * 0.52, middle_y)), SCREEN);
+            let right =
+                layout_for(side, shape, Some(Vec2::new(SCREEN.x * 0.52, middle_y)), SCREEN, Bearing::World);
             assert!(
                 right.glyph.x >= SCREEN.x * KEEP_OUT_HIGH_PCT / 100.0,
                 "{side:?} holding a point right of centre was drawn at {:?}",
@@ -902,7 +1137,8 @@ mod tests {
             );
             assert!(right.label_right, "{side:?}: the letter has to stay outboard");
 
-            let left = layout_for(side, shape, Some(Vec2::new(SCREEN.x * 0.48, middle_y)), SCREEN);
+            let left =
+                layout_for(side, shape, Some(Vec2::new(SCREEN.x * 0.48, middle_y)), SCREEN, Bearing::World);
             assert!(
                 left.glyph.x + shape.glyph_w_px <= SCREEN.x * KEEP_OUT_LOW_PCT / 100.0,
                 "{side:?} holding a point left of centre was drawn at {:?}",
@@ -914,8 +1150,8 @@ mod tests {
         // Dead on the axis there is no lean, and then the arm's own side decides — that is the
         // only thing an idle pair can honestly say (module header).
         let on_axis = Vec2::new(SCREEN.x * 0.5, middle_y);
-        let l = layout_for(Side::Left, shape, Some(on_axis), SCREEN);
-        let r = layout_for(Side::Right, shape, Some(on_axis), SCREEN);
+        let l = layout_for(Side::Left, shape, Some(on_axis), SCREEN, Bearing::World);
+        let r = layout_for(Side::Right, shape, Some(on_axis), SCREEN, Bearing::World);
         assert!(l.glyph.x < r.glyph.x, "Q ended up right of E: {:?} {:?}", l.glyph, r.glyph);
     }
 
@@ -930,7 +1166,7 @@ mod tests {
             Vec2::new(f32::NAN, 12.0),
         ] {
             for side in Side::ALL {
-                let l = layout_for(side, shape, Some(at), SCREEN);
+                let l = layout_for(side, shape, Some(at), SCREEN, Bearing::World);
                 assert!(
                     l.glyph.x >= 0.0 && l.glyph.x + shape.glyph_w_px <= SCREEN.x,
                     "{side:?} aimed at {at:?} left the screen: {:?}",

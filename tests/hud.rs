@@ -34,8 +34,10 @@ use defeated_by_titan::hud::health_bar::{HealthBar, HealthTrack};
 use defeated_by_titan::hud::objective::ObjectiveLine;
 use defeated_by_titan::hud::{HudElement, KEEP_OUT_HIGH_PCT, KEEP_OUT_LOW_PCT};
 use defeated_by_titan::mission::{KillTally, MissionPhase};
+use defeated_by_titan::shared::settings::{FOV_MAX_DEG, FOV_MIN_DEG};
 use defeated_by_titan::shared::{
-    BodyId, Blades, Cli, Gas, Health, Hook, HookState, LocalPlayer, PlayerId, Side, TitanId,
+    BodyId, Blades, Cli, Gas, Health, Hook, HookState, LocalPlayer, PlayerId, PlayerSettings,
+    Side, TitanId,
 };
 
 /// Builds the **real** app, headless — not a second, similar one.
@@ -466,6 +468,11 @@ fn f170_nothing_covers_the_middle_of_the_screen() {
     // Every `HudElement`, in its **worst case**: health present so its bar is laid out, the
     // objective forced visible although nothing produces it, and the crosshair in `Cortex` —
     // the state with eight nodes and the widest reach.
+    //
+    // **The one documented exception is not in this app**: an idle arm previewing its own side
+    // ray (`arm_aim::Bearing::Fan`) may stand inside the box and is held out of the aim pixel
+    // instead (FIND-098). Nothing here has an `ArmAim`, so both markers are badges in their side
+    // slots and every node below is under the full rule.
     let mut app = app();
     attach_screen(&mut app);
     let player = local_player(&mut app);
@@ -1101,6 +1108,13 @@ fn f170_the_arm_markers_stay_out_of_the_middle_in_every_state() {
     // `f170_nothing_covers_the_middle_of_the_screen` sees this pair only in the state a fresh
     // player is in. The pair changes size with its state, so it gets its own loop over all four
     // — including the widest glyph and the one with the tether.
+    //
+    // **Scope, since FIND-098:** this is the `arm_aim::Bearing::World` claim, and the bare app
+    // is exactly that case — no `ArmAim` data, so neither arm has a point of its own and both
+    // markers are badges in their side slots. An idle arm aiming down its own side ray is a
+    // `Bearing::Fan` marker and is deliberately allowed inside the box; what it may not cover is
+    // the aim pixel, and `f023_the_drawn_marker_is_strictly_monotone_in_the_resolved_fan` is
+    // where that is swept.
     let mut app = app();
     attach_screen(&mut app);
     let (w, h) = screen(&mut app);
@@ -1682,72 +1696,69 @@ fn f026_the_rope_flies_at_the_point_the_marker_stood_on() {
 
 #[test]
 fn f026_two_idle_arms_preview_two_different_points() {
-    // ★ *"und es muss mehr rechts und links spreaden!!"* — and the W5 acceptance
-    // "both glyphs ≥ 145 px from centre x". Until W3 this test could not exist: two idle arms
-    // shared one point, so the pair had nothing but its side slots to say
+    // ★ *"und es muss mehr rechts und links spreaden!!"* — and until W3 this test could not
+    // exist: two idle arms shared one point, so the pair had nothing but its side slots to say
     // (`docs/FINDINGS.md` FIND-039/047).
     //
-    // The two points are not invented — they are cast down `vector::aim::side_dirs`, the same
-    // two directions the hook uses, at the spread `game.ron` ships.
-    use defeated_by_titan::shared::{AimPoint, ArmAim, Intent};
-    use defeated_by_titan::vector::aim::side_dirs;
+    // **W5's `off >= 145 px` is gone on purpose, and it is the rollback point FIND-096 named.**
+    // That number was the keep-out box plus a gap, i.e. the fixed slot itself, so it could only
+    // ever be met by a marker that had stopped following the fan — and it was measured against
+    // the raw wheel fed into `side_dirs` as if it were a half-angle, which is neither the unit
+    // the wheel carries nor the angle the game resolves. Two of the user's own requirements
+    // disagreed and requirement 9 wins: *"und dann muss das seil auch dahin!!"*. What is asserted
+    // instead is what "wider" actually means — the pair opens with the wheel, never swaps, and
+    // never covers the pixel he is cutting. `docs/FINDINGS.md` FIND-098.
+    use defeated_by_titan::shared::MovementState;
+    use defeated_by_titan::vector::aim::{effective_spread_rad, SpreadContext};
     let mut app = app();
     attach_screen(&mut app);
     stand_and_look(&mut app, Vec3::ZERO, 0.0, 0.0);
 
-    let (spread_min, spread_max, eye_height_m) = {
-        let data = app.world().resource::<GameData>();
-        (
-            data.game.vector.aim_spread_min_deg,
-            data.game.vector.aim_spread_max_deg,
-            data.game.player.eye_height_m,
-        )
-    };
+    let v = app.world().resource::<GameData>().game.vector.clone();
     let (w, _h) = screen(&mut app);
     let centre_x = w * 0.5;
 
     let mut gaps = Vec::new();
-    for spread_deg in [spread_min, 28.0_f32, spread_max] {
-        let player = local_player(&mut app);
-        let intent = {
-            let mut e = app.world_mut().entity_mut(player);
-            let mut intent = e.get_mut::<Intent>().expect("the player has an `Intent`");
-            intent.aim_spread_deg = spread_deg;
-            *intent
-        };
-        let eye = Vec3::ZERO + Vec3::Y * eye_height_m;
-        let dirs = side_dirs(&intent, intent.aim_spread_rad(spread_min, spread_max));
-        // 40 m down each side ray: a distance the projection cannot see anyway — what a marker
-        // shows is the bearing, and the bearing is what the rope takes.
-        let arms = Side::ALL.map(|side| AimPoint {
-            point_m: Some(eye + dirs[side.index()] * 40.0),
-            body: Some(BodyId(1)),
-            anchorable: true,
-        });
-        app.world_mut().entity_mut(player).insert(ArmAim { arms });
-        run_hud(&mut app);
+    for wheel_deg in [v.aim_spread_min_deg, v.aim_spread_deg, v.aim_spread_max_deg] {
+        // The angle the game really resolves for a player standing still and looking 40 m away
+        // — not the wheel, which is only the ceiling on it (`vector::aim::effective_spread_rad`).
+        let half_rad = effective_spread_rad(
+            &v,
+            SpreadContext {
+                wheel_rad: wheel_deg.to_radians(),
+                state: MovementState::Grounded,
+                horizontal_speed_m_s: 0.0,
+                distance_m: Some(40.0),
+            },
+        );
+        aim_both_arms_at(&mut app, half_rad);
 
         let left = glyph_centre(&mut app, Side::Left);
         let right = glyph_centre(&mut app, Side::Right);
         let gap = right.x - left.x;
         println!(
-            "f026 spread {spread_deg} deg -> Q at {left:?}, E at {right:?}, gap {gap:.1} px, \
-             {:.1} / {:.1} px off centre",
+            "f026 wheel {wheel_deg:4.1} deg -> resolved half {:5.2} deg, Q at {left:?}, \
+             E at {right:?}, gap {gap:.1} px, {:.1} / {:.1} px off centre",
+            half_rad.to_degrees(),
             (centre_x - left.x).abs(),
             (right.x - centre_x).abs()
         );
         assert!(left.x < centre_x && right.x > centre_x, "the pair is swapped or collapsed");
         for (side, at) in [(Side::Left, left), (Side::Right, right)] {
             let off = (at.x - centre_x).abs();
+            // The glyph is 20 px wide, so `off - 10` is its inner edge. The marker may stand
+            // inside `F-170`'s box — it IS the aim — but never over the aim pixel itself.
             assert!(
-                off >= 145.0,
-                "the {side:?} glyph stands {off:.1} px off the centre at {spread_deg} deg — \
-                 W5's acceptance is 145 px, and the keep-out box alone is 128"
+                off > 10.0,
+                "the {side:?} glyph stands {off:.1} px off the centre at a resolved {:.2} deg \
+                 and its inner edge is over the pixel the player is cutting",
+                half_rad.to_degrees()
             );
         }
         gaps.push(gap);
     }
-    // And the wheel is visible in the picture: a wider spread is a wider pair.
+    // And the wheel is visible in the picture: a wider permission is a wider pair. This is the
+    // clause the keep-out push used to eat — before FIND-098 all three notches drew 292.0 px.
     for pair in gaps.windows(2) {
         assert!(
             pair[1] > pair[0] + 20.0,
@@ -1792,4 +1803,579 @@ fn f026_an_anchor_behind_you_goes_to_the_edge_on_its_own_side() {
     println!("f026 behind, swapped: Q at {left:?}, E at {right:?}");
     assert!(left.x > w * 0.85, "Q's anchor moved behind-RIGHT and the marker stayed at {left:?}");
     assert!(right.x < w * 0.15, "E's anchor moved behind-LEFT and the marker stayed at {right:?}");
+}
+
+// ---------------------------------------------------------------------------------------
+// F-023 — the drawn marker IS the resolved fan
+//
+// > *„der spread für seile ist zu weit auseinander und sollte mehr dynamisch sein!"*
+// > — the user, 2026-08-18
+//
+// The narrowing landed in `vector::aim::effective_spread_rad` and was verified there over
+// 200 000 randomised ticks. What no test could see was what the HUD then did with it: at the
+// shipped wheel every resolved fan projects **inside** `F-170`'s keep-out box (9.594° grounded
+// is |NDC_x| 0.165, and the box edge is 0.2), and `layout_for` pushed anything that touched the
+// box to a fixed slot at its edge. So the fan narrowed by 65 % and the picture did not move a
+// pixel. `docs/FINDINGS.md` FIND-098.
+//
+// The two tests below are the ones that would have caught it: the first pins the drawn x to the
+// projection of the resolved half-angle, the second sweeps the whole reachable band of angles
+// and demands the drawn x be **strictly** monotone in it.
+// ---------------------------------------------------------------------------------------
+
+/// Where a ray `half_rad` off the look axis lands, in pixels from the centre of the screen.
+///
+/// **Independent arithmetic, deliberately not `Camera::world_to_viewport`**: a test that asked
+/// the camera where the camera puts a point would agree with itself no matter what the HUD did
+/// with the answer. `PerspectiveProjection.fov` is the **vertical** field of view
+/// (`docs/QUESTIONS.md` Q-021), so the horizontal half-frustum is `atan(tan(fov/2) · aspect)`
+/// and `NDC_x = tan(half_rad) / tan(half_frustum)`.
+fn fan_offset_px(half_rad: f32, w: f32, h: f32, fov_deg: f32) -> f32 {
+    let tan_half_h = (fov_deg.to_radians() * 0.5).tan() * (w / h);
+    half_rad.tan() / tan_half_h * w * 0.5
+}
+
+/// Puts both idle arms on **their own** side rays at `half_rad`, 40 m out, and lays the HUD out.
+///
+/// 40 m because the projection cannot see distance anyway (module header of
+/// `src/hud/arm_aim.rs`) — what a marker shows is the bearing, and the bearing is the fan.
+fn aim_both_arms_at(app: &mut App, half_rad: f32) -> [Vec3; 2] {
+    use defeated_by_titan::shared::{AimPoint, ArmAim, Intent};
+    use defeated_by_titan::vector::aim::side_dirs;
+    let eye_height_m = app.world().resource::<GameData>().game.player.eye_height_m;
+    let player = local_player(app);
+    let intent = *app
+        .world()
+        .entity(player)
+        .get::<Intent>()
+        .expect("the player has an `Intent`");
+    let eye = Vec3::ZERO + Vec3::Y * eye_height_m;
+    let dirs = side_dirs(&intent, half_rad);
+    let points = Side::ALL.map(|side| eye + dirs[side.index()] * 40.0);
+    let arms = Side::ALL.map(|side| AimPoint {
+        point_m: Some(points[side.index()]),
+        body: Some(BodyId(1)),
+        anchorable: true,
+    });
+    app.world_mut().entity_mut(player).insert(ArmAim { arms });
+    run_hud(app);
+    points
+}
+
+/// **The field of view the player is actually running**, not the file's default.
+///
+/// `src/shared/settings.rs` lets the settings screen move it from [`FOV_MIN_DEG`] to
+/// [`FOV_MAX_DEG`] and `render::apply_field_of_view` writes it into the camera's `Projection`.
+/// Every test that computes where a ray *should* land has to read this and not
+/// `game.ron: camera.fov_deg` — the two are equal only until the player touches the slider,
+/// and the whole point of `F-023`'s marker is that it follows the picture the player sees.
+fn live_fov_deg(app: &mut App) -> f32 {
+    app.world().resource::<PlayerSettings>().fov_deg
+}
+
+/// Moves the FOV the way the settings screen moves it, and lets `render` carry it to the camera.
+///
+/// `render::apply_field_of_view` runs in `Update` and the camera's own projection matrix is
+/// recomputed in `PostUpdate` — which is exactly [`run_hud`], in that order.
+fn set_fov(app: &mut App, deg: f32) {
+    assert!(
+        (FOV_MIN_DEG..=FOV_MAX_DEG).contains(&deg),
+        "{deg} deg is outside the range the settings screen can reach \
+         ({FOV_MIN_DEG}..={FOV_MAX_DEG}) — the test is exercising a value no player can set"
+    );
+    app.world_mut().resource_mut::<PlayerSettings>().fov_deg = deg;
+    run_hud(app);
+    let mut q = app.world_mut().query_filtered::<&Projection, With<Camera3d>>();
+    let Projection::Perspective(p) = q.iter(app.world()).next().expect("a 3D camera") else {
+        panic!("the 3D camera is not on a perspective projection");
+    };
+    assert!(
+        (p.fov.to_degrees() - deg).abs() < 1e-3,
+        "`PlayerSettings.fov_deg` was set to {deg} and the camera is still on {:.3} deg — \
+         `render::apply_field_of_view` did not carry it",
+        p.fov.to_degrees()
+    );
+}
+
+/// The four fields of view the marker tests sweep: both ends of the slider, the file's default,
+/// and the one in the middle that a wide-screen player actually picks.
+const FOVS: [f32; 4] = [FOV_MIN_DEG, 60.0, 90.0, FOV_MAX_DEG];
+
+#[test]
+fn f023_the_drawn_marker_stands_at_the_resolved_fan_angle() {
+    // ★ **The refutation, as a test.** Nine readings — three movement states × three wheel
+    // notches — each one the angle `vector::aim::effective_spread_rad` really resolves, and each
+    // one measured off the laid-out rectangle. Before the fix all nine came out at the same
+    // 146.0 px, because the keep-out push had already eaten every one of them.
+    //
+    // **× four fields of view since FIND-099.** The running camera's FOV is
+    // `PlayerSettings.fov_deg` and the settings screen moves it over 55..110 deg; the projection
+    // of a fixed angle nearly triples across that range, so a test that only ever saw the
+    // file's 60 was checking one corner of the picture the player can actually produce.
+    use defeated_by_titan::shared::MovementState;
+    use defeated_by_titan::vector::aim::{effective_spread_rad, SpreadContext};
+
+    let mut app = app();
+    attach_screen(&mut app);
+    stand_and_look(&mut app, Vec3::ZERO, 0.0, 0.0);
+    let (w, h) = screen(&mut app);
+    let centre_x = w * 0.5;
+
+    let v = app.world().resource::<GameData>().game.vector.clone();
+    let notches = [
+        ("min", v.aim_spread_min_deg),
+        ("default", v.aim_spread_deg),
+        ("max", v.aim_spread_max_deg),
+    ];
+    let states = [
+        ("grounded", MovementState::Grounded),
+        ("airborne", MovementState::Airborne),
+        ("tethered", MovementState::Tethered),
+    ];
+
+    for fov in FOVS {
+        set_fov(&mut app, fov);
+        let fov_deg = live_fov_deg(&mut app);
+        println!("f023 drawn marker vs resolved fan, {w:.0} x {h:.0}, fov {fov_deg:.0} deg:");
+        for (state_name, state) in states {
+            for (notch_name, wheel_deg) in notches {
+                let half_rad = effective_spread_rad(
+                    &v,
+                    SpreadContext {
+                        wheel_rad: wheel_deg.to_radians(),
+                        state,
+                        horizontal_speed_m_s: 0.0,
+                        distance_m: Some(40.0),
+                    },
+                );
+                aim_both_arms_at(&mut app, half_rad);
+                let left = glyph_centre(&mut app, Side::Left);
+                let right = glyph_centre(&mut app, Side::Right);
+                let want = fan_offset_px(half_rad, w, h, fov_deg);
+                println!(
+                    "  {state_name:9} wheel {notch_name:7} ({wheel_deg:4.1} deg) -> half \
+                     {:6.3} deg, want {want:6.1} px, drew Q {:6.1} / E {:6.1} px",
+                    half_rad.to_degrees(),
+                    centre_x - left.x,
+                    right.x - centre_x
+                );
+                for (side, at) in [(Side::Left, left), (Side::Right, right)] {
+                    let off = (at.x - centre_x).abs();
+                    assert!(
+                        (off - want).abs() <= 1.0,
+                        "at fov {fov_deg:.0} deg, {state_name} at the {notch_name} wheel \
+                         resolves to {:.3} deg, which projects {want:.1} px off the centre — \
+                         the {side:?} glyph was drawn at {off:.1} px. The marker and the rope \
+                         are supposed to be ONE number (`F-023`); a marker parked at a fixed \
+                         slot is the HUD lying about a fan the player just paid for",
+                        half_rad.to_degrees()
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Whether one glyph covers the pixels the player is actually cutting.
+///
+/// The **sight core** is `SIGHT_CORE_PX` either side of the middle of the screen on **both**
+/// axes — the hole the crosshair's four ticks stand around. A fan marker is allowed inside
+/// `F-170`'s keep-out box (its x *is* the resolved angle, `docs/FINDINGS.md` FIND-098) and this
+/// little square is the one thing it may never sit on.
+fn covers_the_sight_core(centre: Vec2, size: Vec2, screen: Vec2) -> bool {
+    use defeated_by_titan::hud::arm_aim::SIGHT_CORE_PX;
+    const EPS: f32 = 0.5;
+    let half = size * 0.5 + Vec2::splat(SIGHT_CORE_PX - EPS);
+    (centre.x - screen.x * 0.5).abs() < half.x && (centre.y - screen.y * 0.5).abs() < half.y
+}
+
+#[test]
+fn f023_the_drawn_marker_is_strictly_monotone_in_the_resolved_fan() {
+    // ★ **The invariant, over the whole reachable band and not at one point.** `game.ron` lets
+    // the resolved half-angle run from `aim_spread_floor_deg` (2°) to half of
+    // `aim_spread_max_deg` (22°); every angle in between is reachable by some combination of
+    // state, speed, distance and wheel. Narrower fan, closer markers — **always**, with no flat
+    // stretch anywhere, because a flat stretch is exactly what a fixed slot looks like from
+    // outside.
+    //
+    // **And at every field of view the slider can reach (FIND-099).** A wider FOV projects the
+    // same angle into fewer pixels: at 110 deg on a 1280 px viewport the whole band
+    // 2.000..3.632 deg lands within 16 px of the middle, which is where the sight-core guard
+    // used to clamp — so the flat stretch this test exists to catch came back the moment a
+    // player widened his view, and nothing was looking.
+    let mut app = app();
+    attach_screen(&mut app);
+    stand_and_look(&mut app, Vec3::ZERO, 0.0, 0.0);
+    let (w, h) = screen(&mut app);
+    let centre_x = w * 0.5;
+    let (floor_deg, max_deg) = {
+        let data = app.world().resource::<GameData>();
+        (data.game.vector.aim_spread_floor_deg, data.game.vector.aim_spread_max_deg)
+    };
+    let ceiling_deg = max_deg * 0.5;
+    let glyph = Vec2::splat(arm_aim::shape_of(ArmAimState::Ready).glyph_w_px);
+
+    const STEPS: usize = 24;
+    for fov in FOVS {
+        set_fov(&mut app, fov);
+        let fov_deg = live_fov_deg(&mut app);
+        let mut previous: Option<(f32, f32)> = None;
+        let mut flats = Vec::new();
+        for step in 0..=STEPS {
+            let half_deg = floor_deg + (ceiling_deg - floor_deg) * step as f32 / STEPS as f32;
+            aim_both_arms_at(&mut app, half_deg.to_radians());
+            let left = glyph_centre(&mut app, Side::Left);
+            let right = glyph_centre(&mut app, Side::Right);
+            let off = ((centre_x - left.x) + (right.x - centre_x)) * 0.5;
+
+            // The pair never swaps and never covers the pixels the player is aiming at. Not
+            // "10 px of x" any more: at a wide FOV the honest x for a floor-angle fan *is*
+            // under 10 px, and the marker gives up the axis that carries nothing — its y is
+            // the crosshair's y at every angle — instead of the one that carries the number.
+            assert!(
+                left.x < centre_x && right.x > centre_x,
+                "at fov {fov_deg:.0} deg and {half_deg:.2} deg the pair is swapped or \
+                 collapsed: Q {left:?}, E {right:?}"
+            );
+            for (side, at) in [(Side::Left, left), (Side::Right, right)] {
+                assert!(
+                    !covers_the_sight_core(at, glyph, Vec2::new(w, h)),
+                    "at fov {fov_deg:.0} deg and a resolved {half_deg:.2} deg the {side:?} \
+                     glyph sits at {at:?} on a {w:.0} x {h:.0} screen — over the pixels the \
+                     player is cutting"
+                );
+            }
+
+            if let Some((prev_deg, prev_off)) = previous {
+                if off <= prev_off + 0.5 {
+                    flats.push(format!(
+                        "{prev_deg:.2} deg -> {prev_off:.1} px, {half_deg:.2} deg -> {off:.1} px"
+                    ));
+                }
+            }
+            previous = Some((half_deg, off));
+        }
+        let span = fan_offset_px(ceiling_deg.to_radians(), w, h, fov_deg)
+            - fan_offset_px(floor_deg.to_radians(), w, h, fov_deg);
+        println!(
+            "f023 monotone sweep at fov {fov_deg:3.0} deg, {floor_deg:.1}..{ceiling_deg:.1} \
+             deg over {} steps, {span:.1} px of travel, {} flat steps",
+            STEPS + 1,
+            flats.len()
+        );
+        assert!(
+            flats.is_empty(),
+            "at fov {fov_deg:.0} deg the drawn marker stopped following the fan on {} of \
+             {STEPS} steps — a flat stretch is what a fixed slot looks like from the outside, \
+             and it is the whole defect: {}",
+            flats.len(),
+            flats.join(" | ")
+        );
+    }
+}
+
+#[test]
+fn f023_the_marker_x_against_the_resolved_fan_is_the_evidence_table() {
+    // **The evidence for FIND-098, computed from the shipped code rather than quoted.** Both
+    // columns are real code paths that still exist: `Bearing::World` *is* the rule every marker
+    // obeyed before the fix, `Bearing::Fan` is what an idle arm on its own side ray obeys now.
+    // Two viewport widths, because the box is a percentage and the glyph is not.
+    use defeated_by_titan::hud::arm_aim::{layout_for, shape_of, Bearing};
+    use defeated_by_titan::shared::MovementState;
+    use defeated_by_titan::vector::aim::{effective_spread_rad, SpreadContext};
+
+    let mut app = app();
+    let v = app.world().resource::<GameData>().game.vector.clone();
+    // The **live** setting, not `game.ron: camera.fov_deg` — see `live_fov_deg`.
+    let fov_deg = live_fov_deg(&mut app);
+    let shape = shape_of(ArmAimState::Ready);
+
+    for (w, h) in [(1280.0_f32, 720.0_f32), (2560.0, 1440.0)] {
+        let viewport = Vec2::new(w, h);
+        let centre = Vec2::new(w * 0.5, h * 0.5);
+        println!(
+            "\nf023 evidence, {w:.0} x {h:.0} — E glyph centre, px right of screen centre:\n\
+             \x20 state     wheel   half-angle   projected   before(World)   after(Fan)"
+        );
+        for (state_name, state) in [
+            ("grounded", MovementState::Grounded),
+            ("airborne", MovementState::Airborne),
+            ("tethered", MovementState::Tethered),
+        ] {
+            for (notch, wheel_deg) in [
+                ("min", v.aim_spread_min_deg),
+                ("def", v.aim_spread_deg),
+                ("max", v.aim_spread_max_deg),
+            ] {
+                let half_rad = effective_spread_rad(
+                    &v,
+                    SpreadContext {
+                        wheel_rad: wheel_deg.to_radians(),
+                        state,
+                        horizontal_speed_m_s: 0.0,
+                        distance_m: Some(40.0),
+                    },
+                );
+                let want = fan_offset_px(half_rad, w, h, fov_deg);
+                let at = Vec2::new(centre.x + want, centre.y);
+                let before =
+                    layout_for(Side::Right, shape, Some(at), viewport, Bearing::World).glyph.x
+                        + shape.glyph_w_px * 0.5
+                        - centre.x;
+                let after =
+                    layout_for(Side::Right, shape, Some(at), viewport, Bearing::Fan).glyph.x
+                        + shape.glyph_w_px * 0.5
+                        - centre.x;
+                println!(
+                    "  {state_name:9} {notch:5} {:8.3} deg {want:9.1} px {before:11.1} px \
+                     {after:11.1} px",
+                    half_rad.to_degrees()
+                );
+                assert!(
+                    (after - want).abs() <= 0.05,
+                    "{state_name}/{notch} at {w:.0} px: the fan resolves to {:.3} deg, which \
+                     projects {want:.1} px, and the marker was drawn at {after:.1} px",
+                    half_rad.to_degrees()
+                );
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// F-023 / F-026 — what happens in the ONE frame the bearing flips
+//
+// `arm_aim::bearing_of` decides per tick whether a marker's x is an **angle**
+// (`Bearing::Fan`) or a **place** (`Bearing::World`), and the two obey different rules. Nothing
+// watched the frame the answer changes. `docs/FINDINGS.md` FIND-099.
+// ---------------------------------------------------------------------------------------
+
+/// Sends one arm out at a world point exactly the way `vector::hook::fire` does.
+///
+/// **Including its decision 5: the tip starts in the hand**, i.e. at the eye, i.e. inside the
+/// camera. That detail is the whole point of the test below — a marker that reads the tip has
+/// to project a point sitting on the camera's own near plane.
+fn fire_arm_at(app: &mut App, side: Side, target_m: Vec3) {
+    let eye_height_m = app.world().resource::<GameData>().game.player.eye_height_m;
+    let player = local_player(app);
+    let hand_m = app
+        .world()
+        .entity(player)
+        .get::<Transform>()
+        .expect("the player has a `Transform`")
+        .translation
+        + Vec3::Y * eye_height_m;
+    let mut hook = app
+        .world()
+        .entity(player)
+        .get::<Hook>()
+        .copied()
+        .expect("the player carries a `Hook`");
+    hook.arms[side.index()].state = HookState::Flying { target_m, body: BodyId(1) };
+    hook.arms[side.index()].tip_m = hand_m;
+    app.world_mut().entity_mut(player).insert(hook);
+}
+
+/// How far from the middle of the screen a marker parked in its **side slot** stands, for one
+/// shape. The furthest out `layout_for` will ever put a marker on purpose — read out of the
+/// layout itself rather than spelled again here, so the number cannot drift.
+fn slot_offset_px(side: Side, state: ArmAimState, screen: Vec2) -> f32 {
+    use defeated_by_titan::hud::arm_aim::{layout_for, shape_of, Bearing};
+    let shape = shape_of(state);
+    let laid = layout_for(side, shape, None, screen, Bearing::World);
+    (laid.glyph.x + shape.glyph_w_px * 0.5 - screen.x * 0.5).abs()
+}
+
+#[test]
+fn f026_a_fired_arm_previews_where_it_lands_and_not_the_hook_in_its_hand() {
+    // ★ **The teleport, and it fires on every single shot.** The player's requirement is
+    // *"und da wo das seil am ende auch landet soll die markierung hin ... dass man direkt
+    // sieht wo man landet"* — where the rope ENDS UP. `vector::hook::fire` freezes that place
+    // into `HookState::Flying { target_m }` and puts the tip **in the hand**; the tip is then
+    // one metre from the camera for the first few ticks, `Camera::world_to_viewport` refuses
+    // it, `edge_pixel` gives it a bearing, and the layout clamps it to the edge of the screen.
+    //
+    // So a marker reading `tip_m` answers "your target is off the right-hand edge" about a
+    // point 40 m dead ahead, and then crawls back inwards over the flight as if the target
+    // were moving. Measured here: it went to **608 px** off centre on a 1280 px screen, from
+    // 105 px, in one frame — and the target had not moved at all.
+    let mut app = app();
+    attach_screen(&mut app);
+    stand_and_look(&mut app, Vec3::ZERO, 0.0, 0.0);
+    let (w, h) = screen(&mut app);
+    let centre_x = w * 0.5;
+    let v = app.world().resource::<GameData>().game.vector.clone();
+
+    // Two fans, because the keep-out box makes the two cases genuinely different: a wide fan
+    // projects **outside** `F-170`'s box and a narrow one lands inside it.
+    for (name, half_rad) in [
+        ("wide, outside the box", v.aim_spread_deg.to_radians() * 0.5),
+        ("narrow, inside the box", v.aim_spread_floor_deg.to_radians()),
+    ] {
+        // Both arms home first: the previous pass left them flying, and a flying arm previews
+        // its `target_m` rather than this pass's side ray.
+        for side in Side::ALL {
+            set_arm(&mut app, side, HookState::Idle);
+        }
+        let points = aim_both_arms_at(&mut app, half_rad);
+        let before = Side::ALL.map(|side| glyph_centre(&mut app, side));
+
+        // Fire both arms at **exactly** the two points their markers were standing on. Nothing
+        // about the world changed; the only new fact is that the arms are committed.
+        for side in Side::ALL {
+            fire_arm_at(&mut app, side, points[side.index()]);
+        }
+        run_hud(&mut app);
+
+        for side in Side::ALL {
+            let after = glyph_centre(&mut app, side);
+            let (off_before, off_after) = (
+                (before[side.index()].x - centre_x).abs(),
+                (after.x - centre_x).abs(),
+            );
+            let slot = slot_offset_px(side, ArmAimState::Busy, Vec2::new(w, h));
+            println!(
+                "f026 fire ({name}) {side:?}: {off_before:.1} px -> {off_after:.1} px off \
+                 centre (side slot is {slot:.1} px)"
+            );
+            // Either it did not move at all — the honest answer, and the one a target outside
+            // the box gets — or `F-170`'s box parked it in its own side slot. Never further:
+            // past the slot is the projection running away, which is what reading the hook in
+            // the player's hand produces.
+            let stayed = (off_after - off_before).abs() <= 1.0;
+            let parked = (off_after - slot).abs() <= 1.0;
+            assert!(
+                stayed || parked,
+                "{side:?} fired at {:?} — the point its own marker was standing on \
+                 {off_before:.1} px off the centre of a {w:.0} px screen — and the marker \
+                 jumped to {off_after:.1} px, which is neither where it stood nor the \
+                 {slot:.1} px side slot. It is reading the hook in the player's hand instead \
+                 of the place the hook is flying to, so it says the target is off the edge of \
+                 the screen while the target is 40 m dead ahead",
+                points[side.index()]
+            );
+        }
+    }
+}
+
+#[test]
+fn f023_every_bearing_flip_is_a_hard_jump_and_this_is_how_big() {
+    // ★ **The transition table, which is the finding.** `bearing_of` can flip four ways and
+    // each one moves the glyph; nothing measured any of them. What is asserted here is the
+    // decision (`docs/FINDINGS.md` FIND-099), not a wish:
+    //
+    // 1. **the jump stays hard** — it is not smoothed and must not be. A slide would put the
+    //    marker for ~100 ms on a place the rope does not go, and "the marker and the rope are
+    //    one number" is the whole of `F-023`/`F-026`. So: one frame after the flip the marker
+    //    is already final, and it stays there.
+    // 2. **no flip may throw the marker further out than its own side slot** — the slot is the
+    //    designed parking place for a marker with nothing to say, and anything past it is the
+    //    projection running away rather than a decision.
+    // 3. **at rest a fan marker stands exactly at the resolved angle**, before and after the
+    //    round trip: a flip may not leave a residue behind.
+    use defeated_by_titan::shared::{AimPoint, ArmAim};
+
+    let mut app = app();
+    attach_screen(&mut app);
+    stand_and_look(&mut app, Vec3::ZERO, 0.0, 0.0);
+    let (w, h) = screen(&mut app);
+    let (centre_x, viewport) = (w * 0.5, Vec2::new(w, h));
+    let fov_deg = live_fov_deg(&mut app);
+    let v = app.world().resource::<GameData>().game.vector.clone();
+    let eye_height_m = app.world().resource::<GameData>().game.player.eye_height_m;
+    let player = local_player(&mut app);
+
+    // The tethered default: the narrowest fan the shipped numbers produce at a hooking range,
+    // and therefore the biggest distance between "my own side ray" and "the side slot".
+    let half_rad = v.aim_spread_floor_deg.to_radians().max(v.aim_spread_deg.to_radians() * 0.2);
+    let want = fan_offset_px(half_rad, w, h, fov_deg);
+
+    // The shared centre ray, 40 m dead ahead — the value `vector::aim` hands an arm whose own
+    // side ray found nothing (`vector::aim::aim`, the fallback).
+    let centre_m = Vec3::new(0.0, eye_height_m, -40.0);
+    let shared = AimPoint { point_m: Some(centre_m), body: Some(BodyId(1)), anchorable: true };
+    app.world_mut().entity_mut(player).insert(shared);
+
+    let side = Side::Right;
+    let mut steps: Vec<(&str, ArmAimState, f32)> = Vec::new();
+    let mut reading = |app: &mut App, name: &'static str, state: ArmAimState| {
+        let at = glyph_centre(app, side);
+        // **Not smoothed** — two more frames of exactly the same input may not move it.
+        run_hud(app);
+        run_hud(app);
+        let settled = glyph_centre(app, side);
+        assert!(
+            (settled.x - at.x).abs() < 0.01,
+            "after `{name}` the marker moved {:.2} px over two further frames of the same \
+             input ({at:?} -> {settled:?}). Somebody has put a filter on the position: at rest \
+             the marker has to stand exactly where the arm fires, and a marker that is still \
+             sliding is pointing at a place the rope will not go",
+            settled.x - at.x
+        );
+        let off = at.x - centre_x;
+        let slot = slot_offset_px(side, state, viewport);
+        assert!(
+            off.abs() <= slot + 1.0,
+            "`{name}`: the marker stands {off:.1} px off the centre of a {w:.0} px screen and \
+             its own side slot is {slot:.1} px out. A bearing flip that throws the glyph past \
+             the slot is the projection running away, not a decision"
+        );
+        steps.push((name, state, off));
+        off
+    };
+
+    // 1. both arms on their own side rays — `Bearing::Fan`.
+    let points = aim_both_arms_at(&mut app, half_rad);
+    let fan = reading(&mut app, "fan, own side ray", ArmAimState::Ready);
+
+    // 2. the side ray finds nothing and is handed the centre ray — `Bearing::World` by value.
+    let arms = Side::ALL.map(|_| shared);
+    app.world_mut().entity_mut(player).insert(ArmAim { arms });
+    run_hud(&mut app);
+    let fallback = reading(&mut app, "fell back to the centre ray", ArmAimState::Ready);
+
+    // 3. and back: the round trip may not leave a residue.
+    aim_both_arms_at(&mut app, half_rad);
+    let back = reading(&mut app, "back on its own side ray", ArmAimState::Ready);
+
+    // 4. fired at the point it was standing on — `Bearing::World`, a real place.
+    fire_arm_at(&mut app, side, points[side.index()]);
+    run_hud(&mut app);
+    let fired = reading(&mut app, "fired at that same point", ArmAimState::Busy);
+
+    // 5. holding it.
+    anchor_arm_at(&mut app, side, points[side.index()]);
+    run_hud(&mut app);
+    let anchored = reading(&mut app, "anchored on it", ArmAimState::Anchored);
+
+    println!(
+        "f023 bearing flips at fov {fov_deg:.0} deg on a {w:.0} x {h:.0} screen, \
+         resolved half {:.3} deg (projects {want:.1} px):",
+        half_rad.to_degrees()
+    );
+    let mut previous: Option<f32> = None;
+    for (name, state, off) in &steps {
+        let jump = previous.map_or(0.0, |p: f32| off - p);
+        println!("  {name:32} {:10} {off:8.1} px  jump {jump:+8.1} px", format!("{state:?}"));
+        previous = Some(*off);
+    }
+
+    // The fan readings are the angle itself, before and after the round trip.
+    for (name, off) in [("before", fan), ("after", back)] {
+        assert!(
+            (off.abs() - want).abs() <= 1.0,
+            "the fan marker {name} the round trip stands {:.1} px off centre and the resolved \
+             {:.3} deg projects to {want:.1} px",
+            off.abs(),
+            half_rad.to_degrees()
+        );
+    }
+    assert!(
+        fallback.abs() > fan.abs() + 1.0,
+        "falling back to the centre ray moved the marker {:.1} -> {:.1} px, which is nothing. \
+         The two states mean different things and the test is proving neither",
+        fan.abs(),
+        fallback.abs()
+    );
+    let _ = (fired, anchored);
 }
