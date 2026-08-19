@@ -1,0 +1,30 @@
+# f003-sky — the district vantage, for the sky and the fog and nothing else.
+#
+#   cargo run -- --offscreen --screenshot docs/images/f003-sky-after.png \
+#                --script scripts/f003-sky.txt --ticks 102
+#
+# The picture is `docs/images/f003-sky-before.png` / `-after.png`, and the only difference
+# between the two is `assets/data/art.ron: lighting.sky` + `lighting.fog`
+# (`docs/FINDINGS.md` FIND-112). Same binary, same map, same tick — the RON is read at
+# startup, so an A/B needs no rebuild and cannot be a different build by accident.
+#
+# ⚠️ It goes to the vantage DIRECTLY instead of flying `scripts/f003-ashgate.txt` to its end.
+# That is not laziness: on 2026-08-19 that script's later acts no longer hold (six red
+# asserts, FIND-112 §4), so `--ticks 1720` no longer lands on `f003-vantage` and the frame
+# comes out from inside a wall. A picture whose camera position depends on 25 asserts holding
+# is not evidence about light.
+#
+# The vantage is the one `scripts/f003-ashgate.txt` documents: north-east of the main street,
+# 62 m up, looking south-west across the roofscape at the 120 m wall.
+
+wait 1.5                # world, camera, meshes and the render pipelines come up
+warp 150 62 165
+look -28 -14
+wait 0.15               # ⚠️ SHORT: he is airborne, and every tick is more falling
+mark f003-sky
+assert height > 55
+wait 5                  # keep the run alive until the image is on disk
+#
+# ⚠️ `--ticks 102` is the SHOT and `MARK` prints at 103 — the mark is one tick behind because
+# it is checked after the wait that precedes it. Same pose either way: `warp` and `look` have
+# both landed by then. A verdict run wants `--headless --ticks 420` so the trailing wait ends.

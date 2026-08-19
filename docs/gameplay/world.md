@@ -78,9 +78,16 @@ twice: atmosphere and culling. Bevy's PBR plus a `DirectionalLight` plus fog is 
 of the bible's "Future Lighting" — **the style stays exactly as specified**, only the mechanism
 changes ([`../architecture.md`](../architecture.md), translation table).
 
-> **Neither exists yet.** The screenshots in [`../ACCEPTANCE.md`](../ACCEPTANCE.md) show a
-> uniform dark gray upper half: that is Bevy's `ClearColor`, not a sky, and there is no fog. Both
-> are missing, not broken — worth knowing before somebody files it as a rendering bug.
+> ⚠️ **This paragraph used to say "Neither exists yet" and that is STALE since 2026-08-13.**
+> Both are built: `src/render/light.rs::setup_sky` raises a **dome** (three linear-RGB stops out of
+> `art.ron: lighting.sky`, zenith → horizon → nadir, `radius_m` 820, pinned to the eye) and
+> `camera_light_settings` returns a real `DistanceFog` whose colour **is** the horizon stop, so a
+> distant block dissolves into the sky rather than into a grey wall.
+>
+> **What is true is that they do not READ yet.** Two independent rounds looking at 2026-08-18/19
+> frames called the result *"flat/harsh, half the image near-black"* and *"a flat grey sky"*.
+> That is a tuning or a wiring fault, not a missing feature — **do not re-implement it**, measure
+> why the dome and the fog are not doing their job (`docs/NEXT.md` §3).
 
 ## Platform
 

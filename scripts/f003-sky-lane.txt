@@ -1,0 +1,27 @@
+# f003-sky-lane — **the fog, measured instead of admired.**
+#
+#   cargo run -- --offscreen --screenshot docs/images/f003-sky-fog-after.png \
+#                --script scripts/f003-sky-lane.txt --ticks 102
+#
+# Straight down the gantry spine from z = 245, so the ten stations of `maps.ron: ashgate`
+# (z = 227.5 .. -87.5, pitch 35 m) stand in one frame as ten IDENTICAL stone_gray columns at
+# 17.5, 52.5, 87.5 ... 332.5 m. Same geometry, same material, same normal, same NdotL — so
+# every difference down the row is the fog and can be nothing else. That is what makes this
+# the acceptance shot for "the same wall at 30 m and at 300 m has to differ"
+# (`docs/gameplay/world.md`, "Lighting"; `docs/FINDINGS.md` FIND-112 has the eight numbers).
+#
+# The left-hand columns show their +X face (NdotL 0.769, sunlit), the right-hand ones their
+# -X face (NdotL 0, fill only) and both rows their +Z face (0.250) — so the frame also
+# carries the three values the design's own sentence asks for, on one material.
+
+wait 1.5
+warp 0 25 245
+look 0 0                # yaw 0 = -Z, down the spine toward the wall
+wait 0.15
+mark f003-sky-lane
+assert height > 20
+wait 5
+#
+# ⚠️ `--ticks 102` is the SHOT and `MARK` prints at 103 — the mark is one tick behind because
+# it is checked after the wait that precedes it. Same pose either way: `warp` and `look` have
+# both landed by then. A verdict run wants `--headless --ticks 420` so the trailing wait ends.

@@ -428,12 +428,41 @@
         // lower. **The horizon stop is also the fog colour** (below), which is what makes a
         // distant block dissolve into the sky instead of into a grey wall.
         sky: (
-            // Deep slate blue. Dark enough that the silhouette of the wall reads against it.
-            zenith: (0.010, 0.018, 0.042),
-            // Pale warm haze. The one bright thing in the frame that is not a lit surface.
-            horizon: (0.115, 0.112, 0.104),
-            // Below the horizon — the ground haze the district stands in.
-            nadir: (0.030, 0.029, 0.027),
+            // Deep slate blue, and it is only ever seen at a steep look-up: the ramp is linear
+            // in `sin(elevation)` (`render::light::dome_mesh`), so this stop arrives at 90 deg
+            // and half of it at 30. It has to be an extreme, or the middle of the ramp — which
+            // is the only part of the sky a flyer sees — is grey.
+            zenith: (0.025, 0.058, 0.150),
+
+            // **Pale warm haze, and it is now actually pale and actually warm.** It was
+            // (0.115, 0.112, 0.104) until 2026-08-19: red minus blue 0.011, linear luminance
+            // 0.112 — a mid grey that sat BELOW the district's own mid-tone (a stone_gray wall
+            // at a grazing angle is 0.265). Measured on the frame (FIND-112), the whole band a
+            // flyer looks through read rgb (90.9, 90.2, 88.4) at 2.8 % saturation with an
+            // 11-level spread over 230 rows, and the 120 m wall in front of it read 107.6 —
+            // **the sky was darker than the city standing against it**, so the wall had no
+            // silhouette and the sky was the "flat grey" of the report.
+            //
+            // 0.470/0.412/0.335 is linear luminance 0.419 = **1.58x** that grazing wall. On a
+            // 52 000 lux hazy-bright day (`sun.illuminance_lux`) the haze band IS about as
+            // bright as a sunlit surface, and it stays under the brightest one (a sunlit
+            // stone_gray face, 0.68), so the sun is still the brightest thing in the frame.
+            // Measured on the standard vantage, same binary, same tick, only this block
+            // different: sky 90.2 -> **149.5** and the 120 m wall in front of it 107.6 ->
+            // 140.0, i.e. the sky went from 17 levels DARKER than the wall to 10 brighter, and
+            // the wall has a silhouette for the first time.
+            // Two brighter hazes were rendered and rejected: 0.500/0.440/0.360 with
+            // `start_m 25` reached the same depth but took the near quarter's contrast with it
+            // (distinct tones 22 156 -> 15 836; this one holds 19 769).
+            // `tests/render.rs::f071_the_sky_carries_its_hue_in_the_band_you_actually_fly_in`
+            // holds the warmth, the ramp and the silhouette from three sides.
+            horizon: (0.470, 0.412, 0.335),
+
+            // Below the horizon — the ground haze the district stands in. Held at ~0.45 of the
+            // horizon and not at the old 0.26: the fog fades far geometry to the HORIZON stop,
+            // so a nadir far below it draws a seam across the bottom of any frame that looks
+            // down past the edge of the ground slab.
+            nadir: (0.210, 0.184, 0.150),
             // Metres. The dome is pinned to the eye, so this only has to stay inside the
             // camera's far plane (1000 m, `PerspectiveProjection` default) with room for the
             // dome's own tessellation error. 900 would touch it on the diagonal.
@@ -449,11 +478,16 @@
         // whose two numbers mean something you can walk out and measure.
         fog: (
             // = `sky.horizon`. They must match, or the horizon becomes a visible seam.
-            color: (0.115, 0.112, 0.104),
+            color: (0.470, 0.412, 0.335),
             // Metres. The far side of the district is ~400 m from the vantage and the wall
-            // crown ~450 m: the near quarter is untouched, the wall sits at 50 % and reads as
-            // a distance and not as a backdrop. 60/700 was tried first and was too much — half
-            // the frame went to haze and the palette went with it.
+            // crown ~450 m.
+            //
+            // ⚠️ This line used to read `120.0 / 780.0` and used to say "the wall sits at 50 %".
+            // It did not: 450 m over 120..780 is **36 %**, and 300 m is 27 %. The paragraph was
+            // reasoning about a range it did not have, and the arithmetic was never done — that
+            // is the whole of why an "aggressive" fog measured 6 sRGB levels across the
+            // district for a week. The 60/700 that "was too much" was never measured either;
+            // what was measured is below.
             //
             // **`end_m` has to stay under `sky.radius_m`.** The dome is opaque and pinned to
             // the eye, so nothing beyond 820 m is ever visible: an `end` past it is a number
@@ -461,8 +495,35 @@
             // 900 was in the file for one round and
             // `tests/render.rs::f071_the_sky_casts_no_shadow_and_the_fog_meets_it_at_the_horizon`
             // is what found it.
-            start_m: 120.0,
-            end_m: 780.0,
+            // **60/470 since 2026-08-19, and the old 120/780 is why this block existed and
+            // did nothing.** Linear falloff over 120..780 m puts 300 m — the far side of the
+            // district — at 27 % of the way in, and against a fog colour that was darker than
+            // the scene that bought 6 sRGB levels. Measured, ten identical gantry columns down
+            // one 315 m lane, same face, same light (FIND-112):
+            //
+            //   17.8 m  131.3        119.8 m  131.7        224.3 m  132.5
+            //   50.8 m  131.6        154.8 m  133.2        259.2 m  124.9
+            //
+            // Eight samples over 240 m inside 8 levels of each other. That is not aggressive
+            // fog, that is no fog, and `docs/gameplay/world.md` asks for the opposite.
+            //
+            // 60/470: the whole street in front of the player is untouched (`start_m` is one
+            // gantry bay plus a half), 300 m is **58 %** in and 450 m — the wall crown from the
+            // standard vantage — is **95 %**, so the wall reads as a distance. `start_m` is not
+            // 25: at 25 the haze already sat on the near quarter from a 62 m vantage and the
+            // frame lost a sixth of its tones for depth it did not need there.
+            // The same series, same binary, only this block different:
+            //
+            //   17.8 m  131.3        119.8 m  135.9        224.3 m  146.6
+            //   50.8 m  131.6        154.8 m  140.6        259.2 m  143.9
+            //
+            // monotone, and +12.6 levels where it was -6.4. A wall in SHADE moves further,
+            // because the haze has more room over it: 51.5 -> 69.2 over the first 87 m.
+            // `end_m` still has to stay under `sky.radius_m` (820) and
+            // `tests/render.rs::f071_the_sky_casts_no_shadow_and_the_fog_meets_it_at_the_horizon`
+            // is what checks it.
+            start_m: 60.0,
+            end_m: 470.0,
         ),
 
         // ev100. 12.85 sits between Bevy's OVERCAST (12.0) and SUNLIGHT (15.0) and is the

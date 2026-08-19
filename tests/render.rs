@@ -1818,6 +1818,197 @@ fn f071_the_sky_is_wound_so_you_see_it_from_the_inside() {
     );
 }
 
+
+// ---------------------------------------------------------------------------------------
+// F-071, second round (2026-08-19) — **the sky and the fog were built and did not READ.**
+// ---------------------------------------------------------------------------------------
+//
+// Nothing above is wrong and nothing below re-implements it: the dome spawns, it is wound
+// the right way, it carries a gradient, and the `DistanceFog` really does reach the camera.
+// Measured out of the running game (`docs/FINDINGS.md` FIND-112), the numbers were the
+// problem, and both of them in the same direction:
+//
+//   * the same stone_gray face at **17.8 m read 131.3** and at **259.2 m read 124.9** — 6.4
+//     sRGB levels over 241 m of district. That is not "aggressive distance fog", that is no
+//     fog. And the fog colour (linear luminance 0.112) sat BELOW the mid-tone of the district
+//     it fogs (0.265), so what little it did read as dimming and not as air.
+//   * the sky over the whole band a flyer looks through (elevation -14 .. +16 deg) measured
+//     rgb (90.9, 90.2, 88.4) at 2.8 % saturation with an 11-level spread — literally the
+//     "flat grey sky" of the report. The blue in `zenith` is real, and it is only reached at
+//     90 degrees, where nobody looks.
+//
+// These two tests are the arithmetic of those two sentences. They read `art.ron` only — the
+// screen is measured separately, in the PNGs named in FIND-112, because a test that asks the
+// screen and the function the same question passes when both are wrong (FIND-103).
+
+/// Rec. 709 luminance of a **linear** RGB triple — the RON's own colour space.
+fn luminance(c: (f32, f32, f32)) -> f32 {
+    0.2126 * c.0 + 0.7152 * c.1 + 0.0722 * c.2
+}
+
+/// Linear output value -> 0..255, the plain sRGB transfer function.
+///
+/// ⚠️ **Without the tonemapper**, and that is not a rounding error: the camera runs Bevy's
+/// default `TonyMcMapface`, which compresses hardest at the top. Measured (FIND-112), a sunlit
+/// sand_brown roof at 0.60 linear reaches the frame at 165, not at the 203 this function says.
+/// So a gap computed here is what the shader hands the tonemapper, and the **brighter** the two
+/// values the less of it survives to the screen. The bars below are set per surface for exactly
+/// that reason, and the frame numbers live in FIND-112, not here.
+fn srgb8(linear: f32) -> f32 {
+    let l = linear.clamp(0.0, 1.0);
+    255.0 * if l <= 0.003_130_8 { l * 12.92 } else { 1.055 * l.powf(1.0 / 2.4) - 0.055 }
+}
+
+/// What `FogFalloff::Linear` does to a surface value at distance `d`.
+fn fogged(surface: f32, haze: f32, d: f32, start: f32, end: f32) -> f32 {
+    let t = ((d - start) / (end - start)).clamp(0.0, 1.0);
+    surface * (1.0 - t) + haze * t
+}
+
+/// The three numbers the design's own sentence is about, in linear output units after
+/// exposure: a stone_gray wall in the sun, one at a grazing angle, one in shade.
+/// `lit` is the sun term; the fill is the second one and every face gets it.
+fn the_three_walls(app: &mut App) -> (f32, f32, f32) {
+    let (light, transform) = the_sun(app);
+    let exposure = {
+        let mut q = app.world_mut().query_filtered::<&Exposure, With<Camera3d>>();
+        *q.iter(app.world()).next().expect("the camera carries an Exposure out of art.ron")
+    };
+    let ambient = {
+        let mut q = app.world_mut().query_filtered::<&AmbientLight, With<Camera3d>>();
+        q.iter(app.world()).next().expect("the camera carries an AmbientLight").clone()
+    };
+    let dir = transform.forward().as_vec3();
+    let e = exposure.exposure();
+    let fill = STONE_GRAY_G * ambient.color.to_linear().green * ambient.brightness * e;
+    (
+        lit(dir, Vec3::X, light.illuminance, e) + fill,
+        lit(dir, Vec3::Z, light.illuminance, e) + fill,
+        fill,
+    )
+}
+
+#[test]
+fn f071_the_haze_is_lighter_than_the_district_and_bites_inside_it() {
+    let mut app = app();
+    let k = app.world().resource::<GameData>().art.lighting.clone();
+    let (sunlit, grazing, shaded) = the_three_walls(&mut app);
+    let haze = luminance(k.fog.color);
+
+    // 1. **Distance has to add light, not take it away.** Haze is the sky seen through air;
+    //    a fog colour below the district's mid-tone turns every far surface into a dark
+    //    smear, which is the one thing that reads as "flat" rather than as "far".
+    assert!(
+        haze > grazing * 1.15,
+        "the haze sits at {haze:.3} and a stone_gray wall at a grazing angle at {grazing:.3} — \
+         a fog that is darker than what it fogs reads as dimming, not as air (FIND-112)"
+    );
+
+    // 2. **It has to bite where the district is**, not past it. The main street runs 370 m
+    //    from the vantage to the wall and the crown stands ~450 m out; a fog that is still
+    //    under half strength at 300 m is decoration.
+    let t300 = ((300.0 - k.fog.start_m) / (k.fog.end_m - k.fog.start_m)).clamp(0.0, 1.0);
+    assert!(
+        t300 >= 0.45,
+        "at 300 m the fog is {:.1} % of the way in (start {} m, end {} m) — the whole district \
+         is inside 400 m, so that is a haze the player never flies into",
+        t300 * 100.0,
+        k.fog.start_m,
+        k.fog.end_m
+    );
+
+    // 3. **And the acceptance sentence, in arithmetic:** the same wall at 30 m and at 300 m
+    //    has to be two different values — and it has to hold for a wall whichever way it
+    //    faces, because a fog that only moves one of the three has just picked a new flat.
+    //
+    //    The three bars are different on purpose. Haze converges everything on its own value,
+    //    so how far a surface can travel is how far it starts from the haze: a face in shade
+    //    (0.06 against 0.42) has the whole distance to go, a face at a grazing angle (0.27)
+    //    has little, and a sunlit one is up where the tonemapper eats most of what is left.
+    //    Measured on the frame for the grazing face, which is the one with the least room:
+    //    **131.3 at 17.8 m against 143.9 at 259.2 m**, monotone over eight stations, where
+    //    the old numbers gave 131.3 against 124.9 — the wrong way round (FIND-112).
+    for (which, surface, bar) in
+        [("in the sun", sunlit, 15.0), ("at a grazing angle", grazing, 8.0), ("in the shade", shaded, 40.0)]
+    {
+        let near = srgb8(fogged(surface, haze, 30.0, k.fog.start_m, k.fog.end_m));
+        let far = srgb8(fogged(surface, haze, 300.0, k.fog.start_m, k.fog.end_m));
+        assert!(
+            (far - near).abs() >= bar,
+            "a stone_gray wall {which} reads {near:.1} at 30 m and {far:.1} at 300 m — {:.1} \
+             sRGB levels apart, and under {bar:.0} the fog is decoration on that surface",
+            (far - near).abs()
+        );
+    }
+}
+
+#[test]
+fn f071_the_sky_carries_its_hue_in_the_band_you_actually_fly_in() {
+    let mut app = app();
+    let k = app.world().resource::<GameData>().art.lighting.clone();
+    let (_sunlit, grazing, _shaded) = the_three_walls(&mut app);
+    let sky = &k.sky;
+
+    // The dome mixes zenith into horizon by `cos(theta)` = `sin(elevation)`
+    // (`render::light::dome_mesh`), so this is the colour at a given elevation — recomputed
+    // here from the three stops rather than borrowed from the mesh, so that a change to
+    // either side has to survive the other.
+    let at = |elevation_deg: f32| -> (f32, f32, f32) {
+        let t = elevation_deg.to_radians().sin().max(0.0);
+        (
+            sky.horizon.0 + (sky.zenith.0 - sky.horizon.0) * t,
+            sky.horizon.1 + (sky.zenith.1 - sky.horizon.1) * t,
+            sky.horizon.2 + (sky.zenith.2 - sky.horizon.2) * t,
+        )
+    };
+
+    // 1. **The horizon stop carries a hue of its own.** It is the colour of nearly all the
+    //    sky anybody sees at a flying pitch, and it is also the fog colour, so a neutral one
+    //    makes the whole far half of the frame grey. Measured on the old numbers: 2.8 %
+    //    saturation over a 230-row band.
+    let warmth = sky.horizon.0 - sky.horizon.2;
+    assert!(
+        warmth >= 0.06,
+        "the horizon stop is {:?} — red minus blue is {warmth:.3}, which is a grey. The band \
+         between -15 and +30 degrees is almost all horizon stop, and a grey one is the flat \
+         grey sky the report names",
+        sky.horizon
+    );
+
+    // 2. **The gradient has to happen in the first 30 degrees**, because that is where the
+    //    sky is. Linear in `sin(elevation)` means half the ramp lives above 30 degrees; the
+    //    stops have to be far enough apart that the visible half is still a gradient.
+    let step = luminance(sky.horizon) - luminance(at(30.0));
+    assert!(
+        step >= 0.10,
+        "horizon {:.3} to 30 degrees {:.3} is {step:.3} of linear luminance — over 30 degrees \
+         of sky that is one value with dithering",
+        luminance(sky.horizon),
+        luminance(at(30.0))
+    );
+
+    // 3. **And it has to turn cool as it rises.** Warm haze low, slate blue high — that swing
+    //    is what makes a sky a sky instead of a lit ceiling.
+    let low = sky.horizon.2 - sky.horizon.0;
+    let high = at(30.0).2 - at(30.0).0;
+    assert!(
+        high - low >= 0.08,
+        "blue minus red goes {low:.3} -> {high:.3} between the horizon and 30 degrees — the sky \
+         keeps the same hue all the way up, so nothing about it says which way is up"
+    );
+
+    // 4. **The sky has to out-brighten the city, or the skyline has no silhouette.** The 120 m
+    //    wall is the game's vertical reference and it stands against this colour: measured on
+    //    the old numbers, wall face 107.6 against sky 90.2, and the wall read as a slab in a
+    //    fog bank rather than as a wall against a sky.
+    assert!(
+        luminance(sky.horizon) > grazing * 1.15,
+        "the sky at the horizon is {:.3} and a stone_gray wall at a grazing angle is \
+         {grazing:.3} — a sky darker than the city in front of it is a backdrop, not a sky",
+        luminance(sky.horizon)
+    );
+}
+
 // ---------------------------------------------------------------------------------------
 // F-019 — THE LAMPS IN THE HALL. `maps.ron: lights` -> `PointLight`
 // ---------------------------------------------------------------------------------------
