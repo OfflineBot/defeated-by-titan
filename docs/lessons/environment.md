@@ -187,3 +187,37 @@ in the tool.
   Those lines come from `prompts/init.md` §14 and are a requirement, not a record.
 
 Related: [docs/environment.md](../environment.md) · [STATUS.md](../STATUS.md) · [BUGS.md](../BUGS.md) · [conventions.md](../conventions.md) · [FINDINGS.md](../FINDINGS.md) · [lessons/workflow.md](workflow.md) · [lessons/performance.md](performance.md)
+
+## 🔴 Never `pkill` by path on this machine — it is not yours alone
+
+**Measured 2026-08-19 (`FIND-137`), and it hit the user.** A round finishing a windowed capture ran
+
+```bash
+pkill -f 'target/debug/defeated_by_titan'      # ← NEVER
+```
+
+and killed **the user's own running instance** — he was playing at the time, with the settings
+screen open and the aim-assist rows under his hand. Two of that round's synthetic clicks had
+already landed in his window as well.
+
+**The rule, and it is absolute:**
+
+- **Kill by the PID your own round started**, captured when you started it. Never by a name, never
+  by a path, never by `-f`.
+- **Before opening a window at all, check whether one is already there** — `niri msg windows`, or
+  `pgrep -f defeated_by_titan` **to look, not to kill**. If the user's game is running, **the screen
+  is not free**: report that and take the numbers instead. A screenshot is worth less than not
+  interrupting him.
+- The same holds for `pkill -f cargo`: a build of his is indistinguishable from a build of yours.
+
+**Why this is not a small thing.** `user-messages.md`'s whole premise is that his few minutes of
+play are worth more than a day of instrumented measurement — every symptom he has reported has been
+real, and three of them were invisible to the test suite. **A round that interrupts him to take a
+picture has destroyed something more valuable than the picture.**
+
+### And the second thing that round found about driving this desktop
+
+`ydotool`'s **absolute** mapping is wrong here: a request for `(1278, 1768)` lands at
+`(730, 1680)`, roughly **0.625 × request**. Use closed-loop relative movement with `grim`/`grim -c`
+diffing to verify where the pointer actually is (`FIND-092` established that technique), or drive
+the UI by keyboard.

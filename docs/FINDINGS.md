@@ -1662,7 +1662,8 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 ---
 
 ## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
-**NEXT FREE ID: FIND-135.** Claim it by bumping this line in the same `cat >>` that
+
+**NEXT FREE ID: FIND-142.** Claim it by bumping this line in the same `cat >>` that
 appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
 file separately and both read the same maximum. One line beats a 108 kB grep.
  — and append with `>>`, never with an edit tool
@@ -7918,3 +7919,629 @@ vantage: a 3.6 % grade may still read from a low, sun-raking angle that this rou
 Related: FIND-132 (the three items this closes) · FIND-127 / FIND-120 (the blade) · FIND-071 (the
 value rule) · FIND-112 (the fog these vantages had to respect) · FIND-059 (a cap must carry its
 wall's anchor bit) · `F-003` · `F-033` · `docs/models.md`
+
+---
+
+## FIND-135 — the search extent is on screen now: **227 px at 100 %, 88 px at 40 %, nothing at 0**, and it is drawn from the accessor `vector::aim` reads
+
+**2026-08-19, `F-016`, `src/hud/catch_band.rs` (new), `tests/hud.rs` (5 tests),
+`scripts/f016-band.txt` (new).** The user's whole commission was one sentence:
+
+> *„es soll in der ui angezeigt werden von wo bis wo gesearched wird damit man das besser
+> einstellen kann!"*
+
+**The last clause is the requirement.** `assist_catch_pct` was a percentage of a constant nobody
+can see; the only way to learn what 40 % bought was to fire a hook and guess. The band turns the
+knob into a distance on the screen, and every decision below was made against *„damit man das
+besser einstellen kann"* and not against a look.
+
+### What it draws, and the numbers
+
+`assist_probe_steps` ticks a side at the probe angles, the outermost drawn taller as the **end
+mark**, and a span rule from the sight core out to it. **A line, not a box** — FIND-133 measured
+the sweep's vertical deviation at 0.000006°, so a box would claim a reach the search does not
+have, which is the FIND-098/099/129 failure with a new shape.
+
+| `assist_catch` | half-width, drawn | hand-projected through `fov_deg 60` on 1280 × 720 | ticks a side |
+|---|---|---|---|
+| 0 % | **no band at all** | — | — |
+| 5 % (one slider click) | 11.0 px | 10.9 px | 8 |
+| 40 % | 88.0 px | 87.6 px | 8 |
+| 100 % | 227.0 px | 226.9 px | 8 |
+
+Decoded out of the pictures against the 0 % frame as its own control (same stand, same look,
+same tick, only the knob differs): at 100 % **1 148 changed pixels in exactly two connected runs,
+`x 412..633` and `x 646..867`** about a crosshair at 640 — the 12 px between them is the
+`SIGHT_CORE_PX` the element gives up. Ticks at ±27, 55, 82, 110, 138, 167, 197, 227 px at 100 %
+(uneven — a tangent at 20°) and ±11, 22, 33, 44, 55, 66, 77, 88 px at 40 % (even — a tangent at
+8°). The 0 % frame: **zero** changed pixels in those rows.
+
+### Where the angle comes from, and why it cannot drift
+
+Three inputs, and **two are the identical expressions `vector::aim::aim` reads**:
+`PlayerSettings::assist_catch_deg()` (the accessor that fills `ScoreContext::catch_rad`) and
+`game.ron: vector.assist_probe_steps` (the field the candidate loop iterates). The gate is
+`PlayerSettings::assist_is_on()` — the same predicate `aim` filters on, so *no probe cast* and
+*no band* are one decision and not two.
+
+The third input, the distribution `theta = catch * (i+1)/steps`, **is written a second time**, in
+`hud::catch_band::probe_theta_rad`, because there is no `hud -> vector` line on the allow list and
+mirroring a `Vec3` generator through `shared` would give the sweep a second writer. That is the
+same trap `hud::crosshair::eye` sits in, and it is guarded the same way:
+`tests/hud.rs::f016_the_band_stands_on_the_probe_rays_the_search_really_casts` projects the
+directions **`vector::aim::probe_dirs` itself returns** and asserts every laid-out rectangle
+stands on one — **432 rays over 6 look angles × 5 catch settings, worst 0.691 px**, and the
+0.691 px is the UI's integer snap, not an angle. FIND-103 does not apply: the HUD *cannot* call
+the sweep, so the two sides are genuinely two implementations. The pixel position itself is never
+computed here at all — `Camera::world_to_viewport` on a point one metre down each probe direction,
+the same call `place_arm_aim` makes, so `fov_deg` and the viewport follow by construction.
+
+⚠️ **Projecting from the camera rather than from `Intent` is exact and not an approximation.**
+`render::camera::rotate_camera` builds `Ry(yaw) * Rx(pitch)` with no roll, whose local X is the
+`(cos yaw, 0, −sin yaw)` `look_basis` uses as `right` and whose local −Z is `Intent::look_dir()`.
+And FIND-133's one-tick parallax cannot touch this element: a **direction** projected from the
+camera's own position carries no distance, so a translation has nothing to move.
+
+### The keep-out box: the band is the SECOND exemption, on FIND-098's own argument
+
+The band is level with the crosshair, so it runs straight through the central 20 % × 20 % `F-170`
+protects. **Pushing it out would be the lie, not the fix**: the box's edge is 128 px from centre
+and the band reaches 88 px at 40 %, so a band held out of the box would draw a **wider search than
+the one running for every setting below about 55 %.** FIND-098 already decided this shape of
+question — *"the one element whose position is an angle rather than a place is measured against
+`SIGHT_CORE_PX` instead"* — and the band **is** an angular range. So it gives up the 6 px the
+player is cutting, and it gives it up by **not drawing**: a tick stands on its ray or it is
+absent, never moved. `f016_the_band_keeps_the_sight_core_clear` measures it over the whole slider
+(6 catch settings × 2 look angles, ≥100 nodes), and no *end mark* is ever the one dropped — the
+narrowest catch the slider can dial (5 % = 1°) still projects 10.9 px out.
+
+### The steps are drawn, deliberately
+
+The commission asked whether to show the probe steps or only the ends. **Shown**: eight rays a
+side is the resolution he is buying, an anchor between two probes is not found at all, and the
+ticks visibly crowd as the catch narrows — so one element answers *how far* and *how finely* at no
+extra cost, because the tick index **is** the probe index.
+
+### Evidence
+
+- `tests/hud.rs`, 5 new tests, **44 → 49 green**; `--lib` 239, `--test menu` 37,
+  `--test vector_aiming` 22, `--test vector_hooks` 30, all unchanged and green.
+- Red first with `place_catch_band` unregistered: *"the sweep casts a Left probe 4 that projects
+  to `Vec2(633.19916, 360.0)`, and no band tick is drawn for it"*. Red again after landing, from a
+  one-line break (`step + 1` → `step + 2` in `probe_theta_rad`): **3 of the 5 fell over.**
+- `scripts/f016-band.txt` — **9 asserts held, exit 0**, 368 ticks — and three frames out of the
+  one stand: `docs/images/f016-band-0.png`, `-40.png`, `-100.png`, 1280 × 720.
+
+### ⚠️ What is NOT solved, and it is the one thing he asked for
+
+**He cannot see the band while he is dragging the slider.** `hud::hide_while_a_menu_is_up` hides
+every HUD root whenever `Screen != Playing`, and the settings screen is a screen — so the loop is
+*set the number → close the menu → look → reopen*. The band answers the knob **in the tick it
+moves** (`f016_the_band_answers_the_knob_in_the_tick_it_moves`: 20 % → 44.0 px, 100 % → 227.0 px,
+back to 20 % → 44.0 px, ratio 5.159 against `tan 20°/tan 4° = 5.205`), so the machinery for a live
+preview is already there and only the visibility rule is in the way.
+
+**It was not changed here, and the reason is ownership, not doubt:** exempting the band would
+break `tests/menu.rs::f175_the_hud_is_hidden_while_a_menu_is_up`, which walks **all** `HudElement`
+roots, and neither that file nor a decision about what may draw over a menu belonged to this
+round. **The rollback/extension point is exactly two places:**
+`src/hud/mod.rs::hide_while_a_menu_is_up` (skip roots carrying `CatchTick`/`CatchRule` while
+`Screen::Settings` is up) and that test's `hud_roots`. `docs/QUESTIONS.md` should carry it as the
+user's call: *is a live preview over the settings screen worth the one exception to "a menu is not
+the game"?*
+
+### One more, smaller: the band crosses the crosshair's own left/right ticks at 100 %
+
+At 20° the span runs `x 412..867` and the crosshair's horizontal ticks stand at 487 and 791, on
+the same row. Nothing is wrong — different colour (`NEUTRAL` white for the band, cyan/amber for
+the crosshair), and both are still legible in `f016-band-100.png` — but the middle of the screen
+is busier than it was, and if he says so, the cheap answer is to shorten the span rule rather than
+to move it.
+
+---
+
+## FIND-136 — a ruler you can only read after closing the screen that moves it: the band now stands on the settings plate, and the plate gets out of its way
+
+**2026-08-20 · `F-016` · `src/hud/mod.rs`, `src/hud/catch_band.rs`, `src/hud/crosshair.rs`,
+`src/menu/plate.rs`, `src/menu/settings.rs`, `tests/menu.rs` (3 new, 1 changed).
+Stage: 🟨** — asserted in process, **not photographed**; see §5.
+
+FIND-135 landed the band and it worked: it answers the knob in the tick it moves. It was also
+**invisible while the knob was being moved** — `hud::hide_while_a_menu_is_up` hides every
+parentless `HudElement` whenever `Screen != Playing`, so tuning it was *set → close → look →
+reopen*. That defeats the single reason the user asked for it:
+
+> *„es soll in der ui angezeigt werden von wo bis wo gesearched wird **damit man das besser
+> einstellen kann**!"*
+
+### 1. What is on the settings screen now, and what is not
+
+The obstacle was a test that is **right**, not one to delete:
+`tests/menu.rs::f175_the_hud_is_hidden_while_a_menu_is_up` exists because a gameplay HUD over a
+menu was a measured defect — crosshair down the middle of the pause column, objective counter,
+gas and blade readouts over the lobby (FIND-092 §2). So the rule survives and the exception is
+named: **`hud::ShowWhileTuning`**, carried by exactly two elements.
+
+| on `Screen::Settings` | why |
+|---|---|
+| **search band** — visible | it *is* the number the `Aim assist reach` row writes; hiding it is hiding the setting |
+| **crosshair** — visible | the band is a ruler measured **from** the crosshair, and a ruler with no origin cannot be read |
+| gas bar, blade pips, health bar, objective line, hit mark, arm markers — **hidden** | they report a fight, and there is no fight while a menu is up |
+
+**Only that screen.** The pause plate and the lobby get nothing: neither can move the knob, and a
+band nobody can change is the clutter the rule exists against. `Esc` out of the options and the
+exemption ends with the screen — asserted in the same test.
+
+### 2. Buried under 0.90 alpha is not "dimmer", it is gone — and the backdrop was not touched
+
+`menu::plate::root` is a full-screen node at `BACKDROP`'s 0.90 alpha and it is spawned **after**
+the HUD, so by default it sits on top: measured `UiStack` index **2 for a tick against 38 for the
+plate**. Composited in linear light (FIND-093's own arithmetic, the one that reproduces
+`166 -> 92 at a = 0.72` to the integer):
+
+| world behind the menu | band **over** the backdrop | band **buried under** it |
+|---|---|---|
+| 0.0 (black) | **15.38:1** | 2.44:1 |
+| 0.3 | **9.85:1** | 1.64:1 |
+| 0.6 | **7.28:1** | 1.27:1 |
+| 1.0 (white) | **5.43:1** | **1.00:1** |
+
+Buried, it fails WCAG 1.4.11's 3:1 on **every** frame the game can put behind the menu, and on a
+bright one it is arithmetically indistinguishable from its own background. So the two exempt
+elements get `hud::TUNING_Z = 1` — a `GlobalZIndex` above the menu's default 0 — and the worst
+case over the whole range becomes **5.43:1**.
+
+⚠️ **`plate::BACKDROP` stays at 0.90.** The obvious alternative was to thin it so the world reads
+through, and it was rejected: FIND-093 raised it *to* 0.90 this session so the plate's edge clears
+3:1 against any frame (edge-vs-background **9.94:1** in a sortie, **10.34:1** on black), and that
+number is the mechanism by which the menu is legible at all. Lifting the band costs it **nothing**
+— the plate's pixels are unchanged. What it does cost is the *world* behind the band: at 0.90 the
+market stall FIND-135 read the 100 % band against is down to a tenth of its luminance. The band's
+own ticks and the crosshair carry the reading; the world is a backdrop, not the scale.
+
+### 3. The menu moves, because the band cannot
+
+The band's position **is** an angle (FIND-133, FIND-135), so nudging it out of the way would draw
+a search that is not the one running. Measured at 1280 × 720, the settings column ran **y 41..680**
+with the `Aim spread` row at **y 366..410** — straight through the band's lane at **y 352..369**.
+
+So the plate gives way: `plate::CENTRE_LANE_PX = 12`, one empty node spawned at the **middle of
+the column**, which is what puts it on the middle of the screen — a centred column lands its
+midpoint there. Free lane before: 352..366 = **14 px** for a 17 px tick. After: **339..379 = 40 px**,
+13 px of margin above the band and 10 below; the column is 665 px in a 720 px screen. Every row
+moved 13 px away from centre and nothing else changed.
+
+`menu` may not read `hud`'s tick height (one domain, one folder), so the relationship is pinned
+from outside: `f016_the_settings_screen_leaves_the_bands_lane_empty` measures both rectangles out
+of `ComputedNode`/`UiGlobalTransform` at the widest setting and falls over if a row grows into the
+lane — it went red on exactly that message with the lane taken out.
+
+### 4. The evidence, and each break that turned it red again
+
+| test | what it holds | red when |
+|---|---|---|
+| `f175_the_hud_is_hidden_while_a_menu_is_up` (changed) | all hidden on pause + lobby; on settings **exactly** the `ShowWhileTuning` roots stay | `&& false` on the exemption → `left: Hidden, right: Inherited` |
+| `f016_the_band_widens_under_the_slider_while_the_settings_screen_is_up` | 0 % draws nothing · one click puts it up **and not `Visibility::Hidden`** · eight clicks are >3x wider (**12.0 px → 89.0 px**) | same one-line break → *"the band is laid out but hidden"* |
+| `f016_the_band_reads_over_the_settings_backdrop` | band above the plate in `UiStack`; worst-case contrast ≥ 3:1 | `GlobalZIndex` removed → *"buried under the backdrop: tick at 2 against the plate at 38"* |
+| `f016_the_settings_screen_leaves_the_bands_lane_empty` | no drawn settings node touches the band's rect; lane ≥ tick + 8 px | lane spawn removed → *"a settings node sits in the band's lane: y 366.0..410.0"* |
+
+`--lib` 239 · `--test hud` **49, unchanged** · `--test menu` 37 → **40** · `--test mission` 38 ·
+`cargo check --tests` clean. `F-170`/`F-171` are untouched: the changed test still snapshots every
+HUD node's `Node.display` while playing and compares it after the settings screen has been up, and
+the two lifted elements overlap no other HUD element (the keep-out box and `SIGHT_CORE_PX` are what
+keep them apart).
+
+Two numbers reproduced FIND-135's own, from a different binary and a different code path — the
+band at 100 % lays out at **x 412..868** across **16 ticks**, against FIND-135's measured
+`x 412..633` + `646..867` in the picture.
+
+### 5. ⚠️ Unseen — and it cannot be seen with the tools this round had
+
+**There is no picture of this.** `--offscreen` builds `primary_window: None`
+(`src/lib.rs:208-217`, `Cli::wants_window()` false — asserted at `src/shared/cli.rs:417`), and
+every menu system is gated on `.run_if(there_is_a_window)` (`src/menu/mod.rs:120`). **An offscreen
+run therefore has no settings screen to photograph at all** — not a dark one, not an empty one:
+the plate is never spawned. The `debug` script language has no verb that opens a screen either
+(`settings <key> <value>` writes `PlayerSettings` directly, in `FixedPreUpdate`, without a menu).
+
+The only route is a real window — the `xwayland-satellite` + `grim` setup an earlier round used
+for `f175-pause/-settings/-lobby`. **That is the shot that is owed**, and it would settle three
+things at once that arithmetic cannot: whether 5.43:1 *looks* like a ruler over a 90 %-dimmed
+market street, whether 10 px of clearance under the ticks reads as a lane or as a collision with
+the `Aim spread` row, and whether the crosshair-plus-band in the middle of a text plate is
+information or noise. Until then the geometry and the contrast are 🟧-grade *numbers* on a 🟨
+*picture*, and the stage is the picture's.
+
+FIND-093 §4 closed with the same sentence about the plate itself, and it is still open.
+
+## FIND-137 — the ruler was locked behind the knob it is not a ruler for: the band draws from the REACH now, and the colour carries the one thing the geometry cannot
+
+**2026-08-20 · `F-016` / `Q-042` · `src/hud/catch_band.rs`, `src/shared/settings.rs`,
+`tests/hud.rs` (1 rewritten, 1 new). Stage: 🟧 for the band itself · 🟨 for the settings plate,
+and §4 says why that half is still unseen.**
+
+FIND-135 put the search extent on screen; FIND-136 kept it on screen while the settings plate is
+up. Both landed against one sentence — *„es soll in der ui angezeigt werden von wo bis wo
+gesearched wird **damit man das besser einstellen kann**!"* — and the last clause was still
+failing, in the exact moment it names:
+
+> a player opens `Settings`, turns **`Aim assist reach`** up to any value at all, and **nothing
+> happens**, because the gate was `PlayerSettings::assist_is_on()` = `catch > 0 && strength > 0`
+> and **both knobs ship at 0**.
+
+The evidence that this was a trap and not a preference was already in the tree, in the band's own
+test helper: `tests/menu.rs::nudge_reach` presses the **strength** button in secret before it
+touches the reach, or it would see no band. A test that has to work around the UI is the UI's
+verdict.
+
+### 1. What changed — one predicate, and a second colour
+
+`place_catch_band` draws from a new `PlayerSettings::assist_has_reach()` (`catch > 0`). The old
+predicate is untouched and still owns the **probe**. That is a drawing/searching split, and it is
+declared rather than implied:
+
+| reach | strength | drawn | colour | what is true |
+|---|---|---|---|---|
+| 0 % | anything | **nothing** | — | free aim: there is no extent to draw |
+| > 0 % | 0 % | the band, **geometry unchanged** | `IDLE` (white 0.40) | *this is how far the search would look.* **No probe ray is cast** |
+| > 0 % | > 0 % | the band, **geometry unchanged** | `NEUTRAL` (white 0.75) | the sweep is running, over exactly these rays |
+
+### 2. Why this is not FIND-098 / FIND-099 / FIND-127 / FIND-129 with a new shape
+
+This session has caught four elements that drew something the game did not have, so a change that
+*deliberately* separates the drawn predicate from the real one has to answer for itself.
+
+**In all four the geometry lied** — a marker stood where the thing was not, a bar was a picture of
+a bar. Here the geometry is **bit-identical in the two states**, on the probe rays
+`vector::aim::probe_dirs` itself returns (FIND-135: 432 rays, worst 0.691 px), because the
+geometry answers *"how far does my reach go"*, which is as true with nothing in flight as with
+something. The only claim that differs between the states is *"a ray is being cast right now"* —
+and that claim is **carried, not implied**:
+`tests/hud.rs::f016_the_reach_alone_draws_the_band_and_the_colour_says_whether_it_searches`
+asserts every tick is in the same pixel in both states, that the two colours differ, and that
+both clear 3:1 over the backdrop.
+
+Measured, in linear light over `menu::plate::BACKDROP` at 0.90 (FIND-136 §2's own arithmetic,
+reproduced to the second decimal by the test): **searching 5.43:1, idle 3.36:1** over the worst
+world frame the game can put behind the menu; **15.4:1 / 8.7:1** over black. The two states are
+only **1.61:1** apart from each other, and that is a knowing trade, not an oversight — 3:1
+between them needs the idle band at alpha 0.22, where it reads 1.8:1 against its own background.
+With `F-025` unbuilt the idle state is the **only** state a player can be in today, so
+legible-in-both beat distinguishable-at-a-glance.
+
+⚠️ **`assist_is_on` still gates the probe and nothing was allowed near it.**
+`tests/vector_hooks.rs::f016_at_zero_percent_the_aim_is_bit_for_bit_the_one_the_game_had_before`
+was re-run and is green.
+
+### 3. The evidence, and the break that turned it red again
+
+| test | what it holds | red when |
+|---|---|---|
+| `f016_there_is_no_band_when_there_is_no_reach` (was `..._no_search`) | reach 0 draws nothing at either strength; reach 100 draws all 18 nodes at either strength | seen red before the fix: `left: 0, right: 18` |
+| `f016_the_reach_alone_draws_the_band_and_the_colour_says_whether_it_searches` (new) | at 40 % reach the band is drawn with the strength at 0; every tick and both rules identical to the live state; the colours differ; both ≥ 3:1 | seen red before the fix, and again after it on the one-line break `assist_has_reach` → `assist_is_on`: *"reach 40 % with the strength knob at 0 draws nothing"* |
+
+`--lib` **239** · `--test hud` 49 → **50** · `--test menu` **40, unchanged** (`nudge_reach` still
+raises the strength first, so it measures what it always did) · `--test vector_aiming` **22** ·
+`cargo check --tests` clean.
+
+**In a rendered frame, at strength 0** — three `--offscreen` runs from the same stand as
+FIND-135's, differing only in the reach knob: `docs/images/f016-band-idle-0.png` (the
+control, no band), `docs/images/f016-band-idle-40.png` and
+`docs/images/f016-band-idle-100.png`.
+Decoded against the 0 % frame as its own control: **catch 100 % → one changed region
+`x 412..868, y 352..369`**, which is FIND-136's laid-out `x 412..868` to the pixel; **catch 40 %
+→ `x 551..729`**, 89 px a side against the hand-projected 88. Before today all three frames would
+have been identical, because none of them has the strength knob up.
+
+### 4. ⚠️ Unseen — and this time for a reason that is not a tooling limit
+
+**The settings-plate picture is still owed.** The three questions FIND-136 §5 left — does the
+ruler read over a 90 %-dimmed street, does the 10 px under the ticks read as a lane or as a
+collision with the *Aim spread* row, is crosshair-plus-band inside a text plate information or
+noise — need a real window, and the route (`xwayland-satellite`, `niri`, `grim`, `ydotool`) was
+set up and works: the game opened fullscreen on DP-2, `Esc` reached the pause plate, `grim`
+captured it (an image of the pause screen over the hub was taken).
+
+**It was abandoned deliberately: the machine is in live human use.** Factorio was being played on
+the same output, the user's own instance of *this game* was running from his own terminal with
+its settings screen open and the assist rows being nudged (`aim assist strength = 30 … 80 %`,
+`aim assist reach = 50 … 20 %` in his log, in a burst no click of mine produced), and driving the
+shared pointer was fighting him for it — two of my clicks had already landed in his window.
+`ydotool`'s absolute mapping is also wrong on this desktop (a request for global `(1278, 1768)`
+lands at `(730, 1680)`; a two-point fit gives ≈ 0.625 × request, which is worth writing down for
+whoever tries next).
+
+🔴 **And one thing I did not get right: `pkill -f 'target/debug/defeated_by_titan'` matched his
+instance as well as mine.** I killed the session he was tuning in. A cleanup that matches on a
+path matches *everybody's* process on that path — `pkill` by the PID the round started, never by
+a pattern, on a machine that is not yours alone.
+
+
+## FIND-138 — the reference does not rank anchors, it widens the ray; and it never charges gas for turning
+
+**2026-08-20 · research round, no code · `docs/gameplay/references.md` §"The reference's ODM feel".
+Stage: 🟨 — nobody has attacked it, and nobody in this loop has played the game.**
+
+The user, tired of us guessing: *„kannst du schauen wie es bei dem roblox game gemacht wird? weil
+dort ist es extrem gut! finde heraus wie die einstellungen dort sind!"* … *„damit du nicht weiter
+raten musst!"* Five open questions went out; **two came back with a developer-stated answer, two
+with described behaviour and no numbers, one `unknown`.** The full table with per-row confidence is
+in `references.md`; only what changes a decision is repeated here.
+
+**1. Their assist is a fatter cast, not a scorer — and that is the whole of the user's complaint.**
+The reference aims by **raycast from the cursor** (named outright when other players were excluded
+from "any raycast checks"), and the assist that sits on it is described in the patch record as a
+**radius** ("increased the **radius** of nape assist by 10 %") and as a **range** ("buffed
+`Aim Assist` range"). It widens the line the player is already pointing at. It does **not** build a
+candidate set and rank it. Roblox's community norm for the same job is a **SphereCast along the aim
+ray plus a ~10° cone** — and a swept sphere returns the **first** hit, so **near wins on the same
+ray by construction**, with the cone deciding only who is a candidate.
+
+🔴 **The one place the reference deliberately prefers the FAR anchor is the backwards hook (`B`) —
+"will find the furthest object behind your character instead of based on where your mouse is".**
+Far-preference is attached to the one key that also **throws the cursor away**, and whose job is to
+**stop** you. It is never attached to a hook you aim.
+
+Ours ranks: `assist_score_angle_w 0.45 · momentum 0.25 · height 0.15 · distance 0.10 · recent 0.05`
+— with **distance carrying positive weight**. That is the machine that takes something 300 m off
+over two pillars at 30 m, and it is a model the reference does not share.
+
+**2. Turning is a stat there, not a fuel cost.** Across every patch note from 2023 to 2026 the
+things that spend gas are named repeatedly — **hooks, boost, flips/mega boost** — and the **swerve
+is never among them**. Steering strength is `ODM Control`, an upgradeable **percentage** (100.0 % →
+105.5 % at grade E-, perks +12.5–25 %). We charge `gas_steer_per_s: 16.0` against a
+`gas_boost_per_s: 18.0`: **nearly a full boost's rate to point yourself.**
+
+**3. Their tank is small because the map is dotted with nearly-empty refills.** Marked resupply
+stations across the map (Utgard base icon, markers added to the Outskirts village, "markers can be
+seen from further away now"), each with a **finite use count** that gets balanced like a weapon
+("nerfed refill count by 1 in missions and 3 in raids"), plus a **portable** station (2, 3 with a
+passive), a 50 % skill, and perks returning **1–3.5 % of the bar per kill**. A full refill is not a
+tap: it has an animation, grants i-frames, and drops your blades. **Our `Q-033` shape — one refill,
+at home — is the opposite, and it makes an identical tank size much harsher.** That ruling is the
+user's; this is evidence for asking again, not a change.
+
+**4. The unit question from 2026-08-12 is closed.** `references.md` §7 left `ODM Speed` unresolved
+between studs/s and m/s. Update 4: the `Gear Shift` setting "**no longer scales as a percentage of
+your maximum ODM/TS Speed, is now a flat maximum value between 50 m/s to 500 m/s**". A setting that
+was a *fraction of ODM Speed* and is now an *absolute m/s* over a band bracketing 210–257.5 fixes
+the stat in the game's own metre. **The reference cruises at roughly 200–260 m/s against our
+`max_speed_m_s: 75`.** `inferred`, high confidence.
+
+**What stayed `unknown`, and where I looked.** Time from press to attached, and any hook re-fire
+lockout — nothing published; only the negatives (no documented hook cooldown; a miss that locked
+the gear was **fixed as a bug**). Hook range in metres — `ODM Range` is a **letter grade**, and
+`Equipment`, `Game Mechanics`, all four patch templates, all six update templates and the wiki's
+full `allpages` list carry no absolute figure. Gas tank size and burn rate — everything in that UI
+is a **percentage of a bar**. Catch width of the assist in degrees or metres — not published.
+
+**Two method notes for whoever researches this next.** **Fandom now answers `402 Payment Required`
+to the fetch tool but `200` to plain `curl` on `/api.php?action=parse&…&prop=wikitext`** — the
+2026-08-12 note in `references.md` said 402-vs-200 the other way round and needed updating.
+**reddit.com is still completely unreachable** (403 to `curl`, and the search tool refuses the
+domain by name), so the players' own arguing is missing from both research rounds.
+
+**Three proposals for the main head, in `references.md`, deliberately not edited here:**
+`gas_steer_per_s: 16.0 → 0.0` · `assist_score_distance_w: 0.10 → 0.0` · re-open `Q-033`.
+A fourth is flagged as **ours, not the reference's**: `hook_range_m: 500.0` lets the candidate ray
+reach five times past `aim_sep_full_reach_m: 108.0`, so the far anchors the scorer keeps picking are
+ones our own numbers already call out of play.
+
+**What went unseen.** Every claim above is read off a patch record; **nobody in this loop has
+played the reference**, and a bug-fix list tells you a system exists without telling you how it
+feels. The `unknown` rows are the ones the user actually asked about most directly — the catch
+width and the connect timing — and no amount of further searching will produce them, because they
+are not public. **The way past this is measurement in *our* game against a target he approves, not
+another research round.**
+
+---
+
+## FIND-139 — „gas ist VIEL zu schnell weg": 48 % of the tank paid for a thrust the game refuses to deliver
+
+**The user, after playing, 2026-08-20:** *„eine sache die mir noch auffällt. gas ist VIEL zu
+schnell weg!"* — and his symptom was right again, for the fourth time in four.
+
+### The ledger of one ordinary sortie — 300 gas, gone in 9.1 s of spending
+
+`scripts/f018-budget.txt` flies the measured Ashgate arc — (0, 58, 47.5) at `look 0 0` — and adds
+exactly one verb per leg: the rope alone, then `W`, then `Shift`, then `Ctrl`, then one dodge.
+`src/vector/gas.rs` carries a `DBT_GAS_LEDGER=1` accumulator that splits the same debit four ways
+as it happens; `spent` and `debited` agree to the last digit in every line, so nothing bills gas
+outside that file.
+
+| consumer | gas | % of tank | what it is |
+|---|---|---|---|
+| **steer** (`W`/`A`/`D` on a rope) | **144.8** | **48.3 %** | the game charging him for flying |
+| boost (`Shift`) | 98.1 | 32.7 % | he pressed it |
+| dodge (one press of `C`) | 45.0 | 15.0 % | he pressed it |
+| reel (`Ctrl`) | 12.1 | 4.0 % | the game charging him for flying |
+
+**Things he chose: 47.7 %. Things the game charged him for merely flying: 52.3 %.** And at that
+mix 300 gas bought **8.8 s** of ordinary flight (boost + steer, 34/s), 11.2 s in the sortie above.
+
+### The cause, and it is not a rate that is too high
+
+`player::locomotion::rope_steer` multiplies the rope pull by `cᵢ = max(0, l̂ · r̂ᵢ)`. **A player
+hangs *under* his anchor and looks where he is going**, so `l̂ · r̂ᵢ` is negative through almost
+every tick of a swing and the pull is exactly `Vec3::ZERO`. `gas_budget` billed off
+`anchored_count() > 0 && (move_y.max(0.0) > 0.0 || move_x != 0.0)` — **the button** — and charged
+16/s through all of it.
+
+Measured over the sortie's 99 sampled steer ticks (raw geometry dumped from `gas_budget`, `cᵢ·fᵢ`
+computed offline so no formula was duplicated to get the number):
+
+```
+mean delivered pull   0.0012  of air_pull_m_s2      median 0.0000      max 0.0677
+```
+
+**144.8 gas — the largest line item in the game, larger than the boost he actually presses —
+bought a mean thrust of 0.1 % of nominal.** The second half of the sortie makes it worse: the reel
+pulls the rope in to 4.0 m, and at `min_rope_m: 3.0` with `air_pull_fade_m: 12.0` the fade is
+0.083, so even a player who *did* look at his anchor would have received 8 % of the pull at 100 %
+of the price.
+
+Neither half was wrong on its own — `gas_budget` billed what its condition said, `rope_steer`
+delivered what its formula said. **Nobody ever held the two conditions against each other**, and
+that is the whole bug. `src/vector/gas.rs` states *"the cost follows the effect, not the button"*
+three times in its own doc comment; `Steer` was the one consumer that did not.
+
+### The fix — the bill reads the geometry, not the button
+
+`vector::gas::steer_has_effect` is `rope_steer`'s own zero-test as a pure function, and
+`tests/vector_gas.rs::f006_the_steer_is_billed_exactly_when_the_rope_really_thrusts` holds the two
+against each other over **750 geometries** (anchor above / behind / beside / below, ropes from
+inside `min_rope_m` out to 60 m, five look directions, every WASD combination) so the copy cannot
+drift from the formula it pays for. Seen red first: **98 of 750** charged for zero thrust.
+
+Same binary, same script, after:
+
+| | before | after |
+|---|---|---|
+| steer | 144.8 (48.3 %) | **2.9 (1.0 %)** — the eleven ticks it really pulled |
+| boost | 98.1 | 151.8 (four more seconds of flying were affordable) |
+| the sortie | **ran dry** | 222.9 of 300, **77.1 left in hand** |
+
+**No game value moved.** `gas_steer_per_s` stays 16.0 and the `game.ron` gas-per-m/s table is
+untouched — `18/34 = 0.529` against `16/30 = 0.533` still holds, and it is now true of the thrust
+the player *receives* instead of only of the peak he was charged for. The trajectory is unchanged
+wherever the grant was lost, and it has to be: `air_control` adds `rope_steer(...)` only behind
+`grant.steer`, and every tick that lost its grant had `rope_steer(...) == Vec3::ZERO`.
+
+### ⚠️ THE OTHER HALF, AND IT IS BIGGER THAN THE BUG — `W` ON A ROPE DOES NOTHING
+
+The same measurement says something nobody asked for: **three seconds of `W` on a taut rope, in the
+pose a swing actually spends its time in, produce no thrust at all.** That is now pinned as
+`assert gas == 300` after LEG B of `scripts/f018-budget.txt` — the tank does not move because the
+game delivers nothing.
+
+The user asked for that verb himself: *„wenn ich mit seilen festhake und w in die richtung drücke
+will ich dass man deutlich mehr geboosted wird"*, and `F-023`'s commit line reads *"W hauls you
+where you look"*. **It hauls you where you look only if where you look is your own hook.** The
+`max(0, l̂ · r̂)` clamp is in `player::locomotion` — foreign territory to this round — so it is
+written down and not touched. It is the next thing to measure, and it is a design question, not a
+number: see `docs/QUESTIONS.md` Q-043.
+
+### What went unseen
+
+The repair is a **gate**, not a **price**: at a 4 m rope the fade delivers 8 % of the pull and the
+full 16/s is still charged. Prorating the bill by `Σcᵢfᵢ/n` would be strictly more honest, and it
+cannot be done inside `vector` — it needs `rope_steer`'s factor, and there is no `vector -> player`
+edge in the allow list. Proposed, not built. And the sortie is **one** flight path by **one**
+scripted player; the 48.3 % is that flight's number, and the mechanism (look forward, anchor
+behind) is what generalises, not the digit.
+
+
+## FIND-140 — "time to hook" was never the flight: a press shorter than the flight was thrown away in silence, and the far half of `hook_range_m` cost up to 1.02 s
+
+**2026-08-20 · `F-005` · `src/vector/hook.rs`, `assets/data/game.ron: vector` · evidence:
+`scripts/f005-feel.txt`, `tests/vector_hooks.rs::f005_*`**
+
+The user, after playing: *„und time to hook also e drücken zum connecten geht zu lang! das muss
+schneller gehen."*
+
+`hook_speed_m_s` is 500, so the first guess — "the flight is slow" — is wrong at the ranges the
+game is played at. **The ledger, tick by tick, in the real game** (`scripts/f005-feel.txt` ACT 1,
+Ashgate, the church nave 17.13 m away):
+
+| station | tick | ms from the press |
+|---|---|---|
+| `mark` printed (`IntentSystems::Source`, before `advance_tick`) | 117 | — |
+| trigger seen, ray already cast, `Idle -> Flying` | **118** | 0 |
+| `Flying -> Anchored`, `HookAnchored` written | **121** | **50.0** |
+| `player::rope` attaches the constraint, same tick | 121 | 50.0 |
+
+**50 ms at 17 m. The near field was never the complaint.** Two other things were, and both are
+real:
+
+1. **The far field.** press -> `Anchored` is `1 + ceil(d / (hook_speed_m_s / hz))` ticks, measured
+   over the whole range (`tests/vector_hooks.rs::f005_the_time_from_the_trigger_to_the_anchor_is_capped_by_the_file`):
+   **4 / 7 / 13 / 25 / 49 / 62 ticks at 18 / 50 / 100 / 200 / 400 / 500 m** — 1.03 s at the range
+   the file allows, of a game that does nothing the player can act on.
+2. 🔴 **A press shorter than its own flight was thrown away, and said nothing.** In
+   `HookState::Flying`, `!held` sent the arm to `Retracting` and wrote a `Released` message **with
+   no log line at all** — so the button had to stay down for the full `1 + ceil(...)` ticks or the
+   shot never existed. 4 ticks at 18 m, 26 ticks (0.43 s) at 200 m; **a human tap is 50-150 ms.**
+   Measured before the fix: ACT 2 of the script, a 50 ms tap at 17.13 m, `assert Rope > 0 —
+   measured 0.000`, and **not one line in the log about it**. That is `F-028`'s rule
+   (*„teilweise kann man gar nicht usen weil keine ahnung wieso"*) broken in the one failure that
+   had no word for itself — and it is very probably the whole of what he felt.
+
+### What was changed
+
+* **A shot that has left is a commitment.** `!held` is no longer a case in the `Flying` branch;
+  the tip lands and the rope then obeys the button one tick later in `Anchored`, where a release
+  is a release the player can see. Measured after: the same 50 ms tap now logs
+  `anchored ... (t=214)` and `let go: Released (t=215)`.
+* **`vector.hook_flight_max_s: 0.10`** — a ceiling on the whole flight in seconds, so the tip
+  flies at `max(hook_speed_m_s, distance / this)`. **Below 50 m nothing moves** (the user's own
+  500 m/s from 2026-08-12 still decides every shot the game is played at); above it the ledger
+  flattens to **7 ticks at every range up to 500 m** (was 13 / 25 / 49 / 62). A ceiling in TIME
+  and not a higher speed, because his other sentence that day was *„aber man soll sehen wie es
+  aufspannt"*: 0.10 s is six frames of line at every range.
+* **A successful shot now logs itself**: `hook Right of player 1 left the hand: 150.24 m, 6 ticks
+  to the anchor (t=211)`. The ledger above can be re-measured from any run log.
+
+⚠️ **The ledger test could answer the complaint by moving its own goalposts** — `cap_ticks` is
+read out of the very key under test, and a control run with `hook_flight_max_s: 10.0` left it
+green at 601 ticks. That is why
+`f005_the_flight_ceiling_is_a_number_that_binds_and_a_number_a_player_would_wait` exists: it
+bounds the key itself (`< hook_range_m / hook_speed_m_s` so it binds at all, `<= 0.15 s` so it
+stays a time nobody waits through). **A test whose acceptance is read out of the thing it tests
+is not a test.**
+
+## FIND-141 — the look-pull was not weak, gravity was eating 91 % of it: 26.57° of droop, and a blend of directions could never have fixed it
+
+**2026-08-20 · `F-006`/`F-023` · `src/player/locomotion.rs`, `assets/data/game.ron: player` ·
+evidence: `tests/player.rs::f005_*`, `scripts/f005-feel.txt` ACT 3/4**
+
+The user: *„man muss wenn man sich hookt und in die richtung gehen stärker in die richtung gehen!
+also wenn man da hin schaut dass nicht alle physics also gravitiy so stark sind. dass man gerader
+hingezogen wird. damit es sich gut anfühlt. damit man gut steuern kann damit. aber wenn man nicht
+hinschaut man auch gut kreise schwingen kann"*
+
+The obvious knob was `vector.boost_rope_fraction` (0.5), whose own comment states the tension.
+**It cannot do this, and the reason is one line of arithmetic:** that key blends a *direction*
+between the look and the rope, and at perfect alignment the look **is** the rope — the blend is a
+no-op exactly where he asked for the change.
+
+What is actually wrong is measurable without an app. Looking straight down a rope with `W` held:
+
+```
+thrust  = air_accel_m_s2 10 + air_pull_m_s2 30 = 40 m/s² ALONG the rope
+gravity =                                        20 m/s² ACROSS it
+droop   = atan(20 / 40)                        = 26.57° below the line he is aiming at
+```
+
+**The pull was never weak — 40 m/s² is four times a rope-less player and 118 % of `boost_m_s2`.
+Gravity was eating the straightness.** In the real game (ACT 3, 38 m of rope to an anchor 21.7 m
+above him, 1.5 s of `W`): he started at 12 m and finished at **11.997 m** — 1.5 seconds of hauling
+straight at something above him and **zero metres of climb**. On the ground it was worse and for a
+different reason: `air_control` only runs `in_flight`, so `W` on the pavement steers the rope not
+at all (ACT 3's first draft measured 1.996 m and was measuring the ground, not the rope).
+
+### What was changed
+
+**`player.air_pull_lift_fraction: 0.7`** — how much of `gravity_m_s2` the rope pull takes off,
+**riding the same `cᵢ = max(0, l̂ · r̂ᵢ)` and the same near-anchor fade as the pull itself**. So it
+is a function of the angle and not a second constant, which is exactly the shape his two clauses
+ask for. A/B against **the same binary**, only the RON value moved:
+
+| | `0.0` (what he played) | `0.7` |
+|---|---|---|
+| droop at full alignment (pure function) | **26.57°** | **8.53°** |
+| height after 1.5 s of `W` at an anchor 21.7 m up (ACT 3) | **11.997 m** (start 12.0) | **26.828 m** |
+| swing speed, look 90° off the rope (ACT 4) | 13.334 m/s | **13.431 m/s (+0.7 %)** |
+
+The third row is the half he insisted on keeping. The relief is **identically zero** at 90° and
+beyond (`f005_looking_away_from_the_rope_the_swing_is_bit_identical_to_before`); the +0.7 % is the
+swing carrying the look back past 90° for part of its own arc, not the term leaking.
+
+⚠️ **`boost_rope_fraction` is still 0.5 and is still wrong for the other half of his sentence, and
+it was not touched — `src/vector/boost.rs` belonged to another agent this round.** The patch, for
+whoever owns it next: `boost_direction` blends at a constant `w`, so a player looking 90° off his
+rope gets his boost dragged **50 % toward the anchor**, which is radial, which a taut rope eats —
+the file's own comment says so in as many words (*"a taut rope eats a radial pull … it kills the
+swing instead of feeding it"*). Gating it on the same alignment cosine (`w_eff = boost_rope_fraction
+* max(0, l̂ · r̂)`) keeps `B-005`'s ratchet, which only ever happens when you *are* flying at your
+anchor, and stops the boost fighting the arc when you are not. **Measure it before landing it** —
+that claim is unverified.

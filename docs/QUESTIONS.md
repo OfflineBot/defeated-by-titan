@@ -1511,3 +1511,212 @@ both read it and move with it. For (3) it is the two `over_the_core` arms of `la
 
 **A screenshot, and this round did not take one.** Nobody has looked at a marker sitting 12–24 px
 under the crosshair in a window. That is 🟨 on the look and 🟧 on the number.
+
+## Q-042 — ✅ DECIDED (2) on 2026-08-20 — the search band needed BOTH assist knobs up before it appeared, and that was a trap on the settings screen
+
+**2026-08-20 · `F-016` · `src/shared/settings.rs::assist_is_on`, `src/hud/catch_band.rs`.**
+
+The band is now on screen while the settings plate is up, which is what the user asked for
+(*„damit man das besser einstellen kann"*). Measured while building it: a player who opens
+`Settings` on a fresh run and turns **`Aim assist reach`** up sees **nothing happen**, at any
+value, because the gate is `assist_catch_pct > 0 && assist_strength_pct > 0` and
+`assist_strength_pct` ships at 0. He has to guess that a second, differently-named row is the
+master switch. The first row he touches is the one that looks like it should draw the picture.
+
+The gate itself is right and is not the question: it is the identical predicate `vector::aim`
+filters on, so *no probe cast* and *no band* stay one decision (FIND-135) — a band that drew
+while nothing was searching would be the lie the whole element exists against.
+
+**The question is which of these the user wants**, and it is a design call, not a bug:
+1. leave it — the two rows are two axes and the plate says so in its hint lines;
+2. let the reach row light the band on its own, drawn differently (dimmed / dashed) to say
+   *"this is what the search WOULD cover; the assist is off"*;
+3. make `Aim assist strength` come up off 0 the first time the reach is raised.
+
+**DECIDED 2026-08-20 — (2), and it is nearer (1) than it looks: the band is drawn from the
+REACH alone, and the colour says whether anything is searching.**
+
+The first assumption on this entry was *(1), left as it is*, and it was wrong for a reason the
+entry itself contains: `F-025` is not built, so `assist_strength` **does nothing today except
+open this gate**. Leaving it meant the picture the user asked for — *„damit man das besser
+einstellen kann"* — could not be reached at all by a player who had not guessed that a second
+row is a master switch. The strongest evidence against (1) was already in the tree:
+`tests/menu.rs::nudge_reach` had to press the strength button *in secret* before it could see a
+band, which is the trap written down as code.
+
+What changed, in one predicate: `hud::catch_band::place_catch_band` draws from the new
+`PlayerSettings::assist_has_reach()` (`catch > 0`) instead of `assist_is_on()`. The geometry is
+**bit-identical** in both states; the one claim that differs — *is a ray being cast right now* —
+is carried by the colour, `hud::catch_band::IDLE` (white at 0.40) against `NEUTRAL` (0.75).
+Measured: **5.43:1 searching, 3.36:1 idle** over the settings backdrop on the worst world frame,
+both clear of WCAG 1.4.11's 3:1, and the two states 1.61:1 apart — a knowing trade, because
+pushing them 3:1 apart makes the idle state illegible and the idle state is the **only** state a
+player can be in today.
+
+⚠️ **The PROBE is untouched and still `assist_is_on`'s.** Drawing and searching are two
+predicates on purpose; `docs/FINDINGS.md` FIND-137 argues why that is not the FIND-098 /
+FIND-099 / FIND-127 / FIND-129 defect (in all four the *geometry* lied; here it cannot).
+`tests/vector_hooks.rs::f016_at_zero_percent_the_aim_is_bit_for_bit_the_one_the_game_had_before`
+was re-run green after the change.
+
+**Rollback point if he wants (1) back:** one line —
+`src/hud/catch_band.rs::place_catch_band`'s `.filter(|s| s.assist_has_reach())` goes back to
+`.filter(|s| s.assist_is_on())`, and `PlayerSettings::assist_has_reach` and
+`hud::catch_band::IDLE` become dead. The two tests that would then have to change are
+`tests/hud.rs::f016_there_is_no_band_when_there_is_no_reach` and
+`::f016_the_reach_alone_draws_the_band_and_the_colour_says_whether_it_searches`; the break was
+watched red on exactly that one-line edit.
+
+**Still open, and it is the picture and not the code:** whether a *dimmed* band reads as "this
+is what the reach covers, nothing is running" or just as "a faint band" to somebody who has
+never seen the bright one. Side by side the two are clearly different
+(`docs/images/f016-band-100.png` against `docs/images/f016-band-idle-100.png`); alone, the idle
+one is only a fainter ruler. If he says it reads as broken rather than as idle, the cheap answer
+is a word on the `Aim assist reach` row's hint line — `src/menu/settings.rs`, which this round
+did not own.
+
+---
+
+## Q-043 — `W` on a rope does nothing unless you are looking at your own hook. Is that the verb you asked for? (2026-08-20, F-018 budget round)
+
+**Measured, `docs/FINDINGS.md` FIND-139:** over one ordinary sortie across Ashgate
+(`scripts/f018-budget.txt`), holding `W` on a taut rope delivered a mean thrust of **0.0012** of
+`player.air_pull_m_s2` — median **0.0000**, across 99 sampled ticks. Three full seconds of `W` in
+the pose a swing actually spends its time in move the player by **nothing at all**, and that is now
+pinned in the script as `assert gas == 300` after LEG B.
+
+**Why:** `player::locomotion::rope_steer` multiplies the pull by `cᵢ = max(0, l̂ · r̂ᵢ)`. You hang
+*under* your anchor and you look where you are going, so `l̂ · r̂ᵢ` is negative for most of a swing
+and the clamp takes the whole pull to zero. `W` hauls you along the rope **only while you are
+looking at your own hook.**
+
+**And you asked for that verb yourself,** which is why this is a question and not a bug:
+
+> *„wenn ich mit seilen festhake und w in die richtung drücke will ich dass man deutlich mehr
+> geboosted wird"*
+
+and `F-023` landed under the line *"W hauls you where you look"*. Both readings are defensible and
+they are different games:
+
+1. **`W` hauls you along the rope, and aiming at your hook is the skill.** What is built today. The
+   clamp is then correct and the verb is a deliberate move, not an ambient one — but a player who
+   never looks up at his hook will never find it, and nothing on screen tells him.
+2. **`W` hauls you where you LOOK, and the rope only bends it.** The clamp becomes a blend
+   (`0.5 + 0.5·(l̂ · r̂)`, or the look direction with a rope-fraction like `boost_rope_fraction`
+   already does for the boost), so `W` always thrusts and the rope decides how much of it is along
+   the leash. Closer to the commit line, and it makes `W` the traversal verb it reads as.
+
+**ASSUMPTION the work continued under:** (1) — the mechanic is left exactly as it is. This round
+changed only the **price**: gas is no longer charged for the ticks the thrust is zero
+(`vector::gas::steer_has_effect`). Nothing about the feel of `W` moved, and no game value moved.
+
+**Rollback point if you want (2):** it is one expression in
+`player::locomotion::rope_steer` — `let projection = look_dir.dot(direction).max(0.0);` — plus a
+new blend key in `game.ron`'s player block. Everything this round built survives it unchanged:
+`steer_has_effect` reads the same formula, and
+`tests/vector_gas.rs::f006_the_steer_is_billed_exactly_when_the_rope_really_thrusts` would go red
+on the day the formula changes and be re-cut against the new one. **That test is the thing that
+makes (2) cheap** — the price cannot silently fall out of step with the thrust again.
+
+---
+
+## Q-044 — the tank is 17 seconds and the mission is 330. The knob has now been turned twice for the same sentence. (2026-08-20)
+
+**Your sentence, 2026-08-20:** *„eine sache die mir noch auffällt. gas ist VIEL zu schnell weg!"*
+**Your sentence, 2026-08-10:** *„also gas tank sollte sehr viel mehr haben"* — which is why
+`gas_tank` went 100 → 300.
+
+**What this round did NOT do is turn it a third time,** and the reason is the measurement: the
+tank was not the cause. 48.3 % of it was being charged for a thrust that was never delivered
+(FIND-139), and fixing the bill gave the same sortie **77 of 300 gas back** without touching a
+single game value. That is the honest part of the answer.
+
+**Here is the part that is not solved, and it is yours.** With the bill repaired, 300 gas buys:
+
+| what you are doing | gas/s | seconds of it in one tank |
+|---|---|---|
+| swinging, nothing held | 0 | ∞ — **a swing is free, and that is the design** |
+| `W` on a rope, looking forward | 0 | ∞ — see Q-043 |
+| holding `Shift` | 18 | **16.7 s** |
+| `Shift` + `W` aimed at your hook | 34 | 8.8 s |
+| one dodge (`C`) | 45 flat | **6.7 dodges, and nothing else** |
+
+**A sortie is 330 s.** There is no refill anywhere in the world — that is your own decision,
+`Q-033`, *„gas refillt nur im main gebäude an bestimmten stationen/objekten"* — and **the refuel
+stations do not exist yet outside the hub** (`docs/NEXT.md` §1d). So the whole mission's supply of
+thrust is seventeen seconds, and no burn rate in `game.ron` closes a 20x gap.
+
+**This round did not touch the refill rule and will not:**
+`tests/vector_gas.rs::f018_an_idle_tank_never_refills_on_its_own` goes red the moment anyone puts
+a drop back on a timer, and the bible's argument for that is good — burning gas is loud, a Bellower
+answers it, and a tank that fills itself on a roof is exactly the clock the design refuses.
+
+**ASSUMPTION the work continued under:** the gap is a **missing world feature, not a wrong number**
+— the stations of `NEXT.md` §1d are the answer, and until they are built a sortie is meant to feel
+supply-limited. **Rollback point if you disagree:** it is one number,
+`assets/data/game.ron: vector.gas_tank`, and the derivations that hang off it are the "gas per m/s
+bought" table in the same block — the table stays true at any tank size, so raising it breaks
+nothing. `f018-budget.txt`'s brackets and
+`tests/vector_gas.rs::f018_a_tank_is_a_whole_mission_of_flying_because_nothing_refills_it` are the
+two places that would have to be re-cut.
+
+**What it would cost, said plainly (JOB 3 of this round):** every gas you give back makes the
+Vector Gear less of a resource and the bible's *"gas is the clock"* weaker. **The repair in
+FIND-139 does not cost that** — it only stopped charging for nothing, and every gas the player
+now keeps is gas he was never getting thrust for. **A bigger tank would cost it**, and that is
+exactly why this round left `gas_tank` alone and wrote this entry instead.
+
+---
+
+## Q-045 — the rope now takes 70 % of your weight when you look at your own hook. Is that the trade you meant — and does it make `Q-043`'s split too sharp? (2026-08-20, F-005 feel round)
+
+**Your sentence, verbatim:**
+
+> *„und man muss wenn man sich hookt und in die richtung gehen stärker in die richtung gehen! also
+> wenn man da hin schaut dass nicht alle physics also gravitiy so stark sind. dass man gerader
+> hingezogen wird. damit es sich gut anfühlt. damit man gut steuern kann damit. aber wenn man nicht
+> hinschaut man auch gut kreise schwingen kann"*
+
+**What was built, and the numbers** (`docs/FINDINGS.md` FIND-141). The obvious knob,
+`vector.boost_rope_fraction`, provably could not do it: it blends a *direction*, and at full
+alignment the look **is** the rope, so the blend is a no-op exactly where you want the change.
+What was wrong instead was arithmetic — looking straight down a rope with `W` held, the thrust is
+40 m/s² along it and gravity is 20 across it, so the game hauled you **26.57° below the line you
+were aiming at**, and in the real game 1.5 s of `W` at an anchor 21.7 m above you produced
+**zero metres of climb**.
+
+So `player.air_pull_lift_fraction: 0.7` takes 70 % of `gravity_m_s2` off — **gated on the same
+`max(0, look · rope)` the pull itself is gated on**, which is your two clauses in one term:
+
+| | before | now |
+|---|---|---|
+| droop when you look at the anchor | 26.57° | **8.53°** |
+| height after 1.5 s of `W` at an anchor 21.7 m up | 11.997 m (from 12.0) | **26.828 m** |
+| swing speed with the look 90° off the rope | 13.334 m/s | 13.431 m/s (**+0.7 %**) |
+
+**Two things for you to judge, and the work did not wait for either:**
+
+1. **0.7 is a guess with bounds, not a measurement.** Above 1.0 you are weightless while looking at
+   your hook and there is no arc left to fall into; below ~0.5 the approach still visibly droops.
+   0.7 leaves 6.0 m/s² of weight — a running-speed's worth of downward pull every second.
+2. 🔴 **It makes `Q-043` sharper, and that may be the wrong direction.** `Q-043` already asks
+   whether `W` doing *nothing* while you look away from your hook is the verb you wanted. The gap
+   between the two poses is now **wider**, not narrower: looking at the anchor buys 40 m/s² *and*
+   70 % of your weight; looking away still buys the 10 m/s² of free air control and nothing else.
+   If your answer to `Q-043` is "no, `W` should haul me even when I look forward", then this key's
+   gate is the wrong gate and both have to be re-cut together.
+
+**ASSUMPTION the work continued under:** your two clauses describe **one trade along the angle**,
+and the alignment cosine is that angle — so the relief belongs on the same gate as the pull, and
+the swing is meant to keep the full −20 it is built on.
+**Rollback point:** two lines and nothing else. `assets/data/game.ron: player.air_pull_lift_fraction`
+back to `0.0` restores the game you played, bit for bit (the term is `direction * pull + Y * lift`
+under one shared gate — at `0.0` the `Y` half is gone and the rest is untouched). The bound test
+`tests/player.rs::f005_the_gravity_relief_is_a_fraction_between_the_droop_and_weightlessness` and
+the `> 0.5` half of its claim would have to go with it.
+
+**Not decided here and left for you:** `vector.boost_rope_fraction` is still the constant `0.5`,
+so a boost fired while you look 90° off your rope is still dragged half-way toward the anchor —
+radial, which a taut rope eats, which the file's own comment calls "killing the swing". That is the
+same complaint from the Shift side and it belongs to `src/vector/boost.rs`, which another agent
+held this round. The proposed patch is in FIND-141 and it is **unmeasured**.
