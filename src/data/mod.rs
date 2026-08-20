@@ -256,6 +256,17 @@ pub struct PlayerTuning {
     /// `>= 2 * min_rope_m` (or the fade is shorter than the cliff) and `<= 0.1 * hook_range_m`
     /// (or a near-anchor special case runs over a tenth of every rope in the game).
     pub air_pull_fade_m: f32,
+    /// How much of [`gravity_m_s2`](Game::gravity_m_s2) the rope pull cancels **at
+    /// perfect alignment**, dimensionless in `0..1`.
+    ///
+    /// Rides the same `max(0, look · rope)` and the same near-anchor fade as
+    /// [`air_pull_m_s2`](Self::air_pull_m_s2), so it is a function of the angle and not a
+    /// second constant: *„wenn man da hin schaut … dass man gerader hingezogen wird … aber
+    /// wenn man nicht hinschaut man auch gut kreise schwingen kann"* (the user, 2026-08-20).
+    /// Bounds in `tests/player.rs`: `> 0.5` (or the aligned haul still droops — measured
+    /// 1.996 m of climb in four seconds at 0.0) and `< 1.0` (or the player is weightless
+    /// while looking at his own anchor and there is no arc left to swing in).
+    pub air_pull_lift_fraction: f32,
     pub eye_height_m: f32,
     /// Largest distance per substep of the integrator. Has to be strictly smaller than
     /// [`WorldTuning::min_wall_m`], or the player tunnels through the thinnest wall.
@@ -287,6 +298,18 @@ pub struct VectorTuning {
     /// cleared inside a second, because §1A's first requirement is that firing again is never
     /// blocked.
     pub hook_retract_speed_m_s: f32,
+    /// **A ceiling on the whole flight, in seconds.** The tip flies at
+    /// `max(hook_speed_m_s, distance / this)`, so [`hook_speed_m_s`](Self::hook_speed_m_s)
+    /// still decides every shot short enough to fit inside it and this key decides the rest.
+    ///
+    /// *„und time to hook also e drücken zum connecten geht zu lang! das muss schneller
+    /// gehen."* (the user, 2026-08-20). Measured before it existed: press to `Anchored` is
+    /// `1 + ceil(d / (hook_speed_m_s / hz))` ticks — 3 ticks at 18 m, **61 ticks at 500 m**.
+    /// A cap in TIME and not a higher speed, because the other half of his 2026-08-12
+    /// sentence is *„aber man soll sehen wie es aufspannt"*: 0.10 s is six frames of line at
+    /// every range. Held by `tests/vector_hooks.rs`: `hook_range_m / hook_speed_m_s > this`
+    /// (or the ceiling never binds and nobody could tell it was broken) and `<= 0.15 s`.
+    pub hook_flight_max_s: f32,
     /// **⚠️ UNTUNED, and read by nothing yet** — `W3` (`vector::aim`) and `W2` (the wheel)
     /// consume it. Half-angle between the two arms' aim rays, in degrees off the look
     /// direction; degrees in the RON, radians in the code (`docs/conventions.md`).

@@ -323,6 +323,14 @@ pub struct SteerTuning {
     pub fade_m: f32,
     /// [`crate::data::VectorTuning::min_rope_m`] — where the pull is **exactly zero**.
     pub min_rope_m: f32,
+    /// **How much weight the aligned pull takes off the player, in m/s² of upward
+    /// acceleration** — `-gravity_m_s2 * player.air_pull_lift_fraction`, already multiplied
+    /// out by the caller so that this struct stays in one unit.
+    ///
+    /// Rides the same `cᵢ` and the same `fᵢ` as [`pull_m_s2`](Self::pull_m_s2), so at 90° off
+    /// the rope it is exactly zero and the swing is the swing it always was. `0.0` is the
+    /// behaviour before 2026-08-20, bit for bit.
+    pub lift_m_s2: f32,
 }
 
 /// What an **anchored** rope adds to the air control, in m/s² — the rope half of the mixing
@@ -337,7 +345,7 @@ pub struct SteerTuning {
 /// ```text
 /// r̂ᵢ = unit(tipᵢ − h)   Lᵢ = |tipᵢ − h|   w⁺ = max(0, move_y)   ê_right = (cos yaw, 0, −sin yaw)
 /// cᵢ = max(0, l̂ · r̂ᵢ)                     fᵢ = clamp((Lᵢ − min_rope_m) / fade_m, 0, 1)
-/// rope = (1/n)·Σᵢ r̂ᵢ·pull_m_s2·w⁺·cᵢ·fᵢ  +  ê_right·lateral_m_s2·mx
+/// rope = (1/n)·Σᵢ (r̂ᵢ·pull_m_s2 + ŷ·lift_m_s2)·w⁺·cᵢ·fᵢ  +  ê_right·lateral_m_s2·mx
 /// ```
 ///
 /// ## Three details that are the whole design, and each one is a trap already paid for once
@@ -357,6 +365,18 @@ pub struct SteerTuning {
 /// 3. **`A`/`D` ride `ê_right`, the horizontal look-right, never the rope tangent.** A tangent
 ///    **flips sign** the moment the anchor passes beside you, which inverts the strafe in the
 ///    middle of a swing — the one place a player is committed and cannot correct.
+///
+/// 4. **`lift_m_s2` is the same `cᵢ` again, on `ŷ`** — and it is the whole of the user's
+///    *„wenn man da hin schaut dass nicht alle physics also gravitiy so stark sind. dass man
+///    gerader hingezogen wird … aber wenn man nicht hinschaut man auch gut kreise schwingen
+///    kann"* (2026-08-20). Measured before it existed (`docs/FINDINGS.md` FIND-131): looking
+///    straight down a **horizontal** rope with `W` held, the thrust is 40 m/s² along the rope
+///    and gravity is −20 across it, so the player is hauled **26.57° below the line he is
+///    aiming at**. The pull was never weak; gravity was eating the whole of the straightness.
+///    Because it rides `cᵢ`, the term dies with the alignment: at 90° off the rope it is
+///    identically zero and the arc is untouched, which is the second half of his sentence.
+///    ⚠️ It is a WEIGHT relief and not a thrust — nothing here reads `gravity_m_s2`; the
+///    caller multiplies it out (`air_control`), so this function keeps one unit and one job.
 ///
 /// **The `1/n` covers the pull only.** The lateral term is the player's own thrust, not the
 /// rope's, so it does not get halved for owning two ropes; the pull is one budget shared out,
@@ -395,7 +415,10 @@ pub fn rope_steer(
         };
         let projection = look_dir.dot(direction).max(0.0);
         let fade = ((length_m - t.min_rope_m) / t.fade_m).clamp(0.0, 1.0);
-        pull += direction * (t.pull_m_s2 * forward * projection * fade);
+        let gate = forward * projection * fade;
+        // `direction * pull` and `Y * lift` share the one gate, so there is no state of the
+        // world in which the weight comes off without the haul being on.
+        pull += (direction * t.pull_m_s2 + Vec3::Y * t.lift_m_s2) * gate;
     }
 
     let (sin, cos) = yaw.sin_cos();
@@ -479,6 +502,9 @@ pub fn air_control(
         lateral_m_s2: s.air_lateral_m_s2,
         fade_m: s.air_pull_fade_m,
         min_rope_m: data.game.vector.min_rope_m,
+        // The one place `gravity_m_s2` is read for this: a fraction in the file, m/s² in the
+        // struct. `-` because the RON carries gravity as the negative number it is.
+        lift_m_s2: -data.game.gravity_m_s2 * s.air_pull_lift_fraction,
     };
 
     for (intent, state, velocity, gas, hook, grant, transform, mut drive, forces) in &mut players {

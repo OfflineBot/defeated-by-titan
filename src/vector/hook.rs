@@ -194,15 +194,48 @@ fn anchorable_beyond_reach(
 /// with two copies of this is how a refire ends up obeying a different rule than a first shot.
 /// The tip starts in the hand (decision 5) and [`HookState::Flying`] carries the carrier it is
 /// flying at (`B-001`), so a miss can never become a flight.
-fn fire(arm: &mut HookArm, aim: &AimPoint, hand_m: Vec3) -> bool {
+fn fire(arm: &mut HookArm, aim: &AimPoint, hand_m: Vec3) -> Option<f32> {
     match anchor_target(aim) {
         Some((target_m, body)) => {
             arm.state = HookState::Flying { target_m, body };
             arm.tip_m = hand_m;
-            true
+            Some((target_m - hand_m).length())
         }
-        None => false,
+        None => None,
     }
+}
+
+/// **How far the tip moves this tick** — `hook_speed_m_s`, unless that would make the whole
+/// flight take longer than `hook_flight_max_s`, in which case it is whatever gets it there in
+/// that time (`F-005`, the user 2026-08-20: *„time to hook … das muss schneller gehen"*).
+///
+/// A **ceiling on the time and not a higher speed**, because his other sentence
+/// (2026-08-12, *„aber man soll sehen wie es aufspannt"*) is the opposite requirement: raising
+/// `hook_speed_m_s` to buy the far shot back would turn every near shot into a teleport, while
+/// a ceiling in seconds leaves the line the same number of FRAMES long at every range.
+///
+/// `total_m` is the length of the whole flight and not what is left of it, so the speed is
+/// decided once by the shot and does not creep upward as the tip closes in — a tip that
+/// accelerated into its own anchor would arrive at a time nobody can compute from the file.
+/// A non-positive or non-finite `hook_flight_max_s` disables the ceiling rather than dividing
+/// by zero; the value is a game number and `tests/data.rs` is where its range is held.
+pub fn flight_per_tick_m(v: &crate::data::VectorTuning, total_m: f32, dt_s: f32) -> f32 {
+    let at_speed = v.hook_speed_m_s * dt_s;
+    if !(v.hook_flight_max_s > 0.0) || !total_m.is_finite() {
+        return at_speed;
+    }
+    at_speed.max(total_m * dt_s / v.hook_flight_max_s)
+}
+
+/// How many ticks a flight of `total_m` takes — the number the fire log prints, and the whole
+/// of *„time to hook"* in one integer. `0` is impossible: a shot always spends at least the
+/// tick it left in.
+pub fn flight_ticks(v: &crate::data::VectorTuning, total_m: f32, dt_s: f32) -> u64 {
+    let step = flight_per_tick_m(v, total_m, dt_s);
+    if !(step > 0.0) {
+        return 0;
+    }
+    (total_m / step).ceil().max(1.0) as u64
 }
 
 /// Drives both arms through their states and reports every change.
@@ -238,7 +271,6 @@ pub fn update_hooks(
 
     let dt = time.delta_secs();
     let v = &data.game.vector;
-    let flight_per_tick_m = v.hook_speed_m_s * dt;
     let retract_per_tick_m = v.hook_retract_speed_m_s * dt;
     // The whole world, so "too far" is answered without a second tuning number of its own.
     let probe_m = 2.0 * data.game.world.half_extent_m;
@@ -262,7 +294,15 @@ pub fn update_hooks(
 
             match arm.state {
                 HookState::Idle => {
-                    if just_pressed && !fire(&mut next, aim, hand_m) {
+                    if let Some(distance_m) = just_pressed.then(|| fire(&mut next, aim, hand_m)).flatten() {
+                        info!(
+                            "hook {side:?} of player {} left the hand: {distance_m:.2} m, \
+                             {} ticks to the anchor (t={})",
+                            id.0,
+                            flight_ticks(v, distance_m, dt),
+                            tick.0
+                        );
+                    } else if just_pressed {
                         // The trigger was pulled and nothing caught. The arm stays
                         // `Idle` (decision 2), but `hud` and `sound` still learn that
                         // a shot happened — **and since `F-028` they learn why**. One
@@ -295,15 +335,18 @@ pub fn update_hooks(
                 }
 
                 HookState::Flying { target_m, body } => {
-                    if !held {
-                        next.state = HookState::Retracting;
-                        released.write(HookReleased {
-                            player: *id,
-                            side,
-                            reason: ReleaseReason::Released,
-                            tick: tick.0,
-                        });
-                    } else if gone.contains(&body) {
+                    // ⚠️ **`!held` is NOT a case here any more** (2026-08-20). Until today a
+                    // trigger that came back up while the tip was out sent the arm to
+                    // `Retracting` and wrote a `Released` message **with no log line**, so a
+                    // press shorter than `1 + ceil(d / step)` ticks did nothing and said
+                    // nothing — 4 ticks at 18 m, 26 at 200 m, longer than a human taps.
+                    // Measured in the real game: `scripts/f005-feel.txt` ACT 2, a 50 ms tap at
+                    // 18.06 m, `assert Rope > 0 — measured 0.000`. **A shot that has left is a
+                    // commitment**: it lands, and the rope then obeys the button in the
+                    // `Anchored` branch below, one tick later, where a release is a release the
+                    // player can see. `F-028`'s rule, applied to the one failure that had no
+                    // word for itself.
+                    if gone.contains(&body) {
                         next.state = HookState::Retracting;
                         released.write(HookReleased {
                             player: *id,
@@ -317,7 +360,16 @@ pub fn update_hooks(
                         // can compute — and moving carriers are `F-029`, not today.
                         let to_target = target_m - arm.tip_m;
                         let distance_m = to_target.length();
-                        if distance_m <= flight_per_tick_m {
+                        // The step comes out of **hand -> target**, not out of what is left
+                        // to fly: the ceiling is on the whole flight, and a step read off the
+                        // remainder would shrink with it and never arrive (a geometric series,
+                        // measured: 19 ticks instead of 6 at 500 m). It is re-read every tick
+                        // rather than remembered, and that costs no state and is the more
+                        // honest rule anyway — a player who is moving AWAY from his own target
+                        // still gets there inside `hook_flight_max_s`, because the number the
+                        // ceiling is applied to is the distance that is really out there now.
+                        let step_m = flight_per_tick_m(v, (target_m - hand_m).length(), dt);
+                        if distance_m <= step_m {
                             match index.body(body) {
                                 Some(entry) => {
                                     next.tip_m = target_m;
@@ -359,7 +411,7 @@ pub fn update_hooks(
                             // `distance_m > flight_per_tick_m >= 0`, so the division is safe —
                             // normalizing a zero vector would be the NaN that looks like
                             // "the player has vanished" (§9d).
-                            next.tip_m = arm.tip_m + to_target / distance_m * flight_per_tick_m;
+                            next.tip_m = arm.tip_m + to_target / distance_m * step_m;
                         }
                     }
                 }
@@ -402,11 +454,13 @@ pub fn update_hooks(
                     // goes down, whatever the tip is doing — that is what "instant" means,
                     // and it is why this branch is checked before the retract step below.
                     if just_pressed {
-                        if fire(&mut next, aim, hand_m) {
+                        if let Some(distance_m) = fire(&mut next, aim, hand_m) {
                             info!(
-                                "hook {side:?} of player {} fired again during the retract \
-                                 (t={})",
-                                id.0, tick.0
+                                "hook {side:?} of player {} fired again during the retract: \
+                                 {distance_m:.2} m, {} ticks to the anchor (t={})",
+                                id.0,
+                                flight_ticks(v, distance_m, dt),
+                                tick.0
                             );
                         } else {
                             // A refire at nothing anchorable. Reported like any other miss —

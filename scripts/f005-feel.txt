@@ -1,0 +1,99 @@
+# f005-feel — TIME TO HOOK, and the two ends of the look-pull. The user, 2026-08-20:
+#
+#   „und time to hook also e drücken zum connecten geht zu lang! das muss schneller gehen. und
+#    man muss wenn man sich hookt und in die richtung gehen stärker in die richtung gehen! …
+#    dass man gerader hingezogen wird … aber wenn man nicht hinschaut man auch gut kreise
+#    schwingen kann"
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/f005-feel.txt --ticks 1200
+#   ./target/debug/defeated_by_titan --headless --script scripts/f005-feel.txt --ticks 1200 >/dev/null 2>&1; echo $?
+#
+# The anchor is the market-square church nave (maps.ron: ashgate, 51, 5.75, -8, roof y = 11.5),
+# the same one scripts/f-001-hooks.txt shoots at and for the same reason: it is the one big flat
+# anchorable face in the district with nothing in front of it.
+#
+# ⚠️ THE MARK IS ONE TICK BEHIND THE HOOK. `run_script` sits in `IntentSystems::Source`, which
+# runs BEFORE `advance_tick`; `vector::hook` logs in `FixedUpdate` with the tick already counted
+# up. So a `mark` on the same script tick as a `hook` prints `t = T-1` where the shot leaves at
+# `T`. Every ledger below subtracts that one.
+
+wait 1.5                # world, camera, meshes and the render pipelines come up (90 ticks)
+
+# ── ACT 1 · the ledger: press -> anchored, on a rope a player really fires ────────────────
+look 0 34
+warp 51 0 13
+wait 0.4
+assert speed < 0.5
+mark f005-press-held
+hook right 1.2          # HELD — the button stays down over the whole flight
+wait 0.5
+mark f005-held-landed
+assert rope > 0         # it connected, and the log above says on which tick
+
+# ── ACT 2 · THE CEILING. The same press, at the far end of `hook_range_m`. ────────────────
+# 140 m straight down onto the same roof, from 150 m up. At `hook_speed_m_s` alone that flight
+# is 17 ticks and the press is 0.28 s of a game that does nothing; `hook_flight_max_s` makes it
+# 6 whatever the range is. The assert is 0.15 s after the trigger — inside the old flight and
+# outside the new one, which is the whole of „das muss schneller gehen".
+wait 0.6
+warp 51 150 -8
+look 0 -90
+wait 0.4
+mark f005-press-far
+hook right 1.5
+wait 0.15
+mark f005-far-landed
+assert rope > 0
+# Measured 2026-08-20: „left the hand: 150.24 m, **6 ticks** to the anchor (t=211)", anchored
+# t=218. Before `hook_flight_max_s`, 150.24 m was 19 ticks and this assert was red.
+
+# ── ACT 3 · LOOK AT THE ANCHOR AND PULL. „dass man gerader hingezogen wird" ───────────────
+# **Airborne**, because that is the only state the mixing rule runs in: on the ground
+# `player::locomotion` assigns the velocity outright and the rope steers nothing. The anchor is
+# the tall ruin north-west of the square (maps.ron, body 820, its face at y = 28.8) — high
+# enough that hauling at it is hauling UP, which is where gravity used to eat the pull.
+wait 1.5
+warp 76 12 -70
+look 0 36
+wait 0.1
+mark f005-pull-start
+hook right 4.0
+wait 0.15
+key W 3.0
+wait 1.5
+mark f005-pull-mid
+assert height > 24.0
+# **The number, A/B against the same binary with only `air_pull_lift_fraction` moved:**
+#   0.0 (the game he played)  ->  height 11.997 m — he starts at 12 and gains NOTHING in
+#                                 1.5 s of hauling straight at an anchor 21.7 m above him
+#   0.7 (this file)           ->  height 26.828 m, i.e. +14.8 m, arriving at the anchor
+# The pure-function half of the same claim is the angle:
+# tests/player.rs::f005_looking_at_the_anchor_the_pull_is_not_eaten_by_gravity — **26.57° off
+# the line he aims at, down to 8.53°**.
+wait 1.5
+mark f005-pull-end
+
+# ── ACT 4 · LOOK AWAY AND SWING. „wenn man nicht hinschaut man auch gut kreise schwingen" ──
+# The same drop and the same anchor; the only thing that changes is where the camera looks —
+# 90 degrees off the rope, where the relief is identically zero. What is left is the arc, and
+# an arc is speed that does not point at the anchor.
+wait 2.0
+warp 76 12 -70
+look 0 36
+wait 0.1
+hook left 4.0
+wait 0.15
+mark f005-swing-start
+look 90 0
+key W 3.0
+wait 3.0
+mark f005-swing-end
+assert speed > 8.0
+# **And the other end, same A/B:** 13.334 m/s at 0.0 against 13.431 m/s at 0.7 — **+0.7 %**.
+# The relief is identically zero at 90° off the rope (tests/player.rs::
+# f005_looking_away_from_the_rope_the_swing_is_bit_identical_to_before); what little difference
+# is left comes from the swing carrying the look past 90° for part of the arc. The circle he
+# asked to keep is the circle he had.
+
+wait 1.0
+mark f005-done

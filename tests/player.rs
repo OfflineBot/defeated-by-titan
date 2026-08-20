@@ -1119,6 +1119,7 @@ fn steer_tuning(d: &GameData) -> SteerTuning {
         lateral_m_s2: d.game.player.air_lateral_m_s2,
         fade_m: d.game.player.air_pull_fade_m,
         min_rope_m: d.game.vector.min_rope_m,
+        lift_m_s2: -d.game.gravity_m_s2 * d.game.player.air_pull_lift_fraction,
     }
 }
 
@@ -1161,9 +1162,19 @@ fn f006_looking_straight_at_the_anchor_w_hauls_at_the_sum_of_both_numbers() {
         d.game.player.air_pull_m_s2,
         d.game.player.air_accel_m_s2
     );
-    // And nothing sideways: at 0° there is no tangent to spend anything on.
-    let sideways = (a - towards * closing).length();
-    assert!(sideways < 0.05, "{sideways:.4} m/s² across a rope the player is looking straight down");
+    // And nothing sideways **except the weight the aligned pull takes off** (2026-08-20):
+    // `air_pull_lift_fraction` puts `-gravity_m_s2 * fraction` on `ŷ`, gated by the same
+    // cosine, and on a horizontal rope `ŷ` is across the rope by construction. So the check is
+    // not "nothing off the line" any more, it is "nothing off the line that is not exactly the
+    // gravity relief" — which is the stronger sentence: a stray tangential term of any other
+    // size fails it just as it did before.
+    let lift_due = -d.game.gravity_m_s2 * d.game.player.air_pull_lift_fraction;
+    let sideways = (a - towards * closing - Vec3::Y * lift_due).length();
+    assert!(
+        sideways < 0.05,
+        "{sideways:.4} m/s² across a rope the player is looking straight down, over and above \
+         the {lift_due:.2} m/s² of gravity relief game.ron owes at full alignment"
+    );
 }
 
 #[test]
@@ -1185,7 +1196,10 @@ fn f006_at_forty_five_degrees_w_is_part_haul_and_part_side_boost() {
 
     let towards = anchor.normalize();
     let radial = a.dot(towards);
-    let tangential = (a - towards * radial).length();
+    // Minus the gravity relief, which is on `ŷ` and rides the same cos45 the haul does — see
+    // the sister test above. What is left is the *„boost zur seite"* this test is about.
+    let lift_due = -d.game.gravity_m_s2 * d.game.player.air_pull_lift_fraction * root_half;
+    let tangential = (a - towards * radial - Vec3::Y * lift_due).length();
     assert!(
         (radial - radial_due).abs() < 0.5,
         "45° off the rope the haul is {radial:.4} m/s², not the {radial_due:.4} the cosine \
@@ -1267,6 +1281,12 @@ fn f006_the_pull_lets_go_before_the_short_rope_cliff() {
     //
     // ⚠️ The lateral term is deliberately NOT faded: `A`/`D` next to an anchor pushes you AWAY
     // from the cliff, which is the one thing you want close in.
+    //
+    // ⚠️ **The number read here is the component ALONG the rope and not the length of the
+    // vector** — since 2026-08-20 `rope_steer` also puts `air_pull_lift_fraction` of gravity
+    // on `ŷ`, which on a horizontal rope is perpendicular, so `.length()` would be
+    // `hypot(30, 14) = 33.1` and this test would fail on a term it is not about. The relief
+    // rides the same fade, so every claim below is unchanged by it.
     let d = game_data();
     let t = steer_tuning(&d);
     let full = d.game.player.air_pull_m_s2;
@@ -1287,7 +1307,8 @@ fn f006_the_pull_lets_go_before_the_short_rope_cliff() {
     for step in 1..12 {
         let length_m = t.min_rope_m + t.fade_m * step as f32 / 12.0;
         let anchor = anchor_at(0.0, length_m);
-        let pull = rope_steer(&[anchor], anchor.normalize(), 0.0, 0.0, 1.0, t).length();
+        let along = anchor.normalize();
+        let pull = rope_steer(&[anchor], along, 0.0, 0.0, 1.0, t).dot(along);
         assert!(pull > previous, "the fade is not monotone at {length_m:.2} m: {pull} <= {previous}");
         assert!(pull < full, "at {length_m:.2} m the pull is already the full {full}");
         previous = pull;
@@ -1295,7 +1316,8 @@ fn f006_the_pull_lets_go_before_the_short_rope_cliff() {
 
     // And at the top of the band it is the whole number, with no fade left to pay.
     let anchor = anchor_at(0.0, t.min_rope_m + t.fade_m);
-    let pull = rope_steer(&[anchor], anchor.normalize(), 0.0, 0.0, 1.0, t).length();
+    let along = anchor.normalize();
+    let pull = rope_steer(&[anchor], along, 0.0, 0.0, 1.0, t).dot(along);
     assert!(
         (pull - full).abs() < 1e-3,
         "at min_rope_m + air_pull_fade_m = {} m the pull is {pull:.4} instead of the full {full}",
@@ -1409,7 +1431,12 @@ fn f006_in_the_real_app_the_rope_pull_is_there_and_an_empty_tank_gets_none_of_it
     app.update();
 
     let due = d.game.player.air_accel_m_s2 + d.game.player.air_pull_m_s2;
-    let hauling = run_accel(&app, full).length();
+    // **Minus the gravity relief first** (2026-08-20): `air_pull_lift_fraction` puts
+    // `-gravity_m_s2 * fraction` on `ŷ` at full alignment, and this test is about the two
+    // numbers the sum is made of, not about the third. The look here runs straight down the
+    // rope, so what is left is `air_accel_m_s2 + air_pull_m_s2` along it and nothing else.
+    let lift_due = -d.game.gravity_m_s2 * d.game.player.air_pull_lift_fraction;
+    let hauling = (run_accel(&app, full) - Vec3::Y * lift_due).length();
     assert!(
         (hauling - due).abs() < 1.0,
         "W straight down a real rope in the real app gives {hauling:.4} m/s² instead of \
@@ -1427,5 +1454,148 @@ fn f006_in_the_real_app_the_rope_pull_is_there_and_an_empty_tank_gets_none_of_it
          {half_look} and the rope term is ZERO, so that is the whole of it. {:.4} would be \
          half the rope pull smuggled in for free",
         half_look + d.game.player.air_pull_m_s2 * 0.5
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// THE LOOK-PULL — the user, 2026-08-20
+//
+//   „man muss wenn man sich hookt und in die richtung gehen stärker in die richtung gehen!
+//    also wenn man da hin schaut dass nicht alle physics also gravitiy so stark sind. dass man
+//    gerader hingezogen wird … aber wenn man nicht hinschaut man auch gut kreise schwingen kann"
+//
+// Two ends of one trade, and the two tests below are the two ends. What is measured in both is
+// the **net** acceleration — the thrust plus `gravity_m_s2` — because a straight line is a
+// property of what the world does to you and not of what you push with. The pull was never the
+// problem: it is 40 m/s² along the rope and always was.
+// ---------------------------------------------------------------------------------------
+
+/// The angle between the net acceleration and the rope, in degrees. **The straightness
+/// number.** 0° is "the game takes you exactly where you are aiming".
+fn droop_deg(net: Vec3, towards: Vec3) -> f32 {
+    net.normalize().dot(towards.normalize()).clamp(-1.0, 1.0).acos().to_degrees()
+}
+
+#[test]
+fn f005_looking_at_the_anchor_the_pull_is_not_eaten_by_gravity() {
+    // ⚠️ RED before `air_pull_lift_fraction` existed, and the red number is arithmetic anybody
+    // can redo: a horizontal rope, the look straight down it, `W` held. Thrust is
+    // `air_accel_m_s2 + air_pull_m_s2` = 40 m/s² along the rope; gravity is 20 m/s² across it;
+    // `atan(20 / 40)` = **26.57° below the line he is aiming at**. In the real game that came
+    // out as `scripts/f005-feel.txt` ACT 3: four seconds of `W` at an anchor 9.5 m above him
+    // and `assert Height > 8 — measured 1.996`.
+    //
+    // The acceptance is his sentence, made into a number: **at full alignment the net has to
+    // point within 15° of the rope** — i.e. the straight haul has to be recognisably straight.
+    // 15 and not 0 because gravity does not go away (see the sister test): the file's `< 1.0`
+    // bound on the fraction is the same requirement seen from the other side.
+    let d = game_data();
+    let anchor = anchor_at(0.0, 60.0);
+    let net = mixed(&d, 0.0, anchor, 0.0, 1.0) + Vec3::Y * d.game.gravity_m_s2;
+    let droop = droop_deg(net, anchor);
+
+    let without = mixed(&d, 0.0, anchor, 0.0, 1.0)
+        - Vec3::Y * (-d.game.gravity_m_s2 * d.game.player.air_pull_lift_fraction)
+        + Vec3::Y * d.game.gravity_m_s2;
+    println!(
+        "F-005 straightness at full alignment: {droop:.2}° off the rope, \
+         {:.2}° with air_pull_lift_fraction deleted",
+        droop_deg(without, anchor)
+    );
+
+    assert!(
+        droop < 15.0,
+        "looking straight down a 60 m rope with W held, the game hauls the player {droop:.2}° \
+         off the line he is aiming at — game.ron: player.air_pull_lift_fraction is {} and the \
+         acceptance is 15°",
+        d.game.player.air_pull_lift_fraction
+    );
+    // The control: delete the term and the number has to move back to the 26.57° above. A test
+    // whose number does not move when the thing it measures is removed measures nothing.
+    assert!(
+        droop_deg(without, anchor) > droop + 10.0,
+        "deleting the lift moved the droop from {droop:.2}° to {:.2}° — under 10° of \
+         difference means this test is not measuring the lift at all",
+        droop_deg(without, anchor)
+    );
+}
+
+#[test]
+fn f005_looking_away_from_the_rope_the_swing_is_bit_identical_to_before() {
+    // The other half of the same sentence: *„aber wenn man nicht hinschaut man auch gut kreise
+    // schwingen kann"*. The relief rides `cᵢ = max(0, l̂ · r̂ᵢ)`, so from 90° on it is gone and
+    // a swing is exactly the state in which the look is not down the rope.
+    //
+    // ⚠️ **Not `assert_eq!`, and the tolerance is measured rather than picked.** The first
+    // version of this test did use `assert_eq!` and it went red at 270°: `l̂ · r̂` at a right
+    // angle is `+1.2e-8` and not `0.0`, because 270° in f32 radians is not exactly `3π/2`, and
+    // `max(0, ·)` keeps that sign. The whole term is then **1.7e-7 m/s²** — 8 parts in a
+    // billion of the pull, a millimetre per second after an hour of swinging. `1e-5` is two
+    // orders above that and still 3e-7 of `air_pull_m_s2`, so a term that really reappeared
+    // could not hide under it.
+    let d = game_data();
+    let anchor = anchor_at(0.0, 60.0);
+    let mut zeroed = steer_tuning(&d);
+    zeroed.lift_m_s2 = 0.0;
+
+    for turn_deg in [90.0_f32, 120.0, 180.0, 270.0] {
+        let yaw = turn_deg.to_radians();
+        let look_dir = Intent { yaw, ..default() }.look_dir();
+        let with = rope_steer(&[anchor], look_dir, yaw, 0.0, 1.0, steer_tuning(&d));
+        let without = rope_steer(&[anchor], look_dir, yaw, 0.0, 1.0, zeroed);
+        let leak = (with - without).length();
+        assert!(
+            leak < 1e-5,
+            "{turn_deg}° off the rope the gravity relief still contributes {leak:e} m/s² — the \
+             arc the player swings in is not the arc it was"
+        );
+    }
+
+    // And the swing still has something to swing with: at 90° the look term is the whole of
+    // `air_accel_m_s2`, across the rope, which is what feeds a circle.
+    let yaw = std::f32::consts::FRAC_PI_2;
+    let a = mixed(&d, yaw, anchor, 0.0, 1.0);
+    let towards = anchor.normalize();
+    let tangential = (a - towards * a.dot(towards)).length();
+    println!("F-005 circle at 90° off the rope: {tangential:.3} m/s² across it, 0 along it");
+    assert!(
+        (tangential - d.game.player.air_accel_m_s2).abs() < 0.05,
+        "{tangential:.3} m/s² across the rope instead of air_accel_m_s2 {} — the swing lost \
+         the thrust that draws the circle",
+        d.game.player.air_accel_m_s2
+    );
+}
+
+#[test]
+fn f005_the_gravity_relief_is_a_fraction_between_the_droop_and_weightlessness() {
+    // The bounds on `player.air_pull_lift_fraction` itself, and both ends are the user's own
+    // sentence rather than taste. ⚠️ Here and not in `tests/data.rs` for the same reason the
+    // hook ceiling's bounds live next to the hook: the meaning is `rope_steer`'s.
+    let d = game_data();
+    let f = d.game.player.air_pull_lift_fraction;
+
+    // Below 0.5 the aligned haul still loses more than half of what gravity takes. The measured
+    // floor, not a felt one: at 0.0 the net points 26.57° below the line the player is aiming
+    // at (`f005_looking_at_the_anchor_the_pull_is_not_eaten_by_gravity`), and at 0.5 it is
+    // 14.04° — already outside that test's 15° acceptance would be at 0.49.
+    assert!(
+        f > 0.5,
+        "air_pull_lift_fraction is {f} — under half of gravity relieved and „dass man gerader \
+         hingezogen wird\" is still not true"
+    );
+    // At 1.0 the player is weightless while looking at his own anchor, and then there is no arc
+    // to fall back into when he looks away — which is the other half of the same sentence,
+    // „aber wenn man nicht hinschaut man auch gut kreise schwingen kann".
+    assert!(
+        f < 1.0,
+        "air_pull_lift_fraction is {f} — at 1.0 a player looking at his anchor with W held has \
+         no weight at all, and a swing is a thing that falls"
+    );
+    // And what is left over is a real force and not a rounding: at 0.7 it is 6.0 m/s², which is
+    // `player.run_speed_m_s` worth of acceleration still pulling him down every second.
+    let left_over = -d.game.gravity_m_s2 * (1.0 - f);
+    assert!(
+        left_over >= 1.0,
+        "{left_over:.2} m/s² of weight left at full alignment is not a world to swing in"
     );
 }

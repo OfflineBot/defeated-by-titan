@@ -345,13 +345,19 @@ fn f001_the_edge_belongs_to_the_player_and_not_to_the_system() {
 // ---------------------------------------------------------------------------------------
 
 /// Fires once at a body 28 m away and returns the number of ticks up to `Anchored`.
-fn measure_flight(speed_m_s: Option<f32>) -> (u64, f32, f32) {
+fn measure_flight(speed_m_s: Option<f32>, flight_max_s: Option<f32>) -> (u64, f32, f32) {
     let mut app = app();
     let e = me(&mut app);
     settle(&mut app);
 
     if let Some(speed) = speed_m_s {
         app.world_mut().resource_mut::<GameData>().game.vector.hook_speed_m_s = speed;
+    }
+    // ⚠️ Since 2026-08-20 there are TWO keys in a flight time and `hook_flight_max_s` is the
+    // one that wins on a long shot. Every claim below is about `hook_speed_m_s`, so the caller
+    // pushes the ceiling out of the way rather than pretending it is not there.
+    if let Some(max_s) = flight_max_s {
+        app.world_mut().resource_mut::<GameData>().game.vector.hook_flight_max_s = max_s;
     }
     let speed = data(&app).game.vector.hook_speed_m_s;
     let hz = data(&app).game.simulation_hz as f32;
@@ -381,7 +387,7 @@ fn f001_the_flight_time_comes_out_of_the_file_and_not_out_of_the_code() {
     // The criterion verbatim: flight time = distance / hook_speed_m_s * 60, within one tick.
     // The second half of the test is what makes it red when somebody writes the 90 into the
     // Rust: at a third of the speed the flight has to take three times as long.
-    let (at_file_value, distance_m, expected) = measure_flight(None);
+    let (at_file_value, distance_m, expected) = measure_flight(None, Some(1000.0));
     assert!(
         (at_file_value as f32 - expected).abs() <= 1.0,
         "{distance_m:.3} m took {at_file_value} ticks, the file allows {expected:.2} ± 1 \
@@ -395,7 +401,7 @@ fn f001_the_flight_time_comes_out_of_the_file_and_not_out_of_the_code() {
     .vector
     .hook_speed_m_s
         / 3.0;
-    let (slowed, _, expected_slow) = measure_flight(Some(third));
+    let (slowed, _, expected_slow) = measure_flight(Some(third), Some(1000.0));
     assert!(
         (slowed as f32 - expected_slow).abs() <= 1.0,
         "at {third} m/s the flight took {slowed} ticks instead of {expected_slow:.2} — \
@@ -421,10 +427,20 @@ fn f001_the_tip_starts_in_the_hand_and_flies_towards_the_anchor() {
     // of the arrival. It was: at `hook_speed_m_s: 160` the old fixed 28 m was 10.5 steps, and
     // `W1`'s 160 -> 500 m/s made it 3.4. Derived from the file now, so the next speed change
     // cannot do it again.
-    let per_tick_m = data(&app).game.vector.hook_speed_m_s / data(&app).game.simulation_hz as f32;
-    let target = Vec3::new(0.0, 1.6, -per_tick_m * 8.0);
+    //
+    // ⚠️ And **not further out than `hook_speed_m_s * hook_flight_max_s`** (2026-08-20): past
+    // that distance the ceiling decides the step and the tip moves more than the speed key
+    // says, which is the ceiling working and not a bug. 50 m today — eight steps would have
+    // been 66.7 m and this test would have been measuring the wrong key.
+    let d = data(&app);
+    let dt = 1.0 / d.game.simulation_hz as f32;
+    let distance_m =
+        (d.game.vector.hook_speed_m_s * dt * 8.0).min(d.game.vector.hook_speed_m_s * d.game.vector.hook_flight_max_s);
+    let per_tick_m = defeated_by_titan::vector::hook::flight_per_tick_m(&d.game.vector, distance_m, dt);
+    let steps = ((distance_m / per_tick_m).floor() as usize).saturating_sub(1).min(5);
+    let target = Vec3::new(0.0, 1.6, -distance_m);
     let body =
-        put_body(&mut app, 90_005, Vec3::new(0.0, 1.6, -per_tick_m * 8.0 - 4.0), Vec3::splat(4.0));
+        put_body(&mut app, 90_005, Vec3::new(0.0, 1.6, -distance_m - 4.0), Vec3::splat(4.0));
     aim_at(&mut app, e, target, body, true);
 
     let start = hand(&app, e);
@@ -437,7 +453,8 @@ fn f001_the_tip_starts_in_the_hand_and_flies_towards_the_anchor() {
     );
 
     let mut last = tip(&app, e, Side::Left);
-    for _ in 0..5 {
+    assert!(steps >= 3, "only {steps} full steps fit into this flight — it proves nothing");
+    for _ in 0..steps {
         app.update();
         let now = tip(&app, e, Side::Left);
         let step = (now - last).length();
@@ -1768,4 +1785,164 @@ fn f025_the_height_term_stops_separating_candidates_when_the_player_looks_level(
         "looking level, deleting the height weight moved {moved_level} points — then the term \
          does separate candidates on a horizontal sweep and the arithmetic above is wrong"
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// 8. TIME TO HOOK — the user, 2026-08-20
+//
+//   „und time to hook also e drücken zum connecten geht zu lang! das muss schneller gehen."
+//
+// Two separate sentences hide in that one, and both are measured here:
+//   a) the LEDGER — how many ticks lie between the trigger going down and `Anchored`, at the
+//      ranges `vector.hook_range_m` allows;
+//   b) the HOLD — how long the button has to stay down for the shot to survive at all.
+// ---------------------------------------------------------------------------------------
+
+/// Fires once at a body `distance_m` straight ahead and returns
+/// `(ticks_to_flying, ticks_to_anchored)` counted from the tick the trigger goes down.
+///
+/// The **button is held for the whole run**, so this measures the flight and nothing else.
+fn ledger(app: &mut App, e: Entity, id: u32, distance_m: f32) -> (u64, u64) {
+    let hand = hand(app, e);
+    let target = hand + Vec3::NEG_Z * distance_m;
+    let body = put_body(app, id, target + Vec3::NEG_Z * 4.0, Vec3::splat(4.0));
+    aim_at(app, e, target, body, true);
+
+    press(app, Side::Left);
+    let mut flying = None;
+    for n in 1..=4000 {
+        app.update();
+        if flying.is_none() && matches!(arm_state(app, e, Side::Left), HookState::Flying { .. }) {
+            flying = Some(n);
+        }
+        if arm_state(app, e, Side::Left).is_anchored() {
+            return (flying.unwrap_or(n), n);
+        }
+    }
+    panic!("no anchor within 4000 ticks at {distance_m} m");
+}
+
+#[test]
+fn f005_the_time_from_the_trigger_to_the_anchor_is_capped_by_the_file() {
+    // The acceptance is the file's own ceiling: **press -> `Anchored` in at most
+    // `1 + hook_flight_max_s * simulation_hz` ticks, at every distance in `hook_range_m`.**
+    // The `1` is the fire tick and it is irreducible — the trigger is an edge, and an edge
+    // is seen in the tick it happens in and acted on in the same one.
+    //
+    // ⚠️ RED before `hook_flight_max_s` was read: measured 3 / 7 / 13 / 25 / 49 / 61 ticks at
+    // 18 / 50 / 100 / 200 / 400 / 500 m, i.e. the far half of the range cost between 0.4 s and
+    // 1.02 s of a game that does nothing the player can act on.
+    let d = defeated_by_titan::data::GameData::load(std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/data"
+    )));
+    let hz = d.game.simulation_hz as f32;
+    let cap_ticks = (d.game.vector.hook_flight_max_s * hz).ceil() as u64 + 1;
+    let uncapped = |m: f32| (m / (d.game.vector.hook_speed_m_s / hz)).ceil() as u64 + 1;
+
+    let mut line = String::new();
+    let mut worst = 0;
+    for (i, distance_m) in [18.0_f32, 50.0, 100.0, 200.0, 400.0, 500.0].iter().enumerate() {
+        let mut app = app();
+        let e = me(&mut app);
+        settle(&mut app);
+        let (flying, anchored) = ledger(&mut app, e, 91_100 + i as u32, *distance_m);
+        line.push_str(&format!(
+            " {distance_m:.0} m: fly {flying}, anchor {anchored} ({:.1} ms, was {});",
+            anchored as f32 * 1000.0 / hz,
+            uncapped(*distance_m)
+        ));
+        assert_eq!(flying, 1, "the shot did not leave in the tick the trigger went down");
+        worst = worst.max(anchored);
+    }
+    println!("F-005 press -> anchored:{line} cap {cap_ticks} ticks");
+    assert!(
+        worst <= cap_ticks,
+        "the slowest shot took {worst} ticks; game.ron: vector.hook_flight_max_s allows \
+         {cap_ticks} (fire tick included).{line}"
+    );
+}
+
+#[test]
+fn f005_letting_go_in_mid_flight_no_longer_swallows_the_shot() {
+    // ⚠️ RED before this round, and it is `F-028`'s rule broken in the one place nobody
+    // looked: while `Flying`, `!held` sent the arm to `Retracting` and wrote a `Released`
+    // message **with no log line at all**. So the button had to stay down for the whole
+    // `1 + ceil(d / (hook_speed_m_s / hz))` ticks or the press did nothing and said nothing —
+    // 4 ticks at 18 m and 26 ticks (0.43 s) at 200 m, which is longer than a human taps.
+    // Measured in the real game the same day: `scripts/f005-feel.txt` ACT 2, a 50 ms tap at
+    // 18.06 m, `assert Rope > 0 — measured 0.000`, and not one line in the log about it.
+    let mut app = app();
+    let e = me(&mut app);
+    settle(&mut app);
+
+    let hand = hand(&app, e);
+    let target = hand + Vec3::NEG_Z * 60.0;
+    let body = put_body(&mut app, 91_200, target + Vec3::NEG_Z * 4.0, Vec3::splat(4.0));
+    aim_at(&mut app, e, target, body, true);
+
+    press(&mut app, Side::Left);
+    app.update(); // the shot leaves
+    assert!(matches!(arm_state(&app, e, Side::Left), HookState::Flying { .. }));
+    app.update(); // one tick of flight — the tip is nowhere near 60 m
+    let_go(&mut app, Side::Left);
+
+    // The flight is a commitment: it lands.
+    let landed = ticks_until_anchored(&mut app, e, Side::Left, 600);
+    assert!(
+        landed > 0,
+        "a shot that has left has to reach its anchor even when the trigger comes back up"
+    );
+    // And then the rope obeys the button again, which is the behaviour that was never in
+    // question: a hook is held while `Q`/`E` is held.
+    app.update();
+    assert_eq!(
+        arm_state(&app, e, Side::Left),
+        HookState::Retracting,
+        "the arm anchored with the button already up and then did not let go"
+    );
+}
+
+#[test]
+fn f005_the_flight_ceiling_is_a_number_that_binds_and_a_number_a_player_would_wait() {
+    // The bounds on `vector.hook_flight_max_s` itself. The ledger test above measures the game
+    // **against the file**, so the file could answer any complaint by raising its own ceiling —
+    // it was written that way first and the control run proved it: setting the key to 10.0 left
+    // that test green at 601 ticks. This is the half that cannot be moved from inside.
+    //
+    // ⚠️ This lives here and not in `tests/data.rs`: the key is `vector::hook`'s and so is its
+    // meaning, and a second file that also knows what „instant" is here is a second definition.
+    let v = defeated_by_titan::data::GameData::load(std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/data"
+    )))
+    .game
+    .vector;
+
+    // 1. It has to BIND. A ceiling above what `hook_speed_m_s` already delivers at maximum
+    //    range is a key nobody can tell is broken — and the whole reason it exists is that the
+    //    far half of `hook_range_m` cost up to 1.02 s.
+    let uncapped_worst_s = v.hook_range_m / v.hook_speed_m_s;
+    assert!(
+        v.hook_flight_max_s < uncapped_worst_s,
+        "hook_flight_max_s {} s never binds: hook_range_m / hook_speed_m_s is already \
+         {uncapped_worst_s:.3} s",
+        v.hook_flight_max_s
+    );
+
+    // 2. And it has to be a time a player does not experience as waiting. 0.15 s is the ceiling
+    //    on the ceiling: it is one and a half times this file's own „reads as instant" band
+    //    (`aim_spread_settle_s`, 0.10 s), it is half of the 0.30 s a human takes to react at
+    //    all, and it is under the shortest window the game already measures as a deliberate
+    //    gesture (`dodge_double_tap_window_ticks`, 18 ticks = 0.300 s). Above it, „e drücken
+    //    zum connecten geht zu lang" is true again by arithmetic.
+    assert!(
+        v.hook_flight_max_s <= 0.15,
+        "hook_flight_max_s is {} s — a press the player waits {} ms for is the complaint the \
+         key was added to answer (the user, 2026-08-20)",
+        v.hook_flight_max_s,
+        v.hook_flight_max_s * 1000.0
+    );
+    // 3. Strictly positive: 0.0 is not „no ceiling", it is a division this code refuses to do.
+    assert!(v.hook_flight_max_s > 0.0, "hook_flight_max_s has to be a positive time");
 }

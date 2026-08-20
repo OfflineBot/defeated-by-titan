@@ -104,6 +104,42 @@
         //   - <= 0.1 * hook_range_m (50 m), or a "near the anchor" special case is running over
         //     a tenth of every rope in the game and the pull is no longer what steers a swing.
         air_pull_fade_m: 12.0,
+        // ── THE LOOK-PULL, 2026-08-20 ─────────────────────────────────────────────────────
+        // The user, after playing: „man muss wenn man sich hookt und in die richtung gehen
+        // stärker in die richtung gehen! also wenn man da hin schaut dass nicht alle physics
+        // also gravitiy so stark sind. dass man gerader hingezogen wird. damit es sich gut
+        // anfühlt. damit man gut steuern kann damit. aber wenn man nicht hinschaut man auch
+        // gut kreise schwingen kann"
+        //
+        // **How much of `gravity_m_s2` the rope pull cancels — at PERFECT ALIGNMENT ONLY.**
+        // It rides the very same cosine `cᵢ = max(0, l̂ · r̂ᵢ)` the pull itself rides, and the
+        // same near-anchor fade, so it is a FUNCTION OF THE ANGLE and not a second constant:
+        // look at your anchor and gravity nearly lets go, look off the rope and it is back at
+        // the full −20 the arc is built on. That is his two clauses, one term.
+        //
+        // ⚠️ It could not be done by moving `boost_rope_fraction`. That key blends a
+        // DIRECTION, and at perfect alignment look and rope are the same direction — the blend
+        // is a no-op exactly where he wants the change. What was measured instead
+        // (docs/FINDINGS.md FIND-131, `scripts/f005-feel.txt` ACT 3): hanging under the church
+        // nave, looking straight at an anchor 9.5 m above him, `W` held for four seconds,
+        // he climbed **1.996 m**. The arithmetic says why and it is not close: the rope term
+        // gives 30·0.983 = 29.5 m/s² along a rope that is 0.552 vertical and the look term
+        // 10 m/s² along a look that is 0.559 vertical, so **21.9 m/s² of lift against 20.0 of
+        // gravity** — 1.9 m/s² net. The pull was never weak; gravity was eating 91 % of it.
+        //
+        // ⚠️ UNTUNED. Two bounds, and
+        // tests/player.rs::f005_the_gravity_relief_is_a_fraction_between_the_droop_and_weightlessness
+        // holds both:
+        //   - **> 0.5**, or the aligned haul still loses more than half of the pull and the
+        //     approach still droops — 0.0 is the 1.996 m measured above;
+        //   - **< 1.0**, or a player looking at his anchor with `W` down is WEIGHTLESS, and
+        //     there is then no arc to fall back into when he looks away — which is the half of
+        //     his sentence that asks for the swing to survive.
+        // At 0.7 the net climb of that same measurement becomes 15.7 m/s² and 6.0 m/s² of
+        // weight is left over, so he still settles into a swing the moment the look leaves the
+        // rope. **Costs no new gas key**: it is part of the rope term, and the rope term is
+        // already `GasConsumer::Steer` — on an empty tank it is zero with the rest of it.
+        air_pull_lift_fraction: 0.7,
         // 1.65 -> 1.60: the user gives the camera height directly
         // (scale.ron:camera.height_m). The old 1.65 was estimated from the body height;
         // a stated figure beats an estimate.
@@ -177,6 +213,36 @@
         // At 500 the retract equals the shot: out and back is 2.0 s worst case, 0.24 s at the
         // 60 m a real miss happens at. ⚠️ UNTUNED.
         hook_retract_speed_m_s: 500.0,
+        // ── TIME TO HOOK, 2026-08-20 ──────────────────────────────────────────────────────
+        // The user, after playing: „und time to hook also e drücken zum connecten geht zu
+        // lang! das muss schneller gehen."
+        //
+        // **A CEILING ON THE WHOLE FLIGHT, IN SECONDS** — the tip flies at
+        // `max(hook_speed_m_s, distance / this)`, so `hook_speed_m_s` still decides every shot
+        // that is short enough and this key decides the rest. Measured before it existed
+        // (docs/FINDINGS.md FIND-130): press -> `Anchored` is `1 + ceil(d / (500/60))` ticks,
+        // i.e. **3 ticks / 50 ms at the 18 m of a roof-to-roof hook** and **61 ticks / 1.02 s
+        // at the 500 m the range allows**. The near field was never the complaint; the far
+        // field is a second of a game that does nothing you can act on.
+        //
+        // 0.10 s is not chosen, it is this file's own „reads as instant" band —
+        // `aim_spread_settle_s` carries the same number with the same justification, and the
+        // hook comment above says a 20-60 m shot at 0.04-0.12 s „reads as instant" in so many
+        // words. Two consequences, and both are the point:
+        //   * **below 50 m nothing moves at all** (50 / 500 = 0.10 s), so every shot the game
+        //     is actually played at keeps the 500 m/s the user named on 2026-08-12;
+        //   * at 60 Hz it is **6 frames**, which is the other half of his sentence from that
+        //     day — „aber man soll sehen wie es aufspannt". A cap in TIME keeps the line
+        //     visible at every range; a higher `hook_speed_m_s` would have made a near shot
+        //     a teleport to buy the same second back.
+        // Worst case speed at 500 m is 5000 m/s, and that is what a time ceiling means.
+        // ⚠️ UNTUNED. Its own bounds are held by
+        // tests/vector_hooks.rs::f005_the_flight_ceiling_is_a_number_that_binds_and_a_number_a_player_would_wait
+        // — `hook_range_m / hook_speed_m_s > this` (a ceiling that never binds is a key nobody
+        // can tell is broken; the control run set it to 10.0 and the LEDGER test stayed green,
+        // which is why that second test exists) and `<= 0.15 s`, so the file cannot answer
+        // „das muss schneller gehen" by raising its own ceiling.
+        hook_flight_max_s: 0.10,
         // ⚠️ THE NEXT FOUR ARE NEW ON 2026-08-13 AND NOTHING READS THEM YET — `W3`
         // (src/vector/aim.rs) and `W2` (the wheel) consume them. Frozen here first so that the
         // key names cannot drift while four agents build against them.
@@ -521,12 +587,41 @@
         //
         // In tank terms: 300 gas is 18.75 s of held steering, a little longer than the 16.67 s
         // of held boost — and on an empty tank the rope term is ZERO (the look term keeps
-        // air_accel_empty_fraction, §1e). ⚠️ UNTUNED.
+        // air_accel_empty_fraction, §1e). ⚠️ UNTUNED. ⚠️ And "18.75 s of held steering" is the
+        // WORST CASE and not the normal one: since FIND-139 a steering tick is only billed when
+        // the rope really thrusts, which in the measured sortie was 11 ticks out of 543.
         //
         // Spent since 2026-08-13: GasConsumer::Steer, booked in src/vector/gas.rs and read by
-        // player::locomotion::air_control. Wanted whenever a hook is anchored AND a movement key
-        // is down — the cost follows the effect, not the button, so a rope with no key held and
-        // a key held with no rope both cost nothing.
+        // player::locomotion::air_control.
+        //
+        // ⚠️ **THE RATE IS RIGHT AND THE BILL WAS WRONG — 2026-08-20, docs/FINDINGS.md FIND-139.**
+        // The user, after playing: „gas ist VIEL zu schnell weg!" The ledger of one ordinary
+        // sortie (scripts/f018-budget.txt, DBT_GAS_LEDGER=1) said where it went:
+        //
+        //     steer 144.8 (48.3 % of the tank)   boost 98.1   dodge 45.0   reel 12.1
+        //
+        // Steer was the LARGEST line item in the game, bigger than the boost he actually presses
+        // — and it bought nothing. `rope_steer` multiplies the pull by `max(0, l̂ · r̂)`, a player
+        // hangs UNDER his anchor and looks where he is going, so the delivered thrust over the
+        // sortie's 99 sampled steer ticks was a mean of 0.0012 of air_pull_m_s2 (median 0.0000).
+        // The want condition read the BUTTON — `anchored && (W || A || D)` — and charged 16/s
+        // through all of it.
+        //
+        // **No number here changed.** The fix is `vector::gas::steer_has_effect`: the want is read
+        // off the geometry, which is what "the cost follows the effect, not the button" meant all
+        // along. Same binary, same script, after: steer 2.9 instead of 144.8, and the sortie ends
+        // with 77 of 300 gas in hand instead of running dry.
+        //
+        // So the table above is now true of the thrust the player RECEIVES and not only of the
+        // peak he was charged for — which is what made 16.0 the honest number in the first place.
+        // Whoever lowers this rate to "fix" the tank is turning the wrong knob a second time
+        // (docs/QUESTIONS.md Q-044), and whoever puts the button condition back re-opens FIND-139;
+        // tests/vector_gas.rs::f006_the_steer_is_billed_exactly_when_the_rope_really_thrusts holds
+        // both conditions against each other over 750 geometries and goes red on either.
+        //
+        // ⚠️ What it does NOT do: prorate. At a 4 m rope the fade delivers 8 % of the pull and the
+        // full 16/s is still charged. Prorating needs `rope_steer`'s own `Σcᵢfᵢ/n` factor, and
+        // there is no `vector -> player` edge in docs/architecture.md's allow list. FIND-139.
         gas_steer_per_s: 16.0,
         // F-008, and the ONE gas number in this block that is not a rate: what a single dodge
         // costs, billed once on the tick the double-tap lands. No `_per_s` in the name because
