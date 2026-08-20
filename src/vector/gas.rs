@@ -118,13 +118,89 @@ pub fn apply_refuel_requests(
     }
 }
 
+/// **Does the rope steer this tick move the player at all?** The `Steer` half of the budget's
+/// want condition, as a pure function so that a test can hold it against the thrust it is
+/// supposed to be paying for.
+///
+/// The arguments are `player::locomotion::rope_steer`'s own, minus the two magnitudes and the
+/// yaw — because the question is whether that function returns `Vec3::ZERO`, and neither
+/// `pull_m_s2` nor the yaw can decide that.
+///
+/// `to_anchors_m` is one `tip − hand` per **anchored** arm, unnormalised, exactly as
+/// `rope_steer` takes it.
+pub fn steer_has_effect(
+    to_anchors_m: &[Vec3],
+    look_dir: Vec3,
+    move_x: f32,
+    move_y: f32,
+    min_rope_m: f32,
+    fade_m: f32,
+) -> bool {
+    if to_anchors_m.is_empty() {
+        return false;
+    }
+    // `A`/`D` are the player's own thrust across the rope and nothing scales them down, so a
+    // lateral key on an anchored rope always moves him and always pays. This is the half of the
+    // steer that was never in doubt.
+    if move_x != 0.0 {
+        return true;
+    }
+    // `S` is not a haul (`docs/NEXT.md` §1A requirement 7) — the same `.max(0.0)` as the thrust.
+    if move_y.max(0.0) <= 0.0 {
+        return false;
+    }
+    // And the half that was: **the pull is `max(0, l̂ · r̂)` times `clamp((L − min)/fade)`, and
+    // both of those are zero over most of a swing.** A player hangs *under* his anchor and looks
+    // where he is going, so `l̂ · r̂` is negative and the pull is exactly `Vec3::ZERO` — measured
+    // over `scripts/f018-budget.txt`: mean delivered pull 0.0012 of `air_pull_m_s2` across 99
+    // sampled steer ticks, while 16/s was charged for every one of them. 48.3 % of the tank.
+    to_anchors_m.iter().any(|to_anchor| {
+        let Some(direction) = to_anchor.try_normalize() else {
+            return false;
+        };
+        look_dir.dot(direction) > 0.0 && to_anchor.length() > min_rope_m && fade_m > 0.0
+    })
+}
+
+/// **Diagnostics only, and off unless `DBT_GAS_LEDGER=1` stands in the environment.**
+///
+/// The tank is one number, so a player who says *„gas ist VIEL zu schnell weg"* cannot be
+/// answered from it: 300 gone tells you nothing about WHICH verb spent it. This splits the
+/// same debit four ways as it happens — the amount, and how many ticks each consumer *wanted*
+/// versus how many it was *granted* — so a sortie can be read as a ledger instead of a slope.
+///
+/// It is not a game value and it is not state anybody may read: nothing in the simulation
+/// looks at it, it lives in a `Local` of [`gas_budget`], and with the variable unset the whole
+/// thing is four adds and no output. Kept because the next tuning round needs the same number
+/// (`docs/FINDINGS.md` FIND-139).
+#[derive(Default)]
+pub struct Ledger {
+    tick: u64,
+    /// Gas actually debited, per consumer, in the order `[boost, steer, reel_in, dodge]`.
+    spent: [f32; 4],
+    /// Ticks in which the consumer *wanted* gas.
+    wanted: [u32; 4],
+    /// Ticks in which it was *granted* — below `wanted` only on a tank that ran short.
+    granted: [u32; 4],
+    /// What really left the tank, summed straight off `Gas::current`. The four `spent` entries
+    /// have to add up to this; if they do not, something bills gas that this file does not see.
+    debited: f32,
+}
+
+/// Is the ledger switched on? Read once, not sixty times a second.
+fn ledger_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("DBT_GAS_LEDGER").is_ok_and(|v| v != "0"))
+}
+
 /// Debits this tick's gas and writes [`GasGrant`].
 ///
 /// The **only** writer of `Gas` in the simulation (`docs/architecture.md`, authority table).
 pub fn gas_budget(
     time: Res<Time<Fixed>>,
     data: Res<GameData>,
-    mut players: Query<(&Intent, &Hook, &mut Gas, &mut GasGrant)>,
+    mut ledger: Local<Ledger>,
+    mut players: Query<(&Intent, &Hook, &mut Gas, &mut GasGrant, &Transform)>,
 ) {
     let vector = &data.game.vector;
     // `Time<Fixed>` and not `1.0 / simulation_hz`: the timestep is set from the very same
@@ -146,7 +222,7 @@ pub fn gas_budget(
     // lands. `gas_dodge` therefore has no `_per_s` in its name and must not grow one.
     let dodge_cost = vector.gas_dodge;
 
-    for (intent, hook, mut gas, mut grant) in &mut players {
+    for (intent, hook, mut gas, mut grant, transform) in &mut players {
         let wants_boost = intent.pressed(Buttons::BOOST);
         let wants_reel_in = intent.pressed(Buttons::REEL_IN) && hook.anchored_count() > 0;
         // The same shape as the line above it, and for the same reason: **the cost follows the
@@ -161,8 +237,35 @@ pub fn gas_budget(
         // means there is no rope direction to push along and no lateral boost to add, and no
         // movement key means both halves of it are multiplied by zero. `S` alone is `w⁺ = 0`
         // (*„mit s »spannt« man nur das seil"*) and buys nothing, so it pays nothing.
-        let wants_steer = hook.anchored_count() > 0
-            && (intent.move_y.max(0.0) > 0.0 || intent.move_x != 0.0);
+        // **The one that was a bill and not a price** (`docs/FINDINGS.md` FIND-139). Until
+        // 2026-08-20 this line read `anchored_count() > 0 && (move_y.max(0.0) > 0.0 ||
+        // move_x != 0.0)` — the BUTTON — and `player::locomotion::rope_steer` then delivered
+        // `Vec3::ZERO` for most of every swing, because its pull carries a `max(0, l̂ · r̂)` and
+        // a player hangs *under* his anchor while looking where he is going. Measured over
+        // `scripts/f018-budget.txt`: 144.8 of 300 gas — **48.3 % of the tank, the largest line
+        // item in the game** — bought a mean thrust of 0.0012 of `air_pull_m_s2`.
+        //
+        // [`steer_has_effect`] is that condition read off the geometry instead, and
+        // `tests/vector_gas.rs::f006_the_steer_is_billed_exactly_when_the_rope_really_thrusts`
+        // holds the two against each other over 750 geometries, so the copy here cannot drift
+        // away from the formula it is paying for.
+        let hand_m = transform.translation + Vec3::Y * data.game.player.eye_height_m;
+        let mut to_anchors_m = [Vec3::ZERO; 2];
+        let mut anchored = 0;
+        for arm in &hook.arms {
+            if arm.state.is_anchored() {
+                to_anchors_m[anchored] = arm.tip_m - hand_m;
+                anchored += 1;
+            }
+        }
+        let wants_steer = steer_has_effect(
+            &to_anchors_m[..anchored],
+            intent.look_dir(),
+            intent.move_x,
+            intent.move_y,
+            vector.min_rope_m,
+            data.game.player.air_pull_fade_m,
+        );
 
         if !wants_boost && !wants_reel_in && !wants_dodge && !wants_steer {
             // Nobody wants anything, so **the tank is not touched at all** — not even to
@@ -193,8 +296,51 @@ pub fn gas_budget(
             },
             &mut tank,
         );
+        if ledger_enabled() {
+            let wants = [wants_boost, wants_steer, wants_reel_in, wants_dodge];
+            let grants = [booked.boost, booked.steer, booked.reel_in, booked.dodge];
+            let costs = [boost_cost, steer_cost, reel_cost, dodge_cost];
+            for i in 0..4 {
+                ledger.wanted[i] += u32::from(wants[i]);
+                ledger.granted[i] += u32::from(grants[i]);
+                if grants[i] {
+                    ledger.spent[i] += costs[i];
+                }
+            }
+            // The control on the four adds above, and the reason the ledger is worth reading:
+            // what it claims left the tank is compared against what really left it. A consumer
+            // billed twice, or billed somewhere outside this file, shows up here and nowhere
+            // else.
+            ledger.debited += gas.current - tank.current;
+        }
         gas.set_if_neq(tank);
         grant.set_if_neq(booked);
+    }
+
+    if ledger_enabled() {
+        ledger.tick += 1;
+        if ledger.tick % 60 == 0 {
+            let total: f32 = ledger.spent.iter().sum();
+            let tank = data.game.vector.gas_tank;
+            info!(
+                "gas ledger t={t} spent={total:.1} of {debited:.1} debited ({pct:.0}% of tank) | boost={b:.1} steer={s:.1} reel={r:.1} dodge={d:.1} | wanted_ticks boost={wb} steer={ws} reel={wr} dodge={wd} | granted_ticks boost={gb} steer={gs} reel={gr} dodge={gd}",
+                t = ledger.tick,
+                debited = ledger.debited,
+                pct = 100.0 * total / tank,
+                b = ledger.spent[0],
+                s = ledger.spent[1],
+                r = ledger.spent[2],
+                d = ledger.spent[3],
+                wb = ledger.wanted[0],
+                ws = ledger.wanted[1],
+                wr = ledger.wanted[2],
+                wd = ledger.wanted[3],
+                gb = ledger.granted[0],
+                gs = ledger.granted[1],
+                gr = ledger.granted[2],
+                gd = ledger.granted[3],
+            );
+        }
     }
 }
 

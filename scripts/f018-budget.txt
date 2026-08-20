@@ -1,0 +1,140 @@
+# f018-budget — WHERE THE 300 GOES. A ledger of one ordinary sortie across Ashgate.
+#
+#   the verdict:  ./target/debug/defeated_by_titan --headless \
+#                     --script scripts/f018-budget.txt --ticks 1600
+#   the ledger:   DBT_GAS_LEDGER=1 ./target/debug/defeated_by_titan --headless \
+#                     --script scripts/f018-budget.txt --ticks 1600 2>&1 \
+#                     | grep -E 'MARK|gas ledger|assert|script run finished'
+#
+# The user, after playing, 2026-08-20: *„eine sache die mir noch auffällt. gas ist VIEL zu
+# schnell weg!"*
+#
+# `scripts/f-018-gas.txt` measures the RATE of one consumer at a time and it is right about
+# every number it asserts — and it cannot answer him, because a player never holds one button.
+# This file holds the buttons a player holds, in the mix he holds them in, and the
+# `DBT_GAS_LEDGER=1` accumulator in `src/vector/gas.rs` splits the same debit four ways as it
+# happens. What it is for is the LEDGER, not the asserts: the asserts only pin the ledger's
+# headline so the file goes red if the mix ever changes underneath it.
+#
+# The legs are cut so that each one adds exactly ONE verb to the one before it, and every leg
+# runs on the same anchored rope:
+#
+#   A  the rope alone, nothing held             measured  0/s
+#   B  + W (the verb he asked for himself)      measured  0/s   <- ⭐ AND THAT IS THE FINDING
+#   C  + Shift on top of the W                  measured 18/s   <- gas_boost_per_s alone
+#   D  + Ctrl on top of both                    measured 24/s   <- + gas_reel_per_s
+#   E  one dodge                                measured 45 flat, 15 % of the tank
+#
+# ## THE LEDGER THIS FILE WAS WRITTEN FOR (`docs/FINDINGS.md` FIND-139)
+#
+# The first run of it, 2026-08-20, **before** the repair — 300 gas, gone in 9.1 s of spending:
+#
+#     boost   98.1   32.7 %      steer  144.8   48.3 %
+#     reel    12.1    4.0 %      dodge   45.0   15.0 %   (ONE press)
+#
+# `Steer` was the largest line item in the game — bigger than the boost he actually presses —
+# and the sortie's own geometry says it bought **nothing**: `rope_steer` multiplies the pull by
+# `max(0, l̂ · r̂)`, a player hangs *under* his anchor and looks where he is going, so the pull
+# was `Vec3::ZERO` for 99 of 99 sampled steer ticks (mean 0.0012 of `air_pull_m_s2`). The bill
+# followed the BUTTON, the thrust followed the GEOMETRY, and nobody held the two together.
+#
+# After `src/vector/gas.rs::steer_has_effect` (same binary, same script, same seed):
+#
+#     boost  151.8   50.6 %      steer    2.9    1.0 %
+#     reel    12.1    4.0 %      dodge   45.0   15.0 %   total 222.9 of 300, 77.1 left over
+#
+# **The trajectory is unchanged where it mattered** and it has to be: `air_control` adds
+# `rope_steer(...)` only behind `grant.steer`, and in every tick that lost its grant that term
+# was `Vec3::ZERO` — the same `look` either way. What changed is only the price of it.
+#
+# The stand is `scripts/f003-ashgate.txt`'s measured arc — (0, 58, 47.5) at `look 0 0`, yaw 0
+# down the main street toward the wall — because that one is known to anchor and known to swing
+# (measured there: 31.4 m/s at the bottom of the arc, apex back at 57.5 m).
+
+wait 1.5                 # world, camera, meshes and the render pipelines come up
+warp 0 58 47.5
+look 0 0                 # yaw 0 = -Z, down the main street
+wait 0.3                 # the warp takes effect one tick after it is written
+
+mark f018-budget-start
+assert gas == 300        # a full tank: nothing has been paid for yet
+assert height > 56.9     # measured 56.995 — standing on the ledge the warp puts him on
+
+# =========================================================================================
+# LEG A — the rope alone. **A swing is free**, and that is the baseline everything else is
+# read against.
+# =========================================================================================
+
+hook right 12.0          # one hold for the whole sortie: the fire is an EDGE, holding refires
+wait 2.0                 # nothing
+mark f018-budget-a-rope-only
+assert rope >= 1         # the rope is on him for every leg below
+assert gas == 300        # ⭐ swinging costs nothing
+
+# =========================================================================================
+# LEG B — + `W`. The verb the user asked for („das a d sorgt dafür dass man nicht immer direkt
+# zum seil gezogen wird", and W hauling you where you look) — and the one that is billed.
+# =========================================================================================
+
+key W 3.0
+wait 3.0
+mark f018-budget-b-steer
+assert gas == 300        # ⭐ measured 300.000. THREE SECONDS OF `W` ON A TAUT ROPE, AND THE
+                         # TANK HAS NOT MOVED — because in this pose the rope pull is
+                         # `max(0, l̂ · r̂) = 0` and the game delivers nothing. It used to cost
+                         # 48 gas here. Whoever makes this line go red has either given `W` a
+                         # thrust in this pose (good — then re-cut the act) or put the bill
+                         # back on the button (`docs/FINDINGS.md` FIND-139).
+
+# =========================================================================================
+# LEG C — + `Shift`. Boost and steer are wanted on the very same tick of a swing, and both are
+# billed on it: 18 + 16 = 34/s.
+# =========================================================================================
+
+key W 3.0
+key Shift 3.0
+wait 3.0
+mark f018-budget-c-steer-and-boost
+assert gas < 246.4       # ⭐ measured 245.702 = 300 - 3 x 18. The boost is the WHOLE bill of
+assert gas > 245.0       # this leg: `Shift` is billed, the inert `W` beside it is not.
+
+# =========================================================================================
+# LEG D — + `Ctrl`. All three continuous consumers at once: 40/s.
+# =========================================================================================
+
+key W 2.0
+key Shift 2.0
+key Ctrl 2.0
+wait 2.0
+mark f018-budget-d-all-three
+assert gas < 195.5       # ⭐ measured 194.367 = 245.7 - 2 x (18 + 6) - 2.9. The 2.9 is `Steer`
+assert gas > 193.5       # billed on the eleven ticks it really pulled: the reel shortens the
+                         # rope, the swing carries him up past his own anchor, and for eleven
+                         # ticks `l̂ · r̂` is finally positive. **That is what an honest steer
+                         # bill looks like** — eleven ticks, not 543.
+
+# =========================================================================================
+# LEG E — one dodge. `C` is the dodge key (src/net/local.rs); 45 flat, billed on one tick.
+# =========================================================================================
+
+key W 0.6                # a dodge with no movement key held has no direction and costs nothing
+key C 0.1
+wait 0.6
+mark f018-budget-e-dodge
+assert gas < 150.0       # ⭐ measured 149.367 = 194.367 - 45.000, to the last digit: one press
+assert gas > 148.7       # of `C` is 15 % of the tank and it is billed flat, not per second.
+
+# =========================================================================================
+# LEG F — four more seconds of boost. **This act used to be flown on an empty tank.**
+# =========================================================================================
+
+key W 4.0
+key Shift 4.0
+wait 4.0
+mark f018-budget-f-dry
+assert gas > 76.5        # ⭐ measured 77.067 = 149.367 - 4 x 18. **The sortie no longer runs
+assert gas < 78.0        # dry**: the same eighteen seconds of flying that emptied the tank
+                         # before this repair now end with 77 gas — a quarter of it — in hand.
+                         # Total for the sortie: 222.9, of which 151.8 is the boost he presses.
+
+end

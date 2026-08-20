@@ -123,9 +123,26 @@ const REEL_KEY: KeyCode = KeyCode::ControlLeft;
 /// `vector::hook::update_hooks` is being filled by another job right now, and a test that
 /// silently stops measuring reel-in the day that lands is worse than no test.
 fn anchor_left(app: &mut App, e: Entity) {
+    // ⚠️ **The tip is set too, and since FIND-139 that is not decoration.** `gas_budget` bills
+    // `Steer` off `steer_has_effect`, which reads the real geometry — `max(0, l̂ · r̂)` and the
+    // fade above `min_rope_m` — because billing off the button alone charged 48 % of the tank
+    // for a thrust `player::locomotion::rope_steer` refuses to deliver. A hook whose `tip_m`
+    // was left at the origin is a rope pointing at the world centre, and a test that anchors
+    // one is testing a geometry no player ever flies in.
+    //
+    // 20 m out along the default look (`-Z`, yaw 0) and 10 m up: `l̂ · r̂ = 0.894`, the length is
+    // far above `min_rope_m + air_pull_fade_m`, so the pull is delivered in full and the price
+    // is owed in full. That is the case these tests mean when they say "an anchored rope".
+    let hand_m = {
+        let world = app.world();
+        let transform = world.get::<Transform>(e).expect("a player has a transform");
+        let eye_m = world.resource::<GameData>().game.player.eye_height_m;
+        transform.translation + Vec3::Y * eye_m
+    };
     let mut hook = app.world_mut().get_mut::<Hook>(e).expect("every player carries two hooks");
     hook.arms[Side::Left.index()].state =
         HookState::Anchored { body: BodyId(1), local_m: Vec3::ZERO };
+    hook.arms[Side::Left.index()].tip_m = hand_m + Vec3::new(0.0, 10.0, -20.0);
 }
 
 /// A second player, without the `LocalPlayer` marker — the way a team mate arrives later.
@@ -918,5 +935,98 @@ fn f006_a_rope_with_no_key_and_a_key_with_no_rope_both_cost_nothing() {
         spent.abs() < 1e-6,
         "S on a taut rope cost {spent:.4} gas — requirement 7 of docs/NEXT.md §1A is that S \
          never hauls you at the rope, and what does not haul does not bill"
+    );
+}
+
+/// 🔴 **The bill has to follow the effect — and for `Steer` it did not.**
+///
+/// The user, after playing, 2026-08-20: *„eine sache die mir noch auffällt. gas ist VIEL zu
+/// schnell weg!"* The ledger of one ordinary sortie (`scripts/f018-budget.txt`, the
+/// `DBT_GAS_LEDGER=1` accumulator in `src/vector/gas.rs`) says where it went: of 300 gas,
+/// **144.8 — 48.3 % of the whole tank — went to `Steer`**, the largest line item in the file,
+/// larger than the boost he actually presses (98.1).
+///
+/// And the sortie's own geometry says what those 144.8 bought: **nothing.** `rope_steer`
+/// multiplies the pull by `cᵢ = max(0, l̂ · r̂ᵢ)`, and a player swings *under* his anchor while
+/// looking where he is going — so `l̂ · r̂ᵢ` is negative for almost every tick of a swing and
+/// the pull is exactly `Vec3::ZERO`. Measured over the sortie's 99 sampled steer ticks: mean
+/// delivered pull **0.0012** of `air_pull_m_s2`, median **0.0000**, and `gas_budget` charged
+/// 16/s through all of it.
+///
+/// That is not a rate that is too high, it is a bill for a thrust the game refuses to deliver,
+/// and no test here could see it because both halves were right on their own: `gas_budget`
+/// billed what its own condition said, `rope_steer` delivered what its own formula said, and
+/// **nobody held the two conditions against each other.** This is that test.
+///
+/// It sweeps the geometry a swing really visits — the anchor above, beside and behind, ropes
+/// from inside `min_rope_m` out to 60 m, every combination of `W`/`A`/`D`/`S` — and asserts the
+/// one property that makes the price honest: `steer_has_effect` is true **exactly** when
+/// `rope_steer` moves the player.
+#[test]
+fn f006_the_steer_is_billed_exactly_when_the_rope_really_thrusts() {
+    use defeated_by_titan::player::locomotion::{SteerTuning, rope_steer};
+    use defeated_by_titan::vector::gas::steer_has_effect;
+
+    let data = GameData::load(
+        &std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/data"),
+    );
+    let min_rope_m = data.game.vector.min_rope_m;
+    let fade_m = data.game.player.air_pull_fade_m;
+    let tuning = SteerTuning {
+        pull_m_s2: data.game.player.air_pull_m_s2,
+        lateral_m_s2: data.game.player.air_lateral_m_s2,
+        fade_m,
+        min_rope_m,
+        // 2026-08-20: the weight the aligned pull takes off. Rides the same gate as the pull,
+        // so the equivalence this test asserts is untouched by it.
+        lift_m_s2: -data.game.gravity_m_s2 * data.game.player.air_pull_lift_fraction,
+    };
+
+    // Directions the anchor can lie in, seen from the hand. The first is the one the sortie
+    // spends its whole swing in: **above and behind**, while the look runs forward.
+    let directions = [
+        Vec3::new(-0.06, 0.95, 0.29),  // the measured sortie, t=234: 23.9 m up, 7.4 m behind
+        Vec3::Y,                       // straight overhead — the top of a swing
+        Vec3::new(0.0, 0.7, -0.7),     // up and ahead — the hook you are flying toward
+        Vec3::new(1.0, 0.2, 0.0),      // out to the side
+        Vec3::new(0.0, -0.5, -0.87),   // below and ahead — a hook into a street
+    ];
+    let lengths_m = [min_rope_m * 0.5, min_rope_m, min_rope_m + 0.5, 20.0, 60.0];
+    // Yaw 0 is `-Z` (`docs/conventions.md`), which is the look the sortie flies at.
+    let looks = [Vec3::NEG_Z, Vec3::Z, Vec3::Y, Vec3::NEG_Y, Vec3::X];
+    let keys = [(0.0, 0.0), (0.0, 1.0), (0.0, -1.0), (1.0, 0.0), (-1.0, 0.0), (1.0, 1.0)];
+
+    let mut disagreements = 0;
+    let mut first = String::new();
+    for direction in directions {
+        for length_m in lengths_m {
+            let to_anchor = direction.normalize() * length_m;
+            for look in looks {
+                for (move_x, move_y) in keys {
+                    let thrust =
+                        rope_steer(&[to_anchor], look, 0.0, move_x, move_y, tuning);
+                    let delivers = thrust.length() > 1e-6;
+                    let billed =
+                        steer_has_effect(&[to_anchor], look, move_x, move_y, min_rope_m, fade_m);
+                    if billed != delivers {
+                        disagreements += 1;
+                        if first.is_empty() {
+                            first = format!(
+                                "anchor {direction:?} at {length_m} m, look {look:?}, \
+                                 move ({move_x}, {move_y}): billed={billed} but the thrust is \
+                                 {thrust:?} ({:.4} m/s²)",
+                                thrust.length()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(
+        disagreements, 0,
+        "{disagreements} of {} geometries charge for a thrust that is not delivered (or \
+         deliver one that is not charged). The first: {first}",
+        directions.len() * lengths_m.len() * looks.len() * keys.len()
     );
 }
