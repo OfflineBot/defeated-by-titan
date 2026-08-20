@@ -1663,7 +1663,7 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 
 ## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
 
-**NEXT FREE ID: FIND-142.** Claim it by bumping this line in the same `cat >>` that
+**NEXT FREE ID: FIND-147.** Claim it by bumping this line in the same `cat >>` that
 appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
 file separately and both read the same maximum. One line beats a 108 kB grep.
  — and append with `>>`, never with an edit tool
@@ -8545,3 +8545,237 @@ swing instead of feeding it"*). Gating it on the same alignment cosine (`w_eff =
 * max(0, l̂ · r̂)`) keeps `B-005`'s ratchet, which only ever happens when you *are* flying at your
 anchor, and stops the boost fighting the arc when you are not. **Measure it before landing it** —
 that claim is unverified.
+
+---
+
+## FIND-142 — a 50x tuning value has no safe literal repair: two claims died, and the build now names its own dependents (2026-08-20, gas round)
+
+`assets/data/game.ron: vector.gas_tank` **300 → 15000** on the user's „mach das 50 fache!"
+(`docs/QUESTIONS.md` Q-046). **833.3 s of held boost per tank, against a 330 s sortie.**
+
+**The sweep:** 54 `assert gas` lines over 13 scripts, 6 tests, 6 comment blocks. Repaired
+mechanically where the claim was a delta (+14700, **widths untouched**) or an exact control
+(`== 300` → `== 15000`, which loses nothing: `Comparison::Equal` in `src/debug/script.rs:217` is a
+**fixed absolute 1e-3**, and one tick of boost is 0.3 — 300x the tolerance at any tank size).
+
+🔴 **Two claims could not be repaired by any number, and both were suspended visibly rather than
+left as always-green asserts.** Both are "the tank runs low" claims, and a tank you cannot empty
+cannot make them:
+- `scripts/f-018-gas.txt` ACT 3 — emptying 15000 at 18/s is **50 000 ticks**, and (measured, below)
+  a headless run is wall-clock locked, so **14 minutes per run** and the exit code needs a second.
+  Moved to `tests/vector_gas.rs::f018_the_tank_runs_dry_and_stays_at_zero_instead_of_going_negative`,
+  which now sets its own two-second tank. ACT 4 (the **Q-033 regression guard**) was written as an
+  absolute floor against an emptied tank and **re-cut as a delta** — three idle seconds may not
+  move the number — which is what the claim always was and now holds at any tank size.
+- `scripts/f170-hud.txt`'s 82 % gas bar, the ruler F-170 exists for. `src/hud/gas_bar.rs:89` draws
+  `fraction * 100`, so the same 54 gas now draws **99.64 %**. Reaching 82 % costs 2700 gas = 150 s
+  of boost = 9000 ticks **per run**. Suspended; the mechanism half still goes red in `tests/hud.rs`
+  (which builds its own `Gas::full(100.0)` and never reads the RON).
+
+⚠️ **MEASURED: a headless script run is WALL-CLOCK LOCKED AT ~60 Hz.** 3094 ticks took 52 s whether
+the player was boosting across the map or standing still (control run with the flying deleted:
+identical 52 s). **Simulated seconds are wall-clock seconds**, so "just run it longer" is never
+free, and any script claim whose cost scales with a tuning value is a claim with a time bomb in it.
+
+⚠️ **The dangerous shape, and it is the one to learn:** `scripts/f070-hub.txt:156`,
+`assert gas > 299` — F-070's ⭐ claim 3, *"the tank is full again"*. ACT 1 burns 36, so at a 15000
+tank the player walks in holding 14964 and **that line passes with `refuel_at_stations` deleted from
+the build entirely.** It does not go red; it goes quiet. Repaired to `> 14999`, which demands the
+identical refill the old line did (deficit < 1 gas = 35 of 36 restored = 0.875 s at the racks) —
+**verified red**: with `gear.ron: resupply.gas_per_s` set to 0.0, `line 160: assert Gas > 14999 —
+measured 14963.724`, 1 of 35 asserts failed. `~13 lower bounds in the sweep had this shape.`
+
+**PROPOSAL (foreign territory, NOT taken): a `settings gas <n>` verb in `src/debug/script.rs`.**
+The `settings` command already exists as the script-local override hook, but it only reaches
+`shared::PlayerSettings` and is percentage-clamped 0..100. A verb that writes `Gas::current` (or a
+tank cap) would bring back **both** suspended claims in one line each, and would make every future
+tank move cost nothing — the acts would state the tank they empty instead of inheriting it. This
+change did not own that file, so it is written here rather than done quietly.
+
+**FIND-073 is finally answered.** It said: *"a tuning value that triples silently invalidates every
+script that quoted it, and nothing in the build says which those are."* Nothing had been added
+since. Now `tests/data.rs::t005_the_gas_tank_is_the_value_the_user_asked_for_and_names_its_dependents`
+pins the number and its failure message lists every script, test and doc that quotes it. **Verified
+red**: rolling the tank back to 300.0 prints `` `game.ron: vector.gas_tank` moved from 15000 to 300
+… Every one of these quotes it or is derived from it:`` plus the list.
+
+---
+
+## FIND-143 — at a 15000 tank, `Gas::current` is no longer a precision instrument: a second of boost costs 17.9883, not 18.0 (2026-08-20)
+
+**Four tests went red on the tank change alone, with nothing wrong in `vector::gas::book`.**
+`tests/vector_gas.rs` section 1 measures a rate as **the difference of two tank readings**, and
+`Gas` is `f32`. One ULP at 300 is 3.05e-5; at 15000 it is **9.77e-4 — 32x coarser**. Sixty debits
+of 0.3 taken off a number that large do not sum to 18.0:
+
+```
+60 ticks of boost cost 17.9883 gas; game.ron says gas_boost_per_s = 18
+```
+
+0.0117 of error, straight through a `< 0.01` tolerance that had stood since the feature landed.
+The four: `f018_a_second_of_boost_costs_exactly_the_value_from_the_file`,
+`f018_boost_and_reel_in_together_cost_the_sum_and_not_one_of_them`,
+`f018_every_player_pays_out_of_his_own_tank`, `f018_nothing_refills_while_the_gas_is_being_spent`.
+
+🔴 **The tolerance was NOT loosened.** Loosening would have hidden a real regression later behind a
+number that was only ever wide enough for f32 noise. What those tests claim is that the **rate** in
+`game.ron` is the rate charged — a claim about the booking, not about the tank size — so the
+measurement now runs on a `measurement_tank()` (5 s of boost+reel = 120 gas, one ULP 1.4e-5, sixty
+debits ≤ ~9e-4 of error). The original `< 0.01` means exactly what it always meant, and the four
+are now **immune to tank retuning**, which is the FIND-073 disease they had caught.
+
+⚠️ **This is real in the running game, not only in tests.** At `gas_tank: 15000` a second of held
+boost debits **17.9883 instead of 18.0 — a 0.065 % under-charge in the player's favour**, and it
+grows with the tank. Far below anything anyone can feel, so nothing is being changed for it. What
+it means practically: **do not use `Gas::current` deltas as a precision instrument at this tank
+size.** The gas LEDGER accumulators in `src/vector/gas.rs` start at 0.0 and keep full precision;
+they are the trustworthy reading, and that is exactly the regime FIND-139 was measured in.
+
+Related, same cause: `src/vector/gas.rs` printed the ledger as `{pct:.0}% of tank`. At 15000 a whole
+ordinary sortie is 222.9 gas = **1.49 %**, so the total printed as `1%` and all four line items
+rounded to `0%`/`1%` — erasing the 32.7/48.3/4.0/15.0 % split the instrument exists to show. Now
+`{pct:.2}`.
+
+---
+
+## FIND-144 — foreign territory found while sweeping the tank: four scripts already red, three docs already stale (2026-08-20)
+
+**None of this was caused by the gas change and none of it was touched.** Each was checked with a
+control run at the ORIGINAL `gas_tank: 300` and the ORIGINAL scripts (`git stash`), which reproduced
+the identical failure counts — so these are pre-existing.
+
+**Scripts red before today, all on `Height`/`Speed`/`Rope`, zero gas asserts among them:**
+
+| script | failures | examples |
+|---|---|---|
+| `scripts/w5-lane.txt` | 11 of 43 | `line 126: assert Rope == 1 — measured 0.000`; `Height < 26.9 — 29.652`; `Speed < 27.1 — 34.450` |
+| `scripts/f004-towers.txt` | 5 of 31 | — |
+| `scripts/f025-chain.txt` | 3 of 36 | — |
+| `scripts/f-001-hooks.txt` | 2 of 14 | `Height > 12 — 9.840`; `Speed > 35 — 21.724` |
+
+⚠️ `w5-lane`'s `assert Rope == 1` failing is the one to look at first: that file's whole verdict
+rests on *"every metre came from the rope"*, and a leg that anchored nothing is the exact failure
+`CLAUDE.md` rule 5 was rewritten around on 2026-08-19. **Their gas controls all pass** — the
+`== 15000` rebase is verified green in the same runs.
+
+**Docs that state the tank as current fact and were NOT in this change's ownership:**
+- `docs/NEXT.md:74,78` — *"`gas_tank: 300.0` stays."* and *"Until they exist, 300 gas is the entire
+  supply of a run."* 🔴 **This is the file the next session reads first**, and it now contradicts
+  `game.ron` outright.
+- `docs/HANDOVER.md:100,106,278` — "16.67 s of continuous boost per tank", "300 gas is currently the
+  entire supply of a run".
+- `docs/gameplay/references.md:396` — *"Ours: 300 tank · 18/s boost …"*, the line the whole
+  Attack on Titan Revolution comparison is drawn against.
+
+**Two committed images are now stale in the direction that lies**, and both are marked as such in
+their own script headers rather than silently overwritten: `docs/images/f-018-gas.png` shows an
+EMPTY gas bar for a run that now ends at 97.96 % full, and `docs/images/f170-hud.png` shows the
+82 % bar of the 300-gas era. Neither was retaken, because at a 15000 tank the honest replacement is
+a full-looking bar that is evidence of nothing (FIND-142). **F-018's and F-170's pixel evidence
+should be read as unevidenced until a script can set a small tank.**
+
+---
+
+## FIND-145 — `F-024` re-aimed every script that fires through the snap, and `assert rope == 1` is the only line that noticed (2026-08-20)
+
+**`scripts/w5-lane.txt` ACT A leg 3 anchors nothing, and its two speed asserts pass while it
+happens.** That is the failure `CLAUDE.md` rule 5 was rewritten around on 2026-08-19, caught in the
+wild by the guard that was added for it.
+
+```
+line 165: assert Rope == 1 — measured 0.000          <- the leg anchored NOTHING
+line 168: assert speed > 35.6   HELD                 <- "39.633 m/s, 5.7x running, on no gas"
+line 169: assert speed < 40.2   HELD
+hook Right of player 1 found no anchor: NothingInRange — … open sky (t=282)
+hook Left  of player 1 let go: Released (t=284)      mark at t=337 = 0.88 s of FREE FALL
+```
+
+**`assert speed` cannot tell a swing from a fall.** Without line 165 this file would have reported
+an accelerating three-leg chain — `32.6 → 35.6 → 39.6 m/s` — whose third term is gravity.
+
+**IT IS NOT THE GAS ROUND.** `scripts/w5-lane.txt` is byte-identical to its last-green version
+(`cb3e918`, 2026-08-19 18:27) apart from three `== 300` → `== 15000` lines
+(`diff <(git show cb3e918:scripts/w5-lane.txt) scripts/w5-lane.txt`). The change is under the file.
+
+🔴 **THE CAUSE: `F-024` (`1450bfc`, "the snap searches sideways only"), and its own commit measures
+exactly what vanished** — *"largest vertical deviation a snap can produce **9.232 deg / 3.414 m →
+0.000006 deg / 0.0000 m**"*. Every `look` line in every snap-aimed script was written under the 2D
+cone, which was silently correcting the pitch by up to 9.2°. The sweep is screen-horizontal now and
+corrects none of it. **Control run, same pinned binary, one line changed:** at
+`settings assist_strength 0` leg 3 anchors (`body 911 at 11.31 32.31 196.50`); at `100` it flies
+into open sky. F-024 landed 🟨 *(no image)* and no snap-aimed script was re-run against it.
+
+**Blast radius — `NothingInRange … open sky` in every file that fires through the assist:**
+
+| script | red | shots into open sky |
+|---|---|---|
+| `scripts/w5-lane.txt` | 11 of 43 | 1 (ACT A leg 3) |
+| `scripts/f025-chain.txt` | 3 of 36 | **6** |
+| `scripts/f004-towers.txt` | 5 of 31 | 1 |
+
+The other six failures in `w5-lane` are the same cause without a miss: the snap picks a *different*
+point, so every arc bottom moved (ACT A 33.437 / 29.652 / 20.581 against brackets ending 31.9 /
+26.9 / 19.1; ACT B four heights 0.7–2.8 m high). **ACT C is the same cause the other way round** —
+a purely sideways sweep reaches further along a 700 m rail, so the rope is longer and the arc
+deeper: **34.450 m/s at 29.261 m** against the recorded 26.568 at 41.268, which is precisely the
+failure mode ACT C's own footer warns about (*"the snap reaches 160 m down the wall, the rope
+outgrows the anchor height"*).
+
+⚠️ **WHAT IT COSTS THE TOWER QUESTION.** `w5-lane` exists to rank three shapes, and the ranking is
+what moved: **"gantry 32.6 · gallery 26.6 · town roofscape 1.35" is now IN QUESTION** — today the
+gallery (34.450) beats the gantry (31.307), which is the claim the 2026-08-19 re-measure had
+explicitly retired. What survives is that **ACT A leg 1 and ACT C both still hold `rope == 1`**, so
+both are real swings, and every ACT B `speed < 5.0` still holds, so **the roofscape still carries
+nothing** — the finding that the town is dead is unaffected; only the numbers are.
+
+**NOT REPAIRED, deliberately.** Re-deriving the angles against today's snap bakes today's snap in —
+the identical mistake as the ±28° `aim_spread_deg` compensation that FIND-096 broke. `src/vector/aim.rs`
+is foreign territory to this round. The three files carry a 🔴 header block saying they are
+unevidenced until re-aimed; `w5-lane`'s is written out in full.
+
+---
+
+## FIND-146 — the gas round's four holes closed, and two of them are shapes worth naming (2026-08-20)
+
+Follow-up to FIND-142/143/144. Four defects an adversary found in the `gas_tank` 300 → 15000 repair,
+all real, all measured, all now closed.
+
+**1 · A DOMINATED ASSERT IS A DEAD ASSERT, AND IT INFLATES THE TALLY.** `scripts/f-018-gas.txt`
+carried two `assert gas >= 0` lines, each one row from an `assert gas > 14692.25` that strictly
+dominates it. At the 300 tank they were alive (ACT 3 drained to 0.300, and `>= 0` beside `< 0.3`
+was a two-sided check on the zero clamp); at 15000 neither can fail. **Both kept their original
+comment — *"a tank never goes negative"* — so the file stated a claim it no longer tested, and
+both were counted in `script run finished: 13 asserts held`.** Deleted, with the reason written
+where they stood; the mechanism is tested on a 36-gas tank in
+`tests/vector_gas.rs::f018_the_tank_runs_dry_and_stays_at_zero_instead_of_going_negative`.
+**Measured: 13 → 11 asserts held, 0 failed, exit 0** — the tally was over by exactly two.
+*The habit:* a bound that cannot fail beside its neighbour is not a safety net, it is a comment
+that costs a green tick.
+
+**2 · A HAND-KEPT CHECKLIST FALLS BEHIND ITS OWN DIRECTORY.**
+`tests/data.rs::t005_the_gas_tank_is_the_value_the_user_asked_for_and_names_its_dependents` — the
+test written to answer FIND-073's *"nothing in the build says which"* — **named 11 scripts while 13
+carry an `assert gas` line.** The two it missed, `scripts/f-001-hooks.txt:138` and
+`scripts/game-full.txt:174`, are both `assert gas < 15000` (a literal copy of the tank size) and
+both belong to that list's own *"goes quiet instead of red"* heading. Now added — and the heading is
+split by direction, because both directions exist: **raise the tank and a LOWER bound stops failing
+(f070-hub's `> 299`); lower it and an UPPER bound stops failing (`< 15000` at a 300 tank).**
+The list is no longer hand-kept: `t005_every_script_that_asserts_gas_is_on_the_tank_checklist`
+walks `scripts/*.txt` and demands set equality with the four groups.
+**Verified red both ways:** dropping `game-full.txt` prints ``NOT ON THE LIST … ["game-full.txt"]``;
+adding a `f999-gone.txt` prints ``ON THE LIST but no longer asserting gas … ["f999-gone.txt"]``.
+
+**3 · Two comment-only pointers cited a test name that does not exist** —
+`..._and_these_are_its_dependents` for `..._and_names_its_dependents`, in `tests/vector_boost.rs:130`
+and `tests/vector_gas.rs:783`. `norms.py` does not read prose inside Rust comments, so it passed
+them. `grep -c 'fn t005_…_and_these_are_its_dependents' tests/data.rs` = **0**. Fixed.
+
+**4 · Stale tank figures** in `docs/HANDOVER.md:100/106` and `docs/gameplay/references.md:396`.
+Both now state 15000 and say plainly that it is a **testability** value with a one-line rollback,
+rather than a balance the AoT:R comparison should be read against.
+
+⚠️ **AND A TRAP FOR THE NEXT RUN: `scripts/game-full.txt` needs `--mission tutorial`.** Without it
+the run reports **11 of 24 failed** — `assert Kills == 1 — measured nothing (no mission kill tally
+— is this run missing --mission?)` and five `Phase == 2 — measured 0.000`. With it: **24 asserts
+held, exit 0.** Eleven red that mean nothing is exactly the noise that trains you to skim the next
+real failure; the invocation is in the file's own header, line 3.

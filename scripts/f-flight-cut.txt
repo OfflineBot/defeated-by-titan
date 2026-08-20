@@ -71,11 +71,15 @@
 #      It is a PROXY and `assert rope` is not, so the two are kept side by side deliberately:
 #      the proxy has about five ticks of resolution and would survive a one-tick detach, and
 #      the direct metric would survive a gas system that stopped charging. Neither alone.
-#      ⚠️ The tank is **300** since 2026-08-10 (`game.ron: gas_tank`, docs/QUESTIONS.md Q-033);
-#      the five gas brackets in this file were shifted by +200 and their WIDTHS are untouched.
-#      The eighteen paid ticks still measure 1.8, exactly as they did against a 100 tank. The
-#      refill (`gas_regen_per_s` 10, after `gas_regen_delay_s` 0.5) cannot reach any of them:
-#      `key Ctrl 3.0` spends without a gap across every one.
+#      ⚠️ The tank is **15000** since 2026-08-20 (`game.ron: gas_tank`, docs/QUESTIONS.md
+#      Q-046); it was 100, then 300 on 2026-08-10 (Q-033). The five gas brackets in this file
+#      were shifted by +200 then, and by **+14700** now, and their WIDTHS are untouched both
+#      times. The eighteen paid ticks still measure 1.8, exactly as they did against a 100
+#      tank — **that is the point of shifting rather than rewriting**: this file counts
+#      anchored reeling ticks at 0.1 each, and how big the tank they come out of is has never
+#      been part of the claim. The old refill (`gas_regen_per_s` 10, after `gas_regen_delay_s`
+#      0.5) is deleted and could not reach any of them anyway: `key Ctrl 3.0` spends without a
+#      gap across every one.
 #   4. **He is higher after the cut than before it, and still fast.** 5.665 m at t=148,
 #      7.070 m at t=154, 15.958 m at t=179 — at 28.065 m/s. Gravity moves nothing upward.
 #
@@ -195,7 +199,7 @@
 # wrong once), then x, then the `wait 0.09` before `slash right`.
 #
 # A shot that finds nothing (`hook Right ... found nothing anchorable`) is the other shape:
-# the asserts at t=148 go red in the same tick with `measured 0.000` and `measured 300.000`,
+# the asserts at t=148 go red in the same tick with `measured 0.000` and `measured 15000.000`,
 # and `assert rope >= 1` goes red with `measured 0.000`. That is geometry, and no shifting of
 # waits repairs it — it is what the whole corpus looked like the day the map changed under it.
 
@@ -218,7 +222,7 @@ wait 0.3                        # the warp takes effect one tick later than it i
 assert height > -0.1    # standing on the ground, not sunk into it and not inside a house
 assert height < 0.5
 assert speed < 0.5      # and standing STILL — every number below is read against this zero
-assert gas > 299.9      # a full tank: nothing has been paid for yet
+assert gas > 14999.9      # a full tank: nothing has been paid for yet
 assert titans == 1      # the husk exists, and he is the only one (no `--mission`)
 assert health > 99      # he has not been hit yet — the husk's one strike lands at t=112
 mark flight-aim
@@ -245,8 +249,8 @@ assert speed > 25       # measured 28.089. A jump gives 6.5, gravity from y = 0 
                         # there is no `key Shift` in this file. It is the rope.
 assert height > 4.5     # measured 5.665 m. A jump reaches 1.056 m.
 assert height < 6.5
-assert gas < 299.2      # measured 298.800: twelve ticks of reeling PAID, and `src/vector/gas.rs`
-assert gas > 298.4      # only debits reel gas while a hook is anchored.
+assert gas < 14999.2      # measured 298.800: twelve ticks of reeling PAID, and `src/vector/gas.rs`
+assert gas > 14998.4      # only debits reel gas while a hook is anchored.
 assert rope >= 1        # measured 1 — the anchored arm, read directly and not inferred
 mark flight-fast
 
@@ -254,8 +258,8 @@ wait 0.07               # 6 ticks — across the cut at t=153
 
 assert height > 6.0     # measured 7.070 m — HIGHER than six ticks ago, at 28.09 m/s
 assert height < 11.0
-assert gas < 298.7      # measured 298.200: eighteen anchored reeling ticks paid, t=137..154,
-assert gas > 297.6      # with the cut at t=153 inside them. The rope was on him.
+assert gas < 14998.7      # measured 298.200: eighteen anchored reeling ticks paid, t=137..154,
+assert gas > 14997.6      # with the cut at t=153 inside them. The rope was on him.
 assert rope >= 1        # and this says so without the ledger: one tick after the cortex cut,
                         # the arm is still anchored. This is the file's central claim.
 mark flight-cut

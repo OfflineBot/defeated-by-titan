@@ -1,6 +1,13 @@
 # f025-chain — F-025's own acceptance, and it could not be run until 2026-08-19 because no
 # script verb reached the aim assist. `settings <key> <value>` is that verb.
 #
+# 🔴 **3 OF 36 RED SINCE 2026-08-20, AND SIX SHOTS NOW GO INTO OPEN SKY** — `found no anchor:
+# NothingInRange` at t=155, 555, 591, 627, 663, 1248. Cause: `F-024` (1450bfc, "the snap searches
+# sideways only") removed the snap's vertical correction, which its own commit measures as
+# *"9.232 deg / 3.414 m -> 0.000006 deg / 0.0000 m"*. Every `look` line here was aimed under the
+# 2D cone. **Do not re-aim it against today's snap** — that is the FIND-096 mistake. The chain's
+# numbers are unevidenced until the cause is settled. -> docs/FINDINGS.md FIND-145.
+#
 #   ./target/debug/defeated_by_titan --headless --script scripts/f025-chain.txt --ticks 2400
 #   ./target/debug/defeated_by_titan --headless --script scripts/f025-chain.txt --ticks 2400 >/dev/null 2>&1; echo $?
 #
@@ -49,7 +56,7 @@
 # per tick and the rays come out far closer to the centre (`FIND-096`). Every `look` in this
 # file therefore aims straight at the target, yaw 0, down the street.
 #
-# Rope only: no Shift, no W, and no Ctrl until ACT 3. `assert gas == 300` at the end of ACT 1
+# Rope only: no Shift, no W, and no Ctrl until ACT 3. `assert gas == 15000` at the end of ACT 1
 # and ACT 2 is the proof that every metre per second below came out of the rope and gravity.
 
 wait 1.5
@@ -126,7 +133,7 @@ assert speed > 39.3           # ★ faster than leg 4. 45.232 = 7.5x running
 assert speed < 50.0
 assert height > 3.0           # 6.670 — still in the air, not a landing
 assert height < 10.0
-assert gas == 300             # not one unit: five swaps on the rope alone
+assert gas == 15000             # not one unit: five swaps on the rope alone
 wait 0.15
 
 # =====================================================================================
@@ -190,7 +197,7 @@ mark f025-free-leg-5
 assert rope == 0
 assert height < 4.0           # 2.198 — on the pavement, where ACT 1 was at 6.7 m and climbing
 assert speed < 34.0           # 26.628 against ACT 1's 45.232
-assert gas == 300
+assert gas == 15000
 wait 0.15
 
 # =====================================================================================

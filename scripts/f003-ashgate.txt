@@ -78,7 +78,7 @@ assert height < 1.5
 # ---------------------------------------------------------------------------------------
 # ACT 3 — THE SWING. Gantry station z = 17.5, hooked level from 30 m away.
 # H = 58 m of anchor, L = 26 m of rope, so the arc bottom is 32 m ABOVE the ground and
-# 20 m above the roofs. Rope only: no Shift, no Ctrl, `gas == 300` at both ends.
+# 20 m above the roofs. Rope only: no Shift, no Ctrl, `gas == 15000` at both ends.
 # ---------------------------------------------------------------------------------------
 warp 0 58 47.5
 look 0 0                # yaw 0 = -Z, down the main street toward the wall
@@ -86,7 +86,7 @@ wait 0.1
 mark f003-arc-start
 assert height > 57.0
 assert speed < 3.0
-assert gas == 300
+assert gas == 15000
 
 hook right 4.0
 wait 1.95
@@ -107,7 +107,7 @@ assert rope == 1
 wait 1.85
 mark f003-arc-apex
 assert height > 57.0    # 57.550 m: the far side gives the height back to within 0.5 m
-assert gas == 300       # not one unit spent
+assert gas == 15000       # not one unit spent
 
 # ---------------------------------------------------------------------------------------
 # ACT 4 — THE WALL IN TWO MOVES. Ground -> the 60 m gallery -> the 120 m crown corbel.
@@ -159,8 +159,8 @@ key Ctrl 3.0
 wait 3.4
 mark f003-crown
 assert height > 110.0   # 117.001 m — the crown, in the SECOND move
-assert gas > 250.0      # 263.798: the whole climb costs 36.2 of 300, both reels together
-assert gas < 280.0
+assert gas > 14950.0      # 14963.8: the whole climb costs 36.2 of 15000, both reels together
+assert gas < 14980.0
 
 # ---------------------------------------------------------------------------------------
 # ACT 5 — THE STREET. One block's east wing (x 114.5..125.5, ridge 10.711) faces the next
@@ -243,8 +243,8 @@ assert speed < 8.0       # ⚠️ 7.033, and this bracket USED to read `< 1.0` f
                          # higher he still has 7 m/s of fall left along the facade, and
                          # asserting `< 1.0` would only be asserting that his stand was low
                          # enough to run out of arc. The stop is the claim; the rest is not.
-assert gas > 260         # 263.798 — unchanged since ACT 4: the whole street act runs on
-assert gas < 268         # the rope alone, no Shift and no Ctrl
+assert gas > 14960         # 263.798 — unchanged since ACT 4: the whole street act runs on
+assert gas < 14968         # the rope alone, no Shift and no Ctrl
 
 # ---------------------------------------------------------------------------------------
 # The vantage point for `--screenshot`: over the quarter east of the main street, looking

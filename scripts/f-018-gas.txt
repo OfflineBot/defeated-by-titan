@@ -2,23 +2,35 @@
 #
 #   the verdict:  cargo run -q -- --headless --script scripts/f-018-gas.txt --ticks 1500
 #   the picture:  cargo run -q -- --offscreen --script scripts/f-018-gas.txt --ticks 1118 \
-#                     --screenshot docs/images/f-018-gas.png
+#                     --screenshot docs/images/f-018-gas.png     ⚠️ SEE THE 🔴 BLOCK BELOW
 #
 # ⚠️ **TWO DIFFERENT TICK COUNTS, and the verdict's is not free to choose.** The verdict needs
-# a number ABOVE the script's own end (measured: it finishes at t=1362) or the run is cut off
+# a number ABOVE the script's own end (measured 2026-08-20: it finishes at t=1362) or the run is cut off
 # and `--ticks` exits 0 without the assert summary ever printing. The picture is shot at the
-# tick of `f018-dry`, **1118**, because `--screenshot` fires at `--ticks` and shooting at 1500
+# tick of `f018-twelve-seconds` (it was `f018-dry` until 2026-08-20), **1118**, because
+# `--screenshot` fires at `--ticks` and shooting at 1500
 # writes nothing at all — the process is already gone.
 #
 # ⚠️ **1118 used to be forced for a second reason that is now void.** It read "the tank does
 # not stay empty: the closing `wait 3` puts 30 gas back at 10/s". Since Q-033 (see ACT 4) the
-# tank stays at 0.300 to the end of the run, so any tick from 1118 to 1362 photographs the
-# same empty bar. 1118 is kept because `docs/images/f-018-gas.png` was shot there and an image
+# tank does not move at all after the last boost, so any tick from 1118 to 1362 photographs
+# the same bar. 1118 is kept because `docs/images/f-018-gas.png` was shot there and an image
 # whose tick moves is an image whose diff means nothing.
 #
-# ⚠️ WHAT THE IMAGE SHOWS NOW: `src/hud/gas_bar.rs` is no longer a stub, so at t=1118 the bar
-# in the bottom left is drawn EMPTY — the same claim as `assert gas < 0.3`, in pixels. That
-# sentence used to read "this image does not show the gas level"; it did not since the HUD job.
+# 🔴 **THE IMAGE IS STALE AS OF 2026-08-20, AND IT IS STALE IN THE DIRECTION THAT LIES.**
+# `docs/images/f-018-gas.png` shows an EMPTY gas bar, because it was shot when seventeen
+# seconds of boost emptied a 300 tank. The user raised `gas_tank` to 15000 (docs/QUESTIONS.md
+# Q-046), the same seventeen seconds now spend 306.7 of it, and the bar at t=1118 stands at
+# **14693.3 / 15000 = 97.96 % — visually indistinguishable from full.**
+#
+# So the committed PNG is a picture of a run this file no longer performs. It is left in place
+# rather than silently overwritten, because RETAKING IT DOES NOT HELP: a 97.96 % bar is not
+# evidence of anything, and F-018's "the tank empties" claim has no picture at any tank size
+# a script can drain (see ACT 3). **What the image is evidence FOR, until a script-local tank
+# override exists, is nothing** — F-018's pixel claim should be read as unevidenced, not as
+# evidenced by this file. `src/hud/gas_bar.rs` drawing the real fraction is still held by
+# `tests/hud.rs`, which builds its own `Gas::full(100.0)` and does not depend on the RON.
+#
 # The camera is against a house wall: seventeen seconds of boost at `look 0 -10` carry the
 # player into the city, and this file measures a tank, not a view.
 #
@@ -26,7 +38,7 @@
 # not by a human reading a bar. `assert gas` measures `Gas::current` of the local player
 # (src/debug/mod.rs), and every value below is computed from assets/data/game.ron alone:
 #
-#   gas_tank          = 300   (was 100 until 2026-08-10 — docs/QUESTIONS.md Q-033)
+#   gas_tank          = 15000 (100 until 2026-08-10, 300 until 2026-08-20 — Q-033, Q-046)
 #   gas_boost_per_s   =  18   -> 0.3    per tick at 60 Hz
 #   gas_reel_per_s    =   6   -> 0.1    per tick at 60 Hz
 #
@@ -62,7 +74,7 @@ wait 1.5                 # world, camera, meshes and the render pipelines come u
 look 0 -10               # yaw along -Z (the axis contract), a little down: ground and houses
 
 mark f018-tank-full
-assert gas == 300        # game.ron: vector.gas_tank
+assert gas == 15000        # game.ron: vector.gas_tank
 
 # =========================================================================================
 # ACT 2 — the rate. One second of boost is 18 gas and nothing else.
@@ -71,29 +83,67 @@ assert gas == 300        # game.ron: vector.gas_tank
 key Shift 1.0            # one second of boost = 60 ticks x 0.3
 wait 1.0
 mark f018-one-second-of-boost
-assert gas < 282.35      # 300 - 18, plus/minus the one tick above
-assert gas > 281.65
+assert gas < 14982.35      # 15000 - 18, plus/minus the one tick above
+assert gas > 14981.65
 
 key Shift 4.0            # four more seconds = 4 x 18 = 72
 wait 4.0
 mark f018-four-more-seconds
-assert gas < 210.7       # 282 - 72, plus/minus one tick per `key` line so far
-assert gas > 209.3
+assert gas < 14910.7       # 14982 - 72, plus/minus one tick per `key` line so far
+assert gas > 14909.3
 
 # =========================================================================================
-# ACT 3 — and then it stops. **This act is twelve seconds long because the tank is 300.**
+# ACT 3 — the rate does not drift over a LONG hold.
 # =========================================================================================
 #
-# It was `key Shift 1.0` while the tank held 100: ten gas was not enough for a whole second
-# and the act ran dry inside its own second. On a 300-tank the same line leaves 191 in the
-# tank and asserts nothing at all — so the DURATION moved and the claim did not.
-# 209.4 remaining / 18 per s = 11.63 s, and 12.0 s empties it with 0.37 s to spare.
+# ⚠️ **THIS ACT LOST ITS ORIGINAL CLAIM ON 2026-08-20, AND IT IS NOT COMING BACK IN A SCRIPT.**
+# It used to read "and then it stops": hold the boost until the tank is empty, then assert
+# `gas < 0.3` — a held button buys no half-boost. That act was written twice around the tank
+# size (`key Shift 1.0` at a 100 tank, `key Shift 12.0` at a 300 tank), and the user's third
+# move — 300 -> 15000, "mach das 50 fache!" (docs/QUESTIONS.md Q-046) — puts it out of reach
+# of a script for good:
+#
+#   15000 / 18 = 833.3 s of held boost to reach dry = **50 000 ticks**, and a headless run is
+#   WALL-CLOCK LOCKED AT 60 Hz. Measured 2026-08-20: 3094 ticks take 52 s whether the player
+#   is flying or standing still, so simulated seconds ARE wall-clock seconds. Emptying this
+#   tank is a 14-minute run, and the exit code needs its own second run — 28 minutes to assert
+#   one floor. The whole file runs in 23 s today.
+#
+# **So the claim moved to where it can still be cheap and still go red**, and it is not lost:
+#   tests/vector_gas.rs::f018_the_tank_runs_dry_and_stays_at_zero_instead_of_going_negative
+# sets a two-second tank on the player itself and burns THAT, which tests the mechanism (the
+# floor at zero, no half boost, no negative tank) without testing the tuning value. That test
+# was re-cut in the same commit for the same reason.
+#
+# **What would bring the act back is a script-local tank override** — a `settings gas <n>`
+# verb in src/debug/script.rs, which is foreign territory to this change and is written up as
+# a proposal in docs/FINDINGS.md instead of being taken quietly. With it, ACT 3 is three lines
+# again and better than it ever was, because the tank it empties would be stated in the file.
+#
+# What the act does instead is the one thing a long hold CAN still show here, and it is worth
+# a run: **the rate is linear over twelve seconds.** Twelve seconds is 12 x 18 = 216 gas, and
+# nothing about that number is allowed to drift — a per-frame `dt` bug, a double-multiply or a
+# grant that flickers all show up as a total that is not 216.
 
 key Shift 12.0
 wait 12.0
-mark f018-dry
-assert gas >= 0          # a tank never goes negative
-assert gas < 0.3         # and what is left over is less than one tick's cost: no half boost
+mark f018-twelve-seconds
+# 🔴 **`assert gas >= 0` STOOD HERE AND WAS DELETED 2026-08-20, NOT MOVED.** Beside a
+# `> 14692.25` it is strictly dominated — if the lower bracket holds, `>= 0` cannot fail — so it
+# was an always-green line under a comment ("a tank never goes negative") that still SOUNDED
+# like a claim, and it was counted in this run's "asserts held" tally. At the 300 tank it was
+# alive: ACT 3 drained to 0.300 and `>= 0` beside `< 0.3` was a genuine two-sided check on the
+# zero clamp. A 15000 tank cannot be emptied by a script (833 s = 50 000 ticks, and a headless
+# run is wall-clock locked — FIND-142), and there is no `settings gas <n>` verb to give this act
+# a small tank, so the claim CANNOT be made real here. It is made where it can still go red:
+#   tests/vector_gas.rs::f018_the_tank_runs_dry_and_stays_at_zero_instead_of_going_negative
+# which sets its own 36-gas tank. Bring the verb in (FIND-142's proposal) and this act gets
+# both lines back with the tank it empties written into the file.
+assert gas < 14694.35    # ⭐ measured 14693.300 = 14909.7 − 216.3. Twelve seconds of held
+assert gas > 14692.25    # boost is 12 x 18 = 216 and the bracket is this file's own
+                         # convention: ~one tick of boost (0.35) per `key` line so far, and
+                         # there have been three. A `dt` applied twice reads 14909.7, a rate
+                         # that drifts by 1 % reads 14691.1 — both outside.
 
 # =========================================================================================
 # ACT 4 — and it STAYS dry. A tank that only ever falls.
@@ -127,9 +177,24 @@ assert gas < 0.3         # and what is left over is less than one tick's cost: n
 key Ctrl 1.0             # reel-in without an anchored hook pulls on nothing
 wait 1.0
 mark f018-reel-without-a-hook
-assert gas < 0.35        # ⭐ measured 0.300 — a held key put nothing back
-assert gas >= 0          # and it did not go negative either
+assert gas < 14694.35    # ⭐ UNCHANGED since the mark above — a held key put nothing back
+assert gas > 14692.25    # and took nothing either: reel-in without an anchored hook does
+                         # not want gas (`gas_budget`: wants_reel_in needs anchored_count > 0)
+# `assert gas >= 0` stood here too, and went out with the one in ACT 3 above and for the same
+# reason: dominated by the `> 14692.25` two lines up, so it could not fail at any point in this
+# run. The zero clamp is tested in tests/vector_gas.rs, on a tank that can actually reach zero.
 
 wait 3                   # three idle seconds: the old regen would have paid 30 gas over these
-mark f018-still-dry
-assert gas < 0.35        # ⭐ Q-033: gas comes back at a station and NOWHERE else
+mark f018-still-flat
+assert gas < 14694.35    # ⭐ Q-033: gas comes back at a station and NOWHERE else
+assert gas > 14692.25    # ⭐ **THIS IS THE BOUND THAT CATCHES A REGEN COMING BACK**, and it is
+                         # why ACT 4 was re-cut as a DELTA on 2026-08-20 instead of being
+                         # rebased. It used to say `gas < 0.35` against an EMPTIED tank — an
+                         # absolute floor, which a 15000 tank can never reach in a script. As
+                         # a delta the claim is the same one and it holds AT ANY TANK SIZE:
+                         # three idle seconds move the number by nothing. Re-introduce the old
+                         # 10/s regen and these three seconds read 14723.3 — 29 gas above this
+                         # bound, so the file exits 1, which is exactly the job the old ACT 4
+                         # did. The tank is 306.7 below full here, so there is room for a
+                         # regen to SHOW; a claim like this made on a full tank would be
+                         # hidden by the cap and would prove nothing.

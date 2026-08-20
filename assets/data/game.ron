@@ -553,16 +553,36 @@
         // tests/vector_gas.rs::f018_an_idle_tank_never_refills_on_its_own goes red the moment
         // anything in the simulation puts a drop back.
 
-        // 100.0 -> 300.0. The user, after playing it on 2026-08-10: "also gas tank sollte
-        // sehr viel mehr haben". ⚠️ UNTUNED. At 18/s this is the whole answer to his other
-        // sentence, "der boost haelt nicht lang genug": 16.67 s of continuous boost against
-        // the 5.6 s he flew. **The length of a boost is gas_tank / gas_boost_per_s and
-        // nothing else** — with no refill anywhere, this number IS the flight time, and it is
-        // also the whole mission's supply until the stations exist.
-        gas_tank: 300.0,
+        // 100.0 -> 300.0 -> 15000.0. **THE USER, 2026-08-20, and this is his third time
+        // saying it:** „immernoch viel zu wenig gas. man kann nicht testen! mach das 50
+        // fache!" — so 300 x 50, as asked, not a compromise at 10x. His instruction beats a
+        // derivation and beats his own earlier number (CLAUDE.md; scale.ron and Q-002 already
+        // encode that precedence). docs/QUESTIONS.md Q-046 records it as his decision.
+        //
+        // ⚠️ **THIS IS A TESTABILITY VALUE, NOT A BALANCE VALUE.** He said „man kann nicht
+        // testen" — the tank is this big so a sortie cannot end for lack of gas while he is
+        // trying to feel the movement. Nothing here claims 15000 is the shipped balance.
+        // **The one-line rollback is `gas_tank: 300.0`** and nothing else has to move with it.
+        //
+        // At 18/s: **833.3 s of continuous held boost** (was 16.67 s at 300) against a 330 s
+        // sortie — i.e. the tank now outlasts the mission by 2.5x, which is the point.
+        // **The length of a boost is gas_tank / gas_boost_per_s and nothing else** — with no
+        // refill anywhere, this number IS the flight time.
+        //
+        // ⚠️ **AND IT DOES NOT ANSWER THE BALANCE QUESTION — Q-044 stays open.** With the bill
+        // honest (FIND-139) a 300 tank bought ~16.7 s of held boost against a 330 s sortie,
+        // and **there is still no refuel station in the world**; the design's refill rule is
+        // base-only and is HIS (Q-033). No burn rate closes a 20x gap — only the stations do.
+        // Whoever tunes this back down has to build those first.
+        gas_tank: 15000.0,
         gas_boost_per_s: 18.0,
-        // For scale, the other consumer: reeling a full rope in from 90 m to the 3 m minimum
-        // takes (90-3)/28 = 3.1 s and costs 18.6 gas — 6.2 % of the tank.
+        // For scale, the other consumer: reeling a full rope in from the 500 m anchor range
+        // (scale.ron: vector.anchor_range_m) to the 3 m minimum takes (500-3)/28 = 17.75 s
+        // and costs 106.5 gas — 0.71 % of a 15000 tank.
+        //
+        // ⚠️ This line said "from 90 m ... 3.1 s ... 18.6 gas — 6.2 % of the tank" until
+        // 2026-08-20, and it was false on the RANGE too, not only on the tank: anchor_range_m
+        // has been 500.0, not 90. Re-derived here rather than merely rebased.
         gas_reel_per_s: 6.0,
         // ⚠️ NEW ON 2026-08-13, AND NOTHING SPENDS IT YET. What the rope-pull thrust
         // (player.air_pull_m_s2 / air_lateral_m_s2) costs per second once `W4` bills it.
@@ -585,8 +605,10 @@
         // point, it is the boost's price on a different button. What a player therefore has to
         // learn is WHICH thrust the situation wants, never which one is cheap.
         //
-        // In tank terms: 300 gas is 18.75 s of held steering, a little longer than the 16.67 s
-        // of held boost — and on an empty tank the rope term is ZERO (the look term keeps
+        // In tank terms: 15000 gas is 937.5 s of held steering, a little longer than the
+        // 833.3 s of held boost (18.75 s against 16.67 s at the old 300 tank; the RATIO —
+        // steering outlasts the boost by 12.5 % — is what this line is about, and it is a
+        // property of the two rates that survives any tank size) — and on an empty tank the rope term is ZERO (the look term keeps
         // air_accel_empty_fraction, §1e). ⚠️ UNTUNED. ⚠️ And "18.75 s of held steering" is the
         // WORST CASE and not the normal one: since FIND-139 a steering tick is only billed when
         // the rope really thrusts, which in the measured sortie was 11 ticks out of 543.
@@ -611,6 +633,11 @@
         // off the geometry, which is what "the cost follows the effect, not the button" meant all
         // along. Same binary, same script, after: steer 2.9 instead of 144.8, and the sortie ends
         // with 77 of 300 gas in hand instead of running dry.
+        //   ⚠️ **Those are the numbers AS MEASURED ON 2026-08-20 against the 300 tank**, kept
+        //   verbatim because they are the before/after record that justified the fix. Against
+        //   today's 15000 tank the same sortie ends with 14777.2 in hand and every "% of the
+        //   tank" above is 50x smaller; the ABSOLUTE figures (144.8, 98.1, 45.0, 12.1) and the
+        //   ratios between them are what the finding is about, and those are unchanged.
         //
         // So the table above is now true of the thrust the player RECEIVES and not only of the
         // peak he was charged for — which is what made 16.0 the honest number in the first place.
@@ -648,11 +675,21 @@
         // to reach the same speed — 42x faster, for 3.54x the gas. That is a dodge: you pay for
         // the instant, not for the speed.
         //
-        // In tank terms: 300 gas is 16.67 s of held boost OR 6.67 dodges. Six dodges per run
-        // with no station in the world yet is deliberately tight — this is an emergency move,
-        // not a traversal move, and F-008 in the backlog calls it "kurz, hart, mit eigenem
-        // Cooldown". The cooldown is NOT built (see the report/FIND-067); the gas price is the
-        // whole limiter today, which is exactly what the user's sentence asks for.
+        // In tank terms: 15000 gas is 833.3 s of held boost OR 333 dodges.
+        //
+        // ⚠️ **AND THAT VOIDS AN ARGUMENT THIS NUMBER USED TO REST ON.** Until 2026-08-20 the
+        // line read "300 gas is 16.67 s of held boost OR 6.67 dodges. Six dodges per run with
+        // no station in the world yet is deliberately tight ... the gas price is the whole
+        // limiter today". At 333 dodges per run **the gas price is no longer a limiter at
+        // all**, so what keeps F-008 an emergency move rather than a traversal move is now
+        // NOTHING — the backlog calls it "kurz, hart, mit eigenem Cooldown" and **the cooldown
+        // is still not built** (FIND-067).
+        //
+        // That is a consequence of the 50x testability tank (see gas_tank above), not a
+        // decision about the dodge. `gas_dodge: 45.0` is deliberately NOT lowered to
+        // compensate: the per-m/s ratio below is what makes it the expensive one and it is
+        // intact at any tank size. If the dodge starts being spammed as traversal, the fix is
+        // the cooldown or the rollback to `gas_tank: 300.0` — docs/QUESTIONS.md Q-046.
         gas_dodge: 45.0,
         // Who pays first when the tank is not enough for both? That is a GAME-VALUE
         // decision and not an `if` in the code (docs/QUESTIONS.md Q-017).

@@ -68,7 +68,7 @@ wait 1.5                 # 90 ticks: world, camera, meshes, pipelines — and th
 mark f-007-on-the-ground
 assert height < 0.05     # standing, not still falling
 assert height > -0.05    # and not sunk into the ground
-assert gas == 300        # full tank, nothing spent yet — game.ron: vector.gas_tank
+assert gas == 15000        # full tank, nothing spent yet — game.ron: vector.gas_tank
 
 look 0 89                # straight up; 89 is camera.pitch_limit_deg
 key Shift 2.0            # BOOST is ShiftLeft (src/net/local.rs) — held, not tapped
@@ -79,8 +79,11 @@ assert height > 28.5     # a jump reaches 1.056 m. 28.9 m is gas, and nothing el
 assert height < 29.5
 assert speed > 27.5      # 13.99 m/s^2 net over 121 ticks
 assert speed < 28.5
-assert gas > 263.5       # 121 ticks at gas_boost_per_s / 60 = 0.3 -> 36.3 out of 300
-assert gas < 264.0       # measured 263.701
+assert gas > 14963.5     # 121 ticks at gas_boost_per_s / 60 = 0.3 -> 36.3 out of 15000
+assert gas < 14964.0     # measured 14963.724 (it was 263.701 while gas_tank was 300; both
+                         # bounds shifted by +14700 and the 0.5 WIDTH is untouched — this is
+                         # the tightest gas bracket in scripts/ and it still clears worst-case
+                         # f32 accumulation over 121 subtractions at 15000, ~0.05, by 10x)
 
 look 0 -89               # turn the camera down onto the spot he took off from
 wait 1.4                 # coast on: at 27.9 m/s the apex is 1.40 s away
@@ -89,6 +92,13 @@ mark f-007-apex
 assert height > 48.0     # 45 times the height of a jump
 assert height < 48.7
 assert speed < 2.0       # apex: what is left is the 1.2 m/s of drift from the 1 degree tilt
-assert gas > 263.5       # the climb after the button is free — nothing is drawn while coasting
+assert gas > 14963.5     # the climb after the button is free — nothing is drawn while coasting
+assert gas < 14964.0     # ⚠️ THE UPPER BOUND IS THE CLAIM, and it was missing until 2026-08-20.
+                         # "Nothing is drawn while coasting" means THE NUMBER DID NOT MOVE, and
+                         # that needs both sides. This is deliberately the SAME bracket as the
+                         # one at the end of the boost above, which is what makes the pair say
+                         # "unchanged since then" instead of "still above some floor". A lone
+                         # `>` read as a claim at a 300 tank only because it sat 0.2 under the
+                         # measurement; at 15000 it was trivially true and tested nothing.
 
 wait 5                   # keep the run alive: it must not end before the image is read back

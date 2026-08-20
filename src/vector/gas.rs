@@ -65,7 +65,10 @@
 //! quietly fills itself while you hang around is not.
 //!
 //! How long one held boost lasts is therefore `gas_tank / gas_boost_per_s` and nothing else —
-//! 16.67 s at the numbers of 2026-08-12. The tank is what got bigger for that.
+//! **833.3 s at the numbers of 2026-08-20** (it was 16.67 s while `gas_tank` was 300). The tank
+//! is what got bigger for that, three times now: 100 -> 300 -> 15000, each time because the user
+//! said so after playing. The rule is the division; the seconds are whatever the file currently
+//! says. See `assets/data/game.ron: vector.gas_tank` and `docs/QUESTIONS.md` Q-046.
 //!
 //! `Changed<Gas>` stays a signal because of it. A tick in which nobody wants gas writes
 //! nothing at all to the tank, so the HUD is not woken sixty times a second by a number that
@@ -323,9 +326,15 @@ pub fn gas_budget(
             let total: f32 = ledger.spent.iter().sum();
             let tank = data.game.vector.gas_tank;
             info!(
-                "gas ledger t={t} spent={total:.1} of {debited:.1} debited ({pct:.0}% of tank) | boost={b:.1} steer={s:.1} reel={r:.1} dodge={d:.1} | wanted_ticks boost={wb} steer={ws} reel={wr} dodge={wd} | granted_ticks boost={gb} steer={gs} reel={gr} dodge={gd}",
+                "gas ledger t={t} spent={total:.1} of {debited:.1} debited ({pct:.2}% of tank) | boost={b:.1} steer={s:.1} reel={r:.1} dodge={d:.1} | wanted_ticks boost={wb} steer={ws} reel={wr} dodge={wd} | granted_ticks boost={gb} steer={gs} reel={gr} dodge={gd}",
                 t = ledger.tick,
                 debited = ledger.debited,
+                // ⚠️ `.2`, not `.0`. At `gas_tank: 15000` a whole ordinary sortie spends
+                // ~223 gas = 1.49 % of the tank, so `{:.0}` printed the total as "1%" and
+                // rounded all four line items to 0 % or 1 % — erasing exactly the split this
+                // ledger exists to show (it is the instrument FIND-139 was found with, and
+                // the one `scripts/f018-budget.txt` is written around). The absolute gas
+                // figures beside it are the primary reading; the percentage is the scale.
                 pct = 100.0 * total / tank,
                 b = ledger.spent[0],
                 s = ledger.spent[1],

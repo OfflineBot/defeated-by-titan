@@ -108,7 +108,7 @@
 wait 1.5              # the world, the pads and the render pipelines come up (90 ticks)
 
 assert phase == 5     # ⭐ 1. the game starts in the HUB
-assert gas > 299      # a full tank: 300.0 out of game.ron
+assert gas > 14999    # a full tank: 15000.0 out of game.ron (300.0 until 2026-08-20, Q-046)
 assert blades == 5    # and a full harness: gear.ron: blades.start_pairs
 assert titans == 0    # a hub is not a fight
 mark f072-in-the-hub
@@ -126,8 +126,12 @@ look 180 -89
 key Shift 2.0         # BOOST (src/net/local.rs) — 2 s at gas_boost_per_s 18.0 = 36 gas
 wait 2.3
 
-assert gas < 285      # the tank really emptied: 300 − 36 = 264, and nothing refilled it while
-assert gas > 200      # it was being spent
+assert gas < 14985    # the tank really emptied: 15000 − 36 = 14964, and nothing refilled it
+assert gas > 14900    # while it was being spent. Both bounds are the old 285/200 shifted by
+                      # +14700 — the WIDTH is untouched, so this is the same claim it always
+                      # was: "at least 15 gas left the tank and no more than 100 did".
+                      # ⚠️ This pair is what makes the ⭐ 3 assert below mean anything: it is
+                      # the deficit the station is later measured against.
 mark f072-gas-burnt
 
 # Back onto his own spawn point. The `warp` is a reset and not a shortcut: the 89-degree boost
@@ -153,7 +157,15 @@ wait 9.5              # ⚠️ LONGER than the key is held. `key` does not block
 assert height > 0.10  # ⭐ 2. INSIDE. Nothing but the depot floor of the main building is here
 assert height < 0.30
 assert speed < 0.5    # standing at the back wall of the hall, not still crossing it
-assert gas > 299      # ⭐ 3. the tank is full again — 40 gas/s out of gear.ron: resupply
+assert gas > 14999    # ⭐ 3. the tank is full again — 40 gas/s out of gear.ron: resupply
+                      # ⚠️ `> 14999` against a 15000 tank demands the SAME REFILL the old
+                      # `> 299` against a 300 tank did: a deficit under 1 gas, i.e. 35 of the
+                      # 36 burnt in ACT 1 put back, i.e. 0.875 s of standing at the racks.
+                      # Not loosened and not tightened — rebased. Written out because the
+                      # lazy repair here (`> 299`, left alone) would have PASSED for ever:
+                      # he walks in holding 14964, so the line would have gone green with
+                      # `refuel_at_stations` deleted from the build entirely. A starred claim
+                      # that cannot go red is worse than no claim (docs/FINDINGS.md FIND-073).
 assert blades == 5    # the BASELINE of claim 8/9, not a claim of its own: he flies out with a
 assert sharpness > 0.99  #  full harness, so every point of sharpness missing in ACT 6 was cut off
 mark f072-supplied-inside

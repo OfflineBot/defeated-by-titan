@@ -393,7 +393,10 @@ that is worth knowing before tuning it further.
 
 ## 4. Gas
 
-Ours: 300 tank · 18/s boost · 16/s steer · 45 per dodge · refill only at base.
+Ours: **15000 tank** · 18/s boost · 16/s steer · 45 per dodge · refill only at base.
+⚠️ The tank was **300** until 2026-08-20, when the user asked for „mach das 50 fache!“ — it is a
+**testability** value (833.3 s of held boost against a 330 s sortie), not a balance the comparison
+below should be read against. `docs/QUESTIONS.md` Q-046 · `docs/FINDINGS.md` FIND-142.
 
 | what | the reference | confidence | source |
 |---|---|---|---|

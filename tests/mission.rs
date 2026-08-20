@@ -725,9 +725,17 @@ fn gas_left(app: &mut App) -> f32 {
 
 /// Empties every tank, so that a refill is visible as a rise and not as "still full".
 fn drain_tanks(app: &mut App) {
+    set_tanks(app, 0.0);
+}
+
+/// Puts every tank at `current`. Used to make a **small** refill deficit: since `gas_tank` is
+/// 15000 (Q-046) a test that wants to watch a tank reach the top cannot afford to start it at
+/// zero — 40 gas/s takes 375 s to cross that — and the clamp it wants to measure does not care
+/// how deep the hole was.
+fn set_tanks(app: &mut App, current: f32) {
     let mut q = app.world_mut().query_filtered::<&mut Gas, With<PlayerId>>();
     for mut gas in q.iter_mut(app.world_mut()) {
-        gas.current = 0.0;
+        gas.current = current;
     }
 }
 
@@ -951,11 +959,29 @@ fn f072_gas_comes_back_at_a_station_and_nowhere_else() {
         "30 ticks in a station gave {after} of the expected {expected}"
     );
 
-    // 3. And never above the tank.
-    ticks(&mut app, 1200);
-    let full = gas_left(&mut app);
+    // 3. And never above the tank — the CLAMP in the refuel path, which is the claim that makes
+    //    the first two more than "some system adds gas somewhere".
+    //
+    // ⚠️ **RE-CUT 2026-08-20 (Q-046), because filling a 15000 tank from empty is not a test.**
+    // This used to drain the tank and then stand in the station for 1200 ticks, relying on
+    // 40 gas/s x 20 s = 800 gas being more than the whole tank. That was only ever true because
+    // the tank was 300; at 15000 it filled 5 % of it and the assert went red on a mechanism that
+    // is perfectly fine. Topping a tank up at 40/s would need 22 500 ticks — 375 s of simulation
+    // inside the round gate, to measure a `min`.
+    //
+    // So the deficit is made small instead of the run long: park the tank ten gas below full and
+    // stand in the station far longer than the 0.25 s that costs. **Same claim, and a sharper
+    // one** — it now fails if the station overshoots by more than 1e-3, at any tank size,
+    // including after a rollback to `gas_tank: 300.0`.
     let max = data(&app).game.vector.gas_tank;
-    assert!((full - max).abs() < 1e-3, "the station overfilled the tank: {full} of {max}");
+    set_tanks(&mut app, max - 10.0);
+    ticks(&mut app, 120); // 2 s at 40 gas/s = 80 gas offered against a 10 gas hole
+    let full = gas_left(&mut app);
+    assert!(
+        (full - max).abs() < 1e-3,
+        "the station overfilled the tank: {full} of {max} (it was offered 80 gas into a 10 gas \
+         hole and had to stop at the top)"
+    );
 }
 
 #[test]
@@ -1066,6 +1092,11 @@ fn a_station_and_a_player(with_vector: bool) -> (App, Entity) {
         .spawn((
             PlayerId(1),
             Transform::from_translation(Vec3::ZERO),
+            // ⚠️ A DELIBERATELY ARBITRARY tank, not the shipped one. This fixture exists to
+            // watch who WRITES `Gas`, not how big it is, so it must not be read as a mirror of
+            // `game.ron: vector.gas_tank` (which is 15000 since 2026-08-20 — Q-046). Left as a
+            // literal on purpose; the number is meaningless here and pulling the RON in would
+            // couple a writer test to a tuning value for nothing.
             Gas { current: 0.0, ..Gas::full(300.0) },
         ))
         .id();

@@ -71,11 +71,11 @@ the dodge needs its own key. Both `⚠️ UNTUNED`.
 **1d. Gas refuels only at stations. ✅ half done 2026-08-12.** `Q-033` is answered and the
 regeneration is **removed outright** — mechanism, both RON keys, both struct fields, six tests
 (`FIND-049`). Not "set to 0.0": `deny_unknown_fields` means a re-added key now **crashes on load**,
-which is the honest guard. `gas_tank: 300.0` stays.
+which is the honest guard. ⚠️ **`gas_tank` is 15000.0 since 2026-08-20, not 300** — the user, for the third time and with a number: *"immernoch viel zu wenig gas. man kann nicht testen! mach das 50 fache!"* (`Q-046`). The guard's reasoning is unchanged; only the figure moved.
 **What remains is the feature itself: refuel stations as world objects**, plus a mission loop where
 going back to the main building is a decision. `Gas::refill` exists, is called by nobody, and is
 reserved for them.
-⚠️ **Until they exist, 300 gas is the entire supply of a run.** Whether that is playable is a feel
+⚠️ **Until they exist, the tank is the entire supply of a run** — 15000 since 2026-08-20, which outlasts a 330 s sortie by 2.5x and therefore hides the problem rather than solving it (`Q-044`: no refuel station exists anywhere in the world, and base-only refill is the user's own `Q-033`). Whether that is playable is a feel
 question no test answers, and it is sharper now than it was yesterday.
 ⚠️ **`scripts/f-018-gas.txt` now exits 1** — its ACT 4 brackets (`gas > 5.4` / `< 6.2`) existed only
 because the refill put 10/s back. It needs re-cutting and `docs/images/f-018-gas.png` re-taking.
@@ -339,7 +339,7 @@ rather than being loosened.
 
 **2. `scripts/game-full.txt` breaks in ashgate and was deliberately not fixed.** 5 of 23 asserts,
 **all in ACT 1**, which does `warp 24 0 -20` and hooks a graybox watchtower that does not exist
-here: `Speed > 25 → 0.000`, `Height > 12 → 0.050`, `Gas < 300 → 300.000`. No anchor → no reel → the
+here: `Speed > 25 → 0.000`, `Height > 12 → 0.050`, `Gas < 15000 → 15000.000`. No anchor → no reel → the
 tank is untouched → he never leaves the pavement. **The other 18 hold and the mission still wins:**
 `MISSION WON at tick 898 — 3/3 kills`, because ACTs 2–4 are falls, not swings.
 ⚠️ **~30 other scripts also warp into graybox coordinates and were not checked.** Moving the shipped
@@ -990,7 +990,7 @@ Two orphans that `tools/norms.py` caught, both real work from 2026-08-13, neithe
 
 - **[`scripts/w5-lane.txt`](../scripts/w5-lane.txt)** — a complete, documented run that answers
   §1D item 4 (*"es sind random türme da die nicht so sein sollte"*) **with numbers instead of
-  taste**. Rope only: no boost, no reel, no `W`, and `assert gas == 300` at the end proves every
+  taste**. Rope only: no boost, no reel, no `W`, and `assert gas == 15000` at the end proves every
   metre of height and every m/s came out of the rope and gravity. It measures whether the town
   now carries the swing lane by itself, which became a live question when the district went
   **100 % anchorable** and grew terrain and gable roofs — the arithmetic in `FIND-041`/`FIND-058`

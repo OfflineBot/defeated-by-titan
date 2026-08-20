@@ -377,6 +377,161 @@ fn t005_rope_steering_costs_what_the_boost_costs_per_metre_per_second() {
 }
 
 #[test]
+fn t005_the_gas_tank_is_the_value_the_user_asked_for_and_names_its_dependents() {
+    // **This test exists because of `docs/FINDINGS.md` FIND-073**, which was written when
+    // `gas_tank` went 100 -> 300 and three scripts were still asserting 100 two days later:
+    //
+    //   "a tuning value that triples silently invalidates every script that quoted it, and
+    //    nothing in the build says which those are."
+    //
+    // Nothing was added then to make the build say which. On 2026-08-20 the same value moved
+    // again — 300 -> 15000, a 50x, on the user's „mach das 50 fache!" (docs/QUESTIONS.md
+    // Q-046) — and it invalidated 54 `assert gas` lines across 13 scripts, two tests and six
+    // comment blocks. **So the build says which now, and it says it here.**
+    //
+    // This is a PIN, not a balance guard. It does not claim 15000 is right — it claims that
+    // whoever changes it has been shown the list. To roll back to `gas_tank: 300.0`, change
+    // the literal below and work the list.
+    let v = &data().game.vector;
+    const PINNED_GAS_TANK: f32 = 15000.0;
+    assert_eq!(
+        v.gas_tank,
+        PINNED_GAS_TANK,
+        "{}",
+        tank_rollback_checklist(v.gas_tank, PINNED_GAS_TANK)
+    );
+}
+
+// ── the checklist, as data rather than as prose ────────────────────────────────────────────
+//
+// **Grouped by HOW a line fails when the tank moves, because that is the only grouping that
+// helps the person doing the move.** The dangerous group is not "the ones that break" — those
+// announce themselves. It is the ones that stop failing:
+//
+//   * RAISE the tank and a LOWER bound goes quiet. `scripts/f070-hub.txt:156` was
+//     `assert gas > 299` — F-070's ⭐ "the tank is full again". At 15000 the player walks in
+//     holding 14964 and that line passes with `refuel_at_stations` deleted from the build
+//     (FIND-142, measured).
+//   * LOWER it and an UPPER bound goes quiet. `assert gas < 15000` is a literal copy of the
+//     tank size; at `gas_tank: 300.0` it holds no matter what, and it was measured on
+//     2026-08-20 in a sandboxed `assets/` copy: 300 tank, both burn rates zeroed, gas never
+//     spent at all — `scripts/game-full.txt` reported **24 asserts held, fully green**.
+//
+// The four lists below are checked against `scripts/` itself by
+// `t005_every_script_that_asserts_gas_is_on_the_tank_checklist`, so this cannot fall behind
+// the directory again — which is the whole of what FIND-073 complained about.
+const TANK_SCRIPTS_EXACT: &[&str] = &[
+    "f-007-boost.txt",
+    "f-018-gas.txt",
+    "f003-ashgate.txt",
+    "f003-ruins.txt",
+    "f004-towers.txt",
+    "f018-budget.txt",
+    "f025-chain.txt",
+    "w5-lane.txt",
+];
+const TANK_SCRIPTS_DELTA: &[&str] = &[
+    "f-007-boost.txt",
+    "f-018-gas.txt",
+    "f-flight-cut.txt",
+    "f003-ashgate.txt",
+    "f018-budget.txt",
+    "f070-hub.txt",
+    "f170-hud.txt",
+];
+const TANK_SCRIPTS_QUIET_ON_RAISE: &[&str] = &["f-flight-cut.txt", "f070-hub.txt"];
+const TANK_SCRIPTS_QUIET_ON_LOWER: &[&str] = &["f-001-hooks.txt", "game-full.txt"];
+
+fn as_paths(names: &[&str]) -> String {
+    names.iter().map(|n| format!("scripts/{n}")).collect::<Vec<_>>().join(" · ")
+}
+
+fn tank_rollback_checklist(now: f32, pinned: f32) -> String {
+    format!(
+        "`game.ron: vector.gas_tank` moved from {pinned} to {now}. That is allowed — it is the \
+         user's number (Q-046) — but it is never a one-line change. Every one of these quotes it \
+         or is derived from it:\n\
+         \n\
+           EXACT-TANK ASSERTS (`assert gas == <tank>`), which go RED:\n\
+             {exact}\n\
+           DELTA BRACKETS (shift by the difference, keep the WIDTH):\n\
+             {delta}\n\
+           BOUNDS THAT GO QUIET INSTEAD OF RED — the dangerous ones:\n\
+             raise the tank and a LOWER bound stops failing:\n\
+               {quiet_up}\n\
+             lower it and an UPPER bound stops failing (both are `assert gas < 15000`):\n\
+               {quiet_down}\n\
+           TESTS:\n\
+             tests/vector_boost.rs::f008_the_dodge_is_the_expensive_boost_and_shift_is_the_cheap_one\n\
+             tests/mission.rs::f072_gas_comes_back_at_a_station_and_nowhere_else\n\
+             tests/vector_gas.rs (the downward-only floors: boost seconds, bursts, reel share)\n\
+           PROSE THAT STATES IT AS FACT:\n\
+             assets/data/game.ron (the gas_tank, gas_reel_per_s, gas_steer_per_s, gas_dodge\n\
+               comment blocks) · src/vector/gas.rs (module doc) · docs/NEXT.md\n\
+             docs/HANDOVER.md · docs/QUESTIONS.md Q-033/Q-044/Q-046\n\
+             docs/gameplay/references.md (the AoT:R comparison line)\n\
+         \n\
+         A run whose gas asserts merely stopped failing has stopped measuring.",
+        exact = as_paths(TANK_SCRIPTS_EXACT),
+        delta = as_paths(TANK_SCRIPTS_DELTA),
+        quiet_up = as_paths(TANK_SCRIPTS_QUIET_ON_RAISE),
+        quiet_down = as_paths(TANK_SCRIPTS_QUIET_ON_LOWER),
+    )
+}
+
+#[test]
+fn t005_every_script_that_asserts_gas_is_on_the_tank_checklist() {
+    // **The list above is only worth something if it is COMPLETE**, and on 2026-08-20 it was
+    // not: it named 11 scripts while 13 carried an `assert gas` line. The two it missed —
+    // `scripts/f-001-hooks.txt` and `scripts/game-full.txt` — were both `assert gas < 15000`,
+    // i.e. both in its own "goes quiet instead of red" category. A hand-kept list of files is
+    // exactly the thing FIND-073 said the build should stop relying on, so it is kept by the
+    // directory instead: every `scripts/*.txt` with a line beginning `assert gas` has to be
+    // named in one of the four groups, and every name has to still exist.
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts");
+    let mut on_disk: Vec<String> = Vec::new();
+    for entry in std::fs::read_dir(&dir).expect("scripts/ is readable") {
+        let path = entry.expect("a directory entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("txt") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).expect("a script is readable");
+        if text.lines().any(|line| line.starts_with("assert gas")) {
+            on_disk.push(path.file_name().unwrap().to_string_lossy().into_owned());
+        }
+    }
+    on_disk.sort();
+
+    let mut named: Vec<String> = TANK_SCRIPTS_EXACT
+        .iter()
+        .chain(TANK_SCRIPTS_DELTA)
+        .chain(TANK_SCRIPTS_QUIET_ON_RAISE)
+        .chain(TANK_SCRIPTS_QUIET_ON_LOWER)
+        .map(|n| (*n).to_owned())
+        .collect();
+    named.sort();
+    named.dedup();
+
+    let missing: Vec<&String> = on_disk.iter().filter(|n| !named.contains(n)).collect();
+    let stale: Vec<&String> = named.iter().filter(|n| !on_disk.contains(n)).collect();
+    assert!(
+        missing.is_empty() && stale.is_empty(),
+        "the gas-tank rollback checklist in this file no longer matches scripts/.\n\
+         \n\
+         NOT ON THE LIST but they assert gas — add each to the group that says how it fails when\n\
+         the tank moves (RED / DELTA / QUIET-on-raise / QUIET-on-lower):\n\
+           {missing:?}\n\
+         ON THE LIST but no longer asserting gas — drop them:\n\
+           {stale:?}\n\
+         \n\
+         The list is what `t005_the_gas_tank_is_the_value_the_user_asked_for_and_names_its_dependents`\n\
+         prints when someone moves `game.ron: vector.gas_tank`, and a checklist that is short by two\n\
+         files is how FIND-073 happened. Reproduce the directory side with:\n\
+           grep -rlc '^assert gas' scripts/"
+    );
+}
+
+#[test]
 fn t005_no_value_is_zero_negative_or_nan() {
     // The edge case, not the normal one: a zero in a tank size is a division by zero three
     // systems later (§9d).

@@ -32,5 +32,5 @@ look -28 -14
 wait 0.15
 mark f003-ruins-vantage  # ← the picture is taken here
 assert height > 55.0     # airborne at the vantage and not already on a roof
-assert gas == 300        # nothing has been spent: this is a look, not a flight
+assert gas == 15000        # nothing has been spent: this is a look, not a flight
 wait 1.2

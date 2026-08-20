@@ -2,7 +2,56 @@
 #
 #   ./target/debug/defeated_by_titan --headless --script scripts/w5-lane.txt --ticks 1800
 #
-# ⚠️ Rope only. No Shift (boost), no Ctrl (reel), no W. `assert gas == 300` at the end is the
+# 🔴 **THIS FILE IS 11 OF 43 RED SINCE 2026-08-20, AND IT IS NOT THE GAS ROUND — READ THIS
+# BEFORE YOU BELIEVE ANY NUMBER IN THE TABLES BELOW.** The script is byte-identical to the
+# version that was green at cb3e918 (2026-08-19 18:27) apart from three `== 300` -> `== 15000`
+# lines, so nothing here changed. What changed is under it.
+#
+#   line 165: assert Rope == 1 — measured 0.000        <- ACT A leg 3 anchored NOTHING
+#   line 147: assert Height < 31.9 — measured 33.437   line 157: < 26.9 — 29.652
+#   line 167: assert Height < 19.1 — measured 20.581   line 148: Speed > 32.1 — 31.307
+#   lines 233/241/249/257 (ACT B heights, all 0.7 .. 2.8 m high)
+#   line 316: assert Height > 40.7 — 29.261            line 319: Speed < 27.1 — 34.450
+#
+# ⚠️ **AND LEG 3'S TWO SPEED ASSERTS PASSED WHILE IT HAPPENED.** `assert speed > 35.6` /
+# `< 40.2` — the ⭐ line that reads *"39.633 m/s, 5.7x running, on no gas at all"* — held on a
+# leg with no rope on it. The log says why: `hook Right found no anchor: NothingInRange —
+# nothing within hook range on that line — open sky (t=282)`, and the leg-2 rope let go at
+# t=284, so the mark at t=337 is **0.88 s of free fall**. That is the exact shape CLAUDE.md
+# rule 5 was rewritten around: `assert speed` cannot tell a swing from a fall, and only
+# `assert rope == 1` can. **It is the one line that caught this. Do not widen it, do not delete
+# it, and do not re-aim the leg until the cause below is settled** — an aim tuned against
+# today's snap bakes today's snap in, which is exactly how the ±28° compensation broke in
+# FIND-096.
+#
+# **THE CAUSE, measured 2026-08-20: `F-024` (1450bfc, "the snap searches sideways only").**
+# This whole file is fired through the assist at `assist_strength 100`, and F-024's own commit
+# measures the thing that vanished: *"largest vertical deviation a snap can produce 9.232 deg /
+# 3.414 m -> 0.000006 deg / 0.0000 m"*. Every `look` line below was aimed under the 2D cone,
+# which silently corrected the pitch by up to 9.2 deg; the sweep is screen-horizontal now and
+# corrects none of it. Control run, same binary, one line changed: at `settings assist_strength
+# 0` leg 3 DOES anchor (`body 911 at 11.31 32.31 196.50`); at 100 it flies into open sky.
+# ACT C is the same cause the other way round — a purely sideways sweep reaches further along a
+# 700 m rail, so the rope is longer and the arc deeper: 34.450 m/s at 29.261 m against the
+# recorded 26.568 at 41.268, which is the failure mode the bottom of ACT C already warns about.
+#
+# 🔴 **What that costs: the verdict sentence "gantry 32.6 · gallery 26.6 · town roofscape 1.35"
+# is IN QUESTION and this file is unevidenced until it is re-aimed.** What survives is that
+# ACT A leg 1 and ACT C still hold `rope == 1`, so both are real swings and the town is still
+# dead (every ACT B `speed < 5.0` still holds) — the RANKING is what moved, not the finding
+# that the roofscape carries nothing. -> docs/FINDINGS.md FIND-145.
+#
+# ⚠️ **`== 15000` IS EXACTLY AS STRONG A CONTROL AS `== 300` WAS**, and that is not obvious, so
+# it is written down: `Comparison::Equal` in `src/debug/script.rs` is a FIXED ABSOLUTE
+# tolerance of 1e-3, not a relative one. A single tick of boost is 0.3 and a single tick of
+# reel is 0.1 — both are 100x the tolerance at any tank size, so "not one unit was spent"
+# still fails on one tick of spending. (What DID get 32x coarser is the f32 resolution of the
+# number itself: one ULP at 15000 is 9.8e-4, so 1e-3 is now ~1.1 ULP. It still catches a tick;
+# it would no longer catch a single debit under ~0.001, which is the near-zero steer regime —
+# and there the gas LEDGER accumulators, which start at 0.0, are the trustworthy instrument,
+# not `Gas::current`. FIND-139, docs/QUESTIONS.md Q-046.)
+#
+# ⚠️ Rope only. No Shift (boost), no Ctrl (reel), no W. `assert gas == 15000` at the end is the
 # proof: every metre of height and every metre per second below comes out of the rope and out
 # of gravity, and nothing else.
 #
@@ -118,7 +167,7 @@ assert height > 17.9
 assert height < 19.1
 assert speed > 35.6     # ★ faster than leg 2 — 39.633 m/s, 5.7x running, on no gas at all
 assert speed < 40.2
-assert gas == 300
+assert gas == 15000
 
 # 🔴 **THREE LEGS, NOT FIVE, AND THE TWO THAT ARE GONE ARE THE ANSWER TO THE TOWER QUESTION.**
 # Legs 4 and 5 were measured out of existence on 2026-08-19, not loosened away: aimed at 44°
@@ -215,7 +264,7 @@ mark w5-town-5-end
 # On the ground, on a terrace, at a standstill — 2 m from where the chain started.
 assert height < 3.5
 assert speed < 5.0
-assert gas == 300
+assert gas == 15000
 
 # =====================================================================================
 # ACT C — THE WALL GALLERY. The one shape in this district that is not a gantry and swings.
@@ -268,5 +317,5 @@ assert height > 40.7    # 41.268 — the bottom, over the boulevard and not insi
 assert height < 41.8
 assert speed > 26.0     # 26.568
 assert speed < 27.1
-assert gas == 300
+assert gas == 15000
 end

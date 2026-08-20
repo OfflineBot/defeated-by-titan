@@ -122,8 +122,12 @@ fn flier(app: &mut App, x_m: f32) -> Entity {
 /// **Both**, and on purpose. `vector::gas::gas_budget` (`F-018`) recomputes [`GasGrant`] from
 /// the button and the tank on every tick, so the grant written here is only the seed for the
 /// first one; from the second tick on it is `F-018`'s. Pressing the button as well is what
-/// makes it stay `true` — the tank is full (`spawn_player` gives `Gas::full(gas_tank)` = 100,
-/// which pays for 5.5 s at `gas_boost_per_s = 18`), so nothing in these tests runs dry.
+/// makes it stay `true` — the tank is full (`spawn_player` gives `Gas::full(gas_tank)`, which
+/// is 15000 since 2026-08-20 and pays for 833 s at `gas_boost_per_s = 18`), so nothing in these
+/// tests runs dry. ⚠️ This sentence said "= 100, which pays for 5.5 s" until 2026-08-20 — it had
+/// been wrong since the tank went 100 -> 300 on 2026-08-10 and nobody swept it. That class of
+/// stale comment is exactly what `tests/data.rs::t005_the_gas_tank_is_the_value_the_user_asked
+/// _for_and_names_its_dependents` now lists, so the next move of this number has a checklist.
 /// Written this way the tests also held while `gas_budget` was still an empty stub, which is
 /// what made them runnable before `F-018` landed.
 fn boost(app: &mut App, e: Entity, yaw_deg: f32, pitch_deg: f32) {
@@ -833,11 +837,35 @@ fn f008_the_dodge_is_the_expensive_boost_and_shift_is_the_cheap_one() {
         v.gas_boost_per_s
     );
     // And a tank still has to hold a handful of them, or the move is decoration.
+    //
+    // ⚠️ **THE CEILING CAME OFF ON 2026-08-20, AND IT WAS NOT LOOSENED QUIETLY.** This read
+    // `(3.0..=15.0).contains(&per_tank)`. The user raised `gas_tank` 300 -> 15000 („mach das 50
+    // fache!", docs/QUESTIONS.md Q-046), which makes a tank 333 dodges, and the ceiling's own
+    // sentence — "over 15 it is not expensive at all" — became **true**: measured against the
+    // tank, the dodge is no longer expensive. Widening the window to swallow 333 would have
+    // been a test that asserts whatever the file says, so the half that stopped being true is
+    // removed instead of faked.
+    //
+    // **Nothing is lost that is not still asserted above.** "The dodge is the expensive one" is
+    // carried by `ratio >= 3.0` on gas per m/s of speed bought, and by `gas_dodge >
+    // gas_boost_per_s` — both are ratios between two rates and neither contains a tank term, so
+    // both hold at any tank size. The ceiling was a second, tank-coupled way of saying the same
+    // thing, and it was the only one a tuning value could void.
+    //
+    // What is genuinely unguarded now is "a dodge is an emergency move, not a traversal move":
+    // at 333 per tank the gas price is not a limiter, and F-008's own cooldown is still not
+    // built (FIND-067). That is recorded in `assets/data/game.ron` beside `gas_dodge` and in
+    // Q-046; it is a design hole, not something an assert here can hold shut.
+    //
+    // **On a rollback to `gas_tank: 300.0` the ceiling should come back** — `per_tank` is 6.67
+    // there, comfortably inside the old window.
     let per_tank = v.gas_tank / v.gas_dodge;
     assert!(
-        (3.0..=15.0).contains(&per_tank),
-        "a full tank is {per_tank:.2} dodges — under 3 the move is unusable, over 15 it is not \
-         expensive at all"
+        per_tank >= 3.0,
+        "a full tank is {per_tank:.2} dodges ({} gas at {} a dodge) — under 3 the move is \
+         unusable",
+        v.gas_tank,
+        v.gas_dodge
     );
 }
 

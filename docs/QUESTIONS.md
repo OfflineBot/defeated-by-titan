@@ -1720,3 +1720,79 @@ so a boost fired while you look 90° off your rope is still dragged half-way tow
 radial, which a taut rope eats, which the file's own comment calls "killing the swing". That is the
 same complaint from the Shift side and it belongs to `src/vector/boost.rs`, which another agent
 held this round. The proposed patch is in FIND-141 and it is **unmeasured**.
+
+---
+
+## Q-046 — the tank is 15000 because you asked for it a third time. Is that the balance, or only the testability? (2026-08-20, gas round)
+
+> **You, 2026-08-20:** *„immernoch viel zu wenig gas. man kann nicht testen! mach das 50 fache!"*
+
+**Done, exactly as asked:** `assets/data/game.ron: vector.gas_tank` **300.0 → 15000.0**. No
+compromise at 10x, no derivation argued against it. Your instruction beats a derivation and beats
+your own earlier number — that precedence is already written down in `CLAUDE.md`, in `scale.ron`
+and in `Q-002`, and this is the third time you have said this same sentence (100 → 300 on
+2026-08-10 for „also gas tank sollte sehr viel mehr haben", then 300 → 15000 today).
+
+**What it buys, in the only unit that matters here:** at `gas_boost_per_s: 18` a full tank is
+**833.3 seconds of continuously held boost**, against a sortie of 330 s. It was 16.7 s. The tank
+now outlasts the whole mission by 2.5x, so a run cannot end for lack of gas while you are trying
+to feel the movement. That is what „man kann nicht testen" asked for and it is met.
+
+**ASSUMPTION the work continued under:** this is a **testability** value and not a balance
+decision. Nothing has been tuned around it, nothing else was moved to compensate, and no test now
+requires the tank to be this big — the floors that mention it (`> 10 s` of boost, `> 20` bursts)
+were deliberately left as loose downward guards rather than tightened around 15000, precisely so
+that putting it back is a one-line edit and not a red suite.
+
+**Rollback point: `assets/data/game.ron: vector.gas_tank` back to `300.0`.** Nothing in `src/`
+depends on the magnitude. What must be worked through with it is listed **in the build**, which is
+new: `tests/data.rs::t005_the_gas_tank_is_the_value_the_user_asked_for_and_names_its_dependents`
+pins the number and its failure message names every script, test and doc that quotes it. Two things
+would want deliberate restoring rather than a number swap:
+- the dodges-per-tank **ceiling** in `tests/vector_boost.rs::f008_the_dodge_is_the_expensive_boost
+  _and_shift_is_the_cheap_one` (`per_tank <= 15`), removed today because 15000/45 = 333 makes its
+  own sentence — "over 15 it is not expensive at all" — **true**;
+- `scripts/f-018-gas.txt` ACT 3 and `scripts/f170-hud.txt`'s 82 % ruler, both re-cut below.
+
+### 🔴 What the 50x does NOT answer, and it is the question you actually have to decide
+
+**`Q-044` stays open and this makes it louder, not quieter.** With the steering bill made honest
+(FIND-139, this morning) a 300 tank bought ~16.7 s of held boost against a 330 s sortie, and
+**there is still no refuel station anywhere in the world.** The design's refill rule is yours and
+it is base-only (`Q-033`: „gas refillt nur im main gebäude"). No burn rate closes a 20x gap — only
+the stations do, and they are queued in `docs/NEXT.md` §1d and not built.
+
+So today the gap is closed from the other end, by a tank fifty times the size of the one the
+economy was drawn for. **That has a cost, and it is not the number — it is that gas stopped being
+a decision.** Concretely: a dodge was 6.67 per tank and is now 333, and `F-008`'s own cooldown is
+still not built (FIND-067), so **nothing at all now limits the dodge as a traversal move.** If you
+fly it and it feels like the gas is gone from the game rather than merely generous, that is this,
+and the fix is the stations plus a rollback — not a burn rate.
+
+**The three questions that are yours, in the order they matter:**
+1. Is 15000 what you want to keep, or is it "enough to test with" until the stations exist?
+2. Should the refuel stations be built next (they are the only thing that makes a smaller tank
+   playable), or does the sortie simply not have a gas economy at all for now?
+3. Does the dodge need its cooldown now that its gas price no longer limits it?
+
+### What was re-cut rather than rebased, and why
+
+Two claims could not survive a 50x tank as numbers, and both were **suspended visibly instead of
+being weakened into always-green asserts**:
+- **`scripts/f-018-gas.txt` ACT 3, "the tank empties and a held button buys no half-boost".**
+  Emptying 15000 at 18/s is 833 s = 50 000 ticks, and a headless run is **wall-clock locked at
+  60 Hz** (measured today: 3094 ticks take 52 s whether the player flies or stands still), so that
+  is a 14-minute run — and the exit code needs its own second run. The claim moved into
+  `tests/vector_gas.rs::f018_the_tank_runs_dry_and_stays_at_zero_instead_of_going_negative`, which
+  now sets a two-second tank on the player and burns that. ACT 3 measures the rate's linearity over
+  twelve seconds instead, which is a real claim it can still make.
+- **`scripts/f170-hud.txt`'s 82 % gas bar**, the ruler F-170 exists for. At 15000 the same three
+  seconds of boost draw a **99.64 %** bar — full to any ruler. Getting back to 82 % needs 2700 gas
+  = 150 s of boost = 9000 ticks per run. It is suspended, `docs/images/f170-hud.png` is marked
+  stale in the script's own header, and the mechanism half still goes red in `tests/hud.rs`.
+  **`docs/images/f-018-gas.png` is stale the same way** — it shows an empty bar for a run that now
+  ends 97.96 % full.
+
+Both come back in one line each if `src/debug/script.rs` gains a **`settings gas <n>`** verb so a
+script can ask for a small tank for one act. That file was foreign territory to this change, so it
+is a proposal in `docs/FINDINGS.md` (FIND-142) and not something taken quietly.

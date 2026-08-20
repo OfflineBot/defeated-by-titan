@@ -99,6 +99,37 @@ fn set_tank(app: &mut App, e: Entity, current: f32) {
     app.world_mut().get_mut::<Gas>(e).expect("player has a tank").current = current;
 }
 
+/// A tank small enough that **`Gas::current` is still a precise instrument**.
+///
+/// 🔴 **WHY THIS EXISTS — measured 2026-08-20, and it is a real consequence of the 50x tank.**
+/// Every test in section 1 measures a rate as the DIFFERENCE OF TWO TANK READINGS, and `Gas`
+/// is `f32`. One ULP at 300 is 3.05e-5; at `gas_tank: 15000` (docs/QUESTIONS.md Q-046) it is
+/// **9.77e-4 — 32x coarser**. Sixty debits of 0.3 taken off a number that large do not add up
+/// to 18.0 any more: measured **17.9883**, an error of 0.0117 that blew straight through the
+/// `< 0.01` tolerance these tests have always used. Four of them went red on the tank change
+/// alone, with nothing whatsoever wrong with `gas_budget`.
+///
+/// **The tolerance was NOT loosened to make them pass.** What these tests claim is that the
+/// RATE in `game.ron` is the rate that gets charged — a claim about `vector::gas::book`, not
+/// about how big the tank happens to be. So the measurement is taken on a tank sized for the
+/// measurement, which restores the arithmetic to full f32 resolution (one ULP at 120 is
+/// 1.4e-5, so sixty debits carry at most ~9e-4 of error) and leaves the original `< 0.01`
+/// meaning what it always meant. As a bonus these four stop being sensitive to tank retuning
+/// at all — which is the FIND-073 disease this whole change is an outbreak of.
+///
+/// ⚠️ **The under-charge is real in the running game too**, not only in the tests: at a 15000
+/// tank a second of held boost debits 17.9883 instead of 18.0. That is 0.065 %, far below
+/// anything a player can feel, and it is written up in `docs/FINDINGS.md`. It is a reason not
+/// to trust `Gas::current` as a precision instrument at this tank size — the gas LEDGER
+/// accumulators in `src/vector/gas.rs` start at 0.0 and keep full precision, so they are the
+/// trustworthy reading there.
+///
+/// Five seconds of the two continuous consumers together: big enough that nothing here runs
+/// dry inside its one-second measurement, small enough to be exact.
+fn measurement_tank(d: &GameData) -> f32 {
+    (d.game.vector.gas_boost_per_s + d.game.vector.gas_reel_per_s) * 5.0
+}
+
 fn hz(d: &GameData) -> f32 {
     d.game.simulation_hz as f32
 }
@@ -179,11 +210,16 @@ fn f018_a_second_of_boost_costs_exactly_the_value_from_the_file() {
         d.game.vector.gas_tank
     );
 
+    // The rate is measured on a `measurement_tank`, not on the shipped one — see the doc on
+    // that function. The full-tank assert above is what still reads `gas_tank`.
+    let start = measurement_tank(&d);
+    set_tank(&mut app, e, start);
+
     hold(&mut app, BOOST_KEY);
     ticks(&mut app, 60); // exactly one second
     release(&mut app, BOOST_KEY);
 
-    let spent = before.current - gas(&app, e).current;
+    let spent = start - gas(&app, e).current;
     let expected = d.game.vector.gas_boost_per_s;
     assert!(
         (spent - expected).abs() < 0.01,
@@ -205,7 +241,9 @@ fn f018_boost_and_reel_in_together_cost_the_sum_and_not_one_of_them() {
     let e = me(&mut app);
     ticks(&mut app, 60);
 
-    let before = gas(&app, e).current;
+    // Measured on a `measurement_tank` for f32 resolution — see that function's doc.
+    let before = measurement_tank(&d);
+    set_tank(&mut app, e, before);
     hold(&mut app, BOOST_KEY);
     hold(&mut app, REEL_KEY);
     for _ in 0..60 {
@@ -318,16 +356,28 @@ fn f018_an_empty_tank_yields_no_half_boost() {
 
 #[test]
 fn f018_the_tank_runs_dry_and_stays_at_zero_instead_of_going_negative() {
-    // How long the tank lasts is a number from the file, so the length of this run is too:
-    // `gas_tank / gas_boost_per_s` seconds, and half as long again on top. (It was a literal
-    // `600` — ten seconds — while `gas_tank` was 100; at 300 that run stops while the tank is
-    // still two thirds full and the test stops measuring what it is named after.)
+    // ⚠️ **THIS RUNS ON A TANK THE TEST SETS, NOT ON `gas_tank` — 2026-08-20.** What is being
+    // measured here is a MECHANISM: the tank floors at zero, never goes negative, and an empty
+    // tank grants no boost. None of that is a claim about how big the shipped tank is, so
+    // deriving the run length from `gas_tank` only ever coupled the test's WALL CLOCK to a
+    // tuning value. At `gas_tank: 15000` (Q-046) that derivation asked for 75 000 `app.update()`
+    // calls — 50x what it cost at 300, inside the round gate, to measure a floor.
+    //
+    // The history is worth keeping because it is the same mistake twice: it was a literal `600`
+    // while `gas_tank` was 100, which stopped emptying the tank when the tank tripled. The fix
+    // then was to derive from the file; the fix now is to stop measuring the file at all here.
+    // **The shipped tank's own size is asserted in
+    // `f018_a_full_tank_carries_a_boost_that_lasts` and pinned in `tests/data.rs`.**
     let mut app = app();
     let d = data(&app);
     let e = me(&mut app);
     ticks(&mut app, 60);
 
-    let dry_ticks = (d.game.vector.gas_tank / d.game.vector.gas_boost_per_s * hz(&d)) as u64;
+    // Two seconds of boost, whatever the boost costs. Small enough to be free to run, big
+    // enough that the burn is many ticks and not one.
+    let test_tank = d.game.vector.gas_boost_per_s * 2.0;
+    set_tank(&mut app, e, test_tank);
+    let dry_ticks = (test_tank / d.game.vector.gas_boost_per_s * hz(&d)) as u64;
     hold(&mut app, BOOST_KEY);
     ticks(&mut app, dry_ticks + dry_ticks / 2);
     release(&mut app, BOOST_KEY);
@@ -337,8 +387,8 @@ fn f018_the_tank_runs_dry_and_stays_at_zero_instead_of_going_negative() {
     let left = gas(&app, e).current;
     assert!(
         (0.0..one_tick).contains(&left),
-        "after ten seconds of boost the tank holds {left}, expected 0 .. {one_tick} \
-         (a refused boost leaves the last, insufficient drop lying)"
+        "after burning a {test_tank} gas tank dry the tank holds {left}, expected 0 .. \
+         {one_tick} (a refused boost leaves the last, insufficient drop lying)"
     );
     assert!(!grant(&app, e).boost, "an empty tank grants no boost");
 }
@@ -416,6 +466,12 @@ fn f018_every_player_pays_out_of_his_own_tank() {
     let mut intent = app.world_mut().get_mut::<Intent>(other).expect("he has an intent");
     intent.buttons.set(Buttons::BOOST, true);
 
+    // Both tanks on a `measurement_tank` for f32 resolution — see that function's doc. It is
+    // set on BOTH so that "I pressed nothing and lost nothing" is measured at the same
+    // precision as the other player's spend.
+    let measure = measurement_tank(&d);
+    set_tank(&mut app, mine, measure);
+    set_tank(&mut app, other, measure);
     let mine_before = gas(&app, mine).current;
     let other_before = gas(&app, other).current;
     ticks(&mut app, 60);
@@ -463,6 +519,9 @@ fn f018_the_costs_in_the_file_are_positive_and_the_tank_outlasts_a_swing() {
     assert!(v.gas_boost_per_s > 0.0, "a boost that costs nothing is not a resource");
     assert!(v.gas_reel_per_s > 0.0, "reel-in that costs nothing is not a resource");
     assert!(v.gas_tank > 0.0);
+    // A FLOOR, not a bracket: at `gas_tank: 15000` this is 625 s and cannot fail. It guards
+    // the downward direction only — see the note in `f018_a_full_tank_carries_a_boost_that_lasts`
+    // on why these floors are not tightened around a testability value (Q-046).
     let seconds = v.gas_tank / (v.gas_boost_per_s + v.gas_reel_per_s);
     assert!(
         seconds > 2.0,
@@ -554,7 +613,10 @@ fn f018_nothing_refills_while_the_gas_is_being_spent() {
     let v = &d.game.vector;
     let e = me(&mut app);
     ticks(&mut app, 60);
-    let half = v.gas_tank / 2.0;
+    // Not `gas_tank / 2.0` any more: a `measurement_tank`, so that the sum at the end is exact
+    // in f32 — see that function's doc. The tick-by-tick "never rises" check below does not
+    // care how big the tank is, and the closing sum does.
+    let half = measurement_tank(&d);
 
     set_tank(&mut app, e, half);
     hold(&mut app, BOOST_KEY);
@@ -698,15 +760,35 @@ fn f018_a_full_tank_carries_a_boost_that_lasts() {
     ticks(&mut app, 60);
     assert!((gas(&app, e).current - v.gas_tank).abs() < 1e-6, "the tank starts full");
 
-    let expected_s = v.gas_tank / v.gas_boost_per_s;
+    // CLAIM 1 — about the SHIPPED tank, read straight out of the file. This is the guard that
+    // exists so "der boost hält nicht lang genug" is not shipped a second time, and it is the
+    // one that must stay coupled to `gas_tank`.
+    let shipped_s = v.gas_tank / v.gas_boost_per_s;
     assert!(
-        expected_s > 10.0,
-        "game.ron carries {} gas at {}/s = {expected_s:.2} s of held boost. The user flew \
+        shipped_s > 10.0,
+        "game.ron carries {} gas at {}/s = {shipped_s:.2} s of held boost. The user flew \
          5.6 s of it and said it does not last long enough; anything in that neighbourhood \
          ships the same complaint again",
         v.gas_tank,
         v.gas_boost_per_s
     );
+
+    // ⚠️ **A FLOOR WITH A LOT OF HEADROOM, AND THAT IS DELIBERATE — 2026-08-20.** At
+    // `gas_tank: 15000` (Q-046) `shipped_s` is 833 s, so `> 10.0` cannot fail today. It is kept
+    // as-is rather than raised to something tight: 15000 is a **testability** value the user
+    // asked for („mach das 50 fache!"), not a settled balance, and a tight bound here would
+    // turn the rollback to `gas_tank: 300.0` into a red test instead of a one-line edit. What
+    // it still does is catch the tank being lowered PAST the complaint it was raised for.
+    // The tank's actual value is pinned once, in `tests/data.rs::t005_the_gas_tank_is_the_value
+    // _the_user_asked_for_and_names_its_dependents`.
+
+    // CLAIM 2 — the ARITHMETIC: a held boost lasts `tank / rate` seconds and stops there. That
+    // is a property of `gas_budget`, not of the shipped tank size, so it is measured on a tank
+    // this test sets. Deriving the loop from `gas_tank` cost ~50 000 `app.update()` calls at
+    // 15000 (1000 at 300) and measured nothing extra for them.
+    let test_tank = v.gas_boost_per_s * 3.0; // three seconds, whatever a second costs
+    set_tank(&mut app, e, test_tank);
+    let expected_s = test_tank / v.gas_boost_per_s;
 
     let cap = (expected_s * hz(&d) * 2.0) as u64;
     hold(&mut app, BOOST_KEY);
@@ -723,9 +805,10 @@ fn f018_a_full_tank_carries_a_boost_that_lasts() {
     let measured_s = burned as f32 / hz(&d);
     assert!(
         (measured_s - expected_s).abs() < 0.1,
-        "held boost ran dry after {measured_s:.2} s; {} gas at {}/s is {expected_s:.2} s",
-        v.gas_tank,
-        v.gas_boost_per_s
+        "held boost ran dry after {measured_s:.2} s; {test_tank} gas at {}/s is \
+         {expected_s:.2} s — and the shipped {} gas tank is {shipped_s:.2} s of it",
+        v.gas_boost_per_s,
+        v.gas_tank
     );
 }
 
@@ -756,6 +839,7 @@ fn f018_a_tank_is_a_whole_mission_of_flying_because_nothing_refills_it() {
 
     // Boost is bought in bursts, not held for sixteen seconds. Half a second is a burst; the
     // tank has to hold enough of them that flying is a rhythm rather than a countdown.
+    // Also a downward-only floor: 1666 half-second bursts at `gas_tank: 15000` (Q-046).
     let bursts = v.gas_tank / (v.gas_boost_per_s * 0.5);
     assert!(
         bursts > 20.0,

@@ -97,14 +97,21 @@ Every one of those was right, and three of them found holes no test in this repo
 found:
 
 - **Gas never refilled.** `Gas` was written at spawn and by `gas_budget`, which only subtracts.
-  5.6 s of boost for a 330 s mission, then the gear was dead. `gas_tank` 100 → **300**, which is
+  5.6 s of boost for a 330 s mission, then the gear was dead. `gas_tank` 100 → **300**, which was
   **16.67 s of continuous boost** per tank.
+  ⚠️ **300 is history since 2026-08-20.** The user: „mach das 50 fache!“ — the tank is
+  `gas_tank: 15000.0`, **833.3 s of held boost** at `gas_boost_per_s: 18` against a 330 s sortie
+  (`docs/QUESTIONS.md` Q-046, `docs/FINDINGS.md` FIND-142). It is a **testability** value, not a
+  settled balance, and the one-line rollback is `gas_tank: 300.0`. Everything that quotes the
+  number is listed by
+  `tests/data.rs::t005_the_gas_tank_is_the_value_the_user_asked_for_and_names_its_dependents`.
   ⚠️ **Corrected twice, and the second one is the user's.** I first claimed 37.5 s (wrong — it
   needed the refill to run during the boost). Then I added a 10/s idle regeneration; on 2026-08-12
   the user closed `Q-033` against it: *"gas refillt nur im main gebäude an bestimmten
   stationen/objekten"*. **The regeneration is gone — mechanism, keys and struct fields.** Gas comes
-  back at a **place you go to**, and the stations do not exist yet, so **300 gas is currently the
-  entire supply of a run**. The tripled tank is the whole answer to "the boost is too short".
+  back at a **place you go to**, and the stations do not exist yet, so **one tank is the entire
+  supply of a run** (15000 since 2026-08-20; 300 when this paragraph was written). The bigger tank
+  is the whole answer to "the boost is too short".
 - **`B-005`, the overshoot.** Measured: without the reel held the enforced length never shrank at
   all, so the player flew **the entire rope length — 50.000 m — past his own anchor at every speed
   from 20 m/s up**. Fixed with a slack take-up ratchet (`limits.max` follows the true distance

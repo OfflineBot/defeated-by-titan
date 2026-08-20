@@ -1,6 +1,14 @@
 # f004-towers — the swing lane, measured: one real arc free-aimed, and then three of them
 # chained on the assist. **31 asserts, 838 ticks, exit 0 (2026-08-19).**
 #
+# 🔴 **5 OF 31 RED SINCE 2026-08-20, AND THE AIM IS THE CAUSE — do not re-derive the angles.**
+# `F-024` (1450bfc, "the snap searches sideways only") removed the snap's vertical correction:
+# its own commit measures *"largest vertical deviation a snap can produce 9.232 deg / 3.414 m ->
+# 0.000006 deg / 0.0000 m"*. Every `look` line here was aimed under the 2D cone. One shot now
+# reports `found no anchor: NothingInRange — open sky (t=721)`. The numbers in this file are
+# unevidenced until it is re-aimed, and an aim tuned against today's snap bakes today's snap in
+# (the FIND-096 mistake). -> docs/FINDINGS.md FIND-145.
+#
 #   cargo run -- --headless --script scripts/f004-towers.txt --ticks 1200
 #
 # ⚠️ **RE-MEASURED 2026-08-19 after 14 of its 39 asserts went red, and the file is SHORTER
@@ -15,7 +23,7 @@
 #      are written out at ACT 2 and in docs/FINDINGS.md FIND-126.
 #
 # ⚠️ Rope only. This run never presses Shift (boost) and never presses Ctrl (reel), and it
-# spends **zero gas** — `assert gas == 300` at the end is the proof. Every metre of height and
+# spends **zero gas** — `assert gas == 15000` at the end is the proof. Every metre of height and
 # every metre per second below comes out of `player/rope.rs` and gravity, nothing else.
 #
 # ## What it is evidence FOR
@@ -170,7 +178,7 @@ assert height > 57.0    # 57.403 — the far side gives the height back to withi
                         # a check that he has nearly stopped up there.
 assert speed < 5.0      # 4.417. Was `< 4.0` for 3.5 m/s — same 0.5 m of extra rope as above,
                         # arriving as 0.9 m/s at the apex. Still under running speed.
-assert gas == 300       # not one unit spent: no boost, no reel
+assert gas == 15000       # not one unit spent: no boost, no reel
 
 # ---------------------------------------------------------------------------------------
 # ACT 2 — the chain. **THREE gantries, three arcs, and the place where it stops.**
@@ -263,4 +271,4 @@ assert speed < 40.2
 
 wait 1.0
 mark f004-chain-end
-assert gas == 300       # 105 m of lane, three arcs, zero gas
+assert gas == 15000       # 105 m of lane, three arcs, zero gas

@@ -135,9 +135,12 @@ assert height > 12.0    # a jump reaches 1.056 m. Twelve metres is the rope, and
 assert height < 14.0
 assert speed > 35.0     # measured 46.4 m/s [debian] — see the note below
 assert speed < 55.0
-assert gas < 300        # and the reel really was paid for out of the tank (`gas_tank` is 300
-                        # since 2026-08-10 — this bracket is the old `< 100` rebased, not
-                        # loosened; measured 296.300, i.e. 3.7 spent)
+assert gas < 15000      # and the reel really was paid for out of the tank (`gas_tank` is
+                        # 15000 since 2026-08-20, Q-046 — the old `< 100` rebased twice, never
+                        # loosened; measured 14996.3, i.e. 3.7 spent). ⚠️ A STRICT `<` against
+                        # the exact tank size is the whole claim: a run that spent NOTHING
+                        # reads exactly 15000.0 and fails this line. It does not go vacuous at
+                        # a bigger tank the way a `>` bound would.
 
 wait 1.2
 mark f-001-on-the-roof

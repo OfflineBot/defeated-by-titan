@@ -171,8 +171,9 @@ mark game-reeled
 # ACTS 2-4 below still cut at 30.00/30.33 m/s, and every one of those is a FALL.
 assert speed > 25       # "the rest of this plan is designed for a player who moves at 30 m/s"
 assert height > 12.0    # a jump reaches 1.056 m. Twelve metres is the rope and nothing else.
-assert gas < 300        # and the reel really was paid for out of the tank (`gas_tank` is 300
-                        # since 2026-08-10 — the old `< 100` rebased, not loosened)
+assert gas < 15000      # and the reel really was paid for out of the tank (`gas_tank` is
+                        # 15000 since 2026-08-20, Q-046 — the old `< 100` rebased twice, not
+                        # loosened: a zero-spend run reads exactly 15000.0 and fails this)
 
 wait 2.0                # 1.2 -> 2.0 on 2026-08-12: the 35 m roof is 23 m further up than the
                         # watchtower's, so the reel is still running at the old mark. Measured
