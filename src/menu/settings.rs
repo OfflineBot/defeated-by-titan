@@ -119,6 +119,15 @@ pub fn spawn_settings_screen(commands: &mut Commands, data: &GameData, s: &Playe
             &format!("{FOV_MIN_DEG:.0} - {FOV_MAX_DEG:.0}, vertical"),
             SettingsAction::Fov,
         );
+
+        // **The middle of the screen, kept empty.** The `hud` draws the aim assist's search
+        // extent level with the crosshair — the picture of the very number two rows below —
+        // and it stays on screen while this plate is up (`hud::ShowWhileTuning`). It cannot be
+        // moved aside, so the plate is what makes room. It sits **here** and not anywhere else
+        // because here is the middle of this column, and a centred column puts its middle on
+        // the middle of the screen.
+        screen.spawn(plate::centre_lane());
+
         row(
             screen,
             "Aim spread",

@@ -18,6 +18,7 @@
 //! | arm markers `Q`/`E`, below centre | [`arm_aim`] | [`Hook`](crate::shared::Hook), [`AimPoint`](crate::shared::AimPoint) | `vector` — **exists since 2026-08-10** |
 //! | objective line, top centre | [`objective`] | `KillTally`, `State<MissionPhase>` | `mission` — **exists since 2026-08-10** |
 //! | hit mark, above the crosshair | [`hit_mark`] | [`TitanHit`](crate::shared::TitanHit) | `blades::cut` — **exists**; the element is `F-043` and landed 2026-08-19 |
+//! | **search band**, level with the crosshair | [`catch_band`] | [`PlayerSettings`](crate::shared::PlayerSettings) | the player's own slider — the element is `F-016` and landed 2026-08-19 |
 //!
 //! The objective line is the one edge this domain has out of `bevy`, `shared` and `data`:
 //! `hud -> mission`, read-only, with its reason on the allow list in `docs/architecture.md`.
@@ -54,6 +55,16 @@
 //! at **150 px / 47.7 m** for the rest — and `F-023`'s whole claim is that the rope and the
 //! marker are one number. Those markers are held out of [`arm_aim::SIGHT_CORE_PX`] instead: the
 //! pixels the player is cutting, which is what the box was protecting in the first place.
+//! **And the second exception, on the same argument and no new one**: the
+//! [`catch_band`] — the aim assist's search extent, drawn level with the crosshair because that
+//! is where the sweep looks (`docs/FINDINGS.md` FIND-133: a 1D screen-horizontal line, 0.000006°
+//! of vertical deviation). Its position **is** an angle, and its whole range lives inside the
+//! box: at 1280 × 720 it reaches 227 px from centre at `assist_catch` 100 % but only 88 px at
+//! 40 %, against a box edge at 128 px. Held out of the box it would draw a **wider** search than
+//! the one running for every setting below about 55 % — FIND-129's lie with a different number
+//! on it. It gives up [`arm_aim::SIGHT_CORE_PX`] instead, and it gives it up by **not drawing**:
+//! a tick stands on its ray or it is absent, never moved.
+//!
 //! Everything else — bars, pips, banner, letters, the crosshair, and a marker with **no** point
 //! of its own to be honest about — still obeys the full box.
 //!
@@ -73,6 +84,7 @@
 //! | **`F-043`, the kill** — `KILL  21.0 m/s` in amber over the husk whose nape was just cut | `scripts/f032-swords.txt --ticks 162` → `docs/images/f043-hit-mark-kill.png` |
 //! | the same run's **body cut**, smaller and crimson | `… --ticks 331` → `docs/images/f043-hit-mark-cut.png` |
 //! | and the same band 43 ticks after the kill — **empty** | `… --ticks 200` → `docs/images/f043-hit-mark-gone.png` |
+//! | **`F-016`, the search band at three settings** — no band, 88 px, 227 px, one stand, one look | `scripts/f016-band.txt --ticks 150 / 240 / 330` → `docs/images/f016-band-0.png`, `-40.png`, `-100.png` |
 //!
 //! The hit mark was decoded out of the three frames above rather than against a control run:
 //! in the band `y 195..250, x 320..960` the kill accounts for **1 401 saturated pixels** in a
@@ -81,6 +93,18 @@
 //! frame at tick 200, 43 ticks after a mark that holds 33, for **0**. Different word, different
 //! size, different colour, and it takes itself away. Both boxes end at `y 232` against a
 //! keep-out box that starts at `y 288` — 56 px of measured margin.
+//!
+//! The search band was decoded against its own 0 % frame, which is the control that costs
+//! nothing here: the same stand, the same look, the same tick, and the only difference is the
+//! knob. At `assist_catch` 100 % it accounts for 1 148 changed pixels running `x 412..867` —
+//! 228 px left and 227 px right of a crosshair at 640, against the 226.9 px that 20° through a
+//! 60° lens projects to on a 1280 px screen — in exactly **two** connected runs, `412..633` and
+//! `646..867`, with the 12 px gap between them being the `SIGHT_CORE_PX` the element gives up.
+//! At 40 % the same rows account for `x 551..728` (89 px / 88 px) and the eight ticks a side
+//! stand at ±11, 22, 33, 44, 55, 66, 77, 88 px — evenly, because a tangent is linear at 8°;
+//! at 100 % they stand at ±27, 55, 82, 110, 138, 167, 197, 227 px — unevenly, because it is not
+//! at 20°. The 0 % frame has **zero** changed pixels in the band's rows, which is the
+//! *"no search, no band"* half of the claim measured rather than asserted.
 //!
 //! The preview was decoded against the map instead of against a control run, which is the
 //! stronger check of the two: the two anchor coordinates come out of the game's own log, the
@@ -120,6 +144,7 @@
 
 pub mod arm_aim;
 pub mod blade_pips;
+pub mod catch_band;
 pub mod crosshair;
 pub mod gas_bar;
 pub mod health_bar;
@@ -144,6 +169,7 @@ impl Plugin for HudPlugin {
                 objective::spawn_objective,
                 crosshair::spawn_crosshair,
                 arm_aim::spawn_arm_aim,
+                catch_band::spawn_catch_band,
                 hit_mark::spawn_hit_mark,
             ),
         )
@@ -194,7 +220,7 @@ impl Plugin for HudPlugin {
         // mid-swing, which is the only moment the element has to be trusted.
         .add_systems(
             PostUpdate,
-            arm_aim::place_arm_aim
+            (arm_aim::place_arm_aim, catch_band::place_catch_band)
                 .after(bevy::transform::TransformSystems::Propagate)
                 .after(bevy::camera::CameraUpdateSystems)
                 .before(bevy::ui::UiSystems::Layout),
@@ -233,13 +259,31 @@ impl Plugin for HudPlugin {
 ///
 /// **It runs on a change and not per frame** (§6 rule 6): `Screen` changes when somebody
 /// presses a key or a button, which is a handful of times per session.
+///
+/// ## And one exception, which is [`ShowWhileTuning`]
+///
+/// The rule that survives is *"gameplay clutter does not sit over a menu"*. On
+/// [`Screen::Settings`] the search band and the crosshair are not clutter — they are the
+/// picture of the number the `Aim assist reach` row writes, and a picture you can only look at
+/// after closing the screen that changes it is worth nothing (`docs/FINDINGS.md` FIND-136).
+/// The pause plate and the lobby get no exception: neither can move the knob.
 fn hide_while_a_menu_is_up(
     screen: Res<Screen>,
-    mut roots: Query<&mut Visibility, (With<HudElement>, Without<ChildOf>)>,
+    mut roots: Query<
+        (&mut Visibility, Option<&ShowWhileTuning>),
+        (With<HudElement>, Without<ChildOf>),
+    >,
 ) {
-    let want =
-        if *screen == Screen::Playing { Visibility::Inherited } else { Visibility::Hidden };
-    for mut visibility in &mut roots {
+    let playing = *screen == Screen::Playing;
+    let tuning = *screen == Screen::Settings;
+    for (mut visibility, exempt) in &mut roots {
+        // The rule and its one exception, on one line: the game's overlay belongs to the game,
+        // **except** for the element that IS the number the screen in front of it edits.
+        let want = if playing || (tuning && exempt.is_some()) {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
         // Compared before it is written: `Visibility` is change-detected and a blind write
         // would re-run the propagation over the whole HUD for a value that did not move.
         if *visibility != want {
@@ -247,6 +291,41 @@ fn hide_while_a_menu_is_up(
         }
     }
 }
+
+/// **The exception to [`hide_while_a_menu_is_up`], and it is exactly one screen wide.**
+///
+/// The rule the HUD obeys is *"gameplay clutter does not sit over a menu"* — a crosshair down
+/// the middle of the pause column, an objective counter and two bars over the lobby, all
+/// measured on 2026-08-13 (FIND-092 §2). This marker names the one case that is not clutter:
+/// **the element that IS the setting being edited**. The player opened
+/// [`Screen::Settings`](crate::menu::Screen::Settings) to move a number, and an element that
+/// answers that number in the tick it moves is worth nothing if it can only be looked at after
+/// the screen is closed — which is the whole reason the user asked for it
+/// (*„damit man das besser einstellen kann"*, `docs/FINDINGS.md` FIND-135).
+///
+/// **Two elements carry it and no more**: [`catch_band`] — the search extent, which is the
+/// number the `Aim assist reach` row writes — and [`crosshair`], because the band is a ruler
+/// **measured from the crosshair** and a ruler with no origin cannot be read. The bars, the
+/// pips, the objective line, the hit mark and the arm markers report the *fight*, and there is
+/// no fight while a menu is up; they stay hidden.
+///
+/// It buys nothing on the pause plate or in the lobby, so it is not given there: neither screen
+/// can change the number, and a band nobody can move is the clutter this rule exists against.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct ShowWhileTuning;
+
+/// The stacking layer of a [`ShowWhileTuning`] element — **above the menu backdrop**.
+///
+/// Not cosmetic and not a preference: `menu::plate::root` is a full-screen node at the default
+/// global z of 0 and it is spawned **after** the HUD, so without this the band would sit under
+/// `plate::BACKDROP`'s 0.90 alpha. That is not "dimmer", it is gone: composited in linear light
+/// the band's own white falls to sRGB 24 against a background of 14 — **1.05:1**, where over
+/// the backdrop it is 10.4:1 (`tests/menu.rs::f016_the_band_reads_over_the_settings_backdrop`).
+///
+/// Every other HUD element stays at 0. These two never overlap another HUD element — the
+/// keep-out box and [`arm_aim::SIGHT_CORE_PX`] are what keep them apart — so lifting them
+/// changes nothing about a playing frame, and `F-170`/`F-171`'s pixels are untouched.
+pub const TUNING_Z: i32 = 1;
 
 /// On **every** node this domain spawns — containers included.
 ///

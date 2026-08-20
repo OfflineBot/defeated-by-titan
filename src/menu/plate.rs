@@ -89,6 +89,37 @@ pub fn note(text: impl Into<String>) -> impl Bundle {
 }
 
 /// The gap between two things standing next to each other in a [`row`].
+/// **The empty row the settings screen keeps across the middle of the screen.**
+///
+/// The `hud` draws the aim assist's search extent level with the crosshair, and it cannot be
+/// moved: the band's position **is** an angle, so a band nudged out of the way would draw a
+/// search that is not the one running (`docs/FINDINGS.md` FIND-133, FIND-135). So the menu is
+/// what gets out of the way. Twelve pixels plus a [`root`] gap on each side clears the tallest
+/// tick — 17 px — with about 10 px to spare on both sides at 1280 x 720, and the column stays
+/// centred because the lane sits at its middle.
+///
+/// ⚠️ **The number the band actually needs lives in `hud` and this domain may not read it**
+/// (one domain, one folder — `docs/architecture.md`). The relationship is pinned from the
+/// outside instead, by `tests/menu.rs::f016_the_settings_screen_leaves_the_bands_lane_empty`,
+/// which measures both rectangles and falls over if a row grows into the lane.
+pub const CENTRE_LANE_PX: f32 = 12.0;
+
+/// Marks the lane, so a test can tell "the settings screen draws nothing here" from "there is
+/// nothing here". It carries no colour and no child; it is a hole with a name.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct CentreLane;
+
+/// The lane itself. Spawned at the **middle** of the settings column, which is what puts it on
+/// the middle of the screen — the column is centred, so a child at its midpoint lands there.
+pub fn centre_lane() -> impl Bundle {
+    (
+        Name::new("settings_centre_lane"),
+        PauseElement,
+        CentreLane,
+        Node { height: Val::Px(CENTRE_LANE_PX), width: Val::Px(ROW_W), ..default() },
+    )
+}
+
 pub const ROW_GAP: f32 = 8.0;
 /// The left column of the settings grid: what a setting is called.
 pub const LABEL_W: f32 = 190.0;

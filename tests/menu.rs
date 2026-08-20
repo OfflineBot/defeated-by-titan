@@ -23,6 +23,9 @@
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::ButtonState;
 use bevy::prelude::*;
+use bevy::camera::RenderTarget;
+use bevy::render::render_resource::TextureFormat;
+use bevy::ui::UiStack;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 use defeated_by_titan::menu::{plate, MenuRoot, PauseAction, PauseElement, Screen};
 use defeated_by_titan::shared::Cli;
@@ -440,7 +443,8 @@ fn f072_the_hub_is_a_place_and_not_a_screen() {
 
 use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
-use defeated_by_titan::hud::HudElement;
+use defeated_by_titan::hud::catch_band::{CatchTick, END_H_PX};
+use defeated_by_titan::hud::{HudElement, ShowWhileTuning};
 use defeated_by_titan::menu::lobby::{LobbyAction, LobbyChoice};
 use defeated_by_titan::menu::settings::{Nudge, SettingsAction};
 use defeated_by_titan::mission::{MissionPhase, Sortie};
@@ -985,6 +989,16 @@ fn hud_drawing(app: &mut App) -> Vec<(Entity, Display)> {
     all
 }
 
+/// The roots that are exempt from the rule above — the band and the crosshair.
+fn tuning_roots(app: &mut App) -> Vec<Entity> {
+    let mut q = app
+        .world_mut()
+        .query_filtered::<Entity, (With<ShowWhileTuning>, Without<ChildOf>)>();
+    let mut roots: Vec<Entity> = q.iter(app.world()).collect();
+    roots.sort();
+    roots
+}
+
 fn visibility(app: &App, e: Entity) -> Visibility {
     *app.world().get::<Visibility>(e).expect("a Node always carries Visibility")
 }
@@ -1042,6 +1056,48 @@ fn f175_the_hud_is_hidden_while_a_menu_is_up() {
         while_playing,
         "hiding the HUD must not change WHICH elements the HUD would draw (F-170, F-171)"
     );
+
+    // ⚠️ **The one exception, and it is one screen wide.** The settings screen is where the
+    // aim-assist reach is set, and the search band is the picture of that number — hiding it
+    // there means the only way to tune the knob is set → close → look → reopen, which is
+    // exactly what the user asked the band to end (`docs/FINDINGS.md` FIND-135, FIND-136).
+    // So on `Screen::Settings` the elements carrying `hud::ShowWhileTuning` — the band and the
+    // crosshair it is measured from — stay up, and **nothing else does**: the bars, the pips,
+    // the objective counter, the hit mark and the arm markers report a fight, and there is no
+    // fight while a menu is up. That is FIND-092 §2's rule, narrowed rather than weakened.
+    press(&mut app, &PauseAction::Settings);
+    app.update();
+    assert_eq!(*app.world().resource::<Screen>(), Screen::Settings);
+    let tuning = tuning_roots(&mut app);
+    assert!(
+        tuning.len() >= 3,
+        "the exception has to have something in it — found {} tuning roots",
+        tuning.len()
+    );
+    for &e in &roots {
+        let want = if tuning.contains(&e) { Visibility::Inherited } else { Visibility::Hidden };
+        assert_eq!(
+            visibility(&app, e),
+            want,
+            "{e} on the settings screen: the band and the crosshair stay, everything else goes"
+        );
+    }
+    assert_eq!(
+        hud_drawing(&mut app),
+        while_playing,
+        "the exception must not change WHICH elements the HUD would draw (F-170, F-171)"
+    );
+
+    // Back out of the options, and the exception ends with the screen it belongs to.
+    press_esc(&mut app, window);
+    assert_eq!(*app.world().resource::<Screen>(), Screen::Paused);
+    for &e in &roots {
+        assert_eq!(
+            visibility(&app, e),
+            Visibility::Hidden,
+            "{e} kept the settings screen's exemption on the pause plate"
+        );
+    }
 
     // The lobby is a screen too, and the rule is one line rather than a list of screens.
     press(&mut app, &PauseAction::Lobby);
@@ -1668,4 +1724,264 @@ fn f176_the_host_row_opens_a_real_port_and_shows_it() {
     press(&mut app, &LobbyAction::Host(false));
     app.update();
     assert!(!app.world().resource::<Host>().is_open(), "the door did not close again");
+}
+
+
+// ---------------------------------------------------------------------------
+// `F-016` — the band is only worth something if it can be seen WHILE the knob moves
+// ---------------------------------------------------------------------------
+
+/// Gives the 3D camera a 1280 x 720 image to draw into.
+///
+/// **Without it the band has no pixels to stand on**: `place_catch_band` projects a direction
+/// through `Camera::world_to_viewport`, and a headless run's camera has no target size to
+/// project into — so every tick hides itself and a test about where the band lands would be
+/// asserting against an empty set. The same helper, for the same reason, sits in `tests/hud.rs`
+/// (`attach_screen`); the size is `debug::screenshot`'s own, which is also `Window::default()`'s,
+/// so the menu's layout is the one the pictures are taken at.
+fn attach_screen(app: &mut App) {
+    let handle = {
+        let mut images = app.world_mut().resource_mut::<Assets<Image>>();
+        images.add(Image::new_target_texture(
+            1280,
+            720,
+            TextureFormat::Rgba8Unorm,
+            Some(TextureFormat::Rgba8UnormSrgb),
+        ))
+    };
+    let camera = {
+        let mut q = app.world_mut().query_filtered::<Entity, With<Camera3d>>();
+        q.iter(app.world()).next().expect("there must be a 3D camera")
+    };
+    app.world_mut().entity_mut(camera).insert(RenderTarget::Image(handle.into()));
+    app.world_mut().run_schedule(PostUpdate);
+    app.world_mut().run_schedule(PostUpdate);
+}
+
+/// Every drawn tick of the search band, as a screen rectangle `(x0, y0, x1, y1)`.
+///
+/// Read out of the layout (`ComputedNode` + `UiGlobalTransform`) and not out of the `Node`'s
+/// own `left`/`top`, because what is being asserted is where the thing **lands**, and a
+/// rectangle inside a menu's flex column has no `left` of its own to compare against.
+fn band_rects(app: &mut App) -> Vec<(f32, f32, f32, f32)> {
+    let mut q = app
+        .world_mut()
+        .query_filtered::<(&Node, &ComputedNode, &UiGlobalTransform), With<CatchTick>>();
+    q.iter(app.world())
+        .filter(|(node, ..)| node.display != Display::None)
+        .map(|(_, computed, at)| {
+            let (s, c) = (computed.size(), at.translation);
+            (c.x - s.x / 2.0, c.y - s.y / 2.0, c.x + s.x / 2.0, c.y + s.y / 2.0)
+        })
+        .collect()
+}
+
+/// Turns the aim-assist reach up by `n` clicks of the `+` arrow, one frame each.
+///
+/// ⚠️ The **strength** goes up first, once, because `PlayerSettings::assist_is_on` is
+/// `catch > 0 && strength > 0` and the band is gated on exactly that predicate — the same one
+/// `vector::aim` filters on, so *no probe cast* and *no band* stay one decision (FIND-135). A
+/// run that only turned the reach up would draw nothing and prove nothing.
+fn nudge_reach(app: &mut App, n: usize) {
+    if app.world().resource::<PlayerSettings>().assist_strength_pct == 0.0 {
+        press(app, &SettingsAction::AssistStrength(Nudge::Up));
+        app.update();
+    }
+    for _ in 0..n {
+        press(app, &SettingsAction::AssistCatch(Nudge::Up));
+        app.update();
+    }
+}
+
+/// ★ **The band answers the slider while the slider is on screen.**
+///
+/// The user asked for the band for one stated reason — *„es soll in der ui angezeigt werden von
+/// wo bis wo gesearched wird **damit man das besser einstellen kann**!"* — and it landed hidden
+/// behind `hud::hide_while_a_menu_is_up`, so tuning it was set → close → look → reopen. This is
+/// that sentence as a test: the settings screen is up, the `Aim assist reach` row is pressed,
+/// and the band on screen gets wider in the same frame.
+#[test]
+fn f016_the_band_widens_under_the_slider_while_the_settings_screen_is_up() {
+    let (mut app, window) = app_with_window();
+    attach_screen(&mut app);
+    open_settings(&mut app, window);
+    assert_eq!(*app.world().resource::<Screen>(), Screen::Settings);
+    assert_eq!(
+        app.world().resource::<PlayerSettings>().assist_catch_pct,
+        0.0,
+        "the run has to start at free aim for 'no search, no band' to mean anything"
+    );
+    assert!(band_rects(&mut app).is_empty(), "0 % is free aim and draws no band");
+
+    nudge_reach(&mut app, 1);
+    let one = band_rects(&mut app);
+    assert!(
+        !one.is_empty(),
+        "one click of `Aim assist reach` has to put the band on screen without closing the menu"
+    );
+    // Laid out is not the same as **on screen**: `hud::hide_while_a_menu_is_up` writes
+    // `Visibility` on the roots and leaves `Node.display` alone, so a band that was hidden
+    // would still have every rectangle above. This is the half the user asked for.
+    let band: Vec<Entity> = {
+        let mut q = app.world_mut().query_filtered::<Entity, With<CatchTick>>();
+        q.iter(app.world()).collect()
+    };
+    for e in band {
+        assert_ne!(
+            visibility(&app, e),
+            Visibility::Hidden,
+            "the band is laid out but hidden — tuning it is still set, close, look, reopen"
+        );
+    }
+
+    nudge_reach(&mut app, 7);
+    let eight = band_rects(&mut app);
+    let reach = |r: &[(f32, f32, f32, f32)]| {
+        r.iter().fold(0.0_f32, |w, (x0, _, x1, _)| w.max((x1 - 640.0).abs().max((640.0 - x0).abs())))
+    };
+    assert!(
+        reach(&eight) > reach(&one) * 3.0,
+        "eight clicks have to be visibly wider than one: {:.1} px against {:.1} px",
+        reach(&eight),
+        reach(&one)
+    );
+    println!("BAND one click {:.1} px · eight clicks {:.1} px", reach(&one), reach(&eight));
+}
+
+/// ★ **A ruler under an almost-opaque backdrop is not a dimmer ruler, it is no ruler.**
+///
+/// `plate::root` is a full-screen node at `BACKDROP`'s 0.90 alpha and it is spawned **after**
+/// the HUD, so by default it sits on top of it. Both halves are asserted here: the band is
+/// above the plate's backdrop in the UI stack, and the contrast it then has against the dimmed
+/// world clears WCAG 1.4.11's 3:1 on **any** frame — the same bar FIND-093 held the plate's
+/// edge to, and with the same arithmetic. The backdrop itself is not touched: FIND-093 raised
+/// it to 0.90 for the edge's 9.94:1 and this fix costs that nothing.
+#[test]
+fn f016_the_band_reads_over_the_settings_backdrop() {
+    let (mut app, window) = app_with_window();
+    attach_screen(&mut app);
+    open_settings(&mut app, window);
+    nudge_reach(&mut app, 20);
+    app.update();
+
+    let root = {
+        let mut q = app.world_mut().query_filtered::<Entity, With<MenuRoot>>();
+        q.iter(app.world()).next().expect("the settings plate has to be on screen")
+    };
+    let band: Vec<Entity> = {
+        let mut q = app.world_mut().query_filtered::<Entity, With<CatchTick>>();
+        q.iter(app.world()).collect()
+    };
+    let stack = app.world().resource::<UiStack>();
+    let at = |e: Entity| {
+        stack.uinodes.iter().position(|x| *x == e).expect("a laid-out node is in the UI stack")
+    };
+    let backdrop = at(root);
+    for &e in &band {
+        assert!(
+            at(e) > backdrop,
+            "the band is buried under the backdrop: tick at {} against the plate at {backdrop}",
+            at(e)
+        );
+    }
+
+    // The contrast the player then gets, on the darkest and the brightest frame the game can
+    // put behind the menu. `NEUTRAL` is white at 0.75 alpha, so it composites over whatever the
+    // backdrop left of the world.
+    let neutral = luminance(defeated_by_titan::hud::crosshair::NEUTRAL);
+    let alpha = defeated_by_titan::hud::crosshair::NEUTRAL.to_srgba().alpha;
+    let mut worst = f32::MAX;
+    for step in 0..=10 {
+        let world = step as f32 / 10.0;
+        let behind = behind_the_menu(world);
+        let over = alpha * neutral + (1.0 - alpha) * behind;
+        // What it would have been buried: the band paints on the world, the backdrop paints on
+        // both, and the two ends of the comparison move together.
+        let buried = behind_the_menu(alpha * neutral + (1.0 - alpha) * world);
+        println!(
+            "BAND world {world:.1} · over the backdrop {:.2}:1 · buried under it {:.2}:1",
+            contrast(over, behind),
+            contrast(buried, behind)
+        );
+        worst = worst.min(contrast(over, behind));
+    }
+    assert!(
+        worst >= 3.0,
+        "the band has to clear WCAG 1.4.11's 3:1 on any frame — worst {worst:.2}:1"
+    );
+}
+
+/// ★ **The settings screen leaves the crosshair's row empty.**
+///
+/// The band's position **is** an angle: it is drawn level with the crosshair because that is
+/// where the sweep looks, and it cannot be moved out of the way without lying about where the
+/// search is (`docs/FINDINGS.md` FIND-133, FIND-135). So it is the menu that gets out of the
+/// way — `plate::CENTRE_LANE_PX` — and this is the test that says so. It walks every drawn node
+/// of the settings screen except the backdrop itself and asserts none of them touches a drawn
+/// tick.
+#[test]
+fn f016_the_settings_screen_leaves_the_bands_lane_empty() {
+    let (mut app, window) = app_with_window();
+    attach_screen(&mut app);
+    open_settings(&mut app, window);
+    // The widest band there is: every settings row has to clear the worst case, not the one
+    // this run happens to be at.
+    nudge_reach(&mut app, 20);
+    app.update();
+    assert_eq!(app.world().resource::<PlayerSettings>().assist_catch_pct, 100.0);
+
+    let band = band_rects(&mut app);
+    assert!(!band.is_empty(), "there has to be a band for this test to prove anything");
+    let plate: Vec<(f32, f32, f32, f32, String)> = {
+        let mut q = app.world_mut().query_filtered::<
+            (&ComputedNode, &UiGlobalTransform, Option<&Text>),
+            (With<PauseElement>, Without<MenuRoot>, Without<plate::CentreLane>),
+        >();
+        q.iter(app.world())
+            .map(|(computed, at, text)| {
+                let (s, c) = (computed.size(), at.translation);
+                (
+                    c.x - s.x / 2.0,
+                    c.y - s.y / 2.0,
+                    c.x + s.x / 2.0,
+                    c.y + s.y / 2.0,
+                    text.map(|t| t.0.clone()).unwrap_or_default(),
+                )
+            })
+            .collect()
+    };
+    assert!(plate.len() > 10, "the settings screen has to be built for this to prove anything");
+
+    let lane = band.iter().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |a, b| {
+        (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3))
+    });
+    println!(
+        "BAND lane x {:.1}..{:.1} y {:.1}..{:.1}, {} ticks",
+        lane.0,
+        lane.2,
+        lane.1,
+        lane.3,
+        band.len()
+    );
+    for (x0, y0, x1, y1, text) in &plate {
+        let clear = *x1 <= lane.0 || *x0 >= lane.2 || *y1 <= lane.1 || *y0 >= lane.3;
+        assert!(
+            clear,
+            "a settings node sits in the band's lane: x {x0:.1}..{x1:.1} y {y0:.1}..{y1:.1} \
+             against the lane y {:.1}..{:.1} — {text:?}",
+            lane.1, lane.3
+        );
+    }
+    // And the lane is wide enough for the tallest tick with room on both sides, so a row that
+    // grows by a pixel does not silently start clipping it.
+    let (above, below) = plate.iter().fold((f32::MIN, f32::MAX), |(a, b), (_, y0, _, y1, _)| {
+        (if *y1 <= lane.1 { a.max(*y1) } else { a }, if *y0 >= lane.3 { b.min(*y0) } else { b })
+    });
+    println!("BAND free lane {above:.1}..{below:.1} = {:.1} px", below - above);
+    assert!(
+        below - above >= END_H_PX + 8.0,
+        "the lane is {:.1} px for a {END_H_PX:.0} px tick — it needs {:.0}",
+        below - above,
+        END_H_PX + 8.0
+    );
 }

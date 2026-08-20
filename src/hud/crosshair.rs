@@ -42,7 +42,7 @@ use avian3d::prelude::*;
 use bevy::prelude::*;
 
 use crate::data::GameData;
-use crate::hud::{signal, HudElement, KEEP_OUT_HIGH_PCT};
+use crate::hud::{signal, HudElement, ShowWhileTuning, KEEP_OUT_HIGH_PCT, TUNING_Z};
 use crate::shared::{AimPoint, Intent, LocalPlayer, LAYER_TITAN_CORTEX};
 
 /// What the crosshair is looking at.
@@ -165,6 +165,10 @@ pub fn spawn_crosshair(mut commands: Commands) {
             part,
             CrosshairState::default(),
             HudElement,
+            // The origin of the search band's ruler — it stays up on the settings screen
+            // (`hud::ShowWhileTuning`), and there it has to be over `plate::BACKDROP`.
+            ShowWhileTuning,
+            GlobalZIndex(TUNING_Z),
             BackgroundColor(NEUTRAL),
             node_for(part, shape_of(CrosshairState::default())),
         ));

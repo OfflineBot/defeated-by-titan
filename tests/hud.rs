@@ -470,10 +470,15 @@ fn f170_nothing_covers_the_middle_of_the_screen() {
     // objective forced visible although nothing produces it, and the crosshair in `Cortex` —
     // the state with eight nodes and the widest reach.
     //
-    // **The one documented exception is not in this app**: an arm marker that carries a place —
+    // **The two documented exceptions are not in this app**: an arm marker that carries a place —
     // a fan preview (FIND-098) or a tip, an anchor, a fallback (FIND-129) — stands on that place
     // and is held out of the aim pixel instead. Nothing here has an `ArmAim`, so both markers are
-    // badges in their side slots and every node below is under the full rule.
+    // badges in their side slots and every node below is under the full rule. The `F-016` search
+    // band is the second, and it is absent here for a reason and not by luck: both assist knobs
+    // ship at 0 (`PlayerSettings::from_world`), so no probe is cast and no tick is drawn. What
+    // holds it to the sight core instead is
+    // `f016_the_band_keeps_the_sight_core_clear`, over the whole slider — this test would let
+    // the band through, and that is exactly why the other one exists.
     let mut app = app();
     attach_screen(&mut app);
     let player = local_player(&mut app);
@@ -3154,4 +3159,568 @@ fn f024_a_snap_moves_the_marker_sideways_on_the_screen_and_never_up_or_down() {
          user asked for the search to be locked to the horizontal so that it can be judged; a \
          vertical jump is exactly what he asked to be rid of"
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// F-016 — the search band: from where to where the assist is looking
+//
+// > *„es soll in der ui angezeigt werden von wo bis wo gesearched wird damit man das besser
+// > einstellen kann!"* — the user, 2026-08-19
+//
+// The last clause is the acceptance criterion: the band exists to be READ WHILE THE NUMBER IS
+// BEING CHANGED. So the five tests below ask, in order: does every mark stand on a ray the
+// search really casts · does the extent match an angle this file projects with its own
+// arithmetic · is it gone when no search is running · does it answer the knob in the tick it
+// moves · and does it leave the pixels the player is cutting alone.
+// ---------------------------------------------------------------------------------------
+
+/// The drawn centre of every band tick, by `(side index, step)`. A tick that is not drawn is
+/// simply absent, which is what three of the tests below are actually about.
+fn band_ticks(app: &mut App) -> std::collections::BTreeMap<(usize, u32), Vec2> {
+    use defeated_by_titan::hud::catch_band::CatchTick;
+    let mut out = std::collections::BTreeMap::new();
+    let mut q = app
+        .world_mut()
+        .query::<(&CatchTick, &Node, &ComputedNode, &UiGlobalTransform)>();
+    for (tick, node, computed, at) in q.iter(app.world()) {
+        if node.display == Display::None {
+            continue;
+        }
+        let (min_x, min_y, max_x, max_y) = rect(computed, at);
+        out.insert(
+            (tick.side.index(), tick.step),
+            Vec2::new((min_x + max_x) * 0.5, (min_y + max_y) * 0.5),
+        );
+    }
+    out
+}
+
+/// The drawn rectangle of one span rule, or `None` when it is not drawn.
+fn band_rule(app: &mut App, side: Side) -> Option<(f32, f32, f32, f32)> {
+    use defeated_by_titan::hud::catch_band::CatchRule;
+    let mut q = app
+        .world_mut()
+        .query::<(&CatchRule, &Node, &ComputedNode, &UiGlobalTransform)>();
+    for (rule, node, computed, at) in q.iter(app.world()) {
+        if rule.0 != side || node.display == Display::None {
+            continue;
+        }
+        return Some(rect(computed, at));
+    }
+    None
+}
+
+/// Every drawn band node's rectangle, ticks and rules together.
+fn band_rects(app: &mut App) -> Vec<(String, (f32, f32, f32, f32))> {
+    use defeated_by_titan::hud::catch_band::{CatchRule, CatchTick};
+    let mut out = Vec::new();
+    let mut q = app
+        .world_mut()
+        .query_filtered::<(&Name, &Node, &ComputedNode, &UiGlobalTransform), Or<(With<CatchTick>, With<CatchRule>)>>();
+    for (name, node, computed, at) in q.iter(app.world()) {
+        if node.display == Display::None {
+            continue;
+        }
+        out.push((name.to_string(), rect(computed, at)));
+    }
+    out
+}
+
+/// The crosshair's own pixel, out of the render camera — not `viewport / 2`.
+fn crosshair_px(app: &mut App) -> Vec2 {
+    let (camera, at) = camera_of(app);
+    camera
+        .world_to_viewport(&at, at.translation() + *at.forward())
+        .expect("the direction the camera is looking projects onto its own viewport")
+}
+
+fn probe_steps(app: &App) -> u32 {
+    app.world().resource::<GameData>().game.vector.assist_probe_steps
+}
+
+/// The catch half-width in radians — through [`PlayerSettings::assist_catch_deg`], the same
+/// accessor `vector::aim` fills `ScoreContext::catch_rad` with. There is one mapping from
+/// percent to degrees in this repository and this test does not add a second.
+fn catch_rad(app: &App) -> f32 {
+    app.world().resource::<PlayerSettings>().assist_catch_deg().to_radians()
+}
+
+/// **The load-bearing one: every mark of the band stands on a ray the sweep really casts.**
+///
+/// ⚠️ `docs/FINDINGS.md` FIND-103 — *a test that asks the screen and the function the same
+/// question passes when both are wrong.* It is not that here, and the reason is that `hud`
+/// **cannot** call the sweep: there is no `hud -> vector` line on the allow list in
+/// `docs/architecture.md`, so `hud::catch_band::probe_theta_rad` is a second spelling of
+/// `vector::aim::probe_dirs`' own `theta`, exactly as `hud::crosshair::eye` is a second
+/// spelling of `vector::aim::eye`. This test is what pins the two together: it takes the
+/// `Vec3` directions `probe_dirs` **itself returns**, projects them, and asserts the laid-out
+/// rectangles stand on them. The day the sweep changes shape, this goes red before the picture
+/// starts lying — which is the whole failure mode of FIND-098, FIND-099 and FIND-129.
+#[test]
+fn f016_the_band_stands_on_the_probe_rays_the_search_really_casts() {
+    use defeated_by_titan::hud::arm_aim::SIGHT_CORE_PX;
+    use defeated_by_titan::shared::Intent;
+    use defeated_by_titan::vector::aim::{look_basis, probe_dirs};
+
+    let mut app = app();
+    attach_screen(&mut app);
+    let steps = probe_steps(&app);
+
+    // Six look angles including two steep ones, because "horizontal" is the CAMERA's
+    // horizontal at every pitch (FIND-133) — a band built out of a world axis would pass at
+    // pitch 0 and fail at −85°.
+    let looks: [(f32, f32); 6] =
+        [(0.0, 0.0), (37.0, -60.0), (90.0, 10.0), (180.0, -5.0), (270.0, 45.0), (0.0, -85.0)];
+    // The slider's own step is 5 %, so the narrowest setting a player can dial is in here.
+    let catches = [5.0, 25.0, 40.0, 75.0, 100.0];
+
+    let mut checked = 0;
+    let mut dropped = 0;
+    let mut worst = 0.0_f32;
+    let mut worst_at = String::new();
+
+    for (yaw_deg, pitch_deg) in looks {
+        for catch_pct in catches {
+            set_assist(&mut app, catch_pct, 100.0);
+            stand_and_look(&mut app, Vec3::new(51.0, 0.0, 13.0), yaw_deg, pitch_deg);
+            run_hud(&mut app);
+
+            let drawn = band_ticks(&mut app);
+            let centre = crosshair_px(&mut app);
+            let (camera, camera_at) = camera_of(&mut app);
+            let player = local_player(&mut app);
+            let intent = *app
+                .world()
+                .entity(player)
+                .get::<Intent>()
+                .expect("the player carries an `Intent`");
+            let basis = look_basis(&intent);
+            let rad = catch_rad(&app);
+
+            for side in Side::ALL {
+                for (i, dir) in probe_dirs(basis, rad, steps, side).enumerate() {
+                    let want = camera
+                        .world_to_viewport(&camera_at, camera_at.translation() + dir)
+                        .expect("a probe inside the catch projects onto the viewport");
+                    let key = (side.index(), i as u32);
+                    // The one thing the band gives up is the sight core, and it gives it up by
+                    // NOT DRAWING — never by moving a mark somewhere else.
+                    if (want.x - centre.x).abs() < SIGHT_CORE_PX {
+                        dropped += 1;
+                        assert!(
+                            !drawn.contains_key(&key),
+                            "the {side:?} tick {i} at {want:?} is inside the {SIGHT_CORE_PX} px \
+                             sight core around {centre:?} and was drawn anyway"
+                        );
+                        continue;
+                    }
+                    let drew = drawn.get(&key).copied().unwrap_or_else(|| {
+                        panic!(
+                            "catch {catch_pct} %, yaw {yaw_deg} pitch {pitch_deg}: the sweep \
+                             casts a {side:?} probe {i} that projects to {want:?}, and no band \
+                             tick is drawn for it. The user asked to see from where to where \
+                             the search runs; a missing ray is a search he cannot see"
+                        )
+                    });
+                    checked += 1;
+                    let off = (drew - want).length();
+                    if off > worst {
+                        worst = off;
+                        worst_at = format!(
+                            "catch {catch_pct} %, yaw {yaw_deg} pitch {pitch_deg}, {side:?} \
+                             probe {i}: ray projects to {want:?}, tick drawn at {drew:?}"
+                        );
+                    }
+                    assert!(
+                        off <= 1.0,
+                        "{worst_at} — {off:.2} px apart. The band has to stand on the rays the \
+                         search casts, or it is a picture of a search and not the search"
+                    );
+                }
+            }
+        }
+    }
+
+    println!(
+        "f016 band-vs-sweep: {checked} probe rays compared against their tick, {dropped} \
+         dropped into the sight core, worst {worst:.3} px ({worst_at})"
+    );
+    assert!(
+        checked >= 400,
+        "only {checked} rays were compared — the sweep or the band stopped producing marks"
+    );
+}
+
+/// **The extent, against arithmetic this file does itself.**
+///
+/// The test above compares the band to `probe_dirs`; this one compares it to a pinhole camera
+/// worked out by hand from `fov_deg` and the aspect ratio, with nothing of the game's in it.
+/// Two independent checks, because a band that agreed with `probe_dirs` and disagreed with the
+/// lens would still be in the wrong place on the screen.
+///
+/// It also prints the number the whole feature is for: **how wide the band is at 0 / 40 /
+/// 100 %.**
+#[test]
+fn f016_the_band_ends_where_the_catch_angle_says_in_hand_projected_pixels() {
+    let mut app = app();
+    attach_screen(&mut app);
+    let (w, h) = screen(&mut app);
+    let steps = probe_steps(&app);
+    let fov_deg = app.world().resource::<PlayerSettings>().fov_deg;
+    // `PerspectiveProjection.fov` is the VERTICAL field of view (Q-021), so the horizontal
+    // half-angle comes out of it through the aspect ratio and nothing else.
+    let tan_half_h = (fov_deg * 0.5).to_radians().tan() * (w / h);
+
+    for catch_pct in [0.0_f32, 5.0, 40.0, 100.0] {
+        set_assist(&mut app, catch_pct, 100.0);
+        stand_and_look(&mut app, Vec3::new(51.0, 0.0, 13.0), 0.0, 0.0);
+        run_hud(&mut app);
+
+        let ticks = band_ticks(&mut app);
+        let left = ticks.get(&(Side::Left.index(), steps - 1)).copied();
+        let right = ticks.get(&(Side::Right.index(), steps - 1)).copied();
+        if catch_pct == 0.0 {
+            assert!(
+                left.is_none() && right.is_none(),
+                "at 0 % no search runs and there is nothing to draw the extent of, but the end \
+                 marks are at {left:?} / {right:?}"
+            );
+            println!("f016 band width at   0 %: no band");
+            continue;
+        }
+
+        let (left, right) = (
+            left.expect("the left end mark has to be drawn while a search runs"),
+            right.expect("the right end mark has to be drawn while a search runs"),
+        );
+        let centre = crosshair_px(&mut app);
+        // The pinhole, by hand: x_ndc = tan(theta) / (tan(fov/2) * aspect).
+        let want_dx = (w * 0.5) * catch_rad(&app).tan() / tan_half_h;
+        println!(
+            "f016 band width at {catch_pct:3.0} %: {:.1} px half-width ({:.1} px end to end), \
+             hand-projected {want_dx:.1} px",
+            (right.x - left.x) * 0.5,
+            right.x - left.x
+        );
+        for (side, at) in [("left", left), ("right", right)] {
+            let dx = (at.x - centre.x).abs();
+            assert!(
+                (dx - want_dx).abs() <= 1.0,
+                "at {catch_pct} % the {side} end mark stands {dx:.1} px from the crosshair, and \
+                 {:.2}° through a {fov_deg}° lens on a {w} x {h} screen is {want_dx:.1} px. The \
+                 band would be telling him a different number than the one he is setting",
+                catch_rad(&app).to_degrees()
+            );
+            assert!(
+                (at.y - centre.y).abs() <= 1.0,
+                "the {side} end mark is {:.1} px off the crosshair's own row. The search is a \
+                 LINE (FIND-133, 0.000006° of vertical deviation); a band that is not level is \
+                 drawing a shape the sweep does not have",
+                (at.y - centre.y).abs()
+            );
+        }
+    }
+}
+
+/// **No reach, no band** — and above 0 % reach there is always one, however the second knob
+/// stands.
+///
+/// `Q-042`, 2026-08-20: the gate used to be [`PlayerSettings::assist_is_on`] —
+/// `catch > 0 && strength > 0` — and **both ship at 0**, so the element existed for a moment it
+/// was never present in: the player opens `Settings`, turns *Aim assist reach* up, and sees
+/// nothing at all. The picture is the **reach's** picture, so the reach is what draws it.
+///
+/// ⚠️ **The probe is still `assist_is_on`'s and nothing here touches that.** Drawing and
+/// searching are two predicates now, deliberately, and the difference is said out loud in the
+/// band's colour —
+/// `f016_the_reach_alone_draws_the_band_and_the_colour_says_whether_it_searches`.
+/// `tests/vector_hooks.rs::f016_at_zero_percent_the_aim_is_bit_for_bit_the_one_the_game_had_before`
+/// is the invariant that would have caught it if it had.
+#[test]
+fn f016_there_is_no_band_when_there_is_no_reach() {
+    let mut app = app();
+    attach_screen(&mut app);
+    stand_and_look(&mut app, Vec3::new(51.0, 0.0, 13.0), 0.0, 0.0);
+
+    for (catch_pct, strength_pct) in [(0.0, 0.0), (0.0, 100.0)] {
+        set_assist(&mut app, catch_pct, strength_pct);
+        run_hud(&mut app);
+        let drawn = band_rects(&mut app);
+        assert!(
+            drawn.is_empty(),
+            "reach {catch_pct} % is free aim — there is no extent, and {} band nodes are on \
+             screen: {:?}",
+            drawn.len(),
+            drawn.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    for (catch_pct, strength_pct) in [(100.0, 0.0), (100.0, 100.0)] {
+        set_assist(&mut app, catch_pct, strength_pct);
+        run_hud(&mut app);
+        let drawn = band_rects(&mut app);
+        assert_eq!(
+            drawn.len(),
+            2 * probe_steps(&app) as usize + 2,
+            "reach {catch_pct} % / strength {strength_pct} %: every probe and both span rules \
+             have to be drawn — the reach row is the row that draws this picture, and it may \
+             not need a second row's permission"
+        );
+    }
+}
+
+/// ★ **`Q-042` — the reach draws the band on its own, and the colour says whether anything is
+/// actually searching.**
+///
+/// The user asked for the band for one stated reason: *„es soll in der ui angezeigt werden von
+/// wo bis wo gesearched wird **damit man das besser einstellen kann**!"* A band that appears
+/// only once a second, differently-named knob is also non-zero fails that sentence — and
+/// `assist_strength_pct` ships at 0, so it failed it on every fresh run.
+///
+/// ⚠️ **Drawing and searching are two predicates and this test is what keeps that honest.**
+/// The geometry is identical in both states — the same ticks on the same rays, tested to
+/// 0.691 px by `f016_the_band_stands_on_the_probe_rays_the_search_really_casts` — because the
+/// geometry answers *"how far does the reach go"*, which is true whether or not a probe is in
+/// flight. The one thing that differs is the colour, which is the only claim the two states
+/// make differently: **is a ray being cast right now.** That is why this is not FIND-098 /
+/// FIND-099 / FIND-127 / FIND-129 with a new shape: nothing is drawn in a place the thing is
+/// not, and the state that would be a lie if it were silent is not silent.
+///
+/// Both colours have to clear WCAG 1.4.11's 3:1 over the settings backdrop in its worst case
+/// (FIND-136 §2), because the band is a ruler in **both** states — and with `F-025` unbuilt the
+/// idle one is the only state a player can be in today.
+#[test]
+fn f016_the_reach_alone_draws_the_band_and_the_colour_says_whether_it_searches() {
+    let mut app = app();
+    attach_screen(&mut app);
+    stand_and_look(&mut app, Vec3::new(51.0, 0.0, 13.0), 0.0, 0.0);
+
+    set_assist(&mut app, 40.0, 100.0);
+    run_hud(&mut app);
+    let searching_ticks = band_ticks(&mut app);
+    let searching_rules = [band_rule(&mut app, Side::Left), band_rule(&mut app, Side::Right)];
+    let searching_colour = one_band_colour(&mut app);
+
+    set_assist(&mut app, 40.0, 0.0);
+    run_hud(&mut app);
+    let idle_ticks = band_ticks(&mut app);
+    let idle_rules = [band_rule(&mut app, Side::Left), band_rule(&mut app, Side::Right)];
+    let idle_colour = one_band_colour(&mut app);
+
+    assert!(
+        !idle_ticks.is_empty(),
+        "reach 40 % with the strength knob at 0 draws nothing — that is `Q-042`: the player \
+         turns the row he was told to turn and the feature he asked for stays absent"
+    );
+    assert_eq!(
+        idle_ticks, searching_ticks,
+        "the band's geometry is the REACH and nothing else — the same ticks on the same probe \
+         rays. A band that moved when the strength knob moved would be drawing a second number"
+    );
+    assert_eq!(idle_rules, searching_rules, "and the span rules with them");
+
+    let searching_colour = searching_colour.expect("the band is drawn at 40 % / 100 %");
+    let idle_colour = idle_colour.expect("the band is drawn at 40 % / 0 %");
+    assert_ne!(
+        idle_colour, searching_colour,
+        "no probe ray is cast at 0 % strength (`PlayerSettings::assist_is_on`), so a band drawn \
+         exactly like the live one would be claiming a search that is not running"
+    );
+    for (what, colour) in [("searching", searching_colour), ("idle", idle_colour)] {
+        for world in [0.0_f32, 1.0] {
+            let ratio = band_contrast_over_the_backdrop(colour, world);
+            assert!(
+                ratio >= 3.0,
+                "the {what} band is {ratio:.2}:1 over the settings backdrop on a world at \
+                 luminance {world} — under WCAG 1.4.11's 3:1 it is not a ruler he can read \
+                 (FIND-136 §2)"
+            );
+        }
+    }
+    println!(
+        "BAND Q-042: searching {:.2}:1 · idle {:.2}:1 over the backdrop on white; the two \
+         states differ by {:.2}:1",
+        band_contrast_over_the_backdrop(searching_colour, 1.0),
+        band_contrast_over_the_backdrop(idle_colour, 1.0),
+        state_contrast(searching_colour, idle_colour, 1.0),
+    );
+}
+
+/// The one colour every drawn band node carries, or `None` when nothing is drawn — and it
+/// falls over if the nodes disagree, because a band in two colours says two things.
+fn one_band_colour(app: &mut App) -> Option<Color> {
+    use defeated_by_titan::hud::catch_band::{CatchRule, CatchTick};
+    let mut out: Option<Color> = None;
+    let mut q = app
+        .world_mut()
+        .query_filtered::<(&Name, &Node, &BackgroundColor), Or<(With<CatchTick>, With<CatchRule>)>>(
+        );
+    for (name, node, colour) in q.iter(app.world()) {
+        if node.display == Display::None {
+            continue;
+        }
+        match out {
+            None => out = Some(colour.0),
+            Some(seen) => assert_eq!(
+                seen, colour.0,
+                "{name} is a different colour from the rest of the band"
+            ),
+        }
+    }
+    out
+}
+
+/// Relative luminance of a colour in linear light — the arithmetic FIND-093 and FIND-136 use.
+fn linear_luminance(c: Color) -> f32 {
+    let l = c.to_linear();
+    0.2126 * l.red + 0.7152 * l.green + 0.0722 * l.blue
+}
+
+/// What one band colour reads at over `menu::plate::BACKDROP` over a world frame of luminance
+/// `world` — 0.0 is black, 1.0 is the worst case the game can put behind the menu.
+fn band_contrast_over_the_backdrop(colour: Color, world: f32) -> f32 {
+    use defeated_by_titan::menu::plate::BACKDROP;
+    let a = BACKDROP.to_linear().alpha;
+    let back = a * linear_luminance(BACKDROP) + (1.0 - a) * world;
+    let a = colour.to_linear().alpha;
+    let front = a * linear_luminance(colour) + (1.0 - a) * back;
+    (front.max(back) + 0.05) / (front.min(back) + 0.05)
+}
+
+/// And what the two states read at against **each other**, over the same background.
+fn state_contrast(one: Color, other: Color, world: f32) -> f32 {
+    use defeated_by_titan::menu::plate::BACKDROP;
+    let a = BACKDROP.to_linear().alpha;
+    let back = a * linear_luminance(BACKDROP) + (1.0 - a) * world;
+    let over = |c: Color| {
+        let a = Color::to_linear(&c).alpha;
+        a * linear_luminance(c) + (1.0 - a) * back
+    };
+    let (x, y) = (over(one), over(other));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+/// **It answers the knob in the tick the knob moves** — no restart, no respawn.
+///
+/// That is the requirement, not a nicety: the element exists so the number can be set by eye,
+/// and a band that needed a reload would be read against the *previous* setting. The knob is
+/// moved here exactly the way `menu`'s slider and `debug`'s `settings assist_catch <n>` move
+/// it — by writing `PlayerSettings` — and the band is measured after one HUD pass.
+#[test]
+fn f016_the_band_answers_the_knob_in_the_tick_it_moves() {
+    let mut app = app();
+    attach_screen(&mut app);
+    stand_and_look(&mut app, Vec3::new(51.0, 0.0, 13.0), 0.0, 0.0);
+    let steps = probe_steps(&app);
+
+    let half_width = |app: &mut App, catch_pct: f32| -> f32 {
+        set_assist(app, catch_pct, 100.0);
+        run_hud(app);
+        let ticks = band_ticks(app);
+        let centre = crosshair_px(app);
+        ticks
+            .get(&(Side::Right.index(), steps - 1))
+            .unwrap_or_else(|| panic!("no end mark at {catch_pct} %"))
+            .x
+            - centre.x
+    };
+
+    let narrow = half_width(&mut app, 20.0);
+    let wide = half_width(&mut app, 100.0);
+    let back = half_width(&mut app, 20.0);
+
+    // The angles are 4° and 20°, and a pinhole maps them by their tangents — so the ratio is
+    // fixed arithmetic and not a "it got bigger" that a stuck band could also pass.
+    let want = 20.0_f32.to_radians().tan() / 4.0_f32.to_radians().tan();
+    let got = wide / narrow;
+    println!(
+        "f016 knob: 20 % -> {narrow:.1} px, 100 % -> {wide:.1} px, back to 20 % -> {back:.1} px \
+         (ratio {got:.3}, tan 20°/tan 4° = {want:.3})"
+    );
+    assert!(
+        (got - want).abs() <= 0.05,
+        "moving the knob from 20 % to 100 % took the band from {narrow:.1} px to {wide:.1} px, \
+         a ratio of {got:.3} where the two angles say {want:.3}"
+    );
+    assert!(
+        (back - narrow).abs() <= 0.5,
+        "coming back to 20 % left the band at {back:.1} px instead of the {narrow:.1} px it \
+         stood at before — the band is remembering a setting instead of reading one"
+    );
+}
+
+/// **The band is level with the crosshair, so it runs through the one region `F-170`
+/// protects.** This is the second documented exemption from the keep-out box, and what it
+/// gives up instead is [`SIGHT_CORE_PX`] — the pixels the player is cutting.
+///
+/// The exemption is FIND-098's own argument and no new one: the band's position IS an angle,
+/// its whole range lives inside the box (the box's edge is 128 px from centre and the band
+/// reaches 227 px at 100 % but only 88 px at 40 %), so pushing it out would draw a band wider
+/// than the search for every setting below about 55 %. That is FIND-129's lie with a different
+/// number on it.
+#[test]
+fn f016_the_band_keeps_the_sight_core_clear() {
+    use defeated_by_titan::hud::arm_aim::SIGHT_CORE_PX;
+    let mut app = app();
+    attach_screen(&mut app);
+    let steps = probe_steps(&app);
+    let mut seen = 0;
+
+    for catch_pct in [5.0_f32, 20.0, 40.0, 60.0, 80.0, 100.0] {
+        for (yaw_deg, pitch_deg) in [(0.0, 0.0), (123.0, -70.0)] {
+            set_assist(&mut app, catch_pct, 100.0);
+            stand_and_look(&mut app, Vec3::new(51.0, 0.0, 13.0), yaw_deg, pitch_deg);
+            run_hud(&mut app);
+            let centre = crosshair_px(&mut app);
+            for (name, (min_x, min_y, max_x, max_y)) in band_rects(&mut app) {
+                seen += 1;
+                let covers = min_x < centre.x + SIGHT_CORE_PX
+                    && max_x > centre.x - SIGHT_CORE_PX
+                    && min_y < centre.y + SIGHT_CORE_PX
+                    && max_y > centre.y - SIGHT_CORE_PX;
+                assert!(
+                    !covers,
+                    "at catch {catch_pct} % `{name}` stands at ({min_x:.1}, {min_y:.1})..\
+                     ({max_x:.1}, {max_y:.1}) and covers the {SIGHT_CORE_PX} px sight core at \
+                     {centre:?} — the pixels the player is aiming with"
+                );
+            }
+            // And the span rule really spans: from the edge of the core out to the end mark,
+            // on both sides. A band whose rule stopped short would read as a narrower search
+            // than the ticks say, and the two would be telling him different numbers.
+            let ticks = band_ticks(&mut app);
+            for side in Side::ALL {
+                let (min_x, _, max_x, _) = band_rule(&mut app, side)
+                    .unwrap_or_else(|| panic!("at catch {catch_pct} % the {side:?} span rule is not drawn"));
+                let end = ticks
+                    .get(&(side.index(), steps - 1))
+                    .unwrap_or_else(|| panic!("at catch {catch_pct} % the {side:?} end mark is not drawn"))
+                    .x;
+                let (outer, inner) = match side {
+                    Side::Left => (min_x, max_x),
+                    Side::Right => (max_x, min_x),
+                };
+                assert!(
+                    (outer - end).abs() <= 1.5,
+                    "at catch {catch_pct} % the {side:?} span rule stops at {outer:.1} px and                      its end mark stands at {end:.1} px — the rule and the ticks are drawing                      two different searches"
+                );
+                assert!(
+                    (inner - centre.x).abs() <= SIGHT_CORE_PX + 1.5,
+                    "at catch {catch_pct} % the {side:?} span rule starts {:.1} px from the                      crosshair, and all it is allowed to give up is the {SIGHT_CORE_PX} px                      sight core",
+                    (inner - centre.x).abs()
+                );
+            }
+            // And the mark that carries the number he is tuning is never the one dropped.
+            for side in Side::ALL {
+                assert!(
+                    ticks.contains_key(&(side.index(), steps - 1)),
+                    "at catch {catch_pct} % the {side:?} END MARK is not drawn. The narrowest \
+                     the slider can dial is 5 % = 1°, which projects 10.9 px out on a 1280 px \
+                     screen — past the {SIGHT_CORE_PX} px core. A dropped end mark means the \
+                     band has stopped showing the extent at all"
+                );
+            }
+        }
+    }
+    assert!(seen >= 100, "only {seen} band nodes were looked at over the whole slider");
 }

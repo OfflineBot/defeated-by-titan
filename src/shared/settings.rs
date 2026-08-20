@@ -240,6 +240,26 @@ impl PlayerSettings {
         self.assist_catch_pct > 0.0 && self.assist_strength_pct > 0.0
     }
 
+    /// **Is there a reach to draw?** — [`assist_is_on`](Self::assist_is_on)'s first half, on
+    /// its own, and it exists because those two halves answer two different questions.
+    ///
+    /// ⚠️ **This is the DRAWING predicate. [`assist_is_on`](Self::assist_is_on) is the
+    /// SEARCHING one, and only that one may gate a probe ray** — it is `F-002`'s guarantee and
+    /// `tests/vector_hooks.rs::f016_at_zero_percent_the_aim_is_bit_for_bit_the_one_the_game_had_before`
+    /// is what holds it. `vector::aim` must never call this function.
+    ///
+    /// They deliberately differ, and `Q-042` is why: both knobs ship at 0, so a HUD element
+    /// gated on `assist_is_on` was invisible in the exact moment it exists for — the player
+    /// who opens the settings screen and turns *Aim assist reach* up sees nothing happen, at
+    /// any value, because a second and differently-named row is the master switch. The reach
+    /// **is** a number with a picture (`hud::catch_band`: from where to where the search would
+    /// look), the strength is whether a find is taken, and the picture belongs to the row that
+    /// owns it. What the picture may not do is *claim a search is running*, so the band says
+    /// that in its colour instead — [`hud::catch_band::IDLE`](crate::hud::catch_band::IDLE).
+    pub fn assist_has_reach(&self) -> bool {
+        self.assist_catch_pct > 0.0
+    }
+
     /// Which way the mouse pitches. `+1` normal, `-1` inverted — a factor and not an `if`, so
     /// the input path stays one line.
     pub fn pitch_sign(&self) -> f32 {

@@ -1,0 +1,90 @@
+# f016-band — the search band: from where to where the assist is looking.
+#
+# The user, 2026-08-19: *„es soll in der ui angezeigt werden von wo bis wo gesearched wird
+# damit man das besser einstellen kann!"*
+#
+# ## What this file is for
+#
+# **It is a camera stand, not a proof.** A script cannot see the HUD, so nothing below asserts
+# anything about the band — what it does is hold ONE stand and ONE look while the catch knob is
+# moved through three settings, so that three screenshots of the same frame differ **only** in
+# the knob. That is what makes the pictures readable side by side, and it is the whole point of
+# the element: the number he is setting has to be a distance he can see.
+#
+# The band's honesty is `tests/hud.rs`, five tests, and neither half is evidence on its own:
+#   f016_the_band_stands_on_the_probe_rays_the_search_really_casts     (432 rays, worst 0.69 px)
+#   f016_the_band_ends_where_the_catch_angle_says_in_hand_projected_pixels
+#   f016_there_is_no_band_when_there_is_no_search
+#   f016_the_band_answers_the_knob_in_the_tick_it_moves
+#   f016_the_band_keeps_the_sight_core_clear
+#
+# ## The stand
+#
+# The market square at (51, 0, 13) facing the church wall at z = −1, level — `f024-sideways.txt`
+# leg 2's own stand, chosen because the sweep finds real anchors along the crosshair's row here
+# (`body 950 at 53.37 1.65 −1.00` free, `51.61 1.65 −1.00` snapped). So the band is drawn over
+# geometry it is actually searching and not over sky.
+#
+# ⚠️ **`assist_strength` stays at 100 in every leg.** With either knob at 0 no probe ray is cast
+# at all (`PlayerSettings::assist_is_on`), so leg 1 is the "no search, no band" case by moving
+# `assist_catch` alone — which is exactly the knob the picture is about.
+#
+# ## Running it — three pictures out of one stand
+#
+#   cargo build
+#   # the verdict, once, headless:
+#   ./target/debug/defeated_by_titan --headless --script scripts/f016-band.txt --ticks 420 \
+#       2>&1 | grep -E 'MARK|assert|script run finished' | tail -20
+#   # the exit code needs its OWN run — a pipeline's $? is the last command's:
+#   ./target/debug/defeated_by_titan --headless --script scripts/f016-band.txt \
+#       --ticks 420 >/dev/null 2>&1; echo $?
+#   # and the three frames, one run each (`--ticks` IS the shot tick):
+#   ./target/debug/defeated_by_titan --offscreen --script scripts/f016-band.txt \
+#       --ticks 150 --screenshot docs/images/f016-band-0.png
+#   ./target/debug/defeated_by_titan --offscreen --script scripts/f016-band.txt \
+#       --ticks 240 --screenshot docs/images/f016-band-40.png
+#   ./target/debug/defeated_by_titan --offscreen --script scripts/f016-band.txt \
+#       --ticks 330 --screenshot docs/images/f016-band-100.png
+#
+# ⚠️ `--offscreen` segfaults at teardown roughly one run in six, **after** the PNG is on disk.
+# Check the file, not the exit code, on those three.
+
+wait 1.5                       # world, camera, meshes and the render pipelines come up
+
+# ── leg 1 · catch 0 % — there is no search, and the band says so by not being there ───────
+#
+# Shot at tick 150. Strength is already at its maximum: the only thing switching the search off
+# here is the catch knob, which is the knob the three pictures are a scale for.
+settings assist_strength 100
+settings assist_catch 0
+warp 51 0 13
+look 0 0
+wait 1.5
+assert height > -0.5           # standing on the square, not sunk and not floating
+assert height < 0.5
+assert speed < 0.5
+mark f016-band-catch-0
+
+# ── leg 2 · catch 40 % — 8 deg a side, 88 px on a 1280 px screen ──────────────────────────
+#
+# Shot at tick 240. Nothing moves but the knob: same stand, same look, same frame.
+settings assist_catch 40
+wait 1.5
+assert height > -0.5
+assert height < 0.5
+assert speed < 0.5
+mark f016-band-catch-40
+
+# ── leg 3 · catch 100 % — 20 deg a side, 227 px, and the box's edge is at 128 ──────────────
+#
+# Shot at tick 330. This is the leg that shows why the band is exempt from `F-170`'s keep-out
+# box the way the arm markers are: at 40 % the whole band lives INSIDE the box, so a band held
+# out of it would draw a wider search than the one running.
+settings assist_catch 100
+wait 1.5
+assert height > -0.5
+assert height < 0.5
+assert speed < 0.5
+mark f016-band-catch-100
+
+end
