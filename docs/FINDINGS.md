@@ -1663,7 +1663,7 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 
 ## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
 
-**NEXT FREE ID: FIND-147.** Claim it by bumping this line in the same `cat >>` that
+**NEXT FREE ID: FIND-149.** Claim it by bumping this line in the same `cat >>` that
 appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
 file separately and both read the same maximum. One line beats a 108 kB grep.
  — and append with `>>`, never with an edit tool
@@ -8779,3 +8779,270 @@ the run reports **11 of 24 failed** — `assert Kills == 1 — measured nothing 
 — is this run missing --mission?)` and five `Phase == 2 — measured 0.000`. With it: **24 asserts
 held, exit 0.** Eleven red that mean nothing is exactly the noise that trains you to skim the next
 real failure; the invocation is in the file's own header, line 3.
+
+---
+
+## FIND-147 · The hitbox does not fit because the BODY grows faster than the nape — and the nape's rear-only rule was worth 8 cm
+
+*2026-08-20. `F-030` · `F-032` · `F-064` · `assets/data/titan.ron` · `assets/data/gear.ron` ·
+`src/blades/cut.rs` · `scripts/f030-hitbox.txt` (new). Closes `FIND-124`. Re-aims `Q-031`.
+Answers the user's „**hitboxen passen noch nich!**" with a measurement instead of an opinion.*
+
+### The measurement that starts it
+
+`scripts/f030-hitbox.txt`: one nape pass per **spawnable** kind, every one flown with
+**0.60 m of air between the two capsules** — a cushion a player can hold at 21 m/s, where a tick
+is 0.35 m — and every one has to kill. Fall of 11.2 m at −20 m/s², titan spawned **0.21 s** before
+the cut so the pass measures geometry and not his neck rotation.
+
+| | before | after |
+|---|---|---|
+| kinds killed at 0.60 m of cushion | **2 of 7** (scuttler, weaver) | **7 of 7** |
+| husk, widest cushion that still lands | 0.50–0.60 m | 0.90–1.05 m |
+| **lurker**, widest cushion that still lands | **nothing lands at ANY offset** (0.00 → 0.70 m: 8 passes, 8 `Torso`+`ArmLeft`, zero `Cortex`) | 0.60–0.75 m |
+| warden | only through the contaminated same-swing path (`FIND-123`) | killed by a **clean two-pass** sequence |
+| bellower (`FIND-124`) | −0.555 m of blade — unkillable by arithmetic | **+0.385 m** |
+| script verdict | **8 of 8 asserts failed** | **8 asserts held, exit 0** |
+
+**Control (rule 5):** every `slash` line deleted → **0 cut lines of any zone**, and the two kinds
+that die with the blade (scuttler, weaver) survive without it — the live count climbs 3→5. The
+instrument measures the blade and not a titan walking into a falling player.
+
+### 🔴 What actually decides a miss, and it is NOT `cortex_radius_m`
+
+    band = reach_m + thickness_m + cortex_radius_m − body_radius − player_radius
+    body_radius = scale.ron: width_fraction 0.25 × height_m / 2
+
+`body_radius` grows with the size class **about three times faster than any nape may**, because
+the nape is capped by the user's own head rule (`2r ≤ max_head_fraction × height`, `t005`). A husk
+pays 1.25 m of clearance for 0.55 m of nape; a lurker pays 1.75 m for 0.50 m. **The kind with the
+smallest nape in the game (scuttler, 0.20 m) has the widest tolerance, and the big kinds have
+none.** That is why "make the nape bigger" was never the answer and the sweep says so directly:
+the lurker's radius was raised by 0.27 m and he was *still* unkillable until the blade grew.
+
+### 🔴 And the design's central rule was worth 0.211 m of blade
+
+`q030_the_nape_is_cut_from_behind_and_not_from_the_front` was held up by **geometry alone**: the
+rear pass had the blade 0.131 m *inside* the cortex, the front pass was **0.080 m short**. The
+cortex is a **sphere**, and `dist(blade, centre) − r − thickness` is the same subtraction in both
+directions — so every centimetre added to `reach_m` or to any `cortex_radius_m` is taken out of
+that 0.080 m one for one. **The rule had to stop being an accident before either number could
+move**, and the arithmetic is not hypothetical: at `reach_m` 2.00 the front pass lands by 0.32 m.
+
+**So `titan.ron: cortex_half_angle_deg` landed first** — half the arc the cortex may be cut in,
+off the titan's own **backward** vector, on the ground plane. The exact mirror of
+`strike_half_angle_deg`, one dot product in `blades::cut::nape_is_exposed`, no new collider, no new
+component, no domain edge (`TitanKindName` is in `shared`, `Transform` is Bevy's). It is what
+`docs/PLAN-GAME.md` §3.4 point 3 asked for on day one and nobody had built.
+
+**Values are above 90°, and that is the whole design of them.** 90 is the literal rear hemisphere
+and it is unplayable: a titan turns toward you *while the swing is in the air*, so a player who
+presses at 85° is at 95° when the blade lands. Every value is `90 + turn_deg_per_s × 0.15 s + 15°`
+rounded to 5 — **the gate hands back exactly what the titan's own turn takes**. warden/lurker/
+bellower 110 · husk/chorus 115 · errant 120 · weaver 125 · scuttler 130.
+`tests/combat.rs::every_kind_carries_a_cortex_half_angle_in_range` re-derives that formula out of
+both files, so a comment cannot drift away from the numbers.
+
+**Red-checked by deleting it**: with all eight set to 180.0, `q030_…_not_from_the_front` reports
+*"husk: a pass from the FRONT cut the cortex, with the blade −0.140 m from it"*. Restored, the same
+pass reports **"from the front no cut (blade −0.400 m short)"** — the blade is now 0.40 m *inside*
+the nape and refused **by rule**, where before it was 0.08 m outside and refused by luck.
+
+### What changed, and which measurement drives each line
+
+| change | driver |
+|---|---|
+| `titan.ron: cortex_half_angle_deg` (NEW, 8 kinds) | the 0.211 m budget above; `PLAN-GAME` §3.4.3; the reference's own angular gate |
+| `gear.ron: reach_m` 1.60 → **2.00** | the band formula — the only term that reaches every kind. The reference's own lever, and the only one it pulled twice (*"increased the size of the slash hitbox overall"*) |
+| `gear.ron: thickness_m` 0.12 → **0.20** | the axis nobody had looked at: **perpendicular** to the blade, which in a real horizontal flight is **vertical**. Half-window is `cortex_radius_m + thickness_m`, so a player had to put his **eye** within ±0.32 m of a scuttler's nape at 21 m/s. Now ±0.40 m. It also buys the last 0.15 m the `large` class needed |
+| `cortex_radius_m` warden 0.60→0.77, lurker 0.50→0.77, bellower 0.70→1.16 | the three kinds the sweep could not kill. Each lands on `max_head_fraction/2 × height` minus ~1.5 cm — the same rule the husk's 0.55 already satisfies. Husk, weaver, scuttler and the two other mediums **did not move**: the sweep says they do not need it |
+
+**`thickness_m` is 0.20 and not 0.30, and the reason is a defect the bigger value caused.**
+`reach_m + 2 × thickness_m` is the blade's total span. At 0.30 that is **2.60 m against a husk's
+own width of 2.50 m** — the blade spans the whole titan, so *every* body pass also clips an arm
+box (`titan::rig`: arms occupy `w/2 .. 3w/4`). Measured consequence: a single chest pass carried a
+`HitStop` for **20 ticks** where `husk.stagger_s` asks for 13, and
+`(swing_s + cooldown_s) / 2` = **19.5 ticks** is the permanent-stagger-lock bound that
+`f032_no_kind_can_be_tuned_into_a_permanent_stagger_lock` guards — **the fat blade had put us on
+the wrong side of it, and that test could not see it because it reads the file and not the
+behaviour.** At 0.20 the span is 2.40 m, a torso-only line exists again, and all three
+`F-032`/`F-033` tests are green without their claims being weakened.
+
+### Four tests moved, none of them weakened, and each one is worth reading
+
+1. **`q031_the_nape_survives_a_titan_who_tracks_you` was rebuilt around the gate.** It used to
+   assert a **snapshot** — *the warden misses at 0.20 m of air and lands at 0.15* — worth 0.020 m
+   of blade (`FIND-089`) and measured through the path `FIND-123` showed to be contaminated. It now
+   yaws the body on the spot and finds the **bearing** at which the nape shuts:
+   **husk 60° of turn, warden 45°**, and in both cases it asserts the blade is *inside* the cortex
+   when refused, or the sweep would be measuring reach instead of the gate. That is
+   `Q-031`'s own title — *is the approach angle a thing this game has* — answered in degrees.
+2. **⚠️ And it records a real loss:** the turn no longer eats measurable margin. A tracking
+   warden's widest landing pass is **0.95 m of air, and a still one's is also 0.95 m** (5 cm sweep,
+   0.00–1.60 m). The approach angle is now carried **entirely** by the gate — a cliff at 110°, not
+   a gradient. → `docs/QUESTIONS.md` Q-047.
+3. **`q030_a_titan_wide_enough_really_does_put_the_nape_out_of_reach`**: the width cliff moved from
+   ~0.33 to between 0.41 and 0.49, so the sweep was re-aimed at where it now is. The claim — *there
+   is a width at which the nape is unreachable and `scale.ron`'s 0.25 is well below it* — is
+   unchanged, and the `far_too_wide` assert still stops it becoming a test that proves nothing.
+4. **`f064_the_bellower_stays_blocked_until_the_ear_exists` had its assert INVERTED on purpose.**
+   It used to say *"he is unkillable, which is the strongest argument for keeping him out"*; it now
+   says *"he is killable, and the block is a decision about the **ear** and nothing else"*, and it
+   goes red if anyone shortens the blade back under a `huge` body. **`FIND-124` is closed.**
+5. **`tests/combat.rs: REACH_X` 0.8 → 1.0**, and this one is a trap worth naming. It is the
+   fixture's hand offset, and it was a bare constant while `reach_m` was a file value. When the
+   blade grew, every "chest pass" in `tests/combat.rs` silently started clipping the **right arm**
+   — an extra zone, an extra 0.06 of sharpness, a second stagger — and three tests went red at once
+   with three different-looking messages. It is now `reach_m / 2` with an assert that says so.
+
+### The uncontaminated warden, which `FIND-123` asked for and this round could finally build
+
+`scripts/f030-hitbox.txt`'s warden act is **two passes**: the first is flown across his **front**
+at `z −1.50`, which keeps the blade 2.27 m from the cortex sphere so it provably cannot be the
+kill — `assert titans == 1` is what says so out loud — and the second is the nape pass at the same
+0.60 m cushion as every other kind. Both asserts hold and the log reads
+`cut titan 7 Torso` → `assert titans == 1` → `cut titan 7 Torso` / `cut titan 7 Cortex`.
+The opening pass comes from **+X** on purpose: he tracks at 40°/s and there is 1.3 s between the
+two cuts, so opening from the same side would carry the nape out of the second pass's line and the
+act would measure his neck rotation instead of his guard.
+⚠️ **`tests/titan.rs::fly_past_a_titan` is still contaminated** — it opens the guard with its own
+torso graze. The script is the clean one; the fixture is not, and `F-060` is still not landed.
+
+### What the reference says, in one paragraph
+
+Its nape assist is on the **HOOK, not the blade** (*"Target Acquisition — if using aim assist, the
+nape becomes a hook point"*), so the blade has to land. It made the nape hittable by **growing the
+player's slash hitbox** and **moving the competing limb colliders out of the way** — three of the
+five patch entries that touch nape-adjacent geometry name an **arm** hitbox as the cause of the
+miss — and it never grew a nape to fix one. Then it stopped: **no pure-titan hitbox resize since
+November 2023**, while nape *assist* was tuned five times across three years. Full write-up, every
+row with its confidence and its `unknown`s, in `docs/gameplay/references.md`.
+
+### What went unseen
+
+The user's sentence is three words and this round measured **one** of the four things that could
+produce it. The other three are untouched and all three are real: `FIND-127` (the blade is cast at
+90° to the view, so on the eight of twenty-one ticks that can land it is **44° outside the
+frustum** — he cannot see the thing that hits, and the drawn pair is now 0.93 m of steel against a
+2.00 m cast, a gap that grew by 0.40 m today); `blades.min_speed_m_s` 8.0 (a standing swing at a
+walking titan computes 3.0 m/s, the cast **lands**, and `cut` writes no message at all — silently,
+with the blade inside the nape); and the **titan's own** hitbox, `combat::strike::reaches`, which
+is a flat cone from the body origin with no arm geometry in it, so a blow lands with the arm
+nowhere near you. Any of those reads as "die Hitboxen passen nicht" and only he can say which one
+he felt.
+
+Related: FIND-124 (closed) · FIND-123 · FIND-122 · FIND-127 · FIND-089 · FIND-012 ·
+`docs/QUESTIONS.md` Q-019 / Q-028 / Q-030 / Q-031 / Q-047 · `docs/gameplay/references.md` ·
+`docs/PLAN-GAME.md` §3.4.3 · `scripts/f030-hitbox.txt`
+
+---
+
+## FIND-148 · The `F-030`/`F-034` image pair repaired: the freeze is 155..161 now, and the two frames are ONE run by measurement
+
+*2026-08-20. `F-030` · `F-034` · `scripts/f030-cortex.txt` · `scripts/f034-hitstop.txt` ·
+`scripts/q030-reach.txt` · `docs/images/f030-cortex.png` · `docs/images/f034-hitstop.png`.
+Follows `FIND-147` (which moved `reach_m`) and repeats the repair of `FIND-113` for the same
+reason: **a game value moved and the evidence quoting it did not.** Nothing in the game was
+changed here.*
+
+### Where the window actually sits
+
+`gear.ron: reach_m` 1.60 → 2.00 gave the blade 0.40 m, a tick of this fall is 0.34 m, and the
+crossing came back three ticks: **the cut is `tick 154: cut titan 1 Cortex at 20.67 m/s`**, not
+157 at 21.00. Probed per tick on the shipped script (two interleaved probe runs, `wait 0.001` is
+two ticks so a `wait 0.0167` shifts the parity):
+
+| tick | 153 | **154** | 155 | 156 | 157 | 158 | 159 | 160 | 161 | 162 | 163 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| y | 8.157 | **7.815** | 7.815 | 7.815 | 7.815 | 7.815 | 7.815 | 7.815 | 7.815 | 7.468 | 7.115 |
+| spd | 20.334 | **20.667** | 20.667 | 20.667 | 20.667 | 20.667 | 20.667 | 20.667 | 20.667 | 21.001 | 21.334 |
+
+**Seven frozen ticks, 155..161**, first free tick 162 — `round(feel.hit_stop_cortex_s 0.12 × 60)`
+is still 7 and did not move. The window did: 155..161, not the documented 158..164.
+
+**Control (rule 5), and it is the one the chain test of 2026-08-19 taught us to run:** delete the
+single `slash` line and re-probe. No cut line is logged at all and **no y value is ever repeated**
+— 7.815 · 7.468 · 7.115 · 6.756 · 6.392 · 6.023 · 5.648 · 5.267 on ticks 154..161 — so on 161 the
+unfrozen player stands **2.548 m lower** than the frozen one. The repeated number is the hit stop
+and not the instrument.
+
+### 🔴 The `Torso` graze is gone, and that is the reach too
+
+At 1.60 m of blade the shoulder was met on 154 and the nape on 157 — two cut lines. At 2.00 m both
+lie inside the same swept cast on 154 and
+`tests/combat.rs::f030_the_cortex_wins_over_the_body_it_hides_in` reports the nape: **the run logs
+exactly one cut line now.** Swept, one run per stand-off, only `warp x` changed:
+
+| x | 14.90 | 15.00 | 15.10 | 15.20 | 15.30 | 15.40 .. 15.90 |
+|---|---|---|---|---|---|---|
+| | red | red | green | green | green | green |
+| logs | Torso 154 + ArmLeft 159 | Torso 154 + ArmLeft 159 | Torso 154 + Cortex 158 | Torso 154 + Cortex 157 | Torso 154 + Cortex 157 | **Cortex 154 alone** |
+
+**The pass is 15.10 .. 15.90 = 0.80 m wide**, against 0.20 m at the old reach, and 15.90 is the
+collision limit (1.25 + 0.35 = 1.60 m off the axis). `FIND-113` measured the old window as
+"0.20 m wide, not one centimetre"; it is four times that now.
+
+### The pair is one run — proven, not asserted
+
+The adversary's catch was that the two shipped PNGs came from **two different builds** (`gas
+15000/15000` in one, `300/300` in the other, and 0.3 m of player movement across the window that
+exists to prove there is none). Both were re-shot from **one pinned binary**, one after the other,
+1280x720:
+
+| | `docs/images/f030-cortex.png` | `docs/images/f034-hitstop.png` |
+|---|---|---|
+| tick | **155** — first frozen tick | **161** — last frozen tick |
+| sha256 | `a6bc95ce…` | `5a0e092a…` |
+| `pos` | 15.8 7.8 0.8 | 15.8 7.8 0.8 — identical to the digit |
+| `spd` | 0.0 | 0.0 |
+| `gas` | 15000/15000 | 15000/15000 — same tank, same build |
+| husk | `husk#1 Death 1/60` | `husk#1 Death 7/60` — the clock ran |
+
+And the "same simulation" claim stopped being a claim: **`scripts/f034-hitstop.txt` at
+`--ticks 155` writes a PNG byte-identical to `scripts/f030-cortex.txt` at `--ticks 155`**
+(`a6bc95ce…` both), across five separate processes. That is a stronger check than the gas line and
+it costs one extra run. **Whoever ships a two-frame pair should run it.**
+
+Both scripts' `wait 0.12` after the trigger became `wait 0.08`, so `MARK` lands on the cut tick
+again (`MARK t=154 cortex-cut`) instead of three ticks after it. It changes no simulation: the
+five PNGs above are bit-identical before and after the edit. Verdicts: **2 asserts held, exit 0**
+for `f030-cortex.txt`, `f034-hitstop.txt` and `q030-reach.txt`, each exit code from its own run.
+
+### 🔴 What the re-shoot found that nobody was looking for: **the dissolve pays back its whole backlog in one frame**
+
+Five frames out of the one run, measuring the husk's silhouette as its share of the box
+x 1000..1280, y 0..540:
+
+| tick | 155 | 158 | 159 | 160 | **161** |
+|---|---|---|---|---|---|
+| husk | 83.6 % | 82.6 % | 82.2 % | 81.8 % | **35.4 %** |
+
+He stands still for six frozen ticks and then, on the **last** frozen tick, sinks out of the top of
+the frame in one step. `titan::brain::dissolve` skips every tick it is frozen (`stop.is_some_and(
+HitStop::is_frozen)`) but reads `StateClock::ticks_in_state`, **which does not stop** — so the
+first tick it runs writes `scale = 1 − 7/60 = 0.883` in one go instead of 1/60 per tick, and with
+the nape 8.90 m above his feet that is ~1.04 m of pop in a single frame. It also means the titan
+comes out of the freeze **one tick before the player** (161 against 162).
+**Not chased and not fixed here — `src/titan/brain.rs` is not this commission's territory.** It is
+cosmetic today, it will not be when a kill happens in front of the camera, and it is the sort of
+thing `F-042`'s finisher camera would put on a plate.
+
+### And one more stale picture, deliberately left alone
+
+`docs/images/f030-solid-husk.png` (the `Q-030` reach shot) is from **2026-08-10** and reads
+`gas 100/100`, no `spd` field and `titan#1 Death` without the `n/60` counter — three builds and two
+tank changes ago. Its geometry is still the geometry `scripts/q030-reach.txt` flies, but it is not
+evidence about today's build. The script header now says so; the file was not re-shot because it
+was not this commission's to own.
+
+### The rule this leaves behind
+
+**A picture is evidence of a build, not of a feature.** Every tick, speed and sha in a script
+header is a quotation of one binary, and the day a RON number moves, every one of them is a claim
+about a build that no longer exists. `FIND-113` repaired this pair once, `FIND-148` repaired it
+again seven days later, and both times the trigger was a value change two domains away.
+**So: when a `gear.ron` or `titan.ron` number lands, grep `scripts/` and `docs/features.ron` for
+the ticks it decides, in the same round.** `grep -rl 'tick 15[0-9]' scripts/` is two seconds.
+
+Related: FIND-147 (the reach change) · FIND-113 · FIND-112 · FIND-073 · FIND-032 ·
+`docs/QUESTIONS.md` Q-030 · `tests/combat.rs::f030_the_cortex_wins_over_the_body_it_hides_in`

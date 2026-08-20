@@ -36,12 +36,71 @@
         // main head on 2026-08-09.
         //
         // **`reach_m` decides whether a cut lands at all** and did not exist until
-        // today. 1.6 m against a 1.8 m player: the blade is an arm's length, not a
-        // lance — F-035 is the lance and it is not built.
-        reach_m: 1.6,
-        // The swept capsule's radius. Not zero: a zero-radius sweep is a ray, and a
-        // ray between two ticks at 75 m/s threads a 0.46 m cortex.
-        thickness_m: 0.12,
+        // 2026-08-09. It stood at 1.6 m — "an arm's length, not a lance" — until
+        // 2026-08-20, when a sweep measured what that costs.
+        //
+        // 🔴 **This is the single number that decides how many kinds are killable, and
+        // it is not `cortex_radius_m`.** The width of the band a nape can be cut from is
+        //
+        //     reach_m + thickness_m + cortex_radius_m − body_radius − player_radius
+        //
+        // and `body_radius` is `scale.ron: width_fraction 0.25 × height_m / 2`, which
+        // grows with the size class about three times faster than any nape does. At 1.6
+        // that band was **negative on two of the seven spawnable kinds**: measured
+        // 2026-08-20, `scripts/f030-hitbox.txt` at a 0.60 m cushion killed 2 of 7, and a
+        // lurker could not be killed at ANY lateral offset from 0.00 m to 0.70 m of air
+        // — 8 passes, 8 torso hits, not one cortex (`docs/FINDINGS.md` FIND-147).
+        //
+        // 2.0 is what the same sweep needs: the binding kind is the lurker at
+        // `1.75 + 0.35 + 0.60 + 0.13 − 0.12 − 0.77 = 1.94 m`, where the 0.13 is the
+        // distance his own turn carries the nape sideways during the swing.
+        //
+        // **This is the reference's own lever, and it is the only one it pulled twice.**
+        // AoT:R grew the PLAYER's slash hitbox and paid for it out of the target —
+        // *"Increased the size of the slash hitbox overall (I reduced the nape and eyes
+        // hitbox a bit for this)"*, then *"Increased player slash hitbox size by 5%"* —
+        // and it never grew a nape to fix a miss (`docs/gameplay/references.md`).
+        //
+        // ⚠️ **Two prices, and both are real.** First: 2.0 m of cast against a drawn pair
+        // that is **0.93 m** of steel (`FIND-127`), so the picture now under-promises by
+        // **1.07 m** instead of 0.67. The honest fix is a longer blade model and it is
+        // not this file's. Second: reach is direction-blind — it lengthens the segment
+        // towards the titan's face exactly as much as towards his nape, and at 1.6 the
+        // front pass of `q030_the_nape_is_cut_from_behind_and_not_from_the_front` was
+        // only 0.080 m from landing. **That is why `titan.ron: cortex_half_angle_deg`
+        // had to land in the same change**; without the gate this line alone would cut a
+        // husk's nape from straight in front of him by 0.32 m.
+        reach_m: 2.0,
+        // **The swept capsule's radius — the thickness of the slash, not of the steel.**
+        // Never zero: a zero-radius sweep is a ray, and a ray between two ticks at
+        // 75 m/s threads a 0.46 m cortex.
+        //
+        // 0.12 -> 0.30 on 2026-08-20, and this is the lever that answers the axis
+        // NOBODY had looked at. `reach_m` decides how far sideways the cut goes;
+        // this number decides how wrong the player may be **perpendicular** to the
+        // blade — and in a real horizontal flight past a nape that axis is
+        // **VERTICAL**. Measured (`docs/FINDINGS.md` FIND-147): the half-window is
+        // `cortex_radius_m + thickness_m`, so at 0.12 a player had to put his EYE
+        // within **±0.28 m** of a scuttler's nape and ±0.67 m of a husk's while
+        // travelling 21 m/s. That is a third of a tick of vertical error, and it is
+        // invisible: you fly the line, you press, and nothing happens.
+        //
+        // At 0.30 the same windows are ±0.50 m and ±0.85 m. It also buys the last
+        // 0.15 m the `large` class needed to reach `scripts/f030-hitbox.txt`'s 0.60 m
+        // cushion, which `reach_m` alone could not give without making the cast a
+        // spear (the drawn pair is 0.93 m of steel — `FIND-127`).
+        //
+        // **Why this and not more `reach_m`.** A slash is a swept arc and a real one
+        // is a swath, not a wire; 0.60 m of swath from a pair of blades is a picture
+        // a player can believe, where a 2.15 m blade on a 1.80 m body is not. It is
+        // also the reference's own vocabulary — AoT:R tunes a "player slash hitbox
+        // size" by percentage and never speaks of blade length
+        // (`docs/gameplay/references.md`).
+        //
+        // ⚠️ It is direction-blind like every other length here: it lengthens the
+        // reach towards the titan's face too. `titan.ron: cortex_half_angle_deg` is
+        // what keeps that honest.
+        thickness_m: 0.20,
         // The whole swing. `active_from_s`..`active_to_s` is the part that cuts —
         // without them the blade cuts during its own wind-up, which is the shortcut
         // that makes a slash feel like a hitbox.

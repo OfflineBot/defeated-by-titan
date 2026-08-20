@@ -1,7 +1,7 @@
 # F-030 — the cut: a blade swept along one tick of the player's fall crosses the amber cortex
 # on the husk's nape, and the husk dies.
 #
-# cargo run -- --offscreen --script scripts/f030-cortex.txt --ticks 158 \
+# cargo run -- --offscreen --script scripts/f030-cortex.txt --ticks 155 \
 #              --screenshot docs/images/f030-cortex.png
 #
 # and, as a SEPARATE run, the one that returns a usable exit code:
@@ -22,8 +22,9 @@
 # `right = look × Y`, so at yaw 0 the right blade lies on **+X** and at yaw −90 it lies on Z and
 # points at nothing. Until 2026-08-19 this file turned the camera with `look -90 -6` **five
 # ticks after the trigger, i.e. while the swing was still active** — and that is what made it
-# red (`docs/FINDINGS.md` FIND-112). The one-variable control: delete that line and the run goes
-# green, leave it and no `Cortex` line is ever logged at any stand-off the blade can reach.
+# red (`docs/FINDINGS.md` FIND-112, FIND-113). The one-variable control: delete that line and the
+# run goes green, leave it and no `Cortex` line is ever logged at any stand-off the blade can
+# reach.
 #
 # **The camera cannot be turned at all in this run, before OR after the cut**, and that is
 # geometry and not laziness:
@@ -37,26 +38,33 @@
 # have no titan in frame either. You cut what you fly past, not what you look at — the cutting
 # player is necessarily *beside* the nape, so at the moment of the cut the husk is at 90° to the
 # view whichever way the camera is pointed. What the pictures carry is the F3 overlay: the tick,
-# the player's position to the digit, `spd 0.0` and `husk#1 Death n/60`. (At yaw 0 the husk does
-# get into the right-hand edge of the frame, which the old pair at yaw −90 did not manage.) The
-# picture with the husk properly in it is
+# the player's position to the digit, `spd 0.0`, the tank and `husk#1 Death n/60`. (At yaw 0 the
+# husk does get into the right-hand edge of the frame, which the old pair at yaw −90 did not
+# manage.) The picture with the husk properly in it is
 # `docs/images/f030-solid-husk.png`, out of `scripts/q030-reach.txt`, which turns its camera
 # **after** `assert titans == 1` and steps 17 m back to do it.
 #
-# ## The three ticks this run is read off, and they are not the ones from 2026-08-10
+# ## The three ticks this run is read off — re-measured 2026-08-20, and they MOVED AGAIN
 #
 # | tick | what happens |
 # |---|---|
-# | 154 | the blade meets the shoulder — `cut titan 1 Torso at 20.67 m/s`, a graze, `has_grazed` |
-# | 157 | the blade meets the nape — `cut titan 1 Cortex at 21.00 m/s`, and the husk dies |
-# | 158..164 | the hit stop: 7 ticks, `gear.ron: feel.hit_stop_cortex_s` 0.12 s x 60 |
+# | 154 | the blade meets the nape — `cut titan 1 Cortex at 20.67 m/s`, and the husk dies |
+# | 155..161 | the hit stop: 7 ticks, `gear.ron: feel.hit_stop_cortex_s` 0.12 s x 60 |
+# | 162 | the freeze is over and the player falls again |
 #
-# The cortex crossing sat at tick **154** when this file was written and sits at **157** now —
-# one metre further down the same fall, because at 154 the husk is still coming out of his lean
-# and the nape has not swung back over his feet yet. `scripts/q030-reach.txt` drifted by the
-# same three ticks (its header still says 154) and stayed green through it, because 0.20 m of
-# air survives the drift where this file's 0.15 m does not. **`wait 0.12` after the trigger is
-# what puts `mark cortex-cut` on the cortex tick and not on the graze.**
+# **The crossing has now sat at 154, then 157, then 154 again, and each move had a cause.**
+# It was 154 when the file was written, drifted to 157 on 2026-08-19 (FIND-113), and came back
+# to 154 on 2026-08-20 when `gear.ron: reach_m` went 1.60 → 2.00 and `thickness_m` 0.12 → 0.20
+# (`docs/FINDINGS.md` FIND-147, the user's fix for „hitboxen passen nich"). 0.40 m more blade at
+# 20.67 m/s — a tick is 0.34 m — is very nearly exactly three ticks, and that is the whole move.
+# **Read the crossing tick out of the log; never assume it.**
+#
+# 🔴 **And the `Torso` graze is gone with it: this run now logs exactly ONE cut line.** At
+# 1.60 m of blade the shoulder was met on 154 and the nape only on 157; at 2.00 m both lie inside
+# the same swept cast on 154, and `tests/combat.rs::f030_the_cortex_wins_over_the_body_it_hides_in`
+# is the rule that then reports the nape and not the shoulder. Measured over the stand-off sweep
+# below: the two-line `Torso` + `Cortex` signature survives only at x ≤ 15.30, i.e. from
+# 2.20 m out.
 #
 # ## Why the player FALLS instead of flying
 #
@@ -64,30 +72,49 @@
 # running player cannot cut anything, by design ("damage comes out of speed"). The Vector Gear
 # reaches 30 m/s and more, but hooking, reeling and boosting cannot be aimed from a script
 # accurately enough to pass a 1.10 m sphere. Gravity can: at −20 m/s² a fall of 11.2 m is
-# 21 m/s, and it is reproducible to the tick. The player is at y 7.815 on tick 154 and 7.468 on
-# 157, and 7.468 again on 160 and on 163 — that is the freeze, measured.
+# 21 m/s, and it is reproducible to the tick.
+#
+# **The freeze, probed per tick on this run (2026-08-20):** y is 8.157 on 153 and 7.815 on 154,
+# and then 7.815 on 155, 156, 157, 158, 159, 160 **and** 161 — bit-identical, seven times — and
+# 7.468 on 162. `spd` holds at 20.667 across the same window and is 21.001 on 162: not one tick
+# of gravity was integrated. **Control, rule 5 — delete the one `slash` line:** no cut line is
+# logged at all and no y value is ever repeated (7.815 · 7.468 · 7.115 · 6.756 · 6.392 · 6.023 ·
+# 5.648 · 5.267 on ticks 154..161), so at 161 the unfrozen player is **2.548 m lower** than the
+# frozen one. The repeated number is the hit stop and not the instrument.
 #
 # ## Why x = 15.75 and z = 0.8
 #
 # The husk's body capsule has a radius of `width_fraction × height / 2` = 1.25 m and the player
 # capsule 0.35 m, so anything closer than **1.60 m** to his axis is a collision and not a pass.
-# 1.75 m leaves 0.15 m of air. The blade is `reach_m` = 1.60 m long and hangs from the hand at
-# eye height, so its tip reaches x = 17.35 — 0.15 m inside a cortex sphere of radius 0.55 m
-# centred on x = 17.5. **`reach_m` and the body radius are 1.60 m and 1.60 m**: there is no
-# margin at all in these numbers, and that is a finding about the RON, not about the cut. The
-# cortex also sits `head_m / 2` = 0.55 m **behind** the head's axis (`src/titan/rig.rs:434-440`),
-# and z = 0.8 gives up 0.25 m of that offset — the blade still crosses the sphere.
+# 1.75 m leaves 0.15 m of air. The blade is `reach_m` = 2.00 m long and hangs from the hand at
+# eye height, so its tip reaches x = 17.75 — a quarter of a metre **past** the centre of a cortex
+# sphere of radius 0.55 m at x = 17.5, and `thickness_m` 0.20 widens the swath around it.
+# Until 2026-08-20 `reach_m` and the body radius were **1.60 m and 1.60 m** and there was no
+# margin at all in these numbers; there is 0.40 m of it now, and that is a fact about the RON and
+# not about the cut. The cortex also sits `head_m / 2` = 0.55 m **behind** the head's axis
+# (`src/titan/rig.rs`), and z = 0.8 gives up 0.25 m of that offset — the blade still crosses the
+# sphere.
 #
-# ⚠️ **Do not re-aim this file by centimetres.** `warp 15.70` — the stand-off
-# `scripts/q030-reach.txt` flies — does **not** rescue it and never was the fault: swept over
-# 15.50 / 15.60 / 15.70 / 15.75 / 15.80, **all five are red** while the mid-swing `look` is in the
-# file, and four of the five are green without it. The fifth, 15.50, is a 2.00 m stand-off and
-# simply out of the blade's 1.60 m reach — which is the honest lower bound of this pass, and it
-# is 15.60..15.80 wide, not one centimetre.
+# ⚠️ **Do not re-aim this file by centimetres, and it is no longer close.** The stand-off was
+# swept again on 2026-08-20, one run per position, this script's geometry with only `warp x`
+# changed:
+#
+# | x | 14.90 | 15.00 | 15.10 | 15.20 | 15.30 | 15.40 .. 15.90 |
+# |---|---|---|---|---|---|---|
+# | | red | red | green | green | green | green |
+#
+# **The pass is 15.10 .. 15.90 = 0.80 m wide**, against 15.60 .. 15.80 = 0.20 m at the old reach.
+# 15.90 is the collision limit (1.25 + 0.35 = 1.60 m off the axis at 17.5), so the near half of
+# the window is bounded by the body and not by the blade. The two red runs are not near-misses:
+# both log `Torso` on 154 and `ArmLeft` on 159 and never reach the nape.
 #
 # 1.5 s of lead-in before anything happens: under `--offscreen` the render pipelines and the
 # block meshes are still coming up in the first second, and a screenshot taken into that is
 # evidence of nothing (`scripts/p1-overlay.txt` uses the same 1.5).
+#
+# **`wait 0.08` after the trigger is what puts `mark cortex-cut` on the cortex tick itself.**
+# It was `wait 0.12` while the crossing sat at 157; at 154 that same line marked three ticks too
+# late, which is how a log line starts lying about what it marks.
 wait 1.5
 spawn titan husk 17.5 0 0
 warp 15.75 18.5 0.8
@@ -95,7 +122,7 @@ look 0 0
 key F3 0.05
 wait 0.90
 slash right 0.40
-wait 0.12
+wait 0.08
 mark cortex-cut
 wait 0.10
 assert titans == 1

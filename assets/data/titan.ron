@@ -33,6 +33,50 @@
 // took exactly what a player in his face took (docs/FINDINGS.md FIND-012), which is why
 // `turn_deg_per_s` above governed nothing. Range [30, 90], guarded by
 // tests/combat.rs::every_kind_carries_a_strike_half_angle_in_range.
+// ⚠️ `cortex_half_angle_deg` is NEW (2026-08-20, F-030 hitbox round) and it is UNTUNED. It is
+// half the arc the CORTEX can be cut in, off the titan's own BACKWARD vector, on the ground
+// plane — the exact mirror of `strike_half_angle_deg` two lines below, and it exists for the
+// same reason that one does: without it the property is produced by an ACCIDENT rather than by
+// a rule. `docs/PLAN-GAME.md` §3.4 point 3 asked for it on day one ("a 360 degree sphere makes
+// the titan a floating bullseye and deletes the approach-angle skill F-030 exists to create.
+// A rear hemisphere is the design"), and until today the whole of that design was 0.211 m of
+// blade on a husk: the rear pass has the blade 0.131 m INSIDE the cortex and the front pass is
+// 0.080 m SHORT (docs/FINDINGS.md FIND-147). Any centimetre added to `reach_m` or to a
+// `cortex_radius_m` below spends that margin one for one, because the sphere is isotropic — so
+// the rule had to stop being an accident before either number could move.
+//
+// **Why the values are above 90 and not below.** 90.0 is the literal rear hemisphere and it is
+// unplayable: a titan turns toward you at `turn_deg_per_s` while your swing is in the air, so a
+// player who presses at 85 degrees is at 95 when the blade lands, and the kill he aimed at
+// silently becomes a torso graze. Every value below is
+//     90 + turn_deg_per_s * 0.15 s + 15 degrees, rounded to the nearest 5
+// — the gate hands back exactly what the titan's own turn takes, plus about a tick and a half.
+// The 0.15 s is the swing's own press-to-contact time, (active_from_s + active_to_s) / 2 out of
+// gear.ron. So the SLOWER a kind turns, the more his nape is a rear-only target:
+//   warden 40 deg/s   110   the shielding hand is his mechanic, not a wide window
+//   lurker 45         110   an ambusher who has not turned is open from anywhere behind
+//   bellower 30       110   21 m and 30 deg/s; there is a great deal of behind
+//   husk 50           115   the baseline
+//   chorus 55         115   a husk's arc
+//   errant 100        120   he is never on the line you aimed at, so the gate must forgive
+//   weaver 120        125
+//   scuttler 150      130   he can turn 22 degrees inside one swing
+// Range [45, 180], guarded by
+// tests/combat.rs::every_kind_carries_a_cortex_half_angle_in_range. 180 deletes the gate.
+// A rejected cortex is NOT a whiff: blades::cut::sweep falls through to the body layer and the
+// pass books `Torso`, so a blade that reaches the neck from the front still staggers him. That
+// is the reference's rule too (docs/gameplay/references.md: off-target hits do 0.8x, never 0).
+//
+// ⚠️ `cortex_radius_m` MOVED on 2026-08-20, for the first time since T-005, and only on the
+// three kinds a measurement said could not be killed at all:
+//   warden   0.60 -> 0.77    lurker 0.50 -> 0.77    bellower 0.70 -> 1.16
+// Every one of them is now at `max_head_fraction / 2 * height_m` minus about 1.5 cm, i.e. the
+// nape fills the head box exactly as the husk's already did (2r = head_m). The husk (0.55),
+// weaver (0.23) and scuttler (0.20) did NOT move: the husk is the calibration body and the two
+// small kinds are already at or within 1 % of that same rule. The errant and the chorus did not
+// move either, because the sweep says they do not need it — see FIND-147. This is Q-019's own
+// named rollback, taken on the three rows where it was load-bearing and nowhere else.
+//
 // ⚠️ `stagger_s` is NEW (2026-08-19, F-032) and it is the FIRST consequence a non-lethal cut
 // has ever had in this game. Measured the same day (scripts/f032-swords.txt): a blade through
 // the chest, the arm and the leg all wrote `TitanHit { zone: Torso }` at 20.67 m/s and NOTHING
@@ -78,6 +122,7 @@
                      turn_deg_per_s: 50.0, accel_m_s2: 3.0,
                      strike_s: 0.2, recover_s: 0.4,
                      attack_range_m: 6.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 1.5,
+                     cortex_half_angle_deg: 115.0,
                      stagger_s: 0.22,
                      aggro_radius_m: 45.0, death_s: 1.0, health: 100.0, damage: 34.0,
                      model: "titan_husk",
@@ -98,6 +143,7 @@
                      turn_deg_per_s: 100.0, accel_m_s2: 6.0,
                      strike_s: 0.18, recover_s: 0.37,
                      attack_range_m: 6.0, strike_half_angle_deg: 50.0, attack_cooldown_s: 1.2,
+                     cortex_half_angle_deg: 120.0,
                      stagger_s: 0.20,
                      aggro_radius_m: 50.0, death_s: 1.0, health: 100.0, damage: 30.0,
                      model: "titan_husk",
@@ -123,6 +169,7 @@
                      turn_deg_per_s: 150.0, accel_m_s2: 12.0,
                      strike_s: 0.2, recover_s: 0.4,
                      attack_range_m: 2.5, strike_half_angle_deg: 40.0, attack_cooldown_s: 0.9,
+                     cortex_half_angle_deg: 130.0,
                      stagger_s: 0.26,
                      aggro_radius_m: 60.0, death_s: 0.8, health: 60.0, damage: 18.0,
                      model: "titan_husk",
@@ -146,6 +193,7 @@
                      turn_deg_per_s: 120.0, accel_m_s2: 8.0,
                      strike_s: 0.18, recover_s: 0.37,
                      attack_range_m: 2.5, strike_half_angle_deg: 45.0, attack_cooldown_s: 1.1,
+                     cortex_half_angle_deg: 125.0,
                      stagger_s: 0.24,
                      aggro_radius_m: 50.0, death_s: 0.8, health: 70.0, damage: 22.0,
                      model: "titan_husk",
@@ -173,11 +221,12 @@
         // Shields the cortex with his hand -> arms first, then cortex. The cover only works
         // when the hand really does hide the cortex: for that he needs arm length.
         // 8.0 m -> 14.0 m (class `large`)
-        "warden":   (size_class: "large", speed_m_s:  3.5, cortex_radius_m: 0.60,
+        "warden":   (size_class: "large", speed_m_s:  3.5, cortex_radius_m: 0.77,
                      regen_per_s: 0.6, windup_s: 0.70, 
                      turn_deg_per_s: 40.0, accel_m_s2: 3.0,
                      strike_s: 0.22, recover_s: 0.48,
                      attack_range_m: 8.0, strike_half_angle_deg: 75.0, attack_cooldown_s: 2.0,
+                     cortex_half_angle_deg: 110.0,
                      stagger_s: 0.14,
                      aggro_radius_m: 40.0, death_s: 1.4, health: 220.0, damage: 55.0,
                      model: "titan_large",
@@ -196,11 +245,12 @@
         // "Out of the air" is a question of reach: at 10 m he grabs below the roof, at
         // 14 m above the roof — only then does he force a change of height.
         // 5.0 m -> 14.0 m (class `large`), model titan_husk -> titan_large
-        "lurker":   (size_class: "large", speed_m_s:  2.0, cortex_radius_m: 0.50,
+        "lurker":   (size_class: "large", speed_m_s:  2.0, cortex_radius_m: 0.77,
                      regen_per_s: 0.7, windup_s: 0.40, 
                      turn_deg_per_s: 45.0, accel_m_s2: 2.0,
                      strike_s: 0.2, recover_s: 0.45,
                      attack_range_m: 8.0, strike_half_angle_deg: 60.0, attack_cooldown_s: 1.8,
+                     cortex_half_angle_deg: 110.0,
                      stagger_s: 0.16,
                      aggro_radius_m: 25.0, death_s: 1.4, health: 200.0, damage: 48.0,
                      model: "titan_large",
@@ -218,11 +268,12 @@
         // **The big loud one.** He was the largest kind so far and stays it: the largest
         // class that occurs in a normal mission.
         // 10.0 m -> 21.0 m (class `huge`)
-        "bellower": (size_class: "huge",        speed_m_s:  2.5, cortex_radius_m: 0.70,
+        "bellower": (size_class: "huge",        speed_m_s:  2.5, cortex_radius_m: 1.16,
                      regen_per_s: 0.5, windup_s: 0.80, 
                      turn_deg_per_s: 30.0, accel_m_s2: 2.0,
                      strike_s: 0.25, recover_s: 0.55,
                      attack_range_m: 12.0, strike_half_angle_deg: 85.0, attack_cooldown_s: 2.5,
+                     cortex_half_angle_deg: 110.0,
                      stagger_s: 0.10,
                      aggro_radius_m: 70.0, death_s: 1.6, health: 320.0, damage: 70.0,
                      model: "titan_large",
@@ -245,6 +296,7 @@
                      turn_deg_per_s: 55.0, accel_m_s2: 4.0,
                      strike_s: 0.2, recover_s: 0.4,
                      attack_range_m: 6.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 1.4,
+                     cortex_half_angle_deg: 115.0,
                      stagger_s: 0.20,
                      aggro_radius_m: 45.0, death_s: 1.0, health: 100.0, damage: 30.0,
                      model: "titan_husk",

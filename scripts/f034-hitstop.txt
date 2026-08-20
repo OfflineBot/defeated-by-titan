@@ -1,6 +1,6 @@
 # F-034 — hit stop: the bodies stop, the clock does not.
 #
-# cargo run -- --offscreen --script scripts/f034-hitstop.txt --ticks 164 \
+# cargo run -- --offscreen --script scripts/f034-hitstop.txt --ticks 161 \
 #              --screenshot docs/images/f034-hitstop.png
 #
 # and, as a SEPARATE run, the one that returns a usable exit code:
@@ -15,33 +15,55 @@
 # deliberately generous: overshooting the script's own end is free, undershooting truncates the
 # run and hides the summary (FIND-032).
 #
+# ## The pair, and why it is ONE run
+#
 # **This is the same run as `scripts/f030-cortex.txt`, photographed six ticks later.** The
-# commands below are identical line for line, so the two runs are the same simulation and the
-# two PNGs are two ticks out of it:
+# command lines below are identical to that file's, line for line — and on 2026-08-20 that stopped
+# being a claim and became a measurement: this script at `--ticks 155` writes a PNG whose
+# sha256 is `a6bc95ce…`, **byte for byte the same file** as `scripts/f030-cortex.txt` at
+# `--ticks 155`. Two processes, one simulation, to the pixel.
 #
 # | tick | image | what it shows |
 # |---|---|---|
-# | 158 | `docs/images/f030-cortex.png` | the tick the cortex was cut on (tick 157) plus one — the freeze has just begun |
-# | 164 | `docs/images/f034-hitstop.png` | six ticks later — the LAST frozen tick |
+# | 155 | `docs/images/f030-cortex.png` | the FIRST frozen tick — the cut landed on 154 |
+# | 161 | `docs/images/f034-hitstop.png` | six ticks later — the LAST frozen tick |
 #
-# `gear.ron: feel.hit_stop_cortex_s` is 0.12 s = `round(0.12 x 60)` = **7 ticks**, so the
-# player does not advance on ticks 158..164 and moves again on 165. What the pair proves, and
-# no single frame can:
+# `gear.ron: feel.hit_stop_cortex_s` is 0.12 s = `round(0.12 x 60)` = **7 ticks**, so the player
+# does not advance on ticks 155..161 and moves again on 162. What the pair proves, and no single
+# frame can:
 #
-#   * the husk is visibly further into his dissolve, and the F3 overlay now says so in figures
-#     instead of by eye — `husk#1 Death 1/60` in the first image and `husk#1 Death 7/60` in the
-#     second, i.e. scaled by `1 - ticks/60` = 0.983 and 0.883: **the clock kept running**;
-#   * the player's `pos` is **identical to the digit** — `15.8 7.5 0.8` in both — and `spd 0.0`
-#     in both: **the body did not.** Six ticks of world time, zero metres of player.
+#   * the player's `pos` is **identical to the digit** — `15.8 7.8 0.8` in both — and `spd 0.0`
+#     in both: **the body did not move.** Six ticks of world time, zero metres of player;
+#   * the F3 overlay's own counter ran on: **`husk#1 Death 1/60` in the first frame and
+#     `husk#1 Death 7/60` in the second** — six ticks of `ticks_in_state` while the player's
+#     position did not change in the last digit it prints. **The clock kept running**;
+#   * and **`gas 15000/15000` in both**, which is how a reader checks the pair is one build
+#     and not two: the tank went 300 → 15000 on 2026-08-19 (`F-018`), and the pair that shipped
+#     before this one read `300/300` in one frame and `15000/15000` in the other — two builds,
+#     one claim, and it was the sha of the tank that gave it away.
 #
 # That is the whole claim of `F-034`, and it is the claim the one-line
 # `Time::<Virtual>::set_relative_speed(0.05)` fails — there the tick stops with the body and
-# the husk would not have dissolved a millimetre further.
+# the husk's counter would not have moved a digit.
 #
-# ⚠️ **The freeze is 7 ticks long, and that number did not move on 2026-08-19.** What moved is
-# where it sits: the cortex crossing drifted 154 → 157, so the frozen window drifted 155..161 →
-# 158..164 and the two `--ticks` above with it. Measured, not assumed — the player's y is 7.468
-# on ticks 157, 160 and 163 and 6.756 on 166 (`docs/FINDINGS.md` FIND-112).
+# ⚠️ **The 7 ticks did not move on 2026-08-20; the window under them did, for the second time.**
+# `gear.ron: reach_m` went 1.60 → 2.00 (`docs/FINDINGS.md` FIND-147), the cortex crossing came
+# back 157 → **154**, and the frozen window with it: 158..164 → **155..161**. Probed per tick on
+# this run: y is 7.815 on 154 **and on 155, 156, 157, 158, 159, 160 and 161** — bit-identical,
+# seven times — and 7.468 on 162; `spd` holds at 20.667 through all of it and is 21.001 on 162.
+# **Control, rule 5 — delete the one `slash` line:** no cut line is logged and no y value is ever
+# repeated (7.815 · 7.468 · 7.115 · 6.756 · 6.392 · 6.023 · 5.648 · 5.267 across the same ticks),
+# so at 161 the unfrozen player stands **2.548 m lower**. The repeated number is the freeze.
+#
+# ⚠️ **What the husk does between the two frames is NOT a smooth dissolve, and the second frame
+# catches the jump.** Measured on five frames out of this one run (his silhouette's share of the
+# box x 1000..1280, y 0..540): **83.6 % on 155 · 82.6 % on 158 · 82.2 % on 159 · 81.8 % on 160 ·
+# 35.4 % on 161.** He stands still for six ticks and then, on the last frozen tick, sinks out of
+# the top of the frame in one step and shows only as the tan mass in the bottom-right corner —
+# `titan::brain::dissolve` skips every tick it is frozen but reads a counter that did not stop,
+# so the first tick it runs pays back the whole backlog at once (`scale` 1.00 → 0.883, and the
+# nape sits 8.90 m up, so it drops ~1.04 m in one frame). **That is a real observation about the
+# game and it is not this file's to fix** — `docs/FINDINGS.md` FIND-148.
 #
 # ⚠️ `F-034`'s own acceptance in the backlog is a **blind test with human testers**. That is not
 # satisfiable by an agent, and **the blind test has not been run.**
@@ -60,7 +82,7 @@ look 0 0
 key F3 0.05
 wait 0.90
 slash right 0.40
-wait 0.12
+wait 0.08
 mark cortex-cut
 wait 0.10
 assert titans == 1

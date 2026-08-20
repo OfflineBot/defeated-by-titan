@@ -67,7 +67,8 @@ use bevy::prelude::*;
 
 use crate::data::{BladeTuning, GameData};
 use crate::shared::{
-    Blades, HitStop, HitZone, HitZoneOf, Intent, PlayerId, Side, Tick, TitanHit, TitanId, Velocity,
+    Blades, HitStop, HitZone, HitZoneOf, Intent, PlayerId, Side, Tick, TitanHit, TitanId,
+    TitanKindName, Velocity,
     LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
 };
 
@@ -205,6 +206,52 @@ pub fn blade_right(look: Vec3) -> Vec3 {
     if right.length_squared() > 0.0 { right } else { Vec3::X }
 }
 
+/// **Is the nape on the side of the titan the blade came from?** — `F-030`'s central rule,
+/// as a rule instead of as an accident.
+///
+/// `titan_m` is the titan's own position, `facing` his forward, `hand_m` the point the blade
+/// hangs from **at the moment of contact**, and `half_angle_rad` his
+/// `titan.ron: cortex_half_angle_deg`. True means this cut may book [`HitZone::Cortex`].
+///
+/// ## Why this exists at all
+///
+/// Because until 2026-08-20 "the nape is cut from behind" was produced by **geometry alone**,
+/// and the whole of it was **0.211 m of blade** on a husk: the pass from behind has the blade
+/// 0.131 m inside the cortex, the pass from the front is 0.080 m short
+/// (`tests/titan.rs::q030_the_nape_is_cut_from_behind_and_not_from_the_front`). Every
+/// centimetre added to `gear.ron: blades.reach_m` or to any `cortex_radius_m` is taken out of
+/// that 0.080 m one for one, because the kill volume is a **sphere** and a sphere has no
+/// front: the same subtraction decides the rear gap and the front gap
+/// (`docs/FINDINGS.md` FIND-147). So the two numbers that decide whether a titan can be killed
+/// at all could not move while the design's central rule rested on eight centimetres.
+///
+/// It is also what `docs/PLAN-GAME.md` §3.4 point 3 asked for on day one — *"a 360° sphere
+/// makes the titan a floating bullseye and deletes the approach-angle skill F-030 exists to
+/// create. A rear hemisphere is the design."*
+///
+/// ## The exact mirror of `combat::strike`'s own cone, and deliberately not shared with it
+///
+/// `combat::strike::faces` is this expression about the titan's **forward**; this one is about
+/// his **backward**. Three lines are copied rather than imported: `blades` and `combat` are two
+/// domains and an edge between them would have to be argued in
+/// `docs/architecture.md` for a dot product. The twin is named here so that whoever changes one
+/// finds the other.
+///
+/// ## The degenerate case is inside, not outside
+///
+/// A blade whose hand is exactly on the titan's axis has no bearing, and neither has a titan
+/// whose forward points straight up. Both return `true`, the same decision `combat::strike`
+/// takes and for the same reason: a hole in the middle of a volume is a bug nobody can see.
+pub fn nape_is_exposed(titan_m: Vec3, facing: Dir3, hand_m: Vec3, half_angle_rad: f32) -> bool {
+    let backward = Vec3::new(-facing.x, 0.0, -facing.z);
+    let bearing = Vec3::new(hand_m.x - titan_m.x, 0.0, hand_m.z - titan_m.z);
+    let (Some(backward), Some(bearing)) = (backward.try_normalize(), bearing.try_normalize())
+    else {
+        return true;
+    };
+    backward.dot(bearing) >= half_angle_rad.cos()
+}
+
 /// What one **reported** hit costs the pair in the harness, in sharpness — `F-033`.
 ///
 /// Straight out of `gear.ron: blades`, and the only place the two zones are told apart:
@@ -271,7 +318,12 @@ pub fn cut(
     tick: Res<Tick>,
     mut messages: MessageWriter<TitanHit>,
     parents: Query<&ChildOf>,
-    titans: Query<(&TitanId, &Velocity)>,
+    // `&Transform` and [`TitanKindName`] joined this query on 2026-08-20 for
+    // [`nape_is_exposed`]: the gate needs the titan's own facing and his
+    // `titan.ron: cortex_half_angle_deg`. **Neither costs a domain edge** — `Transform` is
+    // Bevy's and `TitanKindName` lives in `shared`, the same argument `render::model` makes
+    // for reading it. `blades` still does not know how a titan is assembled.
+    titans: Query<(&TitanId, &Velocity, &Transform, Option<&TitanKindName>)>,
     // **The seam of `F-032`.** The boxes `titan::rig` published for each arm and each leg. This
     // domain never learns how a titan is assembled — it walks down from the body the cast
     // already found and asks each box what it is (`docs/FINDINGS.md` FIND-109). `Children` is
@@ -367,16 +419,40 @@ pub fn cut(
             }
             let (a, b) =
                 blade_segment(start, intent.look_dir(), side, eye_height_m, blades.reach_m);
-            let Some(hit) = sweep(&space, entity, blades.thickness_m, a, b, delta) else {
+            // **`F-030`'s central rule, applied where the cast finds the nape** — see
+            // [`nape_is_exposed`]. A rejected cortex is not a miss; `sweep` goes on to the body
+            // layer and the pass books a graze.
+            let Some(hit) = sweep(&space, entity, blades.thickness_m, a, b, delta, |collider, hand_m| {
+                let Some(root) = root_of(&parents, &titans, collider) else {
+                    // A cortex sensor whose rig carries no `TitanId` cannot be placed by this
+                    // file. Let it through: an unplaceable titan that is also **immortal** is
+                    // the worse of the two failures, and it would be silent.
+                    return true;
+                };
+                let Ok((_, _, at, kind_name)) = titans.get(root) else { return true };
+                let Some(half_angle_deg) = kind_name
+                    .and_then(|name| data.titans.kinds.get(name.as_str()))
+                    .map(|kind| kind.cortex_half_angle_deg)
+                else {
+                    // A body with no kind name has no gate — exactly as
+                    // `combat::strike::resolve_tuning` gives it no strike cone and warns once.
+                    // Test fixtures are the whole population of that case.
+                    return true;
+                };
+                nape_is_exposed(at.translation, at.forward(), hand_m, half_angle_deg.to_radians())
+            }) else {
                 continue;
             };
             // The hit entity is the collider. The `TitanId` hangs on the root of the rig, so
             // walk up — `combat` may not know how a titan is assembled, and it does not have
             // to: `ChildOf` is Bevy's, not `titan`'s.
-            let Some((root, titan_id, titan_velocity)) = owner(&parents, &titans, hit.collider)
-            else {
+            let Some(root) = root_of(&parents, &titans, hit.collider) else {
                 continue;
             };
+            let Ok((titan_id, titan_velocity, _, _)) = titans.get(root) else {
+                continue;
+            };
+            let (titan_id, titan_velocity) = (*titan_id, *titan_velocity);
 
             // **`F-032`: the body answered, now ask which part of it.** Only here, only for this
             // titan, and only when the cast found the silhouette rather than the nape.
@@ -492,6 +568,20 @@ pub fn closing_speed(player_m_s: Vec3, titan_m_s: Vec3, delta_m: Vec3) -> f32 {
 /// `entity` is excluded so that the player's own capsule can never answer — it is on avian's
 /// default bit and would not match either mask today, but the day somebody hangs
 /// `LAYER_PLAYER` on him this line is what stops a player from cutting himself.
+///
+/// ## `accept_cortex`, and why a rejected nape falls through instead of missing
+///
+/// `accept_cortex(collider, hand_m)` is asked **once**, only about a cortex candidate, with the
+/// collider that answered and the point the blade hung from at the moment of contact. It is
+/// where [`nape_is_exposed`] is applied, and it is a closure rather than a parameter because
+/// this function may not know what a titan is.
+///
+/// A `false` does **not** end the sweep: the loop goes on to [`LAYER_TITAN_BODY`] and the pass
+/// books [`HitZone::Torso`]. That is deliberate and it is the reference's rule too — in AoT:R a
+/// hit on the wrong part still lands for 0.8x damage and a nape hit outside its window for 1.0x,
+/// so **there is no whiff** (`docs/gameplay/references.md`). Here it means a blade that reaches
+/// the neck from the front staggers the titan (`F-032`) instead of doing nothing at all, which
+/// is also the only version a player can learn from.
 pub fn sweep(
     space: &SpatialQuery,
     player: Entity,
@@ -499,6 +589,7 @@ pub fn sweep(
     a_m: Vec3,
     b_m: Vec3,
     delta_m: Vec3,
+    accept_cortex: impl Fn(Entity, Vec3) -> bool,
 ) -> Option<BladeHit> {
     if !(a_m.is_finite() && b_m.is_finite() && delta_m.is_finite() && thickness_m > 0.0) {
         // A `NaN` out of a broken `Intent` would become a `NaN` cast and, one message later,
@@ -524,6 +615,14 @@ pub fn sweep(
         let filter = SpatialQueryFilter::from_excluded_entities([player]).with_mask(mask);
         if let Some(hit) = space.cast_shape(&capsule, Vec3::ZERO, Quat::IDENTITY, direction, &config, &filter)
         {
+            // The hand, where it stood when the capsule met this collider. `a_m` is the hand at
+            // the START of the tick and the whole capsule travelled `direction * distance`, so
+            // this is the same point the cast used — not a re-derivation of it.
+            if zone == HitZone::Cortex && !accept_cortex(hit.entity, a_m + direction * hit.distance)
+            {
+                // Not a miss. Fall through to the body layer: see the doc comment.
+                continue;
+            }
             return Some(BladeHit { collider: hit.entity, zone, distance_m: hit.distance });
         }
     }
@@ -590,15 +689,15 @@ pub fn limb_zone(
 /// The cortex is a grandchild of the root (`src/titan/rig.rs`), the body capsule sits on the
 /// root itself — so this walks up until it finds the [`TitanId`], and gives up rather than
 /// guessing. `ChildOf` is Bevy's own relation: reading it is not an edge into `titan`.
-fn owner(
+fn root_of(
     parents: &Query<&ChildOf>,
-    titans: &Query<(&TitanId, &Velocity)>,
+    titans: &Query<(&TitanId, &Velocity, &Transform, Option<&TitanKindName>)>,
     collider: Entity,
-) -> Option<(Entity, TitanId, Velocity)> {
+) -> Option<Entity> {
     let mut at = collider;
     loop {
-        if let Ok((id, velocity)) = titans.get(at) {
-            return Some((at, *id, *velocity));
+        if titans.contains(at) {
+            return Some(at);
         }
         at = parents.get(at).ok()?.parent();
     }
@@ -617,13 +716,77 @@ mod tests {
             wear_torso_factor: 0.5,
             damage_per_m_s: 1.4,
             min_speed_m_s: 8.0,
-            reach_m: 1.6,
-            thickness_m: 0.12,
+            reach_m: 2.0,
+            thickness_m: 0.20,
             swing_s: 0.35,
             active_from_s: 0.08,
             active_to_s: 0.22,
             cooldown_s: 0.30,
         }
+    }
+
+    /// The gate, measured against the **two passes the design's central rule is made of** —
+    /// `tests/titan.rs::q030_the_nape_is_cut_from_behind_and_not_from_the_front` flies exactly
+    /// these two lines, and the numbers here are that test's own geometry: a husk at the origin
+    /// facing −Z, the player 1.80 m out with `AIR_M` of air, the cortex 0.55 m behind the neck.
+    #[test]
+    fn f030_the_gate_lets_the_pass_from_behind_through_and_refuses_the_one_from_the_front() {
+        let titan = Vec3::ZERO;
+        let facing = Dir3::NEG_Z;
+        // The rear pass: the player is 1.80 m to the titan's left, level with the cortex's own
+        // set-back of 0.55 m. That is `atan2(1.80, 0.55)` = **73.0°** off his backward vector —
+        // a lateral fly-by, not a stroll up behind him, and every measured cut in this
+        // repository is one of these.
+        let behind = Vec3::new(-1.80, 8.90, 0.55);
+        // The front pass flies along +X in front of him and swings towards his back: at the
+        // crossing the hand is 1.80 m in front, i.e. **180.0°** off backward.
+        let front = Vec3::new(0.0, 8.90, -1.80);
+
+        let bearing = |hand: Vec3| {
+            let b = Vec3::new(-facing.x, 0.0, -facing.z).normalize();
+            let g = Vec3::new(hand.x, 0.0, hand.z).normalize();
+            b.dot(g).clamp(-1.0, 1.0).acos().to_degrees()
+        };
+        assert!((bearing(behind) - 73.0).abs() < 0.5, "the rear pass is at {:.1}°", bearing(behind));
+        assert!((bearing(front) - 180.0).abs() < 0.5, "the front pass is at {:.1}°", bearing(front));
+
+        // The husk's number out of `titan.ron`. Spelled out, so a change to the file shows up
+        // here as a red test and not as a silently different rule.
+        let husk = 115.0f32.to_radians();
+        assert!(nape_is_exposed(titan, facing, behind, husk), "the pass from behind was refused");
+        assert!(!nape_is_exposed(titan, facing, front, husk), "the pass from the FRONT was let in");
+
+        // 🔴 **Why the file says 115 and not 90.** A titan turns toward you at
+        // `turn_deg_per_s` while the swing is in the air, so the bearing at the moment of
+        // contact is always LARGER than the one the player pressed at. At a literal rear
+        // hemisphere the 73° pass survives — but a scuttler turning 150°/s adds 22° inside one
+        // swing, and 95° is refused. That is the failure this margin exists to prevent.
+        let hemisphere = 90.0f32.to_radians();
+        let after_the_turn = Vec3::new(-1.80, 8.90, -0.16); // 95° off backward
+        assert!(
+            !nape_is_exposed(titan, facing, after_the_turn, hemisphere),
+            "a 90° gate would still have accepted a pass the titan had turned out from under"
+        );
+        assert!(
+            nape_is_exposed(titan, facing, after_the_turn, husk),
+            "115° must forgive the turn the titan made while the blade was in the air"
+        );
+    }
+
+    /// The degenerate cases, and both answers are "inside". The same decision
+    /// `combat::strike::faces` takes about its own cone: a hole in the middle of a volume is a
+    /// bug nobody can see.
+    #[test]
+    fn f030_a_blade_on_the_titans_own_axis_is_never_refused() {
+        let husk = 115.0f32.to_radians();
+        // Exactly on the axis: no bearing to measure.
+        assert!(nape_is_exposed(Vec3::ZERO, Dir3::NEG_Z, Vec3::new(0.0, 8.9, 0.0), husk));
+        // A titan whose forward points straight up has no flattened facing.
+        assert!(nape_is_exposed(Vec3::ZERO, Dir3::Y, Vec3::new(0.0, 8.9, -5.0), husk));
+        // And 180.0 in the file is "no gate at all" — the bullseye, kept reachable on purpose
+        // so that the rollback is one number per kind.
+        let off = 180.0f32.to_radians();
+        assert!(nape_is_exposed(Vec3::ZERO, Dir3::NEG_Z, Vec3::new(0.0, 8.9, -1.8), off));
     }
 
     #[test]

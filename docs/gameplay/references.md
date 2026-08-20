@@ -493,3 +493,127 @@ from #2.
   outright). The players' own arguing is still missing from this document, as it was in 2026-08-12.
 - Not reachable / not useful: `aot-revolution-test.fandom.com` (402), a second community wiki whose
   ODM pages carry no numbers, and YouTube guide videos (no readable transcript).
+
+---
+
+# The reference's hitboxes — how AoT:R makes a nape hittable
+
+*Researched 2026-08-20, on the user's own question after „**hitboxen passen noch nich!**": whether
+we had looked at how the reference does it, „damit du besser weißt wie du das einstellen musst".*
+**Honest scope note:** the ODM round above (2026-08-20, earlier the same day) covered feel — anchor
+assist, connect time, pull, gas, ranges. **It did not cover combat geometry at all.** This section
+is the round that did.
+
+**Confidence, same ladder as the section above.** `documented` = the developers said it (their own
+patch notes, or the wiki's reproduction of them) · `community` = players/guides, several agreeing ·
+`inferred` = my reading of documented facts, and therefore a decision · `unknown` = looked for it,
+did not find it, and the row says where I looked.
+
+## 1. Is there a snap on the CUT? — the question that had to be settled first
+
+Because if there is, every geometric number below is decoration.
+
+| what | the reference | confidence | source |
+|---|---|---|---|
+| What "nape assist" actually assists | **the HOOK, not the blade.** The in-game skill text is unambiguous: *"Target Acquisition — If using aim assist, **the nape becomes a hook point**"* | documented | wiki `Skill_Trees`, Support tree, 3 points |
+| Do the players describe it the same way | yes, three independently: *"makes the nape a hook point so you can easily swoop in"* · *"easier to **hook on** to titan weak points"* · the wiki's own tips list it beside `Hook Assist` as a separate toggle | community | SlytherGames 2024-11-27, GameRant, wiki `Tips_and_Tricks` |
+| What vocabulary do the devs use for it | **aim-side, every single time, 2023→2026**: *"increased the **radius** of nape assist"* · *"fixed nape assist not working on **console**"* · *"fixed **aim assist** going towards Eren's nape"* · *"buffed it even more for **mobile** players"*. Never damage, never swing, never blade | documented | Patches 10 (2023), 2024 ×3, ~38 and 39 (2026) |
+| Is a landed hit ever REDIRECTED onto the nape | **yes — but only as a named skill, never as baseline**: *"Skill 'Blade Dance': any limb hit automatically targets the titan's nape"* | documented | 2025 patch |
+| **So: does the blade get a snap?** | **No. It has to land.** | documented | the four rows above |
+
+🔴 **This is the load-bearing answer.** The reference's assist is on **getting you there**, not on
+**connecting**. Ours is the same shape (`F-016`/`F-024`/`F-025` assist the hook, nothing assists
+the cut) — so we are not missing a system, and no amount of aim assist would have answered the
+user's complaint.
+
+## 2. Then how did they make the nape land? — **by tuning the weapon and the neighbours**
+
+The complete geometry record is four patches in the game's first three months, and its shape is
+one idea repeated:
+
+| patch | what they changed | direction |
+|---|---|---|
+| 1 (10/10/2023) | *"Increased the size of the **slash hitbox** overall (I **reduced the nape and eyes** hitbox a bit for this)"* | weapon **up**, target **down** |
+| 2 (12/10/2023) | *"Reduced hand hitbox size by 5% · Increased nape hitbox size by 5% · **Increased player slash hitbox size by 5%** · Reduced size of the **arm** hitboxes by 15% **so they aren't near the nape anymore** · Moved the leg hitboxes upwards and reduced the size by 10%"* | weapon up, **limbs out of the way** |
+| 8 | *"Reduced the size of the **arm** hitboxes outwards **so you should hit the nape easier**"* | limbs out of the way |
+| 10 | *"Nerfed hand hitboxes, arm hitboxes (**easier to hit nape again**)"* + *"increased the radius of nape assist by 10%"* | limbs out of the way |
+
+**Measured across the complete 2023–2026 patch corpus (114 kB, four dev-written templates): of the
+five entries that touch nape-adjacent geometry, THREE name a competing limb collider as the cause
+of the miss.** In the reference, *"I can't hit the nape"* was an **arm-hitbox** problem, not a
+nape-size problem. `documented`.
+
+**And then they stopped.** Every pure-titan nape/arm/hand/leg resize falls in Patches 1, 2, 8 and
+10 — **October–November 2023**. In the three years since there is not one pure-titan hitbox resize
+in the record; only boss-specific, attack-hitbox and shifter-skill changes. What they *did* keep
+touching — five times across four years, including a buff and a revert one patch apart in 2026 — is
+**nape assist**. `measured over the corpus`.
+
+> **The reading:** the reference settled its collider geometry in three months and then lived on the
+> **assist** as its tuning surface. It never grew a nape to fix a miss; it grew the **player's
+> slash volume** and moved the **limbs** out of the way.
+
+## 3. Absolute numbers — `unknown`, and here is where I looked
+
+| what | verdict |
+|---|---|
+| Nape collider size, in studs or metres, for any titan | **`unknown`.** The patch record only ever moves it in **percentages** or "a bit" |
+| Whether it scales with titan height | **`unknown`.** HP does (*"6 m titans have −10.0 % HP, 18 m titans +10.0 %"*), the collider is never mentioned in a size-conditional sentence |
+| Blade reach / slash-hitbox size in absolute units | **`unknown`.** Tuned by percentage in 2023, never dimensioned |
+| Base value of the `Swing Duration` stat, in seconds | **`unknown`.** Confirmed real and upgradable (+2 % … +16 % in the skill tree, +10–15 % on the `SPEEDY` perk), but no source gives the number it is a percentage *of* |
+| Shape of the nape volume — sphere, box, or a capsule down the spine | **`unknown`.** One community guide says *"the nape area stretches far down. So if you hit a titan's upper back, you'll probably still get them"* — single source, treat as a hypothesis about shape |
+| How the cut is detected — raycast, `Touched`, overlap query | **`unknown`.** Documented for the **hook** only (*"other players are now excluded from any raycast checks"*). Nothing on the blade |
+
+**Where I looked:** all ~130 pages of the official Fandom wiki enumerated through
+`action=query&list=allpages` — `Pure_Titans`, `Titans`, `Equipment`, `Game_Mechanics`,
+`Skill_Trees`, `Perks`, `Memories`, `Raid_Boss_Titans`, `Mission_Shifter_Titans`, `Bugs`,
+`Modifiers`, `Injuries`, `Updates`; all four dev patch templates (2023/2024/2025/2026, 114 kB);
+Grokipedia; GameRant; SlytherGames; Beebom; Sportskeeda. Datamining was attempted through the
+ScriptBlox API (a listed "NAPE EXPANDER" script) — the page 403s and the API returns loadstring
+stubs with no constants. reddit.com unreachable (403), itemlevel.net and noleep.com 403, YouTube
+returns only footer navigation to the fetch tool.
+
+## 4. What the reference does INSTEAD of a bigger nape
+
+| what | the reference | confidence | source |
+|---|---|---|---|
+| **The nape has HEALTH** — a kill is a damage check, not a trigger volume | Easy pure titans 37–43 max nape health, abnormals 46–58; Normal 354–449 / 443–572 | documented | wiki `Pure_Titans` |
+| Other parts cost more | the nape is the **1.0x baseline**; legs were 2.5x → **2x**, eyes 1.5x → **1.35x** | documented | Patch 12 (2023) |
+| **A wrong hit still lands** — there is no whiff | off-limb damage **0.2x → 0.8x**; a nape hit outside its window **0.5x → 1.0x**. The penalty for hitting the wrong thing went from 5x-down to 1.25x-down | documented | Patch 24 (24/06/2024) |
+| **The target is shown, not guessed** | the crosshair **turns red** on the weak point; raid bosses wear a *white skull with a red outline* worth **3x** | community (crosshair) / documented (bosses) | guides; wiki `Raid_Boss_Titans` |
+| Hard targets are gated by a **STATE**, not by a tighter collider | Ice Burst: *"attack any weak point two times, causing a small explosion that **reveals** the nape"*; Ducker: a backward roll with i-frames, *"the roll has a startup delay allowing hits"* | documented | wiki `Modifiers` |
+| Speed is in the damage model **as a condition** | core perk `PERFECT FORM`: *"Deal maximum damage as long as you have 70 %~50 % of your maximum speed"*; mythic `BLACK FLASH`: *"every 1.0 % of SPEED gives an extra 0.3 %~0.6 % CRIT DAMAGE"* (buffed 0.5→0.6 in 2024) | documented | wiki `Perks` |
+| The swing is a **span**, and players buy more of it | `Swing Duration` is a first-class stat; M1 *"can be held to delay the swing"*, and holding raises damage (`BLITZBLADE`) | documented | 2025 patch, wiki `Equipment` |
+| One slash resolves against **one** thing by default | *"Blades, by default caps at 1 Titan kill/limb hit per slash"*, raised by perks (`Kengo` +4, `Carnifex` +5) | documented | wiki `Equipment` |
+| They deleted the size class rather than fix its nape | minimum titan spawn size **3 m → 6 m** (Patch 2) → **7 m** (Patch 15). Pure titans span **7–18 m** | documented | Patches 2, 15 |
+| Latency is part of the hitbox | *"Titan hitboxes now use your **ping** as a factor too [from testing, it works fine up until ~250 ping]"* | documented | Update 1 / Patch 23 (2024) |
+
+## 5. What this changed on our side, and what it did not
+
+| their answer | ours, after 2026-08-20 |
+|---|---|
+| grow the **player's slash volume**, pay for it out of the target | **taken**: `gear.ron: reach_m` 1.60 → 2.00, `thickness_m` 0.12 → 0.20. `docs/FINDINGS.md` FIND-147 |
+| move the **competing limb colliders** away from the nape | **not needed, and measured why**: our cortex is on its own collision layer and is cast **first**, so a limb can never occlude it (`blades::cut::sweep`). What our limb boxes eat is the *label* on a torso graze, never the kill |
+| never grow the nape to fix a miss | **broken deliberately, on three kinds**: warden 0.60 → 0.77, lurker 0.50 → 0.77, bellower 0.70 → 1.16. Reason: their titans span 7–18 m (2.6x) and ours span 4.2–21 m (5x), and our body capsule is `width_fraction × height` — so the *clearance* a blade must cross grows three times faster with the class than any nape can. The reference deleted its small class instead of fixing it; we cannot delete our large one, it is where the game is going |
+| an **angular gate** on the assist (Roblox norm: SphereCast + `acos(dot) < 10°`) | **taken, and moved onto the KILL instead of onto an assist**: `titan.ron: cortex_half_angle_deg`. We have no blade assist to gate, and our problem was the opposite one — the nape was cuttable from **every** side, held off the front by 8 cm of geometric accident |
+| a wrong hit still lands for reduced damage — **no whiff** | **taken**: a cortex refused by the gate falls through to the body layer and books `Torso`, so it still staggers (`F-032`). It does not yet do *scaled* damage — we have no titan damage model, only the cortex rule |
+| **show** the target: crosshair turns red, bosses wear a marker | **not built, and it is the biggest open one.** `FIND-127` measured that our blade is cast at 90° to the view and is therefore **44° outside the frustum** on the eight of twenty-one ticks that can land. The reference's answer to "where do I hit" is feedback; ours is currently "guess" |
+| the nape has **health**; speed is a damage condition | **not ours**: `src/shared/message.rs` kills on `Cortex` **by rule**, and `min_speed_m_s` is a binary gate rather than a curve. That is `F-031`'s question and it is untouched |
+
+### Sources added this round
+
+- `Template:2023_Patches`, `2024`, `2025`, `2026` — the complete dev-written patch corpus, 114 kB,
+  read for every occurrence of *hitbox*, *nape*, *assist*, *slash*, *arm*, *hand*, *leg*.
+- Official wiki `Pure_Titans` (max nape health table), `Perks` (`PERFECT FORM`, `BLACK FLASH`,
+  `SPEEDY`, `BLITZBLADE`), `Skill_Trees` (`Target Acquisition`), `Equipment` (M1 hold, per-slash
+  cap), `Raid_Boss_Titans`, `Modifiers` (Ice Burst, Ducker), `Tips_and_Tricks`.
+- SlytherGames "11 Best Attack on Titan Revolution Tips and Tricks" (2024-11-27), GameRant,
+  Grokipedia (AI-aggregated from the same wiki — **not** an independent source).
+- Genre cross-checks, quoted as genre and never as the reference: `attack-on-titan-game-tribute`
+  wiki `Sizes_of_Titans` (*"their necks have small hit-boxes"* on the 4 m class — the only explicit
+  statement anywhere that a nape scales with size, and it is a **different game**);
+  `untitled-aot` wiki `Titans` (*"their hitbox is big enough that with enough speed, it will be a
+  guaranteed kill"*).
+- **Still missing, same hole as every round before it:** the players' own arguing about whether the
+  nape feels right. reddit.com 403, the official Discord unreachable, YouTube/TikTok return only
+  navigation chrome.

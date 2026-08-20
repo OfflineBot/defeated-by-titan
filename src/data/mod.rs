@@ -1138,6 +1138,38 @@ pub struct TitanKind {
     /// whiffs at a player standing straight in front of him, at 90° the cone is a half-space
     /// and the approach angle stops meaning anything again.
     pub strike_half_angle_deg: f32,
+    /// **Half the arc the CORTEX can be cut in**, in degrees off the titan's own **backward**
+    /// vector, measured on the ground plane. The mirror of [`Self::strike_half_angle_deg`], and
+    /// the same shape: together with the cortex sphere it makes the kill zone a **cone opening
+    /// backwards** instead of a floating bullseye.
+    ///
+    /// **Why it exists** — `docs/PLAN-GAME.md` §3.4 point 3: *"A 360° sphere makes the titan a
+    /// floating bullseye and deletes the approach-angle skill F-030 exists to create. A rear
+    /// hemisphere is the design."* Until 2026-08-20 that rule was produced by **geometry
+    /// alone**, and the whole of it was **0.211 m of blade** on a husk (`docs/FINDINGS.md`
+    /// FIND-147: the rear pass has the blade 0.131 m inside the cortex, the front pass is
+    /// 0.080 m short). Any growth of `reach_m` or `cortex_radius_m` past 0.08 m spends that
+    /// accident — so the rule had to become a rule before either could move.
+    ///
+    /// **Why the numbers are above 90 and not below.** 90° would be the literal rear
+    /// hemisphere, and it is unplayable: a titan turns toward you at
+    /// [`turn_deg_per_s`](Self::turn_deg_per_s) while your swing is in the air, so a player who
+    /// presses at 85° is at 95° when the blade lands and the kill he aimed at silently becomes
+    /// a torso graze. Every value is therefore `90 + turn_deg_per_s × 0.15 s + 15°` rounded to
+    /// the nearest 5 — **the gate hands back exactly what the titan's own turn takes**, plus a
+    /// tick and a half of margin. The 0.15 s is the swing's own press-to-contact time,
+    /// `(active_from_s + active_to_s) / 2` out of `gear.ron`.
+    ///
+    /// A rejected cortex is **not a whiff**: `blades::cut::sweep` falls through to the body
+    /// layer, so a blade that reaches the neck from the front books `Torso` and the pass still
+    /// costs the titan a stagger. The reference does the same — off-target hits there do 0.8x
+    /// damage rather than nothing (`docs/gameplay/references.md`).
+    ///
+    /// ⚠️ **UNTUNED.** Range `[45, 180]`, guarded by
+    /// `tests/combat.rs::every_kind_carries_a_cortex_half_angle_in_range`. At 180 the gate is
+    /// gone and the titan is a bullseye again; below 45 the nape is unreachable by anything
+    /// that is not a stationary approach from dead astern.
+    pub cortex_half_angle_deg: f32,
     pub attack_cooldown_s: f32,
     /// **What a non-lethal cut into this kind's body costs him, in seconds of standing still**
     /// — `F-032`'s *"Kein Kill, sondern Stagger, Bewegungs-Debuff oder Blendung"*.

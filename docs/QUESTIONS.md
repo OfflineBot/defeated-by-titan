@@ -1796,3 +1796,70 @@ being weakened into always-green asserts**:
 Both come back in one line each if `src/debug/script.rs` gains a **`settings gas <n>`** verb so a
 script can ask for a small tank for one act. That file was foreign territory to this change, so it
 is a proposal in `docs/FINDINGS.md` (FIND-142) and not something taken quietly.
+
+---
+
+## Q-047 — the blade got longer, thicker and a rear-only rule. Three knobs, and I want you to feel them. (2026-08-20, F-030 hitbox round)
+
+**Your words:** *„hitboxen passen noch nich!"* — and you asked whether we had looked at how
+Attack on Titan: Revolution does it. We had not; that round covered movement only. Now we have
+(`docs/gameplay/references.md`, the whole last section), and the answer changed what I did.
+
+### What was actually wrong, measured before anything was touched
+
+`scripts/f030-hitbox.txt` flies one nape pass at every kind that can spawn, each with **0.60 m of
+air between your capsule and his**. Before today: **2 of 7 kinds died.** The **lurker could not be
+killed from any offset at all** — 8 passes from 0.00 m to 0.70 m of air, 8 torso hits, not one
+nape. The reason is not the nape's size. It is that a titan's body capsule is
+`width_fraction × height`, so the clearance you must cross grows with the class **three times
+faster than the nape may grow** (your own head rule caps it at `height / 18`). The kind with the
+smallest nape in the game has the widest tolerance; the big ones had none.
+
+After: **7 of 7, exit 0.** `docs/FINDINGS.md` FIND-147 has the whole table.
+
+### 🔴 The three numbers I most want you to feel, in this order
+
+| knob | was | is | what it feels like if it is wrong |
+|---|---|---|---|
+| `gear.ron: blades.reach_m` | 1.60 | **2.00** | too long: you kill things you did not aim at, and a fly-by feels like a lawn mower. Too short: the 14 m kinds are unkillable again |
+| `gear.ron: blades.thickness_m` | 0.12 | **0.20** | this is **vertical** forgiveness in a flying pass. At 0.12 your **eye** had to be within ±0.32 m of a scuttler's nape at 21 m/s. Too high and the cut stops feeling aimed |
+| `titan.ron: cortex_half_angle_deg` | did not exist | **110–130 per kind** | the nape may only be cut from inside that arc off his **back**. Too tight: a correct pass silently books a graze. Too wide: the titan is a floating bullseye and the approach angle is decoration |
+
+**Roll back:** one line each in `assets/data/gear.ron`; the gate is one line per kind in
+`assets/data/titan.ron` and **180.0 deletes it** without touching a line of Rust. The three raised
+napes (`warden` 0.60→0.77, `lurker` 0.50→0.77, `bellower` 0.70→1.16) are one number each in the
+same file.
+
+### ASSUMPTION I worked under, and the thing it cost
+
+**ASSUMPTION:** *the nape being cuttable only from behind is a RULE, not a coincidence* —
+`docs/PLAN-GAME.md` §3.4 point 3 says so (*"a 360° sphere makes the titan a floating bullseye"*)
+and it has been an open question since day one. I built it, because without it a longer blade cuts
+a husk's nape **from straight in front of him** by 0.32 m, and I was not willing to trade that.
+
+**⚠️ And it cost something I want you to know about rather than find.** Before today, a titan
+turning to face you slowly ate your margin — 5 cm on a warden across one pass. It no longer does:
+tracking on and tracking off both leave the same 0.95 m of usable air. The approach angle is now a
+**cliff** (the nape shuts after he has come about **45–60°** round towards you) where it used to be
+a **gradient**. A cliff is more learnable and less subtle. If it reads as sudden — as "it worked a
+second ago and now it does not" — the fix is not the gate, it is that nothing on screen tells you
+his nape has shut. Which brings me to:
+
+### The three things I did NOT fix, and any of them could be what you actually felt
+
+Your sentence is three words and it fits four different defects. This round measured one.
+
+1. **You cannot see the thing that hits.** `FIND-127`: the blade is cast at 90° to where you are
+   looking, and the camera sees ±45.7° — so on the eight of twenty-one ticks that can actually
+   cut, the steel is **44° off screen**. The drawn pair is 0.93 m of model against what is now a
+   2.00 m cast, and I made that gap 0.40 m worse today. The reference's answer to "where do I hit"
+   is **feedback** — its crosshair turns red on the weak point. We have none.
+2. **A slow swing does nothing, silently.** `gear.ron: min_speed_m_s` 8.0. Stand still, swing at a
+   walking titan: the cast **lands**, the blade is inside the nape, and no message is written at
+   all. That reads exactly like a broken hitbox.
+3. **His hitbox, not yours.** `combat::strike::reaches` is a flat cone from the titan's origin with
+   no arm geometry in it — a blow can land with the arm nowhere near you.
+
+**If „hitboxen passen noch nich" was about any of those three, say which and the next round goes
+straight at it.** If it was about the nape, this round is the answer and the three knobs above are
+yours to move.

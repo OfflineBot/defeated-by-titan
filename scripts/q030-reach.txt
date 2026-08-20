@@ -15,8 +15,17 @@
 # deliberately generous: overshooting the script's own end is free, undershooting truncates the
 # run and hides the summary (FIND-032).
 #
-# It logs `tick 154: cut titan 1 Cortex at 20.67 m/s (player 1)` and the F3 overlay of the
-# screenshot reads `pos -11.0 …` and `titan#1 Death`.
+# Re-measured 2026-08-20 against `reach_m` 2.00: it logs `tick 154: cut titan 1 Cortex at
+# 20.67 m/s (player 1)`, `MARK t=154 cortex-pass`, **2 asserts held, exit 0**. The crossing tick
+# is the one this header was written with and it has been back at 154 since FIND-147; it stood at
+# 157 in between (FIND-113). **Read it out of the log, never assume it.**
+#
+# 🔴 **The shipped `docs/images/f030-solid-husk.png` is from 2026-08-10 and is three builds
+# stale.** Its F3 overlay reads `t=168 · pos -11.0 5.4 8.0 · gas 100/100 · Airborne` and
+# `titan#1 Death` — a tank of 100 (it is 15000 since `F-018` on 2026-08-19), no `spd` field and no
+# `Death n/60` counter. The geometry it shows is still the geometry this file flies, but it is
+# **not** evidence about today's build and it wants re-shooting; it was left alone here on purpose
+# (`docs/FINDINGS.md` FIND-148).
 #
 # ⚠️ The picture is called `f030-solid-husk.png` and not `q030-…`: `tools/norms.py` §10 knows
 # f/t/b/p ids and a **question** has no letter of its own. The evidence belongs to `F-030` — it
@@ -26,12 +35,16 @@
 # and a husk's body radius plus the player's is `1.25 + 0.35 = 1.60 m`, so "there is zero
 # margin". **The arithmetic leaves out two lengths that stand in the same two files.**
 #
-#   reach_m 1.60  +  titan.ron husk.cortex_radius_m 0.55  +  blades.thickness_m 0.12  =  2.27 m
+#   reach_m 2.00  +  titan.ron husk.cortex_radius_m 0.55  +  blades.thickness_m 0.20  =  2.75 m
 #   against a clearance of                                    1.25 + 0.35             =  1.60 m
-#                                                                            margin  = +0.67 m
+#                                                                            margin  = +1.15 m
+#
+# ⚠️ Those two gear.ron numbers were 1.60 and 0.12 until 2026-08-20 (margin +0.67 m). They grew
+# because five of seven spawnable kinds could not be killed at a 0.60 m cushion and a lurker
+# could not be killed at any offset at all — docs/FINDINGS.md FIND-147, scripts/f030-hitbox.txt.
 #
 # The blade never has to touch the titan's axis. It has to touch a **sphere** of radius 0.55 m
-# that sits half a head's depth behind the neck, with a swept capsule of radius 0.12 m.
+# that sits half a head's depth behind the neck, with a swept capsule of radius 0.20 m.
 #
 # This run flies the pass at **x = −1.80**, i.e. with **0.20 m of air** between the two
 # capsules — a margin a player can hold, not the last centimetre of the clearance. The whole
@@ -52,15 +65,16 @@
 # (`src/titan/rig.rs: cortex_in_head`). Standing at z = 0.55 the blade's line runs straight
 # through its centre, so the only thing being measured is the lateral offset. Looking at yaw 0
 # (Bevy's forward, −Z) the **right** blade lies on +X (`src/blades/cut.rs: blade_segment`), so
-# the player stands on −X and the blade points inward: from x = −1.80 to x = −0.20, and −0.20
-# is 0.35 m inside a cortex sphere of radius 0.55.
+# the player stands on −X and the blade points inward: at `reach_m` 2.00 the segment runs from
+# x = −1.80 to **x = +0.20**, i.e. it carries 0.20 m **past** the centre of a cortex sphere of
+# radius 0.55. It used to stop at x = −0.20, 0.35 m inside the sphere and short of its centre.
 #
 # ## Why the cut lands in `Recover`
 #
 # Identical to `scripts/f030-cortex.txt`: the husk is 1.88 m away on the ground plane, inside
 # `attack_range_m` = 6.0, so he goes `Idle → Pursue → Windup` at once and his torso leans 12°
 # over the next 36 ticks — which carries the cortex almost a metre. `Windup` 36 + `Strike` 12
-# put `Recover` at tick 141..165 of this run and the crossing at ~154, against an upright body.
+# put `Recover` at tick 141..165 of this run and the crossing at 154, against an upright body.
 #
 # 1.5 s of lead-in before anything happens: under `--offscreen` the render pipelines and the
 # block meshes are still coming up in the first second.

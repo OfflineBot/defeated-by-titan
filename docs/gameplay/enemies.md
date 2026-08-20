@@ -91,13 +91,18 @@ cortex sensor out of the world while he carries himself `roll_speed_m_s` backwar
 decision rather than a shortcut: his nape is out of the world in `Idle` and `Pursue` anyway, so
 i-frames there would be invulnerability on a hit zone that is already gone.
 
-🔴 **The bellower still cannot spawn, and there are now two reasons.** The first is the one
-`docs/QUESTIONS.md` Q-028 records: he is class `huge` and `scale.ron: max_spawnable_class` is
-`large`. The second was measured on 2026-08-19 by raising the cap and running the suite, and it is
-worse than "half a kind": **his nape cannot be reached at all.** A 21 m body at `width_fraction`
-0.25 is 2.625 m of radius, plus the player's 0.35 m is 2.975 m of clearance, against
-`reach_m` 1.60 + `cortex_radius_m` 0.70 + `thickness_m` 0.12 = 2.42 m of blade — **−0.555 m**. No
-flying pass cuts that nape at any offset or any speed. And the thing he exists for, the **ear**, is
+🔴 **The bellower still cannot spawn, and since 2026-08-20 there is only ONE reason left.** It is
+the one `docs/QUESTIONS.md` Q-028 records: he is class `huge` and `scale.ron: max_spawnable_class`
+is `large`.
+
+There used to be a second, measured on 2026-08-19 by raising the cap and running the suite, and it
+was worse than "half a kind": **his nape could not be reached at all.** A 21 m body at
+`width_fraction` 0.25 is 2.625 m of radius, plus the player's 0.35 m is 2.975 m of clearance,
+against `reach_m` 1.60 + `cortex_radius_m` 0.70 + `thickness_m` 0.12 = 2.42 m of blade —
+**−0.555 m** (`docs/FINDINGS.md` FIND-124). **That is closed.** `cortex_radius_m` 0.70 → 1.16 (the
+head rule's own ceiling for a 21 m body), `reach_m` 1.60 → 2.00 and `thickness_m` 0.12 → 0.20 give
+**3.36 m of blade against 2.975 m of clearance = +0.385 m**, and the test below now asserts that
+direction instead (FIND-147). And the thing he exists for, the **ear**, is
 `F-051` and does not exist, so a spawnable bellower today calls on sight and pulls a 90 m radius
 with no counterplay, because the counterplay this chapter specifies is *play quietly* and nothing
 can hear gas. Both are pinned by `tests/titan.rs::f064_the_bellower_stays_blocked_until_the_ear_exists`,

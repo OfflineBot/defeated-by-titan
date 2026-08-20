@@ -821,15 +821,21 @@ fn f064_the_cap_refuses_by_name_whatever_the_shipped_cap_happens_to_be() {
 /// seconds — with no counterplay at all, because the counterplay the design specifies is "spend
 /// less gas" and nothing can hear gas.
 ///
-/// 🔴 **And the second half is worse than hollow, and it was measured on 2026-08-19 by raising
-/// the cap and running the suite: he cannot be killed.** `Q-030`'s arithmetic on a 21 m body —
-/// `width_fraction` 0.25 gives a radius of 2.625 m, plus the player's 0.35 m is 2.975 m of
-/// clearance, against `reach_m` 1.60 + `cortex_radius_m` 0.70 + `thickness_m` 0.12 = 2.42 m of
-/// blade. **−0.555 m.** No flying pass reaches that nape at any offset and at any speed, and
-/// `q030_a_titan_wide_enough_really_does_put_the_nape_out_of_reach` says so the moment he is
-/// spawnable. A kind that cannot do the one thing he is for is a judgement call; a kind the
-/// player cannot kill is a bug with a body. The number below is that arithmetic, so this test
-/// carries the reason and not only the decision.
+/// ## 🔴 The second reason is GONE, and that is what this test now records
+///
+/// It used to be worse than hollow: measured on 2026-08-19 by raising the cap and running the
+/// suite, **he could not be killed.** `Q-030`'s arithmetic on a 21 m body — `width_fraction`
+/// 0.25 gives a radius of 2.625 m, plus the player's 0.35 m is 2.975 m of clearance, against
+/// `reach_m` 1.60 + `cortex_radius_m` 0.70 + `thickness_m` 0.12 = 2.42 m of blade. **−0.555 m**
+/// (`docs/FINDINGS.md` FIND-124). A kind the player cannot kill is a bug with a body.
+///
+/// **2026-08-20 closed it from both ends at once**: `cortex_radius_m` 0.70 → 1.16 (the head
+/// rule's own ceiling for a 21 m body), `reach_m` 1.60 → 2.00 and `thickness_m` 0.12 → 0.20 give
+/// **3.36 m of blade against 2.975 m of clearance = +0.385 m**. So the assertion below is
+/// **inverted on purpose**: it no longer says "he is unkillable, which is why he stays out", it
+/// says "he is killable now, and the block is a design decision about the **ear** and nothing
+/// else". It goes red if anyone shortens the blade back under a `huge` body — which would
+/// silently re-open FIND-124 — and the block itself is still asserted one line above.
 #[test]
 fn f064_the_bellower_stays_blocked_until_the_ear_exists() {
     let app = app();
@@ -851,14 +857,16 @@ fn f064_the_bellower_stays_blocked_until_the_ear_exists() {
     let budget_m = d.gear.blades.reach_m + rig.cortex_radius_m + d.gear.blades.thickness_m;
     let margin_m = budget_m - clearance_m;
     assert!(
-        margin_m < 0.0,
-        "the bellower's nape is reachable now ({margin_m:+.3} m of margin) — the strongest \
-         argument for keeping him out has gone, and the block is a design decision again"
+        margin_m > 0.0,
+        "the bellower is unkillable again ({margin_m:+.3} m of margin, {budget_m:.3} m of blade \
+         against {clearance_m:.3} m of clearance). FIND-124 is re-opened: somebody shortened \
+         gear.ron's reach_m/thickness_m or took back his cortex_radius_m, and the only kind in \
+         the game whose nape no arithmetic can reach is back"
     );
     println!(
-        "F-064 the bellower ({}) stays out while max_spawnable_class is `{}` — Q-028, and his \
-         nape is {margin_m:+.3} m out of reach anyway ({budget_m:.3} m of blade against \
-         {clearance_m:.3} m of clearance)",
+        "F-064 the bellower ({}) stays out while max_spawnable_class is `{}` — Q-028, and that \
+         is now the ONLY reason: his nape is {margin_m:+.3} m INSIDE reach ({budget_m:.3} m of \
+         blade against {clearance_m:.3} m of clearance), where FIND-124 measured −0.555 m",
         bellower.size_class, d.scale.titan.max_spawnable_class
     );
 }
@@ -982,6 +990,13 @@ struct Pass {
 /// `model_cortex` is the `.glb`'s own `cortex` empty, in the root's space, or `None` for the
 /// computed rig. It is the one knob that can move the kill zone without moving a single length
 /// in `assets/data/`, which is exactly why it needs its own passes.
+///
+/// `turned_deg` yaws the titan on the spot **before** the pass, so the same flight line can be
+/// flown at any bearing off his back. Added 2026-08-20 for `F-030`'s rear gate
+/// (`titan.ron: cortex_half_angle_deg`): the approach angle stopped being a matter of
+/// centimetres that day and became a matter of degrees, and nothing here could measure a degree.
+/// Positive turns him **towards** the side the player passes on, i.e. it raises the bearing.
+/// Only meaningful with [`Tracking::Off`] — a titan whose brain is turning will undo it.
 fn fly_past_a_titan(
     kind: &str,
     dir: Vec3,
@@ -990,6 +1005,7 @@ fn fly_past_a_titan(
     widen: Option<f32>,
     tracking: Tracking,
     model_cortex: Option<Vec3>,
+    turned_deg: f32,
 ) -> Pass {
     let mut app = app_with_hits();
     if tracking == Tracking::Off {
@@ -1073,9 +1089,19 @@ fn fly_past_a_titan(
     // exactly what they measured before this parameter existed. With one the sensor has been
     // moved by `rig::cortex_from_the_model`, and the pass is aimed at where it moved to — a
     // fixture that keeps aiming at the computed point would report a miss that is its own.
-    let cortex = match model_cortex {
-        None => Vec3::new(0.0, LANE_Y + rig.cortex_height_m, rig.head_m * 0.5),
-        Some(_) => {
+    if turned_deg != 0.0 {
+        // On the spot, after the run-up, so `titan::brain` has already written whatever it was
+        // going to write this tick and cannot undo it before the pass starts.
+        let root = the_titan(&mut app);
+        let mut at = app.world_mut().get_mut::<Transform>(root).expect("the titan has a transform");
+        at.rotation = Quat::from_rotation_y(turned_deg.to_radians());
+        ticks(&mut app, 1);
+    }
+    let cortex = match (model_cortex, turned_deg != 0.0) {
+        (None, false) => Vec3::new(0.0, LANE_Y + rig.cortex_height_m, rig.head_m * 0.5),
+        // A turned titan carries his nape round with him, so the arithmetic above stops
+        // describing where it is. Read it off the sensor, exactly as the model case does.
+        _ => {
             let root = the_titan(&mut app);
             let sensor = part_entity(&app, root, TitanPart::Cortex).expect("the rig has a cortex");
             app.world().get::<GlobalTransform>(sensor).expect("global").translation()
@@ -1163,7 +1189,7 @@ fn q030_a_flying_player_reaches_the_nape_of_a_solid_husk() {
         "a husk plus a player needs {clearance_m:.3} m of clearance, Q-030 is written against 1.60"
     );
 
-    let p = fly_past_a_titan("husk", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off, None);
+    let p = fly_past_a_titan("husk", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off, None, 0.0);
     assert!(
         p.cortex_tick.is_some(),
         "a pass at 30 m/s with {AIR_M:.2} m of air landed NO cortex hit. Closest approach \
@@ -1199,7 +1225,7 @@ fn q030_a_flying_player_reaches_the_nape_of_a_solid_husk() {
 /// The same at `large` — 14 m, where Q-030's arithmetic says the blade is **0.50 m short**.
 ///
 /// It is not short: the 0.50 m is `reach_m` measured against the body radius alone, and the two
-/// lengths it leaves out (`cortex_radius_m` 0.60 and `thickness_m` 0.12) are worth 0.72 m.
+/// lengths it leaves out (`cortex_radius_m` 0.77 and `thickness_m` 0.20) are worth 0.97 m.
 #[test]
 fn q030_the_nape_is_reachable_on_a_large_titan_too() {
     let d = data(&app());
@@ -1214,7 +1240,7 @@ fn q030_the_nape_is_reachable_on_a_large_titan_too() {
         (clearance_m - 2.10).abs() < 0.01,
         "a `large` titan plus a player needs {clearance_m:.3} m, Q-030 is written against 2.10"
     );
-    let p = fly_past_a_titan("warden", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off, None);
+    let p = fly_past_a_titan("warden", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off, None, 0.0);
     assert!(
         p.cortex_tick.is_some(),
         "warden (14 m): no cortex hit. Clearance {clearance_m:.3} m, closest approach {:.3} m, \
@@ -1279,7 +1305,7 @@ fn q030_the_nape_is_reachable_on_a_large_titan_too() {
     let (tightest, _, tightest_margin) = margins[0].clone();
     let mut flyable_air_m = 0.0f32;
     for air_m in [0.30f32, 0.25, 0.20, 0.15, 0.10, 0.05] {
-        if fly_past_a_titan(&tightest, Vec3::NEG_Z, air_m, 30.0, None, Tracking::Off, None)
+        if fly_past_a_titan(&tightest, Vec3::NEG_Z, air_m, 30.0, None, Tracking::Off, None, 0.0)
             .cortex_tick
             .is_some()
         {
@@ -1308,10 +1334,10 @@ fn q030_the_nape_is_cut_from_behind_and_not_from_the_front() {
     for kind in ["husk", "warden"] {
         // Flying along −Z the player comes over the titan's back (a fresh titan faces −Z), and
         // the blade meets the cortex before it meets anything else.
-        let behind = fly_past_a_titan(kind, Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off, None);
+        let behind = fly_past_a_titan(kind, Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off, None, 0.0);
         // Flying along +X the player is in **front** of the titan and the blade swings towards
         // his back, through the whole depth of the body.
-        let front = fly_past_a_titan(kind, Vec3::X, AIR_M, 30.0, None, Tracking::Off, None);
+        let front = fly_past_a_titan(kind, Vec3::X, AIR_M, 30.0, None, Tracking::Off, None, 0.0);
         assert!(behind.cortex_tick.is_some(), "{kind}: the pass from behind did not land");
         assert!(
             front.cortex_tick.is_none(),
@@ -1335,12 +1361,20 @@ fn q030_the_nape_is_cut_from_behind_and_not_from_the_front() {
 /// is changed *in the resource*, and the ★ test's assertion has to fall.
 ///
 /// It also puts a number on how much room 0.25 has. `width_fraction` is not on a cliff edge:
-/// the husk's nape stays reachable up to about **0.33**, and 0.25 is 32 % below that.
+/// the husk's nape stays reachable up to about **0.45**, and 0.25 is 44 % below that.
+///
+/// ⚠️ **The list moved on 2026-08-20 and the reason is the point of the test, not a repair.**
+/// It used to run to 0.45 and the cliff sat near 0.33; `gear.ron`'s `reach_m` 1.6 → 2.0 and
+/// `thickness_m` 0.12 → 0.20 pushed the same cliff to between 0.41 and 0.49, so the old top of
+/// the sweep stopped being a miss. The claim is unchanged — *there is a width at which the nape
+/// is unreachable, and `scale.ron`'s 0.25 is well below it* — and the sweep is re-aimed at where
+/// that width now is. **The `far_too_wide` assert is what stops this from silently becoming a
+/// test that proves nothing** (`docs/FINDINGS.md` FIND-147).
 #[test]
 fn q030_a_titan_wide_enough_really_does_put_the_nape_out_of_reach() {
     let mut reachable = Vec::new();
-    for fraction in [0.25f32, 0.29, 0.33, 0.37, 0.45] {
-        let p = fly_past_a_titan("husk", Vec3::NEG_Z, AIR_M, 30.0, Some(fraction), Tracking::Off, None);
+    for fraction in [0.25f32, 0.33, 0.41, 0.49, 0.65] {
+        let p = fly_past_a_titan("husk", Vec3::NEG_Z, AIR_M, 30.0, Some(fraction), Tracking::Off, None, 0.0);
         reachable.push((fraction, p.cortex_tick.is_some(), p.blade_gap_m));
     }
     let at_file_value = reachable[0];
@@ -1843,9 +1877,9 @@ fn f030_a_bound_model_cannot_drag_the_nape_round_to_the_front() {
         let k = d.titan(kind).unwrap_or_else(|| panic!("titan.ron has no {kind}"));
         let anchor = drop_anchor(raw, d.titan_cortex_height_m(k).expect("cortex height"));
         let behind =
-            fly_past_a_titan(kind, Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off, Some(anchor));
+            fly_past_a_titan(kind, Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off, Some(anchor), 0.0);
         let front =
-            fly_past_a_titan(kind, Vec3::X, AIR_M, 30.0, None, Tracking::Off, Some(anchor));
+            fly_past_a_titan(kind, Vec3::X, AIR_M, 30.0, None, Tracking::Off, Some(anchor), 0.0);
         assert!(
             behind.cortex_tick.is_some(),
             "{kind} with the drop's anchor: the pass from behind did not land (blade {:+.3} m). \
@@ -2230,67 +2264,114 @@ fn q031_a_titan_turns_while_winding_up() {
 }
 
 
-/// ★ **What `Q-031` cost the nape, as a number — and it is not the nape.**
+/// ★ **Is the approach angle a thing this game has?** — `Q-031`'s own title, re-answered on
+/// 2026-08-20 with a different instrument, because the old answer stopped being measurable.
 ///
-/// Since 2026-08-13 a titan turns towards his target inside his own `attack_range_m`
-/// (`src/titan/brain.rs::walk`), so the ideal pass of [`fly_past_a_titan`] is no longer flown at
-/// a statue: the body rotates under the blade while the player crosses. That is the mechanic
-/// working — but it eats margin off a cut that had very little to begin with, and `F-030` is a
-/// 🟧 row that may not be traded away for it.
+/// ## What this test used to assert, and why that is gone
 ///
-/// **Measured, both kinds, tracking on:**
+/// A **snapshot**: *the warden misses at 0.20 m of air and lands at 0.15*. Two things were
+/// wrong with it. `FIND-089` put the margin behind that must-miss at **0.020 m of blade**, and
+/// `FIND-123` then showed the number was measured through a contaminated path — the same swing
+/// that cut the nape had opened the warden's guard with its own torso graze. A must-miss on a
+/// contaminated 2 cm is a tripwire on noise, and `gear.ron`'s `reach_m` 1.6 → 2.0 plus
+/// `thickness_m` 0.12 → 0.20 duly tripped it.
 ///
-/// | kind | air the pass still lands with |
-/// |---|---|
-/// | husk (10 m) | 0.20 m — unchanged, blade 0.131 m *inside* the cortex |
-/// | warden (14 m) | **0.15 m**, down from 0.20 m |
+/// ## What the approach angle IS now, and it is a rule instead of a remainder
 ///
-/// So the nape stays reachable on both. What moved is the widest gap between the two capsules a
-/// player can leave himself on a `large` titan: 20 cm before, 15 cm now, because the warden
-/// covers 10.7° of yaw during the 16 ticks of the pass (`turn_deg_per_s: 40`). At 45 and 60 m/s
-/// the same 0.15 m lands as well, so it is a width and not a timing.
+/// `titan.ron: cortex_half_angle_deg` — the nape may only be cut from inside an arc off the
+/// titan's own **backward** vector (`blades::cut::nape_is_exposed`). So the question stopped
+/// being *how many centimetres of margin does his turn eat* and became *at what BEARING does
+/// his nape shut*, which is a degree and not a length. Measured here by yawing the body on the
+/// spot and flying the identical line at it.
 ///
-/// Goes red if a titan is ever given enough `turn_deg_per_s` to swing his nape out of a pass
-/// entirely — which is the failure this test exists to catch, and it is a `titan.ron` failure,
-/// not a code one.
+/// The ideal pass sits about **73°** off a husk's back and **71°** off a warden's, so the file's
+/// 115° and 110° leave 42° and 39° of turn before the nape shuts. That is the number a player
+/// feels: *you may cut him until he has come about 40° towards you.*
+///
+/// ⚠️ **The warden's contamination is NOT fixed here.** This fixture still opens his guard with
+/// the pass's own torso graze. The clean two-pass version lives in `scripts/f030-hitbox.txt`,
+/// where the opening pass is flown across his front, `assert titans == 1` proves it was not the
+/// kill, and the nape pass comes from the other side afterwards.
+///
+/// ⚠️ **And one thing the round cost, recorded rather than hidden:** the turn no longer eats
+/// measurable margin. Measured the same day with a 5 cm sweep of `air_m` from 0.00 to 1.60 m, a
+/// warden's widest landing pass is **0.95 m with tracking on and 0.95 m with it off** — the
+/// 10.7° he covers during a 16-tick pass no longer moves his nape out of a 0.30 m-thick, 2.00 m
+/// blade. So the approach angle is carried **entirely by the gate**: a cliff at 110°, not the
+/// gradient it used to be. That is a real loss and it belongs to the user's judgement, not to a
+/// silent assert — `docs/QUESTIONS.md` Q-047.
 #[test]
 fn q031_the_nape_survives_a_titan_who_tracks_you() {
-    // The husk keeps the full 20 cm.
-    let husk = fly_past_a_titan("husk", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::On, None);
-    assert!(
-        husk.cortex_tick.is_some(),
-        "husk: a tracking titan swung his own nape out of the ideal pass at {AIR_M} m of air \
-         (blade {:+.3} m). turn_deg_per_s has been raised past what the cut can follow",
-        husk.blade_gap_m
-    );
+    let d = data(&app());
+    let mut table = Vec::new();
+    for kind in ["husk", "warden"] {
+        // The tracked ideal pass still lands at every speed the fixture is flown at. This is the
+        // half `F-030` may not lose: a nape that is only reachable at one speed is not reachable.
+        for speed in [30.0_f32, 45.0, 60.0] {
+            let p = fly_past_a_titan(kind, Vec3::NEG_Z, AIR_M, speed, None, Tracking::On, None, 0.0);
+            assert!(
+                p.cortex_tick.is_some(),
+                "{kind} at {speed} m/s: no cut with {AIR_M} m of air (blade {:+.3} m). The nape \
+                 of a tracking titan has stopped being reachable at the criterion's own offset, \
+                 which is F-030 traded away for Q-031 and is not an acceptable price",
+                p.blade_gap_m
+            );
+            assert!(p.closest_m > 0.0, "{kind} at {speed} m/s: the capsules touched");
+        }
 
-    // The warden does not, and this is the number: 0.15 m, at every speed the pass is flown at.
-    let tight_m = 0.15;
-    let wide = fly_past_a_titan("warden", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::On, None);
-    assert!(
-        wide.cortex_tick.is_none(),
-        "warden: the pass at {AIR_M} m of air lands again (blade {:+.3} m). Either \
-         turn_deg_per_s fell or a length moved — re-measure the table in this test's comment \
-         instead of deleting the line",
-        wide.blade_gap_m
-    );
-    for speed in [30.0_f32, 45.0, 60.0] {
-        let p = fly_past_a_titan("warden", Vec3::NEG_Z, tight_m, speed, None, Tracking::On, None);
+        // ---- and the gate, swept in degrees ------------------------------------------------
+        //
+        // The body is yawed on the spot before the identical line is flown at it, so the ONLY
+        // thing that changes between two runs is the bearing the blade arrives on. Coarse on
+        // purpose (5°): what is asserted is that a shut-off exists and sits near the file's own
+        // number, not that it sits on a particular degree.
+        let gate_deg = d.titan(kind).expect("kind").cortex_half_angle_deg;
+        let mut shut_at = None;
+        let mut turned = 0.0f32;
+        while turned <= 90.0 {
+            let p = fly_past_a_titan(kind, Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off, None, turned);
+            if p.cortex_tick.is_none() {
+                // 🔴 The blade has to be INSIDE the cortex when this happens, or the pass was
+                // refused by geometry and this sweep is measuring the wrong thing entirely.
+                assert!(
+                    p.blade_gap_m < 0.0,
+                    "{kind}: the pass stopped landing at {turned}° of turn with the blade \
+                     {:+.3} m SHORT of the cortex — that is the reach running out, not the gate. \
+                     This sweep is not measuring cortex_half_angle_deg",
+                    p.blade_gap_m
+                );
+                shut_at = Some((turned, p.blade_gap_m));
+                break;
+            }
+            turned += 5.0;
+        }
+        let (shut_deg, gap_m) = shut_at.unwrap_or_else(|| {
+            panic!(
+                "{kind}: the nape was still cuttable with the body yawed 90° towards the pass. \
+                 cortex_half_angle_deg is {gate_deg}° and it is governing nothing — the titan is \
+                 a floating bullseye again, which is FIND-012's shape in the other direction"
+            )
+        });
         assert!(
-            p.cortex_tick.is_some(),
-            "warden at {speed} m/s: no cut with {tight_m} m of air (blade {:+.3} m). The nape of \
-             a `large` titan has stopped being reachable at all, which is F-030 traded away for \
-             Q-031 and is not an acceptable price",
-            p.blade_gap_m
+            shut_deg > 10.0,
+            "{kind}: the nape shuts after only {shut_deg}° of turn. A player cannot hold a line \
+             that tight and the cut will read as broken"
         );
-        assert!(p.closest_m > 0.0, "warden at {speed} m/s: the capsules touched");
+        table.push((kind, gate_deg, shut_deg, gap_m));
     }
+
     println!(
-        "Q-031 tracked nape: husk lands at {AIR_M} m of air (blade {:+.3} m) · warden needs \
-         {tight_m} m, misses at {AIR_M} (blade {:+.3} m)",
-        husk.blade_gap_m, wide.blade_gap_m
+        "Q-031 the approach angle, in degrees: {}",
+        table
+            .iter()
+            .map(|(k, gate, shut, gap)| format!(
+                "{k} shuts after {shut:.0}° of turn (gate {gate:.0}°, blade {gap:+.2} m inside)"
+            ))
+            .collect::<Vec<_>>()
+            .join(" · ")
     );
 }
+
 
 // ===========================================================================================
 // `F-029` Dynamische Ankerpunkte — **a titan holds a rope, and the rope rides him.**

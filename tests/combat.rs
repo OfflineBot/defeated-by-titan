@@ -285,9 +285,18 @@ fn watch(app: &mut App, n: u64) -> Watch {
 
 /// The lane every pass is flown in. Above the church (35 m), the tallest thing in the city.
 const LANE_Y: f32 = 60.0;
-/// How far to the right of the flight line the target sits. Inside `gear.ron: reach_m` (1.6 m)
-/// and not at its very tip, so the test measures the cut and not the last centimetre of reach.
-const REACH_X: f32 = 0.8;
+/// How far to the right of the flight line the target sits: **half of `gear.ron: reach_m`**, so
+/// the blade straddles it and the test measures the cut and not the last centimetre of reach.
+///
+/// ⚠️ 0.8 → 1.0 on 2026-08-20 with `reach_m` 1.6 → 2.0, and it is not cosmetic. At 0.8 the hand
+/// sat at x −0.8 and a 2.0 m blade reached to x +1.2, plus `thickness_m` to **+1.45** — and a
+/// husk's arm box spans `w/2 .. 3w/4` = **1.25 .. 1.875** (`titan::rig`'s header). So every
+/// "chest pass" in this file silently started clipping the right arm: an extra `HitZoneOf`
+/// refinement, an extra zone in the mask, an extra 0.06 of sharpness and a second stagger.
+/// Three tests went red on it at once and all three were right to.
+/// `f032_the_chest_is_still_the_torso_after_the_limbs_got_their_own_zones` asserts the tie to
+/// `reach_m`, so the next person to move that number gets a red test and not a mystery.
+const REACH_X: f32 = 1.0;
 
 /// A target: a body capsule on `LAYER_TITAN_BODY` with a cortex sphere **inside** it on
 /// `LAYER_TITAN_CORTEX`, exactly the way `titan::rig::build_rig` assembles the real one.
@@ -323,7 +332,7 @@ fn spawn_target(app: &mut App, id: u32, cortex_m: Vec3, cortex_r: f32, kinematic
             // impact. Measured, not assumed: with a solid body the player at 30 m/s bounces off
             // the fixture at 1.7 m from the cortex (`lv` turned to (-28.4, 0, -13.0)) and no
             // pass ever reaches the target. The real husk IS solid and 2.5 m wide while
-            // `gear.ron: reach_m` is 1.60 m — that is a finding about the numbers, not about
+            // `gear.ron: reach_m` is 2.00 m — that is a finding about the numbers, not about
             // the cut, and it is reported as one.
             CollisionLayers::new(LAYER_TITAN_BODY, LayerMask::NONE),
         ))
@@ -714,7 +723,7 @@ fn f030_the_cut_kills_the_real_husk() {
     );
 
     // ⚠️ The player is put on his own collision layer for this pass. The husk's body capsule
-    // is solid and 2.5 m wide and `gear.ron: reach_m` is 1.60 m — measured, the player at
+    // is solid and 2.5 m wide and `gear.ron: reach_m` is 2.00 m — measured, the player at
     // 30 m/s slams into him and is thrown sideways before the blade is anywhere near the nape.
     // That is a **finding about the numbers** (`reach_m` vs. `scale.ron: width_fraction`), and
     // this test is about the cut. Nothing in the repo wears `LAYER_WORLD` today
@@ -770,8 +779,19 @@ fn f030_the_cost_of_one_thousand_casts() {
                 // blade past the target the way a real one does.
                 let z = -2.0 + i as f32 * 0.004;
                 let offset = Vec3::new(0.0, 0.0, z);
-                if sweep(&space, me, thickness, a + offset, b + offset, Vec3::new(0.0, 0.0, -0.5))
-                    .is_some()
+                // `|_, _| true` — the gate of `F-030`'s rear cone is not what this benchmark
+                // measures, and a rejected cortex would fall through to a SECOND cast and make
+                // the µs figure describe two casts on some iterations and one on others.
+                if sweep(
+                    &space,
+                    me,
+                    thickness,
+                    a + offset,
+                    b + offset,
+                    Vec3::new(0.0, 0.0, -0.5),
+                    |_, _| true,
+                )
+                .is_some()
                 {
                     found += 1;
                 }
@@ -1970,6 +1990,52 @@ fn every_kind_carries_a_strike_half_angle_in_range() {
     );
 }
 
+/// The range guard on `cortex_half_angle_deg`, the twin of the one above it — and it also
+/// checks the **derivation** the file claims for its eight values, because a rule that only
+/// lives in a comment is a rule that drifts.
+///
+/// `titan.ron` says every value is `90 + turn_deg_per_s × 0.15 s + 15°`, rounded to the nearest
+/// 5, where the 0.15 s is the swing's own press-to-contact time out of `gear.ron`. That is not
+/// decoration: **90° would be the literal rear hemisphere and it is unplayable**, because a
+/// titan turns toward you while the blade is in the air and a bearing the player pressed at is
+/// always smaller than the one the cut lands at. The margin is what he turns, plus a tick and a
+/// half.
+#[test]
+fn every_kind_carries_a_cortex_half_angle_in_range() {
+    let app = app();
+    let d = data(&app);
+    assert!(!d.titans.kinds.is_empty(), "titan.ron has no kinds — the loop below is vacuous");
+    let blades = &d.gear.blades;
+    let contact_s = (blades.active_from_s + blades.active_to_s) * 0.5;
+    for (key, kind) in &d.titans.kinds {
+        let deg = kind.cortex_half_angle_deg;
+        assert!(
+            (45.0..=180.0).contains(&deg),
+            "titan.ron: {key}.cortex_half_angle_deg is {deg}, outside [45, 180]"
+        );
+        // The gate must give back at least what this kind's own turn takes during one swing,
+        // or a correctly aimed press lands as a torso graze and reads as a broken hitbox.
+        let owed = 90.0 + kind.turn_deg_per_s * contact_s;
+        assert!(
+            deg >= owed,
+            "titan.ron: {key}.cortex_half_angle_deg is {deg}, but he turns {}°/s and the swing \
+             takes {contact_s:.2} s from press to contact — a player who presses at 90° is at \
+             {owed:.1}° when the blade lands, and this gate refuses him",
+            kind.turn_deg_per_s
+        );
+    }
+    println!(
+        "F-030 cortex gates ({:.2} s press-to-contact): {}",
+        contact_s,
+        d.titans
+            .kinds
+            .iter()
+            .map(|(k, v)| format!("{k} {}° (turns {}°/s)", v.cortex_half_angle_deg, v.turn_deg_per_s))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    );
+}
+
 // ---------------------------------------------------------------------------
 // F-032 — a blade in the body is not a kill. It is a stagger.
 // ---------------------------------------------------------------------------
@@ -2009,7 +2075,7 @@ fn a_standing_husk(app: &mut App) -> (Entity, Vec3) {
         .translation();
     // ⚠️ The player passes through the solid husk for these tests, exactly as
     // `f030_the_cut_kills_the_real_husk` does and for the same measured reason: the body
-    // capsule is 2.5 m wide and `gear.ron: reach_m` is 1.60 m, so a 30 m/s pass slams into him
+    // capsule is 2.5 m wide and `gear.ron: reach_m` is 2.00 m, so a 30 m/s pass slams into him
     // and is thrown sideways before the blade is anywhere near. That is a finding about the
     // numbers; these tests are about what a landed cut MEANS.
     let me = player(app);
@@ -2349,6 +2415,15 @@ fn f032_the_chest_is_still_the_torso_after_the_limbs_got_their_own_zones() {
     let mut app = app();
     let d = data(&app);
     let husk_r = d.titan("husk").expect("husk").cortex_radius_m;
+    // 🔴 The fixture's own tie to the file. The blade has to STRADDLE the chest line, or its
+    // tip runs into the arm box at `w/2` and this test measures the arm — which is exactly what
+    // happened on 2026-08-20 when `reach_m` grew and `REACH_X` did not. See [`REACH_X`].
+    assert!(
+        (REACH_X - d.gear.blades.reach_m * 0.5).abs() < 1e-6,
+        "REACH_X is {REACH_X} but gear.ron: reach_m is {} — the pass is no longer centred on the \
+         chest and the zones below describe a different line than the one this test is named for",
+        d.gear.blades.reach_m
+    );
     let (_, cortex) = a_standing_husk(&mut app);
 
     let gaps = fly_past(&mut app, cortex, husk_r, 30.0, cortex.y - 2.4, 2, 8);
