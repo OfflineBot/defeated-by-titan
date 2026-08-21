@@ -365,6 +365,20 @@ chained command whose destructive half ran and whose restorative half did not, b
 and a rewrite *plus* a mistake would break it irrecoverably.
 **So the message has to be right the FIRST time** — run
 `python3 tools/norms.py --commit-msg .git/COMMIT_EDITMSG` **before** committing, not after
+
+🔴 **And never pipe that check into anything.** Measured 2026-08-20, after it had already let a
+bad subject through: `norms.py --commit-msg X | tail -1 && git commit` **always commits**, because
+a pipeline's exit status is the LAST command's and `tail` always succeeds. The check printed its
+violation and the guard never fired — the commit is public and, by the rule above, has to stay.
+**Run it bare and let it gate:**
+
+```bash
+python3 tools/norms.py --commit-msg /tmp/cm.txt || echo "FIX THE MESSAGE, DO NOT COMMIT"
+python3 tools/norms.py --commit-msg /tmp/cm.txt && git commit -q -F /tmp/cm.txt   # bare, no pipe
+```
+
+Same shape as the `$?`-after-a-pipeline trap already recorded for the game's exit code. **A guard
+you cannot see failing is not a guard**
 (the 72-character subject limit is the one that bit twice), and never chain a destructive git
 command with anything.
 
