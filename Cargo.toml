@@ -84,6 +84,19 @@ avian3d = { version = "0.7.0", default-features = false, features = [
 default = ["x11"]
 x11 = ["bevy/bevy_winit", "bevy/x11"]
 wayland = ["bevy/bevy_winit", "bevy/wayland"]
+# Windows. winit needs no display-server feature there — `bevy_winit` alone is the whole
+# story, and `x11`/`wayland` are Linux-only and would fail to build. So a Windows build is
+#     cargo run --no-default-features --features windows
+# ⚠️ **UNTESTED, AND IT CANNOT BE TESTED HERE.** `cargo check --no-default-features --features
+# windows` on Linux fails with **"The platform you're compiling for is not supported by winit"**
+# — measured 2026-08-20. That error is **correct and expected**: winit needs a display-server
+# feature on Linux and none on Windows. **Do not "fix" it by adding x11 back**, which would
+# break the Windows build this feature exists for.
+# There is no Windows machine in this project, and no `cfg(target_os)`, `cfg(unix)`, `/dev/` or
+# `std::os::unix` anywhere in `src/` (checked 2026-08-20) — the game code is platform-blind.
+# What is NOT proven: that the dependency tree builds, that `assets_dir()` finds `assets\` from
+# a Windows working directory, and that wgpu picks a sane backend. See `docs/windows.md`.
+windows = ["bevy/bevy_winit"]
 # Without `wav` every .wav loads without an error and plays silence (prompts/init.md §3).
 audio = ["bevy/audio", "bevy/wav"]
 # Transcendentals identical across platforms (sin/cos/atan2 through libm instead of the
