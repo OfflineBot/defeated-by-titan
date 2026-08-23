@@ -7,12 +7,12 @@
 //! there is nothing in the struct it cannot carry.
 //!
 //! ```text
-//! byte 0        1..5        5..13     13..33                33..37
+//! byte 0        1..5        5..13     13..29                29..33
 //! ┌─────────┬───────────┬──────────┬─────────────────────┬──────────┐
-//! │ version │ player id │   tick   │ 5 × f32 (move, look,│ buttons  │
-//! │   0x01  │    u32    │   u64    │   spread)           │   u32    │
+//! │ version │ player id │   tick   │ 4 × f32 (move, look)│ buttons  │
+//! │   0x01  │    u32    │   u64    │                     │   u32    │
 //! └─────────┴───────────┴──────────┴─────────────────────┴──────────┘
-//!                            37 bytes, always
+//!                            33 bytes, always
 //! ```
 //!
 //! ## Why by hand and not with a serde format
@@ -20,8 +20,8 @@
 //! `ron` is already a dependency and `Intent` already derives `Serialize` — so this could
 //! have been three lines. It is not, for two reasons that are worth 60:
 //!
-//! - **A fixed size is a property, not an accident.** 37 bytes at 60 Hz is 2.2 kB/s per
-//!   player, and twenty players are 44 kB/s in each direction. That number has to be
+//! - **A fixed size is a property, not an accident.** 33 bytes at 60 Hz is 2.0 kB/s per
+//!   player, and twenty players are 40 kB/s in each direction. That number has to be
 //!   *knowable* before the netcode is designed around it, and a text format makes it depend
 //!   on how many decimal places a yaw happens to need. [`FRAME_BYTES`] is a constant and
 //!   `wire_a_frame_is_always_the_same_size` is the test that keeps it one.
@@ -46,7 +46,7 @@ use crate::shared::{Buttons, Intent, PlayerId};
 pub const VERSION: u8 = 0x01;
 
 /// How many bytes one frame is. **Always** — see the module header.
-pub const FRAME_BYTES: usize = 1 + 4 + 8 + 5 * 4 + 4;
+pub const FRAME_BYTES: usize = 1 + 4 + 8 + 4 * 4 + 4;
 
 /// One player's wish for one tick, as it travels.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -86,14 +86,14 @@ pub fn encode(frame: &Frame) -> [u8; FRAME_BYTES] {
     out[0] = VERSION;
     out[1..5].copy_from_slice(&frame.player.0.to_le_bytes());
     out[5..13].copy_from_slice(&i.tick.to_le_bytes());
-    for (slot, value) in [i.move_x, i.move_y, i.yaw, i.pitch, i.aim_spread_deg]
+    for (slot, value) in [i.move_x, i.move_y, i.yaw, i.pitch]
         .iter()
         .enumerate()
     {
         let at = 13 + slot * 4;
         out[at..at + 4].copy_from_slice(&value.to_le_bytes());
     }
-    out[33..37].copy_from_slice(&i.buttons.0.to_le_bytes());
+    out[29..33].copy_from_slice(&i.buttons.0.to_le_bytes());
     out
 }
 
@@ -124,8 +124,7 @@ pub fn decode(bytes: &[u8]) -> Result<Frame, WireError> {
             move_y: f32_at(17),
             yaw: f32_at(21),
             pitch: f32_at(25),
-            aim_spread_deg: f32_at(29),
-            buttons: Buttons(u32_at(33)),
+            buttons: Buttons(u32_at(29)),
         },
     })
 }
@@ -145,7 +144,6 @@ mod tests {
                 move_y: 0.5,
                 yaw: 1.234_5,
                 pitch: -0.678_9,
-                aim_spread_deg: 11.25,
                 buttons,
                 tick: 4_294_967_400, // deliberately past u32 — the tick is a u64
             },
@@ -163,7 +161,7 @@ mod tests {
     fn wire_a_frame_is_always_the_same_size() {
         // 37 bytes at 60 Hz is 2.2 kB/s per player. Twenty of them are 44 kB/s, and that
         // number has to stay knowable — see the module header.
-        assert_eq!(FRAME_BYTES, 37);
+        assert_eq!(FRAME_BYTES, 33);
         assert_eq!(encode(&a_frame()).len(), FRAME_BYTES);
         assert_eq!(
             encode(&Frame { player: PlayerId(0), intent: Intent::default() }).len(),

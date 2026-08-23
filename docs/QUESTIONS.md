@@ -1481,15 +1481,23 @@ level with the *horizon* instead.
 
 ---
 
-## Q-041 — the marker now dodges the crosshair 4× as often. Does that read as the snap moving up?
+## Q-041 — the marker now dodges the crosshair on 78 % of samples. Does that read as the snap moving up?
 
 **Raised 2026-08-19, same round.** A cost of the feature and it is measured, not feared.
+
+⚠️ **Updated 2026-08-23 and the number roughly doubled again, for a second and unrelated reason**
+(`FIND-154`): `F-023`'s fan is retired, so **both** arms now carry the same point instead of two
+different ones, and the pair dodges together where one of them used to be off at its own side ray.
+Same sweep: **588 of 752** samples step out of the core, against 302 of 708 yesterday and 101 of
+768 the day before. **The worst step did not move** — 20.5 px against 21.5 and 20.0 — and the
+horizontal error is 0.45 px over the whole sweep, so this is still a question about *how often*,
+never about *how far*. The three answers below stand unchanged.
 
 Every candidate now projects onto the crosshair's own screen row, so a marker near the middle of
 the screen collides with `SIGHT_CORE_PX` — the 6 px square the player is cutting — far more often
 than it did when candidates were scattered over a disc. `tests/hud.rs::f023_the_drawn_pixel_...`,
-same sweep, before and after: **101 of 768 samples stepped out of the core → 302 of 708**, and the
-worst step went 20.0 px → 21.5 px. The step is bounded (`full_h/2 + SIGHT_CORE_PX`) and it is the
+same sweep, across the three rounds: **101 of 768 → 302 of 708 → 588 of 752**, and the worst step
+went 20.0 px → 21.5 px → 20.5 px. The step is bounded (`full_h/2 + SIGHT_CORE_PX`) and it is the
 only vertical movement a marker has left — but it is now the common case rather than the corner one.
 
 **The three answers:**
@@ -1866,72 +1874,58 @@ yours to move.
 
 ---
 
-## Q-048 — both ropes to the crosshair, or the left/right split you asked for?
+## Q-048 — both ropes to the crosshair, or the left/right split you asked for? ✅ ANSWERED
 
 **Opened:** 2026-08-23, while the user played the reference on the Windows machine (`FIND-149`).
-**Status:** 🔴 open — **his call, because both sides of it are his own words.**
+**Answered:** 2026-08-23, by him, in one sentence:
 
-### The conflict
+> *„dann das auseinander mit q und e kann weg. einfach da wo ich hinschau (also fadenkreuz) geht
+> das seil hin."*
 
-**2026-08-12, about ours:**
+**`F-023` is retired. Both ropes fly at the point under the crosshair.** This overrides his own
+2026-08-12 instruction that built the fan (*„es muss mehr rechts und links spreaden!!"*), and the
+standing rule says it may — `CLAUDE.md`: *his instruction beats my derivation, and beats his own
+earlier number.* The fan was **deleted, not flagged**: a dead branch nobody selects is worse than
+a deletion, and this repository already refuses registry rows nothing can spawn.
 
-> *„es muss mehr rechts und links spreaden!! … und da wo das seil am ende auch landet soll die
-> markierung hin vom seil"*
+### What changed, in one line each
 
-That became `F-023` and is built: `src/shared/gear.rs:156-168` (`ArmAim`) splits the candidate set
-relative to the camera forward axis — *„Q bedient ausschliesslich die linke Menge, E
-ausschliesslich die rechte"* — with a fallback to the centre ray when a side ray finds nothing
-anchorable. `vector::aim::aim` is the single writer, and the HUD draws the same value the hook
-fires at.
+- `vector::aim` casts **one** ray and writes one `AimPoint` into both halves of `ArmAim`.
+- `Q` and `E` are unchanged as keys, arms and state machine — two ropes on **one** anchor.
+- **16 `game.ron` keys, 3 fields, 12 functions and 31 tests** went with it; the wire is 4 bytes
+  shorter (`FRAME_BYTES` 37 → 33). The full list is `docs/FINDINGS.md` **FIND-154**.
+- **The assist stays.** It searches sideways along the crosshair's own screen row (`FIND-133`)
+  and now publishes one winner instead of one per hemisphere. *"Sideways from the crosshair"* was
+  never *"the two arms apart"*.
+- **`FIND-129`'s promise stays**: a drawn pixel is the point its rope flies to, and the guard
+  that proves it got a **stronger** assertion, not a looser one (the drawn x is the projected x
+  in all 752 samples, worst 0.45 px).
 
-**2026-08-23, about the reference:**
+### The assumption that was running under this question, and what it cost
 
-> *„zudem gehen die seile nicht nahc ausen. diese gehen auf das fadenkreuz! und dann mit q und e
-> festhalten."*
+**`ASSUMPTION:` "`F-023` stays as built. Nothing is changed on the strength of one observation."**
+It stood for a few hours and cost nothing: no work was built on top of the fan in that window.
+The rollback point this entry named — *"one file, one function: `vector::aim::aim`"* — turned out
+to be **wrong by an order of magnitude**, and that is the lesson worth keeping. The aim itself was
+one function; the wheel, the settings row, the `Intent` field, the wire slot, the metre model's
+seven keys, `B-008`'s coherence guard and `hud::arm_aim::Bearing` were not. **A rollback point
+written from the feature's own file underestimates a feature that has a player-facing control.**
 
-**No split there.** One aim point, two ropes that both go to it, `Q`/`E` **held** rather than
-tapped. That matches the research from the patch record (commit `0a317a9`): their assist **widens
-the cursor ray**; it does not rank a candidate set, so there is no left set and no right set to
-begin with.
+### If he changes his mind again
 
-### Why this is not mine to decide
+`git show 83f09da` is the last commit with the fan in it — the model, the keys, the wheel and all
+31 tests. It is a revert, not a re-derivation.
 
-It is not derivation-vs-user, where the user wins by the standing rule. It is **his instruction
-against his own observation**, and the two are about different games. The 2026-08-12 sentence may
-still be exactly what he wants *for ours* — a deliberate divergence from the reference, and the
-whole point of `F-023` was that the two hooks should not land on top of each other.
-
-### ASSUMPTION the work continues under
-
-**`F-023` stays as built. Nothing is changed on the strength of this observation.** The split is
-tested, seen and shipped; the observation is one sentence typed while playing, and the reference
-being different is not by itself an argument that we are wrong.
-
-**What IS being treated as settled by `FIND-149`:** that `Q`/`E` are **held** in the reference,
-and that the force comes from the key rather than from the rope. Those are about the *drive*, not
-about the *split*, and they feed `docs/NEXT.md` item 1.
-
-### Rollback point if he decides the other way
-
-One file, one function: `vector::aim::aim` in `src/vector/aim.rs` — make both arms resolve to the
-centre ray instead of to their hemisphere, and `ArmAim.arms` collapses to two copies of one
-answer. `hud::arm_aim` needs no change (it draws whatever `ArmAim` holds), and the `F-023` tests
-would go red as designed. **Nothing else reads the split.**
-
-### What would make the answer cheap
-
-He now has both games on one machine. **Fire both hooks at one wall in each and compare where the
-two ropes land.** If ours landing apart is what he wanted, this question closes as "no change".
-
-Related: `FIND-149` · `docs/NEXT.md` item 1 · `F-023` · `src/shared/gear.rs:156-168` ·
-`docs/gameplay/references.md`
+Related: `FIND-154` · `FIND-149` · `FIND-096` · `FIND-133` · `docs/NEXT.md` item 1 ·
+`scripts/q048-one-point.txt`
 
 ---
 
 ## Q-049 — Pendulum or Drive? The switch is built, both work, and only you can answer it
 
 **Opened:** 2026-08-23, out of `FIND-149` / `FIND-152`.
-**Status:** 🔴 open — **his call, and this one is the whole feel of the game.**
+**Status:** ✅ **ANSWERED 2026-08-23 — `Drive`.** He asked for it twice. The switch stays, so a
+session can still A/B; the numbers underneath it are the open part now.
 
 `game.ron: vector.rope_force_model` now picks between two rope physics, and both are live:
 
@@ -1948,22 +1942,45 @@ sed -i 's/rope_force_model: Pendulum/rope_force_model: Drive/' assets/data/game.
 cargo play                        # and the same sed the other way round to go back
 ```
 
-### `ASSUMPTION:` the default stays `Pendulum` until he says otherwise
+### ✅ ANSWERED, 2026-08-23 — **`Drive` is the shipped default now, on his word**
 
-Not because it is better — nobody here knows that — but because every measured number in this
-repository is a statement about it (`FIND-035`, `FIND-041`, `FIND-045`, `B-005`, all of
-`tests/vector_rope.rs`), and shipping the untested model as the default would silently invalidate
-them. **The `Drive` half is 🟨: built, tested against its own claims, never played by a human.**
+The assumption written here on the morning of 2026-08-23 was *"the default stays `Pendulum` until
+he says otherwise"*. **He said otherwise the same day**, after playing the drive:
 
-**Rollback point:** the one line above. Nothing else has to move in either direction.
+> *„wenn ich mich hooke und w drücke oder generell booste dann soll ich erstmal ziemlich direkt
+> daran gezogen werden. also ziemlich gerade. außer ich move nach links (a oder rechts d). **es
+> darf „strenger" sein. also nicht so physics accurate aber mehr haptisch. also man macht was und
+> man merkt es auch direkt!**"*
+
+That is a request for **more** drive, not less — the second time he has described this model as
+the one he wants (`FIND-149` was the first). `game.ron: vector.rope_force_model: Drive`, and
+`FIND-153` is what was built on top of it.
+
+**The old assumption's real content survives and it cost 19 tests to learn:** every measured
+number in this repository is a statement about ONE of the two models, and until 2026-08-23 the
+tests read whichever way `game.ron` happened to be set. Flipping the default took **13 of
+`tests/vector_rope.rs`, 5 of `tests/combat.rs` and 1 of `tests/player.rs`** red at once without a
+line of their subject having changed. They now **pin** `RopeForceModel::Pendulum` in their app
+builder. → `FIND-153`.
+
+**Rollback point:** still the one line, in both directions:
+
+```bash
+sed -i 's/rope_force_model: Drive/rope_force_model: Pendulum/' assets/data/game.ron
+```
 
 ### The three numbers that are his to judge, and what each does
 
-| key | today | what it is | what to say if it is wrong |
-|---|---|---|---|
-| `drive_speed_m_s` | 50.0 | the speed `W` chases along the rope | *„zu langsam/zu schnell"* |
-| `drive_ramp_s` | 0.25 | the onset — 63 % of the gap in this long | *„zu träge"* / *„zu abrupt"* |
-| `drive_lateral_m_s` | 18.0 | what `A`/`D` chase across the rope | *„ich kann nicht genug lenken"* |
+| key | 2026-08-23 a.m. | **today** | what it is | what to say if it is wrong |
+|---|---|---|---|---|
+| `drive_speed_m_s` | 50.0 | **70.0** | the speed `W` chases along the rope | *„zu langsam/zu schnell"* |
+| `drive_ramp_s` | 0.25 | **0.08** | the onset — 63 % of the gap in this long, and the whole of *„gerade"* | *„zu träge"* / *„zu abrupt"* |
+| `drive_lateral_m_s` | 18.0 | **30.0** | what `A`/`D` chase across the rope | *„ich kann nicht genug lenken"* |
+
+🔴 **The ceiling on the first one is not that key.** `vector.max_speed_m_s` (75) is an avian
+`MaxLinearSpeed` on the body itself, so any `drive_speed_m_s` above it is a number the solver
+silently clips. **Raising the drive past ~70 means raising `max_speed_m_s` first** — and that key
+was not this round's to touch.
 
 **Measured, both models, one pinned binary (`scripts/f006-drive.txt`):** hooked with no key held,
 both fall at exactly 21.33 m/s — neither rope pulls a player who holds nothing, because the
@@ -1978,7 +1995,8 @@ Related: `FIND-149` · `FIND-152` · `docs/NEXT.md` item 1 · `Q-050` · `script
 ## Q-050 — under `Drive` the reel does nothing and `A`/`D` alone is a brake. Both are consequences, not decisions
 
 **Opened:** 2026-08-23, with `Q-049`.
-**Status:** 🔴 open — two side effects of the drive that nobody chose, and that only playing can weigh.
+**Status:** 🟡 **half closed 2026-08-23** — the `A`/`D` brake is fixed (`FIND-153`); the reel is
+still inert and still billed, and that half is a design question, not a repair.
 
 **1. The reel-in (`F-005`, `Ctrl`) has nothing to shorten.** `Drive` builds no `DistanceJoint`,
 so there is no enforced length, so `player::rope::shorten_ropes` never sees the rope —
@@ -1992,16 +2010,21 @@ raises `drive_speed_m_s` while held (a boost along the rope) or *(b)* the reel i
 picking either is additive; the billing line is `src/vector/gas.rs` (foreign territory to the
 round that wrote this).
 
-**2. `A`/`D` with `W` released brakes you.** The drive chases a target velocity; with only a
-lateral key held that target is `drive_lateral_m_s` (18 m/s) and **nothing else**, so a player at
-52.9 m/s who taps `D` alone is pulled down to 20.9 m/s in a second (measured,
-`scripts/f006-drive.txt` ACT 3). Holding `W`+`D` together keeps the full speed — that is the
-normal input — but `D` on its own is a strong air brake that he never asked for.
+**2. ✅ FIXED 2026-08-23 (`FIND-153`) — `A`/`D` with `W` released brakes you.** The drive chased
+a target velocity; with only a lateral key held that target was `drive_lateral_m_s` (18 m/s) and
+**nothing else**, so a player at 52.9 m/s who tapped `D` alone was pulled down to 20.9 m/s in a
+second (measured, `scripts/f006-drive.txt` ACT 3).
 
-`ASSUMPTION:` kept, because it falls out of the model rather than being bolted on, and because a
-brake on a steering key may well be *why* the reference feels controllable. **Rollback point:**
-`player::locomotion::rope_drive`, the line `let target = along / n * (speed * forward) + right *
-(lateral * move_x)` — making the forward term keep the speed the player already has when `W` is
-released is a two-line change.
+His own instruction settled it — *„außer ich move nach links (a oder rechts d)"* asks the key to
+take him **off the anchor line**, not to end the flight. So the released-`W` target now **keeps
+the player's own velocity on every axis it does not command** and replaces only `ê_right`.
+Measured over the same second: **70.0 → 70.0 m/s, turned 23°** instead of 70.0 → 30.0.
+Red test: `tests/player.rs::f153_a_and_d_alone_steer_the_flight_instead_of_braking_it`.
+
+⚠️ **The first fix for it was wrong in the other direction and the measurement caught it.** A
+lateral that merely *adds* to the flight took `D`-alone to **75.000 m/s exactly** — that is
+`vector.max_speed_m_s`, the avian clamp, and not a speed anybody chose either. The drive's own
+`clamp_length_max(drive_speed_m_s)` now sits outside the blend, so `A`/`D` is a **redirect**:
+same speed, ~20° of it pointing somewhere else. Measured 71.12 m/s in ACT 3.
 
 Related: `Q-049` · `FIND-152` · `F-005` · `src/vector/gas.rs`

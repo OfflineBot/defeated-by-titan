@@ -1393,6 +1393,12 @@ fn f006_in_the_real_app_the_rope_pull_is_there_and_an_empty_tank_gets_none_of_it
     // gated on `GasGrant::steer`, and half a rope pull for no gas would be exactly the free
     // thrust all nine judges of `docs/NEXT.md` §1B refused.
     let mut app = app();
+    // 🔴 **`Pendulum`, PINNED** — this test is about `rope_steer` and `air_pull_m_s2`, i.e. about
+    // ONE of the two force models, and it read whichever way `game.ron` happened to be set. It
+    // went red the day the shipped default moved to `Drive` (2026-08-23) without a single line
+    // of its subject having changed. Same line, same reason, as `tests/vector_rope.rs::app`.
+    app.world_mut().resource_mut::<GameData>().game.vector.rope_force_model =
+        defeated_by_titan::data::RopeForceModel::Pendulum;
     let d = data(&app);
     ticks(&mut app, 2); // the spatial index is filled in the first steps, not in `Startup`
     let body = a_real_body(&mut app);
@@ -1685,8 +1691,11 @@ fn f149_the_drive_chases_a_speed_instead_of_building_one() {
         "at 1.5x the drive speed the drive still pushed forward ({too_fast:?})"
     );
     // One ramp of explicit integration closes 1 − 1/e of the gap, and that is the number the
-    // user is being asked to feel. 60 Hz, so the discrete sum is a little under the analytic
-    // 63.2 % — the assert is the shape, not the third digit.
+    // user is being asked to feel. **The band is wide because the tick is coarse against a
+    // short ramp**: at `drive_ramp_s: 0.25` one constant is 15 ticks and the discrete sum comes
+    // out a little UNDER the analytic 63.2 % (64.4 %, and the old band was `0.55..0.68`); at
+    // `0.08` it is 4.8 ticks, `dt/ramp` = 0.21, and the same sum lands a little OVER it
+    // (68.9 %). Both are the exponential; only the sampling moved. The assert is the shape.
     let dt = 1.0 / d.game.simulation_hz as f32;
     let mut v = Vec3::ZERO;
     for _ in 0..(t.ramp_s / dt).round() as u32 {
@@ -1694,7 +1703,7 @@ fn f149_the_drive_chases_a_speed_instead_of_building_one() {
     }
     let closed = v.length() / t.speed_m_s;
     assert!(
-        (0.55..0.68).contains(&closed),
+        (0.55..0.75).contains(&closed),
         "after one time constant the drive had closed {:.1} % of the gap, not the ~63 % an \
          exponential owes — `drive_ramp_s` is not the ramp it claims to be",
         closed * 100.0
@@ -1790,6 +1799,119 @@ fn f149_the_three_drive_numbers_are_the_ones_the_file_can_defend() {
         t.lateral_m_s > 0.0 && t.lateral_m_s <= t.speed_m_s,
         "drive_lateral_m_s is {} against a drive_speed_m_s of {}",
         t.lateral_m_s,
+        t.speed_m_s
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// `FIND-153` — **straighter, stricter, immediate.** The user, 2026-08-23, after playing the
+// `Drive` model for the first time:
+//
+// > *„wenn ich mich hooke und w drücke oder generell booste dann soll ich erstmal ziemlich
+// > direkt daran gezogen werden. also ziemlich gerade. außer ich move nach links (a oder rechts
+// > d). **es darf „strenger" sein. also nicht so physics accurate aber mehr haptisch. also man
+// > macht was und man merkt es auch direkt!**"*
+//
+// That is a design instruction and it outranks physical plausibility. These three tests are the
+// three halves of it that a pure function can hold: **immediate** (the ramp), **straight** (the
+// two ropes do not dilute each other), and **`A`/`D` steer instead of braking** (`Q-050`).
+// The angle a whole flight actually makes with its rope is
+// `tests/vector_rope.rs::f153_under_drive_w_pulls_the_flight_onto_the_rope_line`.
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn f153_a_and_d_alone_steer_the_flight_instead_of_braking_it() {
+    // `Q-050`, and it was never anybody's decision: under the full velocity chase a released
+    // `W` reads as "chase 18 m/s sideways", and `scripts/f006-drive.txt` measured that as
+    // 52.9 → 20.9 m/s in a single second. *„außer ich move nach links"* asks `A`/`D` to bend
+    // the line, not to end the flight.
+    // **A whole second of it, integrated the way `air_control` integrates it** — because that is
+    // the shape `Q-050` measured (*"52.9 → 20.9 m/s in a second"*), and a single tick cannot tell
+    // "steers" from "brakes slowly".
+    let d = game_data();
+    let t = drive_tuning(&d);
+    let dt = 1.0 / d.game.simulation_hz as f32;
+    let ahead = anchor_at(0.0, 60.0);
+    let look = Intent::default().look_dir();
+
+    let started_at = Vec3::NEG_Z * t.speed_m_s;
+    let mut v = started_at;
+    for _ in 0..d.game.simulation_hz.round() as u32 {
+        v += rope_drive(&[ahead], look, 0.0, 1.0, 0.0, v, t) * dt;
+    }
+    assert!(
+        v.length() > 0.95 * started_at.length(),
+        "a second of `D` with `W` released took the flight from {:.1} m/s to {:.1} m/s — an air \
+         brake nobody asked for (`Q-050`). `A`/`D` steer, they do not stop the player",
+        started_at.length(),
+        v.length()
+    );
+    let turned = v.angle_between(started_at).to_degrees();
+    assert!(
+        turned > 15.0,
+        "a second of `D` turned the flight {turned:.1}° — *„außer ich move nach links (a oder \
+         rechts d)\"* asks the key to take the player OFF the anchor line"
+    );
+    assert!(
+        v.x > 0.0 && (v.y - started_at.y).abs() < 1e-3,
+        "`D` drove the player to {v:?} — the strafe rides the horizontal look-right and never \
+         the vertical"
+    );
+}
+
+#[test]
+fn f153_a_second_rope_does_not_halve_the_drive() {
+    // The `1/n` is `rope_steer`'s **force budget** — one pull shared between two arms. A target
+    // VELOCITY has no budget to share, and carrying the division over made a second hook a
+    // 34 % penalty. Direction still blends between the arms; only the strength stops being an
+    // average.
+    let d = game_data();
+    let t = drive_tuning(&d);
+    let look = Intent::default().look_dir();
+    let straight_ahead = anchor_at(0.0, 60.0);
+    let off_to_the_right = anchor_at(-60.0_f32.to_radians(), 60.0);
+
+    let single = rope_drive(&[straight_ahead], look, 0.0, 0.0, 1.0, Vec3::ZERO, t);
+    let pair = rope_drive(&[straight_ahead, off_to_the_right], look, 0.0, 0.0, 1.0, Vec3::ZERO, t);
+    assert!(
+        pair.length() > 0.95 * single.length(),
+        "one rope drove at {:.1} m/s² and two at {:.1} m/s² — hooking a second roof must never \
+         be the slower option",
+        single.length(),
+        pair.length()
+    );
+    assert!(
+        pair.x > 0.0 && pair.z < 0.0,
+        "two anchors 60° apart drove the player at {pair:?} instead of between them"
+    );
+}
+
+#[test]
+fn f153_the_drive_is_felt_inside_a_fifth_of_a_second() {
+    // *„man macht was und man merkt es auch direkt"*, as a number: **how long until 90 % of the
+    // target speed**. Integrated exactly the way `air_control` integrates it — once per tick,
+    // explicitly — so this is the number the player's hand actually waits for and not the
+    // analytic `τ·ln 10`.
+    let d = game_data();
+    let t = drive_tuning(&d);
+    let dt = 1.0 / d.game.simulation_hz as f32;
+    let ahead = anchor_at(0.0, 60.0);
+    let look = Intent::default().look_dir();
+
+    let mut v = Vec3::ZERO;
+    let mut ticks = 0u32;
+    while v.length() < 0.9 * t.speed_m_s && ticks < 600 {
+        v += rope_drive(&[ahead], look, 0.0, 0.0, 1.0, v, t) * dt;
+        ticks += 1;
+    }
+    let ms = ticks as f32 * dt * 1000.0;
+    // See `tests/vector_rope.rs::f153_under_drive_w_pulls_the_flight_onto_the_rope_line`: the
+    // two numbers `FIND-153` answers the user with are printed, not only asserted.
+    println!("f153 ms to 90 % of {:.0} m/s: {ms:.0} ms ({ticks} ticks)", t.speed_m_s);
+    assert!(
+        ms <= 200.0,
+        "the drive needed {ms:.0} ms to reach 90 % of {:.0} m/s — *„es darf strenger sein … man \
+         macht was und man merkt es auch direkt\"*. `drive_ramp_s: 0.25` cost 567 ms of it",
         t.speed_m_s
     );
 }

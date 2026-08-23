@@ -74,7 +74,7 @@ pub enum ScriptCommand {
     /// assist to `With<LocalPlayer>` only (`docs/FINDINGS.md` FIND-104, `Q-038`). A script line
     /// therefore changes the local machine's preference — it is **not** addressed at a player
     /// and there is no way to give two players different knobs from a script. The day the
-    /// knobs travel they move into `Intent` beside `aim_spread_deg`, and this verb grows a
+    /// knobs travel they move into `Intent`, and this verb grows a
     /// player argument with them.
     Settings { key: Setting, value: f32 },
     /// `end` — stop early
@@ -87,9 +87,8 @@ pub enum ScriptCommand {
 /// [`Metric`] gives for its own shortness: a key that changes nothing a script can measure is
 /// not a script verb, it is a settings screen. These two are the only fields of
 /// `PlayerSettings` that (a) change what the *simulation* does and (b) have no other route out
-/// of a script — the mouse sensitivity and the FOV are a device and a picture (and `look`
-/// bypasses the first one anyway), and `aim_spread_deg` already reaches the simulation through
-/// `Intent` where a script can read its effect off `ArmAim`.
+/// of a script — the mouse sensitivity and the FOV are a device and a picture, and `look`
+/// bypasses the first one anyway.
 ///
 /// Both are percentages, `0..100`, and `0` is defined as the absence of the feature
 /// (`F-016`): `settings assist_strength 0` is bit-for-bit the free aim that shipped.
@@ -694,7 +693,6 @@ assert speed > 25
             mouse_deg_per_px: 0.08,
             invert_y: false,
             fov_deg: 60.0,
-            aim_spread_deg: 28.0,
             pitch_limit_deg: 89.0,
             assist_catch_pct: 0.0,
             assist_strength_pct: 0.0,

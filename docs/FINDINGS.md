@@ -1663,7 +1663,7 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 
 ## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
 
-**NEXT FREE ID: FIND-153.** Claim it by bumping this line in the same `cat >>` that
+**NEXT FREE ID: FIND-155.** Claim it by bumping this line in the same `cat >>` that
 appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
 file separately and both read the same maximum. One line beats a 108 kB grep.
  — and append with `>>`, never with an edit tool
@@ -9379,3 +9379,313 @@ photographed evidence is stale. `--lib` 241 · `--test player` 41 · `--test vec
 
 Related: `FIND-149` · `FIND-150` · `Q-049` · `Q-050` · `docs/NEXT.md` item 1 ·
 `scripts/f006-drive.txt` · `src/player/locomotion.rs` · `src/player/rope.rs`
+
+---
+
+## FIND-153 — "ziemlich gerade, strenger, direkt": 567 → 167 ms and 28.1° → 2.2°
+
+**Stage:** 🟧 — two red controls per claim, one pinned binary, the script green under both models
+and exit 0. **Not played by a human yet**, so ✅ is his.
+
+`FIND-152` shipped the drive with three derived numbers and `Pendulum` still the default. He
+played it and answered:
+
+> *„wenn ich mich hooke und w drücke oder generell booste dann soll ich erstmal ziemlich direkt
+> daran gezogen werden. also ziemlich gerade. außer ich move nach links (a oder rechts d). **es
+> darf „strenger" sein. also nicht so physics accurate aber mehr haptisch. also man macht was und
+> man merkt es auch direkt!**"*
+
+**That is a design instruction and it outranks physical plausibility.** It also settles `Q-049`:
+`vector.rope_force_model: Drive` is the shipped default now — the second time he has described
+this model as the one he wants.
+
+### The two numbers that answer him
+
+| | before (50 / 0.25 / 18) | after (70 / 0.08 / 30) |
+|---|---|---|
+| **ms to 90 % of the target speed**, integrated once per tick the way `air_control` does | **567 ms** | **167 ms** |
+| **angle between the rope and the velocity**, 0.25 s of `W` with 40 m/s of crossing momentum, gravity on | **28.1°** | **2.2°** |
+| 1.5 s of `W` on the script's near-horizontal rope | 52.94 m/s | **70.90 m/s** |
+| 1.0 s of `D` alone, straight after it | 20.93 m/s (`Q-050`'s brake) | **71.12 m/s** |
+
+*(control in the same run: `Pendulum` comes out **85.5°** off its own rope — it keeps the crossing
+momentum, which is what a swing IS.)*
+
+### 🔴 `drive_ramp_s` was the whole complaint, and it is also the straightness knob
+
+That is the finding, and it was not obvious from the key's name. Two things ride the same constant:
+
+- **the onset.** `t₉₀ = τ·ln 10`, so a quarter second of ramp is **567 ms** before the player has
+  what he pressed. *"man macht was und man merkt es auch direkt"* is that number and nothing else.
+- **the straightness.** The steady-state sag under gravity is exactly `atan(τ·g / v*)` —
+  **5.71°** at `(0.25, 50)`, **1.31°** at `(0.08, 70)` — and the carried momentum that bends a
+  flight into a curve decays with the *same* τ. **A shorter ramp is a straighter line, exactly.**
+
+`0.08 s` is 4.8 ticks, `dt/τ = 0.21`: stable under the explicit integration, still an exponential
+and not a step (*„ein etwas smoother übergang! aber recht schnell!"*).
+
+### The three dilutions of "gerade", measured — and only one of them was real
+
+1. **the `1/n` split across two arms.** Real, and backwards: `rope_steer` divides by `n` because a
+   *force* is one budget shared between the arms, and a target **velocity** has no budget to share.
+   Measured on the pure function, an anchor straight ahead plus a second one 60° off it came out at
+   **0.661** of the single-rope target — **hooking a second roof drove the player 34 % slower.**
+   Now `unit(Σ r̂ᵢcᵢ)` gives the direction and `maxᵢ cᵢ` the strength; for one rope the expression
+   is unchanged, bit for bit.
+2. **the look gate `cᵢ`.** Kept, untouched. It scales the target *speed*, never the direction, and
+   it is the same predicate `vector::gas::steer_has_effect` bills on — so the drive costs gas
+   exactly when it moves the player, and looking away from an anchor still never hauls you at it.
+3. **gravity.** Kept, and `FIND-149` is why: hooked and holding nothing means **not pulled**, and
+   he confirmed a falling player. *Stricter while driving* is not *no gravity* — the sag is now
+   1.31° instead of 5.71° because τ shrank, not because g did.
+
+### 🔴 `vector.max_speed_m_s` is the real ceiling on `drive_speed_m_s`, not the key itself
+
+`src/player/mod.rs` puts avian's `MaxLinearSpeed(vector.max_speed_m_s)` on the body, so **any
+`drive_speed_m_s` above 75 is a number the solver silently clips.** The reference's own `Gear
+Shift` reads 600 in his settings; at ~0.28 m per Roblox stud that is ~168 m/s, **more than twice
+our hard clamp**. So 70 is not "what the drive should be", it is "what the drive can be without
+`max_speed_m_s` moving first" — and that key belonged to another owner this round. **If he says
+*„immer noch zu langsam"*, `max_speed_m_s` is the line, not `drive_speed_m_s`.**
+
+### `Q-050`'s brake: fixed, and the FIRST fix was wrong in the other direction
+
+The complaint: `D` alone took 52.9 → 20.9 m/s, because with `W` released the chase target was
+`drive_lateral_m_s` **and nothing else**, so the flight's own speed read as an error.
+
+**The first fix** chased only `ê_right` and left the rest of the velocity alone. No brake — and
+`D` alone then arrived at **75.000 m/s exactly**, which is `max_speed_m_s`, *the avian clamp*.
+Un-braking had quietly turned the steering key into a free throttle that ends at the one number in
+this game nobody chose as a speed. **The script caught it, not a test.**
+
+**The shipped fix** makes it a second *target* rather than a second chase: with `W` released the
+target is the player's own velocity **with only its `ê_right` component replaced**, and the
+drive's `clamp_length_max(drive_speed_m_s)` sits *outside* the blend so it holds for that target
+too. `A`/`D` is therefore a **redirect** — same speed, ~20–23° of it pointing somewhere else —
+and `forward` lerps between the two targets so a half-pressed stick gets half of each. 71.12 m/s
+in ACT 3, never the clamp.
+
+### 🔴 THE ONE THAT COST THE ROUND AN HOUR: **19 tests were reading a tuning default**
+
+Flipping `rope_force_model` to `Drive` took **13 of `tests/vector_rope.rs`, 5 of
+`tests/combat.rs` and 1 of `tests/player.rs` red at once** — every one of them a statement about
+the `DistanceJoint`, and `Drive` builds none. Not one of them had anything to do with this round's
+change: they read whichever way `game.ron` happened to be set.
+
+`FIND-152` had already written the sentence — *"all of tests/vector_rope.rs is a statement about
+this line"* — and left it as prose. **The habit is the cheap part: a test whose subject is a
+tuning value must PIN that value in its app builder, not inherit it.** One line in each of the
+three `app()`/`build()` helpers, and `select()` still overrides it for the `f149`/`f153` tests.
+Same shape as `place()` vs `warp` in `FIND-152`: *a harness that inherits state measures whichever
+state it was handed.* ⚠️ `tests/combat.rs` was **foreign territory** to this round and is named
+here for that reason; the change there is one pinning line and nothing else.
+
+### Rule 5, both directions, every claim
+
+| claim | the control, one line | what went red |
+|---|---|---|
+| immediate | `drive_ramp_s: 0.08 → 0.25` (RON only, no rebuild) | *"the drive needed **567 ms** to reach 90 % of 50 m/s"* |
+| straight | the same line | *"a quarter second of `W` left the player flying **28.1°** off his own rope"* |
+| two ropes | `unit(Σ)·max c` → `Σ / n` | *"one rope drove at 200.0 m/s² and two at **132.3** m/s²"* |
+| `A`/`D` steer | `kept.lerp(driven, forward)` → `driven` | *"a second of `D` … took the flight from 70.0 m/s to **30.0** m/s"* |
+
+### What did NOT move
+
+`scripts/f030-cortex.txt`, `f034-hitstop.txt` and `q030-reach.txt` are **identical apart from the
+log timestamp** under both models, one pinned binary, six runs: `hit mark: KILL on Cortex at
+20.67 m/s`, 2 asserts held, 230 ticks, exit 0 in all six. None of them fires a hook, so no
+approach speed moved and no photographed evidence is stale.
+`scripts/f006-drive.txt`: **9 asserts held, 436 ticks, exit 0 under BOTH models.**
+`--lib` 240 · `--test player` 44 · `--test vector_rope` 20 · `--test data` 56 · `--test combat` 39
+· `--test titan` 31 · `--test vector_gas` 21 · `--test vector_hooks` 31 — all green. (The moved
+counts in `--lib`, `--test data` and `--test vector_hooks` are another agent's aim work landing in
+the same tree, not this round's.)
+
+### Still open, and deliberately not fixed here
+
+`Q-050`'s **other** half: under `Drive` the reel-in has no constraint to shorten and
+`vector::gas` still bills `gas_reel_per_s: 6` for the held key (`src/vector/gas.rs:230`,
+`wants_reel_in`). That file was **not this round's to write** and the fix is a design decision
+(*does the reel raise `drive_speed_m_s`, or is the drive what the reel already is?*), not a
+repair. It stays in `Q-050`.
+
+Related: `FIND-149` · `FIND-152` · `Q-049` · `Q-050` · `docs/NEXT.md` item 1 ·
+`scripts/f006-drive.txt` · `src/player/locomotion.rs` · `tests/player.rs` · `tests/vector_rope.rs`
+
+---
+
+## FIND-154 — `F-023` is retired: both ropes fly at the crosshair, and it took **16 keys, 3 fields, 12 functions and 31 tests** with it
+
+**2026-08-23.** The user, after playing the reference beside this game:
+
+> *„dann das auseinander mit q und e kann weg. einfach da wo ich hinschau (also fadenkreuz) geht
+> das seil hin."*
+
+This **overrides his own 2026-08-12 instruction** that built the fan (*„es muss mehr rechts und
+links spreaden!!"*), and the standing rule says it may — `CLAUDE.md`: *his instruction beats my
+derivation, and beats his own earlier number.* `Q-048` had held the question open under the
+`ASSUMPTION:` that `F-023` stays as built; that assumption is now **withdrawn by him** and the
+question is answered, not decided.
+
+### What `Q` and `E` do now
+
+**Both fire at the point under the crosshair.** `vector::aim` casts **one** ray, publishes one
+`AimPoint` into both halves of `ArmAim`, and `vector::hook` fires each arm at its own half —
+which is now the same value. Two ropes, one anchor, and the keys are unchanged: `Q` is still the
+left arm and `E` still the right, they still fire and release independently, and `Hook`'s
+two-arm state machine was **not touched at all** (`src/vector/hook.rs` is byte-identical). The
+arms were never the fan; the two *rays* were.
+
+### Two ropes on ONE point: measured, and it is the easy case, not the degenerate one
+
+`game.ron` warns that `rope_iterations: 2` *"does not converge"* when two anchors are **"nearly
+in one line"**, and retiring the fan makes two coincident anchors the **normal** case rather
+than a corner one. Measured in the running game, `scripts/q048-one-point.txt` ACT 3 — the swing
+fixture of `scripts/f005-feel.txt` ACT 3, hauling at the ruin north-west of the square:
+
+| | height at `q048-two-ropes-hauling` |
+|---|---|
+| **two** ropes on body 822 at `76.00 33.77 -100.15` | **55.506 m** |
+| **one** rope on the same point, same binary, same tick budget | **55.506 m** |
+
+**Identical to three decimals, and that is the answer.** A Gauss-Seidel pass over two *identical*
+distance constraints is idempotent: the first satisfies it and the second finds residual zero.
+The warning is about two anchors whose constraint directions nearly coincide while their
+*targets* differ — the case where each pass undoes the other. Two anchors at the **same** point
+is a duplicate constraint, not a stiff one. `FIND-041`'s swing arithmetic is untouched for the
+same reason: the rope length, the anchor height and the arc are one rope's numbers, and the
+second rope adds none.
+
+⚠️ **Measured under `Pendulum` only.** Under `Drive` the argument is from the code and not from a
+run: `player::locomotion::rope_drive` blends the anchor directions and then **normalises the
+blend** (`src/player/locomotion.rs:551-561`), so two identical directions produce the same unit
+vector as one — no doubled thrust. That is a reading, not a measurement, and `rope_force_model`
+belonged to another agent this round. Whoever flips the default to `Drive` should run
+`scripts/q048-one-point.txt` first; it is written to be model-agnostic.
+
+### The blast radius, because it was not one number
+
+**16 `game.ron` keys** (`vector`), each with its `VectorTuning` field: `aim_spread_deg` ·
+`_min_deg` · `_max_deg` · `_step_deg` · `_floor_deg` · `_slew_deg_s` · `_settle_s` ·
+`aim_sep_neutral_deg` · `_floor_m` · `_tether_m` · `_stand_m` · `_search_m` · `_full_reach_m` ·
+`_calm_speed_m_s` · `_fast_speed_m_s` · `aim_side_coherence_k`. The whole metre model of
+`FIND-094`/`FIND-096` went with them.
+
+**3 fields:** `PlayerSettings::aim_spread_deg` (the settings row *and* the mouse wheel wrote it),
+`Intent::aim_spread_deg`, `MouseSinceTick::scroll_notches`.
+
+**12 functions/types in `vector::aim`:** `wheel_half_rad` · `side_angle_rad` ·
+`effective_spread_rad` · `SpreadContext` · `slew_spread_rad` · `separation_m` ·
+`settle_distance_m` · `AimSpread` · `side_dirs` · `side_hit_is_coherent` · `hemisphere` ·
+`pick_best`'s hemisphere filter. Plus `shared::settings::step_spread` /
+`PlayerSettings::nudge_spread`, `net::local::Spread` / `PIXELS_PER_NOTCH` / the wheel read,
+`menu::settings::SettingsAction::Spread` and its row.
+
+**The wire got 4 bytes shorter:** `FRAME_BYTES` **37 → 33**, `buttons` moved from slot 33 to 29.
+An `Intent` is now `4 × f32` of move and look plus the button word.
+
+**`hud::arm_aim::Bearing` collapsed.** It answered *"is this marker's x an angle or a place?"*,
+and since the fan is gone every marker either carries a world place or carries nothing — `at`
+alone decides. Its two branches had already converged to the same body on 2026-08-19
+(`FIND-133`); this round deleted the enum, `bearing_of` and `layout_for`'s fifth argument.
+
+**31 tests deleted** — 13 in `tests/vector_aiming.rs`, 7 in `tests/hud.rs`, 5 in
+`tests/input.rs`, 2 in `tests/vector_hooks.rs`, 1 each in `tests/data.rs`, `tests/menu.rs`,
+`tests/multiplayer.rs` and `src/shared/settings.rs`. Every one of them measured the fan itself
+(the wheel's window, the metre model, the slew clamp, the hemisphere split, the marker's x
+against the resolved angle). **No test whose claim survives was deleted**; two were rewritten to
+the new geometry and one is new.
+
+### What survives, and one of them is the whole point
+
+- 🔴 **`FIND-129`'s promise holds**: `tests/hud.rs::f023_the_drawn_pixel_is_the_projection_of_the_
+  point_the_rope_flies_to` still lays the real HUD out over the shipped map and compares the
+  drawn rectangle against a point it projects itself.
+- 🔴 **`FIND-133`'s snap holds and was never the fan.** The assist searches **sideways along the
+  crosshair's own screen row** and now publishes **one** winner over both sides instead of one
+  per hemisphere. `probe_dirs` is unchanged, `Side` still being the sign of its step. Same
+  `2 × assist_probe_steps` rays; **two fewer rays per player per tick overall**, because the two
+  side rays are gone.
+- `B-008`'s claim survives its guard. `side_hit_is_coherent` existed because a side ray could
+  leave the surface the crosshair stands on; there is no side ray. The test stays, rewritten to
+  `point == crosshair` exactly, and it is what would catch a second ray creeping back in.
+
+### `f023_the_drawn_pixel_…` needed one assertion changed, and the reason is geometry
+
+Its meta-guard demanded `strict >= 300` — at least 300 of the sweep's samples held to the *exact*
+projection rather than let off by the bounded sight-core step. It now reads **164 of 752** and
+that is not a regression:
+
+| | 2D cone (FIND-104) | 1D line (FIND-133) | one point (now) |
+|---|---|---|---|
+| samples | 768 | 708 | **752** |
+| drawn exactly on the projection | 667 | 406 | **164** |
+| stepped out of the sight core | 101 | 302 | **588** |
+| worst step | 20.0 px | 21.5 px | **20.5 px** |
+| **worst x error** | — | — | **0.45 px** |
+
+Until today the two arms previewed two *different* points, so at most one of them was ever over
+the sight core. Both arms now carry the **same** point, and the place a player aims at is the
+middle of his screen by construction — so the pair dodges together. **The worst step did not
+move** (20.5 px against 21.5). The guard was replaced by a stronger one rather than a looser one:
+**the drawn x is the projected x in every single sample** (worst 0.45 px), because the dodge is
+allowed to move the y and nothing else, and x is the axis `FIND-133` put the whole message on.
+
+### And the two idle markers now sit on the same pixel — deliberately
+
+`Q ◯ E`: both glyphs project to the crosshair's point and each letter hangs outboard on its own
+arm's side (`layout_for`'s tie-break for a point dead on the axis is `matches!(side, Side::Right)`).
+That reads as *two arms, one target*, which is the truth. **No side-splitting dodge was added**:
+sending the two markers to opposite edges of the sight core would double the worst displacement
+from `full_h/2 + SIGHT_CORE_PX` to `full_h + 2·SIGHT_CORE_PX` and buy a separation the player
+did not ask for. 🟨 until he looks at it.
+
+### One thing broke that was not the aim, and it is worth writing down
+
+Removing the settings row moved the **hole in the settings plate off the crosshair**.
+`plate::centre_lane` is a spacer in a vertically centred column, so it lands on the *screen's*
+middle only while the rows above it and below it are the same height — true by accident with
+three rows on each side. One row fewer below and the whole plate slid down by half a row, walking
+the `Field of view` hint into the aim-assist band's lane (`x 559..721 y 366..384` against a lane
+at `y 352..369`). `tests/menu.rs::f016_the_settings_screen_leaves_the_bands_lane_empty` caught it
+in the same run. Fixed with a named counterweight node in `menu::settings` and the number is
+pinned by that test. **A centred flex column is a layout that depends on its own contents; a
+"hole at the middle of the screen" built out of one is a claim that has to be tested, not read.**
+
+### Evidence
+
+- `tests/vector_aiming.rs::f023_both_arms_fire_at_the_point_under_the_crosshair` — **red first**,
+  and the message is the finding: `Q flew at Vec3(-1.690, 1.600, -10.000) instead of the
+  crosshair's point Vec3(0.000, 1.600, -10.000)`, `E` at `+1.690` — 3.38 m apart at 10 m.
+  Green after; red again on a three-line mutation that nudges the right arm 2 m
+  (`b008_a_shot_aimed_straight_down_lands_on_what_the_crosshair_stands_on` goes red with it).
+- `scripts/q048-one-point.txt`, exit **0** from its own run, `12 asserts held, 624 ticks`:
+  `hook Left of player 1 anchored on body 950 at 51.00 11.09 -1.00 (t=121)` /
+  `hook Right of player 1 anchored on body 950 at 51.00 11.09 -1.00 (t=121)` — the same body and
+  the same three numbers, at assist `0/0` and again at `100/100`.
+- Full suite green: 240 lib · 43 hud · 39 menu · 31 vector_hooks · 11 vector_aiming · 56 data ·
+  21 input · 11 multiplayer, and every other binary unchanged.
+
+### Foreign territory, listed and not touched
+
+Four docs still describe the fan as live. They are **history in three of the four cases** and
+were left alone on the one-writer rule; whoever owns them next should read them against this
+entry:
+
+- `docs/NEXT.md` — items 8/9 of the 2026-08-12 queue, the `aim_spread_deg 28.0` tuning list at
+  §766, the FIND-096 write-up at §897-912, and §1112/§1183/§1354 on `side_dirs`. It is a queue
+  **log**, so most of it is correctly past tense, but §766's key list reads as current.
+- `docs/gameplay/references.md:475` cites **`aim_sep_full_reach_m: 108.0`** as a live key in an
+  argument about the reference's candidate reach. That key no longer exists; the *argument* does
+  not depend on it and needs one number substituted, not a rewrite.
+- `docs/windows.md:184` states `Q-048` as open and describes the split as the user's standing
+  instruction. It is answered (above).
+- `docs/BUGS.md` §702/§801/§848-850 — closed bugs whose text names the fan. Correct as history.
+
+`docs/STATUS.md` and `docs/TODO.md` still carry `F-023` as ⬜ from `gameplay/features.xlsx`.
+**That row is now a feature the game deliberately does not have**, and it is the main head's call
+whether the generator source loses it or gains a "retired" state — a ⬜ nobody may build is the
+same defect as a registry row nothing can spawn, one level up.
+
+Related: `Q-048` · `FIND-096` · `FIND-104` · `FIND-129` · `FIND-133` · `FIND-149` ·
+`src/vector/aim.rs` · `src/hud/arm_aim.rs` · `scripts/q048-one-point.txt`

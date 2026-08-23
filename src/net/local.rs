@@ -52,12 +52,11 @@
 //! per tick. Every other button in this file is sampled with `pressed()` per tick as well, so
 //! `Space` now behaves like all of them and no differently.
 
-use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
+use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 
 use super::Inbox;
 use crate::data::GameData;
-use crate::shared::settings::step_spread;
 use crate::shared::{LookOverride, Intent, LocalPlayer, PlayerId, PlayerSettings, Buttons, Tick};
 
 /// Reads the real input and posts an [`Intent`] built from it into the inbox.
@@ -76,7 +75,7 @@ pub fn read_input(
     data: Res<GameData>,
     mut inbox: ResMut<Inbox>,
     mut look_override: ResMut<LookOverride>,
-    mut settings: ResMut<PlayerSettings>,
+    settings: Res<PlayerSettings>,
     mut look: Local<Look>,
     mut space: Local<DodgeTap>,
     local: Query<&PlayerId, With<LocalPlayer>>,
@@ -168,30 +167,6 @@ pub fn read_input(
     let forward = f32::from(keys.pressed(KeyCode::KeyW)) - f32::from(keys.pressed(KeyCode::KeyS));
     let strafe = f32::from(keys.pressed(KeyCode::KeyD)) - f32::from(keys.pressed(KeyCode::KeyA));
 
-    // The wheel, and it is **taken** like the mouse motion above: one notch has to be counted
-    // once, on one tick, whatever the frame rate is doing (`B-002`, and [`gather_mouse_motion`]
-    // is where it is summed). What travels is the resulting **absolute** angle — see
-    // [`Spread`] and `Intent::aim_spread_deg` for why a delta on the wire is not an option.
-    //
-    // ⚠️ **The accumulator moved into `PlayerSettings` on 2026-08-13**, and that is not a
-    // refactor: the settings screen has a row for this angle, and while the live value sat in a
-    // `Local` here the screen could neither show it nor change it. One field, two devices — the
-    // wheel and the slider — and no second copy anywhere (`src/shared/settings.rs`).
-    let v = &data.game.vector;
-    let aim_spread_deg = step_spread(
-        settings.aim_spread_deg,
-        std::mem::take(&mut mouse_motion.scroll_notches),
-        v.aim_spread_step_deg,
-        v.aim_spread_min_deg,
-        v.aim_spread_max_deg,
-    );
-    // Written only when it really moved: a `DerefMut` on a resource marks it changed for every
-    // reader, this runs every tick, and `menu::despawn_menu` rebuilds a screen on a changed
-    // setting (§6 rule 6).
-    if aim_spread_deg != settings.aim_spread_deg {
-        settings.aim_spread_deg = aim_spread_deg;
-    }
-
     inbox.push(
         me,
         Intent {
@@ -200,7 +175,6 @@ pub fn read_input(
             yaw: look.yaw,
             pitch: look.pitch,
             buttons: t,
-            aim_spread_deg,
             tick: tick.0,
         },
         tick.0,
@@ -274,59 +248,6 @@ pub struct Look {
     pub yaw: f32,
     pub pitch: f32,
 }
-
-/// How far apart the player has dialled the two arms' aim rays — `F-023`'s spread, in
-/// **degrees**, and the wheel's accumulator.
-///
-/// The user, 2026-08-12: *„es muss mehr rechts und links spreaden!! (mit mausrad soll man
-/// einstellen können wie weit auseinander es gehen darf!)"*.
-///
-/// ⚠️ **The accumulation lives HERE, on the sending side, and the wire carries the result.**
-/// A notch is a delta, and a delta on a wire is a desync that never re-converges: one lost or
-/// duplicated packet and the two machines stay one notch apart until somebody restarts the
-/// game. The absolute angle re-converges with the next intent (§6 rule 4,
-/// `docs/multiplayer.md`). That is also why this is the same `Local` shape as [`Look`], which
-/// accumulates the mouse for exactly the same reason.
-///
-/// `None` until the first turn: the starting value is fetched from `game.ron`
-/// (`vector.aim_spread_deg`) the first time [`Spread::turn`] is called. **No copy of that number
-/// lives in this file** (§6 rule 2).
-///
-/// ⚠️ **[`read_input`] no longer holds one of these.** Since 2026-08-13 the live angle is
-/// `shared::PlayerSettings::aim_spread_deg`, because the settings screen has a row for it and a
-/// value hidden in a `Local` is a value no screen can show (`src/menu/settings.rs`). The type
-/// stays, and it stays exact: it is the **accumulator over a sequence of notches**, which is
-/// what `tests/input.rs::f023_two_different_starting_points_converge_on_the_same_angle` and
-/// `tests/multiplayer.rs::f023_a_dropped_packet_does_not_desync_the_aim_spread` drive directly,
-/// and both go through the same [`step_spread`] the live path does — so the property they prove
-/// is a property of the shipping code and not of a museum piece.
-#[derive(Default)]
-pub struct Spread(Option<f32>);
-
-impl Spread {
-    /// Turns the wheel by `notches` and returns the **absolute** angle in degrees.
-    ///
-    /// One notch is one `step_deg`, and the result is clamped into `[min_deg, max_deg]` —
-    /// so the window in `game.ron` is what the player can reach and nothing else.
-    ///
-    /// **Clamping and not wrapping**, and the clamp is what makes the value converge: two
-    /// players who turned the wheel differently and then run it into an end stop end on the
-    /// same number. A wrap would make the two paths permanently different.
-    pub fn turn(
-        &mut self,
-        notches: f32,
-        start_deg: f32,
-        step_deg: f32,
-        min_deg: f32,
-        max_deg: f32,
-    ) -> f32 {
-        let current = self.0.unwrap_or(start_deg);
-        let next = step_spread(current, notches, step_deg, min_deg, max_deg);
-        self.0 = Some(next);
-        next
-    }
-}
-
 /// The mouse motion of every **frame** since the last simulation **tick**.
 ///
 /// A `Resource` and not a component: this is the state of a *device*, not of a player. There
@@ -338,25 +259,7 @@ impl Spread {
 #[derive(Resource, Debug, Default)]
 pub struct MouseSinceTick {
     pub delta: Vec2,
-    /// The wheel since the last tick, **in notches** — a wheel's own detents, whatever unit
-    /// the device reported them in (see [`PIXELS_PER_NOTCH`]). Sign follows the device:
-    /// scrolling **up/away is positive** and widens the spread.
-    pub scroll_notches: f32,
 }
-
-/// What one wheel detent is worth when the device reports **pixels** instead of lines.
-///
-/// A wheel sends [`MouseScrollUnit::Line`] (one detent = 1.0) and a touchpad sends
-/// [`MouseScrollUnit::Pixel`] — the same gesture, two units, and the second one has no detents
-/// at all. 20 px is winit's own line height on the platforms that convert, and it is here for
-/// one reason: without it a touchpad would move the spread by **hundreds** of degrees in one
-/// swipe and the clamp would be the only thing the player ever saw.
-///
-/// ⚠️ It is a **device** constant, not a game value — the same class as the key bindings in
-/// this file's header, and it moves into the options RON on the same day they do. It is
-/// deliberately not in `game.ron`: a tuning file that carries a touchpad's pixel pitch invites
-/// somebody to balance the game with it.
-const PIXELS_PER_NOTCH: f32 = 20.0;
 
 /// Sums the frame's mouse motion into [`MouseSinceTick`] — **once per frame**, before the
 /// fixed loop.
@@ -391,12 +294,7 @@ const PIXELS_PER_NOTCH: f32 = 20.0;
 /// paragraph and in `tests/input.rs::f023_the_wheel_notches_survive_any_frame_rate`.
 pub fn gather_mouse_motion(
     motion: Res<AccumulatedMouseMotion>,
-    scroll: Res<AccumulatedMouseScroll>,
     mut pending: ResMut<MouseSinceTick>,
 ) {
     pending.delta += motion.delta;
-    pending.scroll_notches += match scroll.unit {
-        MouseScrollUnit::Line => scroll.delta.y,
-        MouseScrollUnit::Pixel => scroll.delta.y / PIXELS_PER_NOTCH,
-    };
 }

@@ -91,6 +91,14 @@ fn mission_app() -> App {
 
 fn build(start: Cli) -> App {
     let mut app = defeated_by_titan::app(start);
+    // 🔴 **`Pendulum`, PINNED** — the same line `tests/vector_rope.rs::app` carries and for the
+    // same reason. The five `b004_*` tests here are about `combat::hitstop` and a REAL
+    // `DistanceJoint`, and `RopeForceModel::Drive` builds none at all
+    // (`src/player/locomotion.rs`, `FIND-152`), so they read whichever way `game.ron` happened
+    // to be set and all five went red when the shipped default moved on 2026-08-23. Nothing
+    // else in this file fires a hook, so nothing else can tell the two models apart.
+    app.world_mut().resource_mut::<GameData>().game.vector.rope_force_model =
+        defeated_by_titan::data::RopeForceModel::Pendulum;
     app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
     app.init_resource::<HitLog>();
     // `Last`, so that a hit written in `PostStep` is logged with the tick it happened on.

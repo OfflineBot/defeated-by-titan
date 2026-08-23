@@ -555,13 +555,11 @@ fn f175_the_settings_are_seeded_out_of_the_file() {
     let app = defeated_by_titan::app(Cli { headless: true, ..default() });
     let data = app.world().resource::<GameData>();
     let camera = data.game.camera.clone();
-    let spread = data.game.vector.aim_spread_deg;
     let s = *app.world().resource::<PlayerSettings>();
 
     assert_eq!(s.mouse_deg_per_px, camera.mouse_deg_per_px);
     assert_eq!(s.fov_deg, camera.fov_deg);
     assert_eq!(s.pitch_limit_deg, camera.pitch_limit_deg);
-    assert_eq!(s.aim_spread_deg, spread);
     assert!(!s.invert_y, "inverted has to be off until somebody asks for it");
     // `F-016`, and this is the guarantee that lets the two knobs ship before the scoring that
     // will read them: **0 % is exactly today's pure free aim**, so a fresh game aims as it did
@@ -719,53 +717,6 @@ fn f175_the_field_of_view_setting_reaches_the_camera() {
     println!("fov {want} -> {asked} deg, camera {seeded} -> {after} rad");
     assert!(asked > want, "two steps up the slider have to move the number");
     assert!((after - asked.to_radians()).abs() < 1e-6, "the camera did not follow the setting");
-}
-
-/// ★★ **One field, two devices.** The wheel and the settings row write the *same*
-/// `aim_spread_deg`, and the `Intent` carries whichever moved it last.
-///
-/// This is the test the brief asked for by name: `F-023` put the spread on the mouse wheel the
-/// day before the settings screen existed, and a screen with a slider of its own would have
-/// made two numbers out of one — turn the wheel, open the settings, and see the value the wheel
-/// started from.
-#[test]
-fn f175_the_wheel_and_the_settings_row_write_one_aim_spread() {
-    let (mut app, window) = windowed(Cli { headless: true, hub: true, ..default() });
-    app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
-    let step = app.world().resource::<GameData>().game.vector.aim_spread_step_deg;
-    let start = app.world().resource::<PlayerSettings>().aim_spread_deg;
-
-    // One notch of the wheel, through the real input path.
-    app.world_mut().resource_mut::<MouseSinceTick>().scroll_notches = 1.0;
-    app.update();
-    let after_wheel = app.world().resource::<PlayerSettings>().aim_spread_deg;
-    assert!(
-        (after_wheel - (start + step)).abs() < 1e-4,
-        "the wheel no longer writes the settings: {start} -> {after_wheel}"
-    );
-
-    // …and the screen sees exactly that number and moves it on from there.
-    press_esc(&mut app, window);
-    press(&mut app, &PauseAction::Settings);
-    app.update();
-    press(&mut app, &SettingsAction::Spread(Nudge::Up));
-    let after_click = app.world().resource::<PlayerSettings>().aim_spread_deg;
-    assert!(
-        (after_click - (after_wheel + step)).abs() < 1e-4,
-        "the row started from its own copy instead of the wheel's value: \
-         {after_wheel} -> {after_click}"
-    );
-
-    // And what the simulation is handed is that same number — the one thing that travels.
-    press_esc(&mut app, window); // back to the pause screen
-    press_esc(&mut app, window); // and into the game, so the clock runs again
-    app.update();
-    let mut players = app.world_mut().query_filtered::<&Intent, With<LocalPlayer>>();
-    let shipped = players.iter(app.world()).next().expect("a local player").aim_spread_deg;
-    assert!(
-        (shipped - after_click).abs() < 1e-4,
-        "the Intent carried {shipped} while the setting said {after_click}"
-    );
 }
 
 /// **The lobby is `missions.ron`, drawn.** One button per template, one per difficulty of the
@@ -1200,7 +1151,7 @@ fn f175_every_settings_row_is_the_same_width() {
 
     let rows = settings_rows(&mut app);
     println!("settings rows: {rows:?}");
-    assert_eq!(rows.len(), 6, "the settings screen has six adjustable rows");
+    assert_eq!(rows.len(), 5, "the settings screen has five adjustable rows");
     let (first, _) = rows[0];
     for (total, widths) in &rows {
         assert!(

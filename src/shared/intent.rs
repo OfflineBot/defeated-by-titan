@@ -29,30 +29,6 @@ pub struct Intent {
     pub pitch: f32,
     /// Pressed buttons as a bit pattern.
     pub buttons: Buttons,
-    /// How far the two arms' aim rays are **allowed** to stand apart, as a half-angle off the
-    /// look direction in degrees — the number the mouse wheel sets (`F-023`; the user, 2026-08-12:
-    /// *„es muss mehr rechts und links spreaden!! (mit mausrad soll man einstellen können wie
-    /// weit auseinander es gehen darf!)"*).
-    ///
-    /// ⚠️ **This is the ABSOLUTE angle, never a delta, and that is a netcode decision, not a
-    /// taste one.** A wheel that sent `+1 notch` would desync the moment one packet is lost or
-    /// arrives twice, and it would **never re-converge** — the two machines would stay one
-    /// notch apart forever. An absolute value re-converges with the very next intent
-    /// (`docs/multiplayer.md`, §6 rule 4). The accumulation therefore happens on the sending
-    /// side, in `net::local::read_input`, and what goes over the wire is the result.
-    ///
-    /// Degrees here and radians in the code is the axis convention of `docs/conventions.md`
-    /// — read it through [`Intent::aim_spread_rad`], which also clamps.
-    ///
-    /// ⚠️ **Since 2026-08-18 this is a ceiling, not the angle.** The user, 2026-08-18: *„der
-    /// spread für seile ist zu weit auseinander und sollte mehr dynamisch sein!"* — and his own
-    /// word from 2026-08-12 decides the reading: *„wie weit auseinander es gehen **darf**"*.
-    /// What the two rays really open to is solved per tick in `vector::aim::
-    /// effective_spread_rad` out of this ceiling plus the aim distance, the movement state and
-    /// the horizontal speed. **The resolved angle never goes on the wire** — it is a local
-    /// recomputation from this replicated setting plus local simulation state, so a dropped
-    /// packet still costs nothing (`docs/multiplayer.md`).
-    pub aim_spread_deg: f32,
     /// Which simulation tick. The server will later discard anything too old.
     pub tick: u64,
 }
@@ -60,18 +36,6 @@ pub struct Intent {
 impl Intent {
     pub fn movement(&self) -> Vec2 {
         Vec2::new(self.move_x, self.move_y)
-    }
-
-    /// The aim spread in **radians**, clamped into the window from `game.ron`
-    /// (`vector.aim_spread_min_deg` / `_max_deg`).
-    ///
-    /// **The clamp is the whole reason this is a method.** `Intent::default()` gives `0.0`,
-    /// and an `Intent` that comes from somewhere older than this field does too — at 0° both
-    /// arms fire along one ray again, which is exactly the state `F-023` exists to end
-    /// (`docs/FINDINGS.md` FIND-039). Clamping turns that into `min_deg`, the narrowest
-    /// spread the player can dial, and never into a collapsed pair.
-    pub fn aim_spread_rad(&self, min_deg: f32, max_deg: f32) -> f32 {
-        self.aim_spread_deg.clamp(min_deg, max_deg).to_radians()
     }
 
     /// Look direction as a unit vector. `yaw = 0, pitch = 0` yields −Z.

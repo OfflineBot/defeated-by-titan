@@ -16,31 +16,31 @@
 # ## The model this describes, and how to select it
 #
 # `game.ron: vector.rope_force_model` picks between `Pendulum` (the game before 2026-08-23) and
-# `Drive` (the reference's model). **The default is `Pendulum`.** To feel the drive:
+# `Drive` (the reference's model). **THE DEFAULT IS `Drive` SINCE 2026-08-23** — he played it and
+# asked for MORE of it (FIND-153). To go back to the swing:
 #
-#   sed -i 's/rope_force_model: Pendulum/rope_force_model: Drive/' assets/data/game.ron
-#   cargo build && cargo play          # and the same sed the other way round to go back
+#   sed -i 's/rope_force_model: Drive/rope_force_model: Pendulum/' assets/data/game.ron
+#   cargo build && cargo play          # and the same sed the other way round to come back
 #
 # ⚠️ **This script is GREEN under BOTH models, on purpose** — every band below is wide enough
 # that a tuning change does not turn it red, and the two models are told apart by the numbers in
 # the table, not by an assert on a knife edge. What DOES tell them apart, with a control:
 # `tests/vector_rope.rs::f149_*` and `tests/player.rs::f149_*`.
 #
-# Measured 2026-08-23 [offlinebot], one pinned binary, the same run under both models:
+# Measured 2026-08-23 [offlinebot], one pinned binary, the same run under both models. The
+# `Drive` column moved twice in one day: first with (50, 0.25, 18) and then, on his own
+# instruction (FIND-153, „ziemlich gerade … es darf strenger sein"), with (70, 0.08, 30):
 #
-#   at the mark                    Drive        Pendulum
-#   hooked, nothing held, 1.0 s    21.33 m/s    21.33 m/s   <- gravity, and nothing else, in BOTH
-#                                  y 88.6       y 88.6         (bit-identical: neither rope pulls)
-#   +1.5 s of W                    52.94 m/s    59.66 m/s   <- the drive CAPS at ~52.5 (= 50 + the
-#                                  y 67.5       y 59.4         free look thrust); the pendulum is
-#                                                              still building toward the 75 m/s
-#                                                              `vector.max_speed_m_s` CLAMP
-#   +1.0 s of D alone              20.93 m/s    22.32 m/s   <- see ACT 3
+#   at the mark                    Drive 50/.25   Drive 70/.08   Pendulum
+#   hooked, nothing held, 1.0 s    21.33 m/s      21.33 m/s      21.33 m/s   <- gravity, nothing
+#                                                                               else, in ALL THREE
+#   +1.5 s of W                    52.94 m/s      70.90 m/s      59.66 m/s
+#   +1.0 s of D alone              20.93 m/s      71.12 m/s      22.32 m/s   <- see ACT 3
 #
-#   time to cross 100 m from rest, W held (tests/vector_rope.rs harness, 300 m rope, gravity on):
-#     Drive      129 ticks = 2.15 s, arriving at 52.5 m/s (its own speed)
-#     Pendulum   136 ticks = 2.27 s, arriving at 75.0 m/s (the clamp)
-#     no rope    179 ticks = 2.98 s, arriving at 67.0 m/s (that is a FALL, not a flight)
+#   the two numbers he is being answered with (tests/player.rs + tests/vector_rope.rs):
+#     ms to 90 % of the target speed        567 ms  ->  167 ms
+#     angle between rope and velocity,
+#     0.25 s of W with 40 m/s across it     28.1 deg -> 2.2 deg   (Pendulum, same run: 85.5 deg)
 #
 # ## The geometry, and why it is in the sky
 #
@@ -80,24 +80,27 @@ assert speed < 26
 key W 1.5
 wait 1.5
 mark f006-a-second-and-a-half-of-w
-# It really hauls, and it does it fast: 1.5 s is 6 x `drive_ramp_s`, measured 52.94 m/s against
-# the 21.33 m/s he had without a key. That difference IS the drive.
+# It really hauls, and it does it fast: 1.5 s is nearly 19 x `drive_ramp_s`, measured 70.90 m/s
+# against the 21.33 m/s he had without a key. That difference IS the drive.
 assert speed > 40
-# And it is a speed and not a build-up: 75 m/s is `vector.max_speed_m_s`, i.e. the CLAMP, and a
-# run that reaches it is not being driven any more, it is being cut off.
-assert speed < 70
+# And it is a speed and not a build-up: 75 m/s is `vector.max_speed_m_s`, i.e. the avian CLAMP on
+# the body, and a run that reaches it is not being driven any more, it is being cut off. The band
+# has to hold for BOTH models, so it sits above the drive's 70.90 and above the pendulum's 59.66.
+assert speed < 74
 assert rope > 0         # nothing let go on the way
 
 # ---- ACT 3 · A/D · „mit a und d kann man zur seite gehen" -----------------------------------
-# W is released and only D is held. Under the drive the target becomes the LATERAL speed alone
-# (`drive_lateral_m_s`, 18), so the 52.9 m/s is chased back down to 20.9 — A/D on its own is a
-# steering key AND a brake, not a second throttle.
-# ⚠️ That braking is a consequence of the velocity chase and NOT something the user described.
-# It is written down as his to judge: docs/QUESTIONS.md Q-050.
+# W is released and only D is held. **Until FIND-153 this was an air brake**: the target became
+# the lateral speed ALONE, so the chase read the flight's own 52.9 m/s as an error and pulled it
+# down to 20.9 in one second — Q-050, and nobody had chosen it. Since FIND-153 the released-W
+# target KEEPS the flight on every axis it does not command and only replaces the sideways one,
+# under the drive's own shared cap: measured 71.12 m/s, i.e. the same speed pointing ~20 deg
+# somewhere else. ⚠️ The cap matters: without it the sideways 30 ADDS to the 70 and the run
+# arrives at 75.000 m/s exactly, which is `vector.max_speed_m_s` and not a speed anybody chose.
 key D 1.0
 wait 1.0
 mark f006-a-second-of-d-alone
 assert speed > 12       # D on its own really drives him sideways
-assert speed < 34       # and it is a speed, not a build-up
+assert speed < 74       # and it is a REDIRECT, not a second throttle: never the 75 m/s clamp
 assert rope > 0
 assert height > 40      # he never came near the roofscape — see the header

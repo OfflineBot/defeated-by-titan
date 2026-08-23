@@ -1,4 +1,4 @@
-//! The settings screen — **six things a person may change about his own game.**
+//! The settings screen — **five things a person may change about his own game.**
 //!
 //! > *„zudem fehlen settings."* — the user, 2026-08-13 (`docs/NEXT.md` §1D req 6).
 //!
@@ -7,7 +7,6 @@
 //! | Mouse sensitivity | `mouse_deg_per_px` | 0.01 – 0.60 °/px, step 0.01 | `game.ron: camera.mouse_deg_per_px` (0.08) |
 //! | Invert Y | `invert_y` | on / off | nothing — it is a preference, not a game value |
 //! | Field of view | `fov_deg` | 55 – 110°, step 5 | `game.ron: camera.fov_deg` (60) |
-//! | Aim spread | `aim_spread_deg` | `game.ron: vector.aim_spread_min_deg … _max_deg` | `game.ron: vector.aim_spread_deg` (28) |
 //! | Aim assist reach | `assist_catch_pct` | 0 – 100 %, step 5 | nothing — `F-016` defines 0 % as free aim |
 //! | Aim assist strength | `assist_strength_pct` | 0 – 100 %, step 5 | the same |
 //!
@@ -28,16 +27,19 @@
 //! into the log** so he can tell us the number he liked. A knob whose setting he cannot report
 //! back is half a knob.
 //!
-//! ## The aim-spread row is the one that matters, and it is the one that could have been a bug
+//! ## The aim-spread row is gone, and so is the wheel that shared its field
 //!
-//! `F-023` put the aim spread on the **mouse wheel** the day before this screen existed
-//! (`net::local::read_input`, *„mit mausrad soll man einstellen können wie weit auseinander es
-//! gehen darf"*). A settings screen with a slider of its own would have made two numbers out of
-//! one: turn the wheel, open the settings, and the screen shows the value the wheel started
-//! from. So the wheel's accumulator was **moved into**
-//! [`PlayerSettings::aim_spread_deg`](crate::shared::PlayerSettings) and this row edits that
-//! same field. One field, one writer — reached by two devices
-//! (`src/shared/settings.rs` carries the long form of the argument).
+//! Between 2026-08-13 and 2026-08-23 a fourth row edited `PlayerSettings::aim_spread_deg` — how
+//! far apart `F-023`'s two aim rays were **allowed** to stand — and the mouse wheel wrote the
+//! same field, one number reached by two devices. The user retired the fan on 2026-08-23
+//! (*„dann das auseinander mit q und e kann weg. einfach da wo ich hinschau (also fadenkreuz)
+//! geht das seil hin."*), so both ropes fly at the crosshair, there is no angle left to allow,
+//! and the row, the wheel and the field went with it (`docs/QUESTIONS.md` Q-048).
+//!
+//! **The two assist rows below are a different feature and they stay.** The assist searches
+//! sideways along the crosshair's own screen row and publishes **one** point that both arms fly
+//! to (`docs/FINDINGS.md` FIND-133); "sideways from the crosshair" was never "the two arms
+//! apart".
 //!
 //! ## Why every row rebuilds the whole plate
 //!
@@ -51,7 +53,6 @@
 use bevy::prelude::*;
 
 use super::{plate, PauseElement, Screen, SettingsFrom};
-use crate::data::GameData;
 use crate::shared::settings::{
     ASSIST_CATCH_MAX_DEG, ASSIST_MAX_PCT, ASSIST_MIN_PCT, FOV_MAX_DEG, FOV_MIN_DEG,
     MOUSE_MAX_DEG_PER_PX, MOUSE_MIN_DEG_PER_PX,
@@ -87,7 +88,6 @@ pub enum SettingsAction {
     Mouse(Nudge),
     InvertY,
     Fov(Nudge),
-    Spread(Nudge),
     /// `F-016` — how far off the crosshair the assist may catch. 0 % is free aim.
     AssistCatch(Nudge),
     /// `F-016` / `F-024` — how hard it pulls once it has a candidate. 0 % is free aim.
@@ -99,8 +99,7 @@ pub enum SettingsAction {
 }
 
 /// Builds the plate out of the **current** values. Called by `menu::spawn_menu`.
-pub fn spawn_settings_screen(commands: &mut Commands, data: &GameData, s: &PlayerSettings) {
-    let v = &data.game.vector;
+pub fn spawn_settings_screen(commands: &mut Commands, s: &PlayerSettings) {
     commands.spawn(plate::root(Screen::Settings, "settings")).with_children(|screen| {
         screen.spawn(plate::title("Settings"));
 
@@ -128,28 +127,6 @@ pub fn spawn_settings_screen(commands: &mut Commands, data: &GameData, s: &Playe
         // the middle of the screen.
         screen.spawn(plate::centre_lane());
 
-        row(
-            screen,
-            "Aim spread",
-            // ⚠️ "deg apart max" and not "deg max": since 2026-08-18 the number is the angle
-            // **between** the two rays and it is a ceiling, not the angle they take
-            // (`vector::aim::wheel_half_rad`, FIND-096). The old caption read as a per-ray
-            // half-angle and was off by a factor of two (`docs/NEXT.md` §2D).
-            &format!("{:.1} deg apart max", s.aim_spread_deg),
-            // Named, because a player who has already found the wheel has to see that this is
-            // the same number and not a second one — and since 2026-08-18 it is a CEILING, so
-            // the row says what the ropes actually do at that setting instead of a degree the
-            // game only obeys when you point at the sky. The metres are the standing target
-            // scaled by this notch (`src/vector/aim.rs::effective_spread_rad`, step 2).
-            &format!(
-                "{:.0} - {:.0}, the mouse wheel sets it too — up to {:.0} m apart",
-                v.aim_spread_min_deg,
-                v.aim_spread_max_deg,
-                (v.aim_sep_stand_m * s.aim_spread_deg / v.aim_sep_neutral_deg)
-                    .max(v.aim_sep_floor_m)
-            ),
-            SettingsAction::Spread,
-        );
         // `F-016`, the two the user asked for. Their hint lines carry two things a slider
         // cannot: what 0 means, and — for the reach — what the percentage is in degrees, so
         // the number he reports back to us is one we can act on.
@@ -184,8 +161,30 @@ pub fn spawn_settings_screen(commands: &mut Commands, data: &GameData, s: &Playe
                 plate::button(plate::BUTTON_W, false),
             ))
             .with_child(plate::label("Back  (Esc)"));
+
+        // **The counterweight, and it is not decoration.** `plate::root` centres this column on
+        // the screen, so `plate::centre_lane` only lands on the *screen's* middle while the
+        // column above it and the column below it are the same height. That was true by
+        // accident while the screen had three rows on each side of the lane; retiring the aim
+        // spread row (`docs/QUESTIONS.md` Q-048) took one row off the lower half and the whole
+        // plate slid down by half of it, walking the `Field of view` hint straight into the
+        // band's lane. This node puts that height back.
+        //
+        // The number is pinned from the outside by
+        // `tests/menu.rs::f016_the_settings_screen_leaves_the_bands_lane_empty`, which measures
+        // the band and every plate node and falls over the moment they touch — so a row added
+        // or removed here cannot silently move the hole off the crosshair again.
+        screen.spawn((
+            Name::new("settings_counterweight"),
+            PauseElement,
+            Node { height: Val::Px(ROW_COUNTERWEIGHT_PX), width: Val::Px(plate::ROW_W), ..default() },
+        ));
     });
 }
+
+/// One settings row plus one `plate::root` row gap — the height the lower half of the column
+/// lost when the aim-spread row was retired. See the counterweight above.
+const ROW_COUNTERWEIGHT_PX: f32 = 64.0;
 
 /// One adjustable row: `label   [-]  value  [+]`, and a dim line under it saying what the
 /// window is. The window is written down because a slider that silently stops is a slider the
@@ -268,12 +267,10 @@ fn toggle_row(screen: &mut ChildSpawnerCommands, label: &str, on: bool) {
 /// same window the wheel obeys, and a second copy of it would be a second answer.
 pub fn settings_buttons(
     buttons: Query<(&Interaction, &SettingsAction)>,
-    data: Res<GameData>,
     back: Res<SettingsFrom>,
     mut settings: ResMut<PlayerSettings>,
     mut screen: ResMut<Screen>,
 ) {
-    let v = &data.game.vector;
     for (interaction, action) in &buttons {
         if *interaction != Interaction::Pressed {
             continue;
@@ -285,12 +282,6 @@ pub fn settings_buttons(
                 settings.invert_y = !inverted;
             }
             SettingsAction::Fov(n) => settings.nudge_fov(n.steps()),
-            SettingsAction::Spread(n) => settings.nudge_spread(
-                n.steps(),
-                v.aim_spread_step_deg,
-                v.aim_spread_min_deg,
-                v.aim_spread_max_deg,
-            ),
             // ⚠️ **Both print.** `F-024`'s acceptance is that a change is live without a
             // restart, and the user's own reason for asking is that he wants to *test* and
             // tell us what felt best — so the value goes into the log the moment it moves.

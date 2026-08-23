@@ -46,7 +46,7 @@ use defeated_by_titan::shared::{
 use defeated_by_titan::shared::{LookOverride, PlayerSettings, Velocity};
 use defeated_by_titan::data::VectorTuning;
 use defeated_by_titan::vector::aim::{
-    aim, deviation_rad, hemisphere, look_basis, pick_best, probe_dirs, required_margin,
+    aim, deviation_rad, look_basis, pick_best, probe_dirs, required_margin,
     score_candidate, AimCandidate, ScoreContext,
 };
 
@@ -1132,7 +1132,7 @@ fn f024_never_a_point_behind_the_player() {
     let behind = candidate(Vec3::new(2.0, 18.0, 30.0), 1);
     let ahead = candidate(Vec3::new(1.0, 0.0, -30.0), 2);
 
-    let picked = pick_best(&v, &ctx, Side::Right, Vec3::X, &[behind, ahead], None, 100.0)
+    let picked = pick_best(&v, &ctx, &[behind, ahead], None, 100.0)
         .expect("a usable point lies ahead");
     assert_eq!(picked.body, BodyId(2), "it took the point behind the player");
     assert!(
@@ -1142,32 +1142,10 @@ fn f024_never_a_point_behind_the_player() {
 
     // Alone, the point behind is still not chosen — the arm keeps free aim instead.
     assert_eq!(
-        pick_best(&v, &ctx, Side::Right, Vec3::X, &[behind], None, 100.0),
+        pick_best(&v, &ctx, &[behind], None, 100.0),
         None,
         "a point 150 deg off the crosshair was accepted as a candidate"
     );
-}
-
-/// `F-023`'s hemisphere split survives the assist: *"Q bedient ausschliesslich die linke
-/// Menge, E ausschliesslich die rechte"*.
-#[test]
-fn f024_an_arm_never_takes_a_point_from_the_other_hemisphere() {
-    let v = vector_tuning();
-    let ctx = calm_ctx(Vec3::NEG_Z);
-    let right_hand_side = candidate(Vec3::new(6.0, 0.0, -30.0), 1);
-    let left_hand_side = candidate(Vec3::new(-6.0, 0.0, -30.0), 2);
-    let both = [right_hand_side, left_hand_side];
-
-    assert_eq!(
-        pick_best(&v, &ctx, Side::Right, Vec3::X, &both, None, 100.0).map(|c| c.body),
-        Some(BodyId(1))
-    );
-    assert_eq!(
-        pick_best(&v, &ctx, Side::Left, Vec3::X, &both, None, 100.0).map(|c| c.body),
-        Some(BodyId(2))
-    );
-    // And with only the wrong side on offer, the arm keeps what the player aimed at.
-    assert_eq!(pick_best(&v, &ctx, Side::Left, Vec3::X, &[right_hand_side], None, 100.0), None);
 }
 
 /// `F-024`'s three modes are one number, and the number is linear so that he can report it
@@ -1190,12 +1168,12 @@ fn f024_the_three_modes_come_out_of_the_strength_knob_alone() {
     let gap = score_candidate(&v, &ctx, &slightly_better) - score_candidate(&v, &ctx, &aimed_at);
     assert!(gap > 0.0 && gap < full, "the fixture needs a small but real improvement, got {gap}");
     assert_eq!(
-        pick_best(&v, &ctx, Side::Right, Vec3::X, &[slightly_better], Some(aimed_at), 5.0),
+        pick_best(&v, &ctx, &[slightly_better], Some(aimed_at), 5.0),
         None,
         "a marginal improvement snapped at 5 % strength"
     );
     assert_eq!(
-        pick_best(&v, &ctx, Side::Right, Vec3::X, &[slightly_better], Some(aimed_at), 100.0)
+        pick_best(&v, &ctx, &[slightly_better], Some(aimed_at), 100.0)
             .map(|c| c.body),
         Some(BodyId(2)),
         "SNAP has to take the better point"
@@ -1214,7 +1192,7 @@ fn b007_with_nothing_to_beat_the_assist_wins_at_the_lowest_strength_there_is() {
     let ctx = calm_ctx(Vec3::NEG_Z);
     let beside_the_blocker = candidate(Vec3::new(4.0, 2.0, -25.0), 9);
     assert_eq!(
-        pick_best(&v, &ctx, Side::Right, Vec3::X, &[beside_the_blocker], None, 5.0)
+        pick_best(&v, &ctx, &[beside_the_blocker], None, 5.0)
             .map(|c| c.body),
         Some(BodyId(9))
     );
@@ -1224,8 +1202,14 @@ fn b007_with_nothing_to_beat_the_assist_wins_at_the_lowest_strength_there_is() {
 /// at every pitch: it stays **inside the catch cone**, and it stays **on its own side**.
 ///
 /// Both are checked with arithmetic this test does itself — `Intent::look_dir` and the
-/// horizontal right vector of `docs/conventions.md` — and not by asking `deviation_rad` and
-/// `hemisphere`, which are the functions the system uses.
+/// horizontal right vector of `docs/conventions.md` — and not by asking `deviation_rad`, which
+/// is the function the system uses.
+///
+/// ⚠️ **"Its own side" is about the SWEEP, not about the two arms.** `F-023`'s fan was retired
+/// on 2026-08-23 and `pick_best` no longer filters by hemisphere: both sides are cast, both
+/// answers go into one candidate list, and one winner is published to both arms. What this test
+/// still holds is that the sweep really covers left *and* right of the crosshair and never
+/// leaves the row (`docs/FINDINGS.md` FIND-133).
 #[test]
 fn f024_every_probe_stays_inside_the_catch_cone_and_on_its_own_side() {
     let v = vector_tuning();
@@ -1277,11 +1261,6 @@ fn f024_every_probe_stays_inside_the_catch_cone_and_on_its_own_side() {
             }
         }
     }
-    // The hemisphere seam belongs to nobody — a point straight ahead is not silently handed
-    // to one arm by the sign of a float.
-    assert_eq!(hemisphere(Vec3::X, Vec3::NEG_Z), None);
-    assert_eq!(hemisphere(Vec3::X, Vec3::new(-1.0, 0.0, -30.0)), Some(Side::Left));
-    assert_eq!(hemisphere(Vec3::X, Vec3::new(1.0, 0.0, -30.0)), Some(Side::Right));
     assert!(deviation_rad(Vec3::NEG_Z, Vec3::ZERO).is_infinite());
 }
 
@@ -1549,7 +1528,7 @@ fn f025_a_settings_line_moves_the_running_games_assist_knobs() {
     );
     // And nothing else moved: the verb names one field per line.
     assert_eq!(after.fov_deg, before.fov_deg);
-    assert_eq!(after.aim_spread_deg, before.aim_spread_deg);
+    assert_eq!(after.pitch_limit_deg, before.pitch_limit_deg);
     assert_eq!(after.mouse_deg_per_px, before.mouse_deg_per_px);
 }
 
@@ -1623,35 +1602,6 @@ fn f024_every_probe_sits_on_the_crosshairs_own_row_and_never_above_or_below_it()
          {:.6} deg",
         worst_rad.to_degrees()
     );
-}
-
-/// The two side rays are on that same row — so a snap moves the marker **along** the row and
-/// never off it. Without this the previous test would be true of the candidates and still leave
-/// a vertical jump between the free-aim point and the snapped one.
-#[test]
-fn f024_the_side_rays_share_the_crosshairs_row_so_a_snap_moves_only_sideways() {
-    for yaw_deg in [-170.0_f32, -35.0, 0.0, 91.0, 179.0] {
-        for pitch_deg in [-89.0_f32, -45.0, 0.0, 45.0, 89.0] {
-            let intent = Intent {
-                yaw: yaw_deg.to_radians(),
-                pitch: pitch_deg.to_radians(),
-                ..default()
-            };
-            let up = camera_up(intent.yaw, intent.pitch);
-            for half_deg in [0.0_f32, 5.6, 14.0, 22.0] {
-                for dir in defeated_by_titan::vector::aim::side_dirs(&intent, half_deg.to_radians())
-                {
-                    assert!(
-                        up.dot(dir).abs() < 1e-5,
-                        "a side ray at yaw {yaw_deg} pitch {pitch_deg} half {half_deg} leaves \
-                         the crosshair's row by {} deg",
-                        up.dot(dir).abs().asin().to_degrees()
-                    );
-                }
-            }
-            assert!(up.dot(intent.look_dir()).abs() < 1e-5);
-        }
-    }
 }
 
 /// **In the running game, on the shipped map, with real rays**: whatever the assist publishes

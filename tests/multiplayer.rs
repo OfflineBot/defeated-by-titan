@@ -235,67 +235,6 @@ fn multiplayer_buttons_survive_the_trip_through_the_inbox() {
     assert_eq!(out[0].1.tick, 3, "the intent carries the tick it was meant for");
 }
 
-/// ★ **The aim spread travels as an ABSOLUTE angle, and that is what makes a lost packet
-/// harmless.**
-///
-/// `F-023`'s wheel (the user, 2026-08-12: *„mit mausrad soll man einstellen können wie weit
-/// auseinander es gehen darf!"*) is the first input in this game that has **state**. A wheel
-/// notch is a delta, and a delta over a wire is a desync that never re-converges: drop one
-/// packet and the two machines stay one notch apart until somebody restarts the game.
-///
-/// So the accumulation happens on the sending side (`net::local::Spread`) and the wire carries
-/// the result. This test drops the middle packet of three and shows both answers: the absolute
-/// one lands on the sender's angle, the delta one is a notch short **forever**.
-#[test]
-fn f023_a_dropped_packet_does_not_desync_the_aim_spread() {
-    use defeated_by_titan::data::GameData;
-    use defeated_by_titan::net::local::Spread;
-    use defeated_by_titan::net::Inbox;
-
-    let app = app();
-    let v = &app.world().resource::<GameData>().game.vector;
-    let (start, step, min, max) =
-        (v.aim_spread_deg, v.aim_spread_step_deg, v.aim_spread_min_deg, v.aim_spread_max_deg);
-
-    // The sender turns the wheel one notch per tick, three times, and posts an intent each
-    // time — but the middle one never makes it into the inbox.
-    let mut wheel = Spread::default();
-    let mut inbox = Inbox::default();
-    let mut sent = Vec::new();
-    for tick in 0..3u64 {
-        let absolute = wheel.turn(1.0, start, step, min, max);
-        sent.push(absolute);
-        if tick == 1 {
-            continue; // the lost packet
-        }
-        inbox.push(PlayerId(1), Intent { aim_spread_deg: absolute, tick, ..default() }, tick);
-    }
-
-    let delivered = inbox.drain_due(3);
-    let received = delivered.last().expect("two of the three arrived").1.aim_spread_deg;
-    // ⚠️ Derived from `game.ron`, **not** from `sent`: three notches up from the file's
-    // starting value. Comparing the receiver against the sender's own output would be a
-    // tautology — it would stay green even if `Spread` stopped accumulating altogether.
-    let want = (start + 3.0 * step).clamp(min, max);
-    // What a delta scheme would have made of the same two packets: one notch missing, and no
-    // later packet ever repairs it.
-    let as_deltas = start + 2.0 * step;
-
-    println!(
-        "sent {sent:?} — absolute delivers {received}°, a delta scheme would deliver \
-         {as_deltas}° and stay {}° short forever",
-        want - as_deltas
-    );
-    assert!(
-        (received - want).abs() < 1e-6,
-        "the receiver has to end on the sender's {want}°, it ended on {received}°"
-    );
-    assert!(
-        (as_deltas - want).abs() > 1e-6,
-        "this test proves nothing unless the delta scheme really would have differed"
-    );
-}
-
 #[test]
 fn multiplayer_velocity_is_a_component_on_the_player() {
     let mut app = app();

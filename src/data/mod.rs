@@ -343,100 +343,19 @@ pub struct VectorTuning {
     /// every range. Held by `tests/vector_hooks.rs`: `hook_range_m / hook_speed_m_s > this`
     /// (or the ceiling never binds and nobody could tell it was broken) and `<= 0.15 s`.
     pub hook_flight_max_s: f32,
-    /// **⚠️ UNTUNED, and read by nothing yet** — `W3` (`vector::aim`) and `W2` (the wheel)
-    /// consume it. Half-angle between the two arms' aim rays, in degrees off the look
-    /// direction; degrees in the RON, radians in the code (`docs/conventions.md`).
-    ///
-    /// The user, 2026-08-12: *„und es muss mehr rechts und links spreaden!! (mit mausrad soll
-    /// man einstellen können wie weit auseinander es gehen darf!)"* — so this is the **starting
-    /// value of a number the player then sets at runtime**, and the next three keys are the
-    /// window he sets it in. ⚠️ The wheel carries the **absolute** angle, never a delta: a
-    /// delta desyncs over the network and never re-converges (`docs/multiplayer.md`).
-    pub aim_spread_deg: f32,
-    /// Floor of the wheel's window. **Strictly above 0** — at 0 both arms share one ray again,
-    /// which is the state `F-023` exists to end (`docs/FINDINGS.md` FIND-039).
-    pub aim_spread_min_deg: f32,
-    /// Ceiling of the wheel's window. **At most 60°**: past that the side ray leaves the
-    /// horizontal frustum and the marker the user asks for would be drawn off-screen.
-    pub aim_spread_max_deg: f32,
-    /// One notch of the wheel, in degrees. `(max - min) / step` has to be at least 8 notches,
-    /// or the wheel is a three-position switch a player reads as broken.
-    pub aim_spread_step_deg: f32,
-    /// **The hard floor of the DYNAMIC angle, below the wheel's own floor** (`F-023`).
-    ///
-    /// The wheel's window is what the player is allowed to ask for; this is the narrowest the
-    /// game may resolve to on his behalf. Strictly above `0` — at 0 both arms fire along one
-    /// ray again, the state `F-023` exists to end (`docs/FINDINGS.md` FIND-039) — and strictly
-    /// **below** [`VectorTuning::aim_spread_min_deg`], or the model can never narrow past the
-    /// wheel and the whole feature is dead.
-    pub aim_spread_floor_deg: f32,
-    /// How fast the effective half-angle may change, in degrees per second — the outer safety
-    /// clamp on a single-tick depth blip, on top of the distance filter below.
-    pub aim_spread_slew_deg_s: f32,
-    /// Time constant of the low-pass on **log2 of the aim distance**, in seconds.
-    ///
-    /// Log space and not metres: the angle is a function of `1/d`, so a constant relative rate
-    /// behaves the same at 12 m and at 300 m, where a constant metric rate does not.
-    pub aim_spread_settle_s: f32,
-    /// The wheel notch at which the metre targets below apply **unscaled**, in degrees.
-    ///
-    /// Separate from [`VectorTuning::aim_spread_deg`] on purpose: that key has one job, the
-    /// value the wheel starts at. This one is the scale anchor, `k = wheel_deg / this`. They
-    /// happen to be the same number today and nothing requires them to stay so.
-    pub aim_sep_neutral_deg: f32,
-    /// The smallest separation that is still **two** anchors, in metres. Below one house
-    /// frontage both arms are on the same facade, which is FIND-039 again.
-    pub aim_sep_floor_m: f32,
-    /// Target separation while a rope holds, in metres. Mid-swing the second hook is a
-    /// **chain**, near your line — the bible's traversal tech is hook switching, not holding
-    /// two wide anchors (`docs/gameplay/references.md` §5).
-    pub aim_sep_tether_m: f32,
-    /// Target separation on the ground or on a wall, in metres: standing still and picking a
-    /// route, the two rays land on opposite edges of the block in front of you.
-    pub aim_sep_stand_m: f32,
-    /// Target separation airborne and untethered, in metres — one block **pitch**: falling
-    /// with nothing attached, the two rays may not both land on the same block.
-    pub aim_sep_search_m: f32,
-    /// **The distance at which the metre budget above is fully available, in metres.**
-    ///
-    /// Nearer than this the budget scales with `d / this`, which makes the near field a
-    /// constant angle per state instead of a block-scale nonsense the wheel's ceiling has to
-    /// catch. Without it the whole metre model is a measured no-op under ~38 m — the range at
-    /// which every flight's first hook is fired (`docs/FINDINGS.md` FIND-096).
-    pub aim_sep_full_reach_m: f32,
-    /// At or below this **horizontal** speed the state target applies in full, in m/s.
-    pub aim_sep_calm_speed_m_s: f32,
-    /// At or above this **horizontal** speed the target is pinned to
-    /// [`VectorTuning::aim_sep_floor_m`], in m/s.
-    pub aim_sep_fast_speed_m_s: f32,
-    /// **`B-008` — how far a side ray's real hit may sit from the crosshair's point before
-    /// that arm falls back to the centre ray, as a multiple of what the fan asked for.**
-    ///
-    /// The fan asks for `d * sin(half)` metres per side ([`crate::vector::aim::separation_m`]
-    /// is the same number doubled). A side hit further off than `this * d * sin(half)` — and
-    /// on a different body than the crosshair's — is not the surface the player pointed at,
-    /// and `F-028`'s fallback takes over. Bounded in `tests/vector_aiming.rs`:
-    ///
-    /// - `> 1 / cos(aim_spread_max_deg / 2)`, or a side ray on the very same flat wall as the
-    ///   crosshair would be refused (a plane perpendicular to the view puts the hit at
-    ///   `d * tan(half)`, which is `1 / cos(half)` times what the fan asked for);
-    /// - `<= 2.0`, or a hit twice as far off as the fan's whole ask still counts as coherent
-    ///   and the guard stops guarding anything.
-    pub aim_side_coherence_k: f32,
-
     // -----------------------------------------------------------------------------------
     // `F-024` / `F-025` — the anchor candidate system. Every weight below is the backlog's
     // own number (`docs/backlog/gameplay.ron`, F-025), and it lives here so that the user can
     // retune the feel without a rebuild — which is the whole reason he asked for the two
     // sliders (*„damit ich testen kann was am besten wäre"*).
     // -----------------------------------------------------------------------------------
-    /// How many probe rays the candidate sweep casts **per hemisphere**, along the
-    /// screen-horizontal line through the crosshair.
+    /// How many probe rays the candidate sweep casts **per side of the crosshair**, along the
+    /// screen-horizontal line through it.
     ///
     /// The sweep is the candidate query, and it is a BVH walk and not an iteration over the
-    /// world (§6 rule 6): `this` extra `SpatialQuery::cast_ray` calls per hemisphere, at the
+    /// world (§6 rule 6): `this` extra `SpatialQuery::cast_ray` calls per side, at the
     /// 0.21 us per ray `vector::aim`'s header measured. **Only cast while the assist is on** —
-    /// at 0 % the game casts exactly the three rays it always did.
+    /// at 0 % the game casts exactly the one centre ray it always did.
     ///
     /// ⚠️ **It replaced `assist_probe_rings` × `assist_probes_per_ring` on 2026-08-19**, when the
     /// user asked for the search to be locked to the horizontal (*„nur auf der x achse … also
@@ -500,14 +419,20 @@ pub struct VectorTuning {
     /// [`RopeForceModel::Drive`] chases along the rope while `W` is held, in m/s. Ignored
     /// entirely by [`RopeForceModel::Pendulum`].
     pub drive_speed_m_s: f32,
-    /// **⚠️ UNTUNED — the second.** The drive's time constant in seconds: the velocity closes
-    /// `1 − 1/e` = 63 % of the gap to the target in this long, 95 % in three of them. *„ein
-    /// etwas smoother übergang! aber recht schnell!"* is the whole specification of this
-    /// number. Must be `> 0`.
+    /// **⚠️ UNTUNED — the second, and the one the user complained about first.** The drive's
+    /// time constant in seconds: the velocity closes `1 − 1/e` = 63 % of the gap to the target
+    /// in this long, 95 % in three of them. *„ein etwas smoother übergang! aber recht
+    /// schnell!"* is the whole specification of this number. Must be `> 0`.
+    ///
+    /// **It is also the straightness knob**, and that is not obvious from the name: the
+    /// steady-state sag under gravity is `atan(ramp · g / speed)`, and the crossing momentum
+    /// that bends a flight into a curve decays with this same constant. `FIND-153`.
     pub drive_ramp_s: f32,
     /// **⚠️ UNTUNED — the third.** What `A`/`D` add across the rope under
     /// [`RopeForceModel::Drive`], in m/s. *„das a d sorgt dafür dass man nicht immer direkt zum
-    /// seil gezogen wird"* — this is how far off the anchor line the player can hold himself.
+    /// seil gezogen wird"* — this is how far off the anchor line the player can hold himself,
+    /// and since `FIND-153` it is a **steering authority only**: `A`/`D` on their own chase this
+    /// speed on their own axis and no longer brake the flight down to it (`Q-050`).
     pub drive_lateral_m_s: f32,
     /// Gauss-Seidel iterations over both rope constraints (`shared::rope::rope_step`).
     pub rope_iterations: u32,

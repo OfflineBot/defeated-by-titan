@@ -222,58 +222,6 @@ fn t005_a_missed_hook_is_back_inside_one_second() {
 }
 
 #[test]
-fn t005_the_aim_spread_is_a_window_a_wheel_can_turn() {
-    // `F-023`, and the user's own sentence for it (`docs/NEXT.md` §1A): *„und es muss mehr
-    // rechts und links spreaden!! (mit mausrad soll man einstellen können wie weit auseinander
-    // es gehen darf!)"*. Four keys, and every one of them has a way of being quietly wrong
-    // that no other test in this repository would catch.
-    let v = &data().game.vector;
-    // A floor of 0 gives both arms one ray again — the exact state `F-023` exists to end
-    // (docs/FINDINGS.md FIND-039). A player must not be able to wheel the feature off.
-    assert!(
-        v.aim_spread_min_deg > 0.0,
-        "aim_spread_min_deg = {} — at 0 both arms share one aim ray and F-023 is switched off \
-         by a flick of the wheel",
-        v.aim_spread_min_deg
-    );
-    // 60° is geometry, not taste: `camera.fov_deg` 60 vertical is 91.5° horizontal on 16:9,
-    // so a ray more than ~46° off the look direction leaves the image — and the marker the
-    // user calls „wichtig" would have to be drawn where there is no screen.
-    assert!(
-        v.aim_spread_max_deg <= 60.0,
-        "aim_spread_max_deg = {} — above 60° the side ray leaves the frustum and its marker \
-         cannot be drawn where the rope lands",
-        v.aim_spread_max_deg
-    );
-    assert!(
-        v.aim_spread_min_deg < v.aim_spread_max_deg,
-        "aim_spread window {}..{} is empty or inverted",
-        v.aim_spread_min_deg, v.aim_spread_max_deg
-    );
-    assert!(
-        (v.aim_spread_min_deg..=v.aim_spread_max_deg).contains(&v.aim_spread_deg),
-        "aim_spread_deg = {} lies outside its own window {}..={}",
-        v.aim_spread_deg, v.aim_spread_min_deg, v.aim_spread_max_deg
-    );
-    // The step is what turns the window into a wheel. Fewer than 8 notches and a player reads
-    // the wheel as broken rather than as a setting; a step that does not divide the window
-    // leaves a last notch the wheel can never reach.
-    assert!(v.aim_spread_step_deg > 0.0, "aim_spread_step_deg = 0 — the wheel would do nothing");
-    let notches = (v.aim_spread_max_deg - v.aim_spread_min_deg) / v.aim_spread_step_deg;
-    assert!(
-        notches >= 8.0,
-        "{notches} notches between {} and {} at a step of {} — under 8 the wheel is a \
-         three-position switch, not a dial",
-        v.aim_spread_min_deg, v.aim_spread_max_deg, v.aim_spread_step_deg
-    );
-    assert!(
-        (notches - notches.round()).abs() < 1e-3,
-        "{notches} notches is not a whole number — the step has to divide the window, or the \
-         widest setting is one the wheel can never land on"
-    );
-}
-
-#[test]
 fn t005_the_rope_pull_is_the_second_strongest_thrust_in_the_game() {
     // `docs/NEXT.md` §1A, requirement 4: *„dass man dort richtig hingezogen wird"* — and the
     // whole point of the key is that it is **more** than the air control a rope-less player
@@ -546,10 +494,6 @@ fn t005_no_value_is_zero_negative_or_nan() {
         ("boost_m_s2", v.boost_m_s2),
         ("max_speed_m_s", v.max_speed_m_s),
         ("gas_steer_per_s", v.gas_steer_per_s),
-        ("aim_spread_deg", v.aim_spread_deg),
-        ("aim_spread_min_deg", v.aim_spread_min_deg),
-        ("aim_spread_max_deg", v.aim_spread_max_deg),
-        ("aim_spread_step_deg", v.aim_spread_step_deg),
         ("player.air_pull_m_s2", d.game.player.air_pull_m_s2),
         ("player.air_lateral_m_s2", d.game.player.air_lateral_m_s2),
         ("player.air_pull_fade_m", d.game.player.air_pull_fade_m),

@@ -48,12 +48,11 @@
 //! element's rect out of `ComputedNode` and falls over if one of them creeps inward.
 //!
 //! **One exception, and it is the aim itself**: the two arm markers, whenever they carry a
-//! *place* — an idle arm's landing preview at the resolved fan half-angle
-//! ([`arm_aim::Bearing::Fan`], FIND-098), a tip in flight, an anchor being held, or an arm that
-//! fell back to the centre ray ([`arm_aim::Bearing::World`], FIND-129). Applying the box to any
-//! of them draws the marker somewhere the rope does not go — measured at 146 px for the fan and
-//! at **150 px / 47.7 m** for the rest — and `F-023`'s whole claim is that the rope and the
-//! marker are one number. Those markers are held out of [`arm_aim::SIGHT_CORE_PX`] instead: the
+//! *place* — an idle arm's landing preview, a tip in flight, or an anchor being held
+//! (FIND-098, FIND-129). Applying the box to any of them draws the marker somewhere the rope
+//! does not go — measured at **150 px / 47.7 m** — and the standing claim is that the rope and
+//! the marker are one number (the user, 2026-08-19: *„wichtig wäre nur dass diese auch genau da
+//! sind visuell wo das seil auch landen würde!"*). Those markers are held out of [`arm_aim::SIGHT_CORE_PX`] instead: the
 //! pixels the player is cutting, which is what the box was protecting in the first place.
 //! **And the second exception, on the same argument and no new one**: the
 //! [`catch_band`] — the aim assist's search extent, drawn level with the crosshair because that

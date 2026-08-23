@@ -328,7 +328,7 @@ fn spawn_menu(
         Screen::Playing => {}
         Screen::Title => title::spawn_title_screen(&mut commands),
         Screen::Paused => pause::spawn_pause_screen(&mut commands, in_a_sortie(&phase)),
-        Screen::Settings => settings::spawn_settings_screen(&mut commands, &data, &settings),
+        Screen::Settings => settings::spawn_settings_screen(&mut commands, &settings),
         Screen::Lobby => {
             lobby::spawn_lobby_screen(&mut commands, &data, &choice, &roster, &host, &start)
         }

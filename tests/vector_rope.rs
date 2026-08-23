@@ -82,6 +82,16 @@ fn collect_releases(mut log: ResMut<Releases>, mut messages: MessageReader<HookR
 /// Builds the **real** app, headless, one simulation step per `update()`.
 fn app() -> App {
     let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    // 🔴 **`Pendulum`, PINNED, and not because it is the default — because it is the SUBJECT.**
+    // `FIND-152` wrote it down and 2026-08-23 collected the bill: *„all of tests/vector_rope.rs
+    // is a statement about this line"*. Every `DistanceJoint`, every `B-005` ratchet, every
+    // reel-in number in this file exists only under `Pendulum` — and yet the file read whichever
+    // way `game.ron` happened to be set, so the day the shipped default moved to `Drive`
+    // **thirteen of these went red at once** while measuring nothing that had changed. A test
+    // whose subject is a tuning value must pin that value. The `FIND-149`/`FIND-153` tests below
+    // override this with [`select`], which is what that helper is for.
+    app.world_mut().resource_mut::<GameData>().game.vector.rope_force_model =
+        RopeForceModel::Pendulum;
     app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
     app.init_resource::<Releases>();
     app.add_systems(FixedUpdate, force_aim.in_set(SimulationSystems::World).after(aim));
@@ -1471,4 +1481,59 @@ fn f149_the_drive_builds_no_joint_and_still_publishes_a_length() {
     let e = me(&mut other);
     hang(&mut other, e, Vec3::new(0.0, 60.0, 0.0), 20.0);
     assert_eq!(joint_count(&mut other), 1, "a `Pendulum` rope did NOT build a distance joint");
+}
+
+/// Holds `W` toward an anchor 60 m along −Z while the player is **already flying sideways** at
+/// `cross_m_s`, and returns the angle between his velocity and his own rope, in degrees.
+///
+/// ⚠️ **Gravity is ON**, against this file's usual doctrine and for the same reason
+/// [`hangs_and_holds_nothing`] leaves it on: gravity is one of the two things that bend the line
+/// the user asked to be straight, and a measurement of *„ziemlich gerade"* with gravity switched
+/// off would be measuring a world he never plays in. The other one is the carried momentum, and
+/// that is what `cross_m_s` puts there.
+fn angle_to_the_rope_deg(model: RopeForceModel, cross_m_s: f32, ticks_n: u64) -> f32 {
+    let mut app = app();
+    select(&mut app, model);
+    let e = me(&mut app);
+    // 300 m up for `holds_w_toward_an_anchor`'s reason: the tallest thing in the world is a
+    // 123 m tower, so nothing here can fly into a building and report that as a curve.
+    let start = Vec3::new(0.0, 300.0, 0.0);
+    let eye = data(&app).game.player.eye_height_m;
+    let anchor = start + Vec3::Y * eye + Vec3::NEG_Z * 60.0;
+    hang_on(&mut app, e, start, anchor);
+    set_velocity(&mut app, e, Vec3::X * cross_m_s);
+    hold_key(&mut app, KeyCode::KeyW);
+    ticks(&mut app, ticks_n);
+    let to_anchor = anchor - (position(&app, e) + Vec3::Y * eye);
+    velocity(&app, e).angle_between(to_anchor).to_degrees()
+}
+
+#[test]
+fn f153_under_drive_w_pulls_the_flight_onto_the_rope_line() {
+    // *„wenn ich mich hooke und w drücke … dann soll ich erstmal ziemlich direkt daran gezogen
+    // werden. also ziemlich gerade"* (2026-08-23). **The angle between the rope and the velocity
+    // IS „gerade"**, and it is the one thing neither the pure function nor the script can see:
+    // it is made of the carried momentum, of gravity, and of the ramp, all three at once.
+    let ticks_n = 15; // a quarter second — „man macht was und man merkt es auch direkt"
+    let drive = angle_to_the_rope_deg(RopeForceModel::Drive, 40.0, ticks_n);
+    let pendulum = angle_to_the_rope_deg(RopeForceModel::Pendulum, 40.0, ticks_n);
+    // Printed, not only asserted: this is one of the two numbers `FIND-153` answers him with,
+    // and a number that only exists inside a failure message cannot be quoted at him.
+    // `cargo test --test vector_rope f153 -- --nocapture`.
+    println!("f153 angle to the rope after {ticks_n} ticks: Drive {drive:.1}° · Pendulum {pendulum:.1}°");
+
+    assert!(
+        drive < 8.0,
+        "a quarter second of `W` left the player flying {drive:.1}° off his own rope. He started \
+         90° off it (40 m/s of crossing momentum) and gravity pulls another `drive_ramp_s · g` \
+         out of the line — „ziemlich gerade\" is the instruction"
+    );
+    // **The control that makes the number mean something.** A pendulum KEEPS the crossing
+    // momentum — that is what a swing is — so if these two ever answer the same, this test is
+    // measuring the harness and not the force model.
+    assert!(
+        pendulum > 2.0 * drive,
+        "the drive came out {drive:.1}° off the rope and the pendulum {pendulum:.1}° — those are \
+         supposed to be different models"
+    );
 }

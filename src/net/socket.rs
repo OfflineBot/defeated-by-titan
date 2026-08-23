@@ -21,9 +21,8 @@
 //!   yet make a co-op session; a sender and a host make **one** world with two players in it.
 //! - **No reliability, no ordering, no reconnect handshake.** UDP delivers what it delivers.
 //!   That is survivable *because* an [`Intent`](crate::shared::Intent) is absolute and
-//!   idempotent — a lost frame costs one tick and the next one repairs it — and it is exactly
-//!   why the aim spread travels as an angle and not as a wheel notch
-//!   (`tests/multiplayer.rs::f023_a_dropped_packet_does_not_desync_the_aim_spread`).
+//!   idempotent — a lost frame costs one tick and the next one repairs it. Nothing on the wire
+//!   is a delta, and nothing on it may become one.
 //! - **No authentication and no encryption.** A datagram carries a `PlayerId` and this module
 //!   **throws it away**: the seat belongs to the address the packet came from, so a peer
 //!   cannot claim to be somebody else. That is the only security property here, it is one

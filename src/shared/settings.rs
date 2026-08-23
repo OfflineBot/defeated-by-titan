@@ -7,9 +7,9 @@
 //! §6 rule 2 says a game value lives in RON and never in Rust, and that no value may be
 //! defaulted. Both hold here: **every field below is seeded out of `game.ron`** by
 //! [`PlayerSettings::from_world`], there is **no `Default` impl**, and no new RON key was
-//! invented for any of it. `mouse_deg_per_px`, `fov_deg`, `pitch_limit_deg` and
-//! `vector.aim_spread_deg` are exactly the four values the game already shipped with; what is
-//! new is that the person at the keyboard may move them afterwards.
+//! invented for any of it. `mouse_deg_per_px`, `fov_deg` and `pitch_limit_deg` are exactly the
+//! three values the game already shipped with; what is new is that the person at the keyboard
+//! may move them afterwards.
 //!
 //! ⚠️ **Two fields are seeded at zero and not out of the file, and that is not a defaulted game
 //! value.** [`PlayerSettings::assist_catch_pct`] and [`PlayerSettings::assist_strength_pct`]
@@ -22,11 +22,10 @@
 //! The **windows** the sliders run in ([`MOUSE_MIN_DEG_PER_PX`] and friends) are deliberately
 //! *not* in `game.ron`, for the same reason `net::local`'s `PIXELS_PER_NOTCH` is not: they are
 //! properties of a device and of a control, not of the game, and a tuning file that carries a
-//! slider's end stop invites somebody to balance the game with it. `aim_spread_deg` is the one
-//! exception and it proves the rule — its window *is* a game value
-//! (`game.ron: vector.aim_spread_min_deg/-max_deg/-step_deg`), because the wheel could already
-//! reach it before this file existed, so the settings screen reads that window rather than
-//! carrying a second one.
+//! slider's end stop invites somebody to balance the game with it. `aim_spread_deg` used to be
+//! the exception that proved the rule — its window *was* a game value, because the mouse wheel
+//! could reach it before this file existed. That field is gone with `F-023` (below), and every
+//! window here is now a UI constant.
 //!
 //! ## A `Resource`, and rule 3 is not being bent
 //!
@@ -34,19 +33,19 @@
 //! players and a resource holds one of anything. These are not that. They are the state of
 //! *this machine's* input and display — the same class as `net::local::MouseSinceTick` ("the
 //! state of a device"), `net::local::Look`, and `menu::Screen`. A second player on a second
-//! machine has his own, and **nothing here ever travels over a wire**: the one value the
-//! simulation is allowed to see, `aim_spread_deg`, reaches it through `Intent::aim_spread_deg`
-//! and through nothing else, exactly as it did when only the wheel could move it.
+//! machine has his own, and **nothing here travels over a wire at all** since `aim_spread_deg`
+//! was retired: the assist knobs bend only the local player's aim (`vector::aim` filters on
+//! `Has<LocalPlayer>`), which is what keeps rule 3 satisfied.
 //!
-//! ## One field, one writer — with two input devices
+//! ## The field that had two input devices is gone
 //!
-//! `aim_spread_deg` is written by `net::local::read_input` (the mouse wheel, `F-023`) **and**
-//! by `menu::settings` (the slider). That is one writer in the sense the rule means — *the
-//! local player changing his own setting* — reached by two devices, the way `Buttons::DODGE` is
-//! reached by `C` and by a double-tapped `Space`. What must never happen, and does not, is a
-//! **second copy**: `net::local::Spread` used to hold the live angle in a `Local` and the
-//! settings screen would have been unable to see it. The accumulator now lives in this one
-//! field and [`step_spread`] is the arithmetic both of them go through.
+//! Between 2026-08-13 and 2026-08-23 `aim_spread_deg` was written by `net::local::read_input`
+//! (the mouse wheel, `F-023`) **and** by `menu::settings` (the slider) — one field reached by
+//! two devices, with `step_spread` as the arithmetic both went through. The user retired the
+//! fan on 2026-08-23 (*„dann das auseinander mit q und e kann weg. einfach da wo ich hinschau
+//! (also fadenkreuz) geht das seil hin."*): both ropes fly at the crosshair, so there is no
+//! angle to allow, and the field, the wheel, the row and `step_spread` went with it
+//! (`docs/QUESTIONS.md` Q-048).
 
 use bevy::prelude::*;
 
@@ -63,16 +62,6 @@ pub struct PlayerSettings {
     /// Vertical field of view. `game.ron: camera.fov_deg`, and read as vertical because that is
     /// what `PerspectiveProjection.fov` is (`docs/QUESTIONS.md` Q-021).
     pub fov_deg: f32,
-    /// **The live aim spread**, `F-023`. The wheel writes it, the settings screen writes it,
-    /// `Intent::aim_spread_deg` carries it.
-    ///
-    /// ⚠️ It is the angle **between** the two rays and not a half-angle — this line said
-    /// "Half-angle" until 2026-08-19 and that reading was decided against on 2026-08-18
-    /// (`vector::aim::wheel_half_rad`, `docs/FINDINGS.md` FIND-096; the user: *„der spread für
-    /// seile ist zu weit auseinander"*). And since the same day it is a **ceiling** rather than
-    /// the angle: `vector::aim::effective_spread_rad` resolves what the two rays really open
-    /// to, and can only ever come out under half of this.
-    pub aim_spread_deg: f32,
     /// How far up and down the local mouse path may look. Clamped to the file's value at all
     /// times — `render::camera` clamps the *incoming intent* against `game.ron` as well, and
     /// that one is a safety bound against a network peer, not a preference.
@@ -164,7 +153,6 @@ impl FromWorld for PlayerSettings {
             // "off" is what every game means by not inverted.
             invert_y: false,
             fov_deg: camera.fov_deg,
-            aim_spread_deg: data.game.vector.aim_spread_deg,
             pitch_limit_deg: camera.pitch_limit_deg,
             // **Zero is not a defaulted game value, it is the absence of a feature.** `F-016`
             // defines 0 % as "exactly today's pure free aim", so seeding both at 0 is the
@@ -192,13 +180,6 @@ impl PlayerSettings {
     /// `+1` or `-1` for the field of view.
     pub fn nudge_fov(&mut self, steps: f32) {
         self.fov_deg = clamp_step(self.fov_deg, steps, FOV_STEP_DEG, FOV_MIN_DEG, FOV_MAX_DEG);
-    }
-
-    /// `+1` or `-1` for the aim spread — **through the same arithmetic the wheel uses**, and
-    /// with the window out of `game.ron` rather than a second one of this file's own.
-    pub fn nudge_spread(&mut self, steps: f32, step_deg: f32, min_deg: f32, max_deg: f32) {
-        self.aim_spread_deg =
-            step_spread(self.aim_spread_deg, steps, step_deg, min_deg, max_deg);
     }
 
     /// `+1` or `-1` for *how far the assist looks*.
@@ -271,18 +252,6 @@ impl PlayerSettings {
     }
 }
 
-/// One turn of the aim-spread wheel (or one click of its slider): **absolute** degrees out,
-/// clamped into the window.
-///
-/// A free function and not a method, because two callers with two shapes go through it: the
-/// wheel in `net::local::read_input` and the slider in `menu::settings`. Clamping and not
-/// wrapping is what makes the value converge — two players who turned differently and then ran
-/// into an end stop end on the same number, and a wrap would keep them apart forever
-/// (`docs/multiplayer.md`; `net::local::Spread` carries the long version of the argument).
-pub fn step_spread(current_deg: f32, steps: f32, step_deg: f32, min_deg: f32, max_deg: f32) -> f32 {
-    (current_deg + steps * step_deg).clamp(min_deg, max_deg)
-}
-
 /// The same arithmetic for a slider whose window is a UI constant rather than a game value.
 fn clamp_step(current: f32, steps: f32, step: f32, min: f32, max: f32) -> f32 {
     (current + steps * step).clamp(min, max)
@@ -300,7 +269,6 @@ mod tests {
             mouse_deg_per_px: 0.08,
             invert_y: false,
             fov_deg: 60.0,
-            aim_spread_deg: 28.0,
             pitch_limit_deg: 89.0,
             assist_catch_pct: 0.0,
             assist_strength_pct: 0.0,
@@ -336,7 +304,6 @@ mod tests {
             mouse_deg_per_px: 0.08,
             invert_y: false,
             fov_deg: 60.0,
-            aim_spread_deg: 28.0,
             pitch_limit_deg: 89.0,
             assist_catch_pct: 0.0,
             assist_strength_pct: 0.0,
@@ -377,23 +344,5 @@ mod tests {
         // radius, are both "the rope goes where you point".
         s.assist_strength_pct = 0.0;
         assert!(!s.assist_is_on());
-    }
-
-    /// The wheel and the slider are the same arithmetic — one field, one behaviour.
-    #[test]
-    fn the_slider_and_the_wheel_agree_on_one_notch() {
-        let (start, step, min, max) = (28.0, 2.0, 4.0, 60.0);
-        let mut s = PlayerSettings {
-            mouse_deg_per_px: 0.08,
-            invert_y: false,
-            fov_deg: 60.0,
-            aim_spread_deg: start,
-            pitch_limit_deg: 89.0,
-            assist_catch_pct: 0.0,
-            assist_strength_pct: 0.0,
-        };
-        s.nudge_spread(1.0, step, min, max);
-        assert_eq!(s.aim_spread_deg, step_spread(start, 1.0, step, min, max));
-        assert_eq!(s.aim_spread_deg, start + step);
     }
 }

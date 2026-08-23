@@ -1,0 +1,107 @@
+# q048-one-point — **both ropes fly at the crosshair, and two ropes on ONE anchor still swings.**
+#
+# The user, 2026-08-23, after playing the reference beside this game:
+#
+#   „dann das auseinander mit q und e kann weg. einfach da wo ich hinschau (also fadenkreuz)
+#    geht das seil hin."
+#
+# `F-023`'s fan is retired (`docs/QUESTIONS.md` Q-048). `vector::aim` casts one ray, publishes
+# one `AimPoint` into both halves of `ArmAim`, and `vector::hook` fires both arms at it. The
+# unit half is `tests/vector_aiming.rs::f023_both_arms_fire_at_the_point_under_the_crosshair`;
+# what a script adds is the **running game**: the two `anchored on body ... at x y z` lines this
+# run prints have to name the same body and the same three numbers.
+#
+# ## The question this file exists for, and it is not the aim
+#
+# `game.ron` warns that `rope_iterations: 2` „does not converge" in the degenerate case — „both
+# anchors nearly in one line". **Two ropes on the SAME point is the limit of that case**, and
+# retiring the fan makes it the NORMAL case rather than a corner one: every double press now
+# lands both hooks on one anchor. Legs 3 and 4 hold both ropes through a full swing and assert
+# that the body neither sticks nor is thrown — if the Gauss-Seidel pass fought itself, the
+# player would be launched or frozen, and `speed` says which.
+#
+# ## Running it
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/q048-one-point.txt --ticks 900 \
+#       2>&1 | grep -E 'MARK|assert|anchored|found no anchor|script run finished' | tail -30
+#   # and the exit code needs its OWN run — a pipeline's $? is the last command's:
+#   ./target/debug/defeated_by_titan --headless --script scripts/q048-one-point.txt \
+#       --ticks 900 >/dev/null 2>&1; echo $?
+#
+# The stand is `scripts/f-001-hooks.txt`'s: (51, 0, 13) at `look 0 34`, the nave of the
+# market-square church — the one aim in this repository whose anchor is measured,
+# `body 58 at 51.00 11.09 -1.00`.
+#
+# ⚠️ **The hold of one leg must expire before the next leg presses.** `hook left|right <s>`
+# starts a hold and the script walks straight on; `vector::hook::update_hooks` fires on the
+# EDGE, never on the held button, so a leg whose hold overlaps the next one's press measures a
+# shot that never left (`scripts/f023-truth.txt`'s own footer records that mistake).
+
+wait 1.5                       # world, camera, meshes and the render pipelines come up
+
+settings assist_catch 0
+settings assist_strength 0
+
+# ── leg 1 · free aim, both arms, one press ───────────────────────────────────────────────
+#
+# The two `anchored` lines in the log are the evidence: same body, same three coordinates.
+warp 51 0 13
+look 0 34
+wait 0.4
+assert height > -0.1           # standing, not sunk and not floating — the baseline
+assert height < 0.5
+assert speed < 0.5
+mark q048-free-aim-both-arms
+hook left 0.9
+hook right 0.9
+wait 0.5
+assert rope == 2               # BOTH arms found the crosshair's point, not one of them
+wait 1.0
+
+# ── leg 2 · the same shot with both assist knobs wide open ───────────────────────────────
+#
+# The assist STAYS (`docs/FINDINGS.md` FIND-133) — it searches sideways along the crosshair's
+# own screen row. What changed is that it now publishes ONE winner instead of one per
+# hemisphere, so at 100 % the two arms still have to land on one body.
+settings assist_catch 100
+settings assist_strength 100
+warp 51 0 13
+look 0 34
+wait 0.4
+mark q048-assist-100-both-arms
+hook left 0.9
+hook right 0.9
+wait 0.5
+assert rope == 2
+wait 1.0
+
+# ── leg 3 · TWO ROPES ON ONE POINT, HELD THROUGH A SWING ─────────────────────────────────
+#
+# The degenerate case `game.ron` warns about, now the normal one. Step off a roof with both
+# arms on the same anchor and hold them: two `DistanceJoint`s on one point, solved twice per
+# tick. A solver fighting itself shows up as either a body that cannot move at all or one
+# thrown off the map, and both are readable in `speed`.
+settings assist_catch 0
+settings assist_strength 0
+warp 76 12 -70
+look 0 36
+wait 0.4
+mark q048-two-ropes-one-anchor
+hook left 4.0
+hook right 4.0
+wait 0.4
+assert rope == 2               # both arms took the same anchor
+key W 3.0                      # haul at it, so the pair is loaded and not merely hanging
+wait 1.5
+mark q048-two-ropes-hauling
+assert rope == 2               # neither joint tore the other's anchor off
+assert height > 24.0           # the same +14.8 m `scripts/f005-feel.txt` ACT 3 measures on ONE
+assert speed > 0.5             # rope — two on one point still pull, and do not freeze
+assert speed < 120             # nor launch: the overextend release is 100 m/s of rope
+wait 1.5
+mark q048-two-ropes-swinging
+assert rope == 2
+assert speed < 120
+wait 1.0
+
+end

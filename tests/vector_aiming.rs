@@ -54,14 +54,9 @@ use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::net::Inbox;
 use defeated_by_titan::player::spawn_player;
-use defeated_by_titan::shared::Velocity;
-use defeated_by_titan::vector::aim::{
-    effective_spread_rad, separation_m, settle_distance_m, side_dirs, side_hit_is_coherent,
-    slew_spread_rad, wheel_half_rad, AimSpread, SpreadContext,
-};
 use defeated_by_titan::shared::{
     AimPoint, AnchorSurface, ArmAim, Body, BodyId, BodyMask, Buttons, Cli, Hook, HookState,
-    IdCounter, Intent, MovementState, PlayerId, Side, Tick, WarpPlayer,
+    IdCounter, Intent, PlayerId, Side, Tick, WarpPlayer,
 };
 
 /// Builds the **real** app, headless, one simulation step per `update()`, on the map named
@@ -694,7 +689,14 @@ fn f002_the_aim_names_the_body_it_hit() {
 }
 
 // ---------------------------------------------------------------------------------------
-// 10. F-023 — the hemisphere split: Q serves the left set, E the right
+// 10. F-023 retired, 2026-08-23 — **both ropes fly at the crosshair**
+//
+// > *„dann das auseinander mit q und e kann weg. einfach da wo ich hinschau (also fadenkreuz)
+// > geht das seil hin."* — the user, after playing the reference beside this game.
+//
+// This section used to hold the fan: the hemisphere split, the metre model of
+// `effective_spread_rad`, the wheel's ceiling and `B-008`'s coherence guard. Thirteen tests
+// went with the sixteen keys. `docs/QUESTIONS.md` Q-048 · `git show 83f09da` for the model.
 // ---------------------------------------------------------------------------------------
 
 /// Posts a look direction **and** buttons and runs one step. Same channel as [`look`] — the
@@ -705,7 +707,6 @@ fn look_and_press(
     yaw_deg: f32,
     pitch_deg: f32,
     buttons: Buttons,
-    spread_deg: f32,
 ) {
     let tick = app.world().resource::<Tick>().0;
     app.world_mut().resource_mut::<Inbox>().push(
@@ -714,11 +715,6 @@ fn look_and_press(
             yaw: yaw_deg.to_radians(),
             pitch: pitch_deg.to_radians(),
             buttons,
-            // The wheel setting travels **in the intent**, absolutely, the same way it will
-            // arrive over the wire (`src/shared/intent.rs`). Spelled out in every call instead
-            // of defaulted: `Intent::default()` is `0.0`, which the clamp turns into
-            // `aim_spread_min_deg` — a perfectly good angle that is not the one that ships.
-            aim_spread_deg: spread_deg,
             tick,
             ..default()
         },
@@ -738,865 +734,86 @@ fn fired_target(app: &App, e: Entity, side: Side) -> Vec3 {
 }
 
 #[test]
-fn f002_q_and_e_can_target_two_different_points() {
-    // The user, 2026-08-12: „und es muss mehr rechts und links spreaden!!" — and the backlog
-    // had already specified it: `F-023` splits the candidate set relative to the camera
-    // forward axis into a LEFT and a RIGHT hemisphere, "Q bedient ausschliesslich die linke
-    // Menge, E ausschliesslich die rechte" (`docs/backlog/gameplay.ron`).
+fn f023_both_arms_fire_at_the_point_under_the_crosshair() {
+    // The user, 2026-08-23, after playing the reference beside this game: „dann das
+    // auseinander mit q und e kann weg. einfach da wo ich hinschau (also fadenkreuz) geht das
+    // seil hin." **One aim point, two ropes.** It overrides his own 2026-08-12 sentence that
+    // built the fan (`docs/QUESTIONS.md` Q-048), and the standing rule says it may
+    // (`CLAUDE.md`: his instruction beats his own earlier number).
     //
-    // Until this test existed `vector::hook` handed **one** `AimPoint` to both arms
-    // (`docs/FINDINGS.md` FIND-039), so both ropes flew at the same world point and the two
-    // HUD markers described one place. That is the state this measures away.
-    //
-    // The fixtures are the graybox's three explicit blocks, and the numbers below are
-    // computed from `maps.ron`, not read off a run: standing in the clear circle at the
-    // origin (`layout.clear_radius_m: 24`, so nothing procedural stands in the way), looking
-    // along -Z, the centre ray ends on the small sand-brown cube (0, 2, -12) at z = -10, the
-    // left ray on the brick-red cube (-12, 4, -20) and the right one on the stone-gray tower
-    // (10, 5.75, -28). All three are `anchorable: true`.
+    // Same fixture as the fan test it replaces: standing in the clear circle at the origin
+    // (`layout.clear_radius_m: 24`), looking along -Z, the centre ray ends on the small
+    // sand-brown cube (0, 2, -12) at z = -10. Under the fan the left arm flew to the brick-red
+    // cube (-12, 4, -20) and the right one to the stone-gray tower (10, 5.75, -28); now both
+    // fly at the cube the crosshair is on.
     let mut app = app();
     let (e, id) = test_player(&mut app, Vec3::new(0.0, 0.0, 0.0));
     ticks(&mut app, 60); // land and settle — the eye has to be a stable number
 
     let both = Buttons(Buttons::HOOK_LEFT.0 | Buttons::HOOK_RIGHT.0);
-    let spread_deg = data(&app).game.vector.aim_spread_deg;
-    // The wheel is turned to the shipped notch a few ticks BEFORE the trigger, because the fan
-    // is rate-limited (`aim_spread_slew_deg_s`) and 60 ticks of `Intent::default()` left it at
-    // the wheel's floor. Firing on the same tick as the wheel move measures the ramp.
     for _ in 0..20 {
-        look_and_press(&mut app, id, 0.0, 0.0, Buttons::NONE, spread_deg);
+        look_and_press(&mut app, id, 0.0, 0.0, Buttons::NONE);
     }
-    look_and_press(&mut app, id, 0.0, 0.0, both, spread_deg);
+    look_and_press(&mut app, id, 0.0, 0.0, both);
 
+    let centre = aim_of(&app, e).point_m.expect("the small cube stands 10 m ahead");
     let left = fired_target(&app, e, Side::Left);
     let right = fired_target(&app, e, Side::Right);
-    let apart = (left - right).length();
-    println!("f002 two targets at 10 m: {apart:.2} m apart — {left:?} / {right:?}");
-    // ⚠️ **This number came down from 15 m on 2026-08-18 and that is the feature, not a
-    // relaxation.** The claim of this test is FIND-039's — two points and never one — and it
-    // is unchanged. The 15 m was the old fixture's byproduct: a constant 28° half-angle threw
-    // the two rays past the small cube 10 m ahead and onto two different blocks 20-28 m away,
-    // which is exactly the „zu weit auseinander" the user reported after playing. At 10 m the
-    // near field is now governed by the city (`aim_sep_full_reach_m`) and the two hooks
-    // straddle 3.4 m of the roof you are actually looking at.
-    assert!(
-        apart > 3.0,
-        "the two ropes flew {apart:.2} m apart — left {left:?}, right {right:?}. At 0.00 m \
-         they are one point, which is what `vector::hook` handed both arms before F-023"
-    );
+    println!("f023 one point: centre {centre:?} · Q {left:?} · E {right:?}");
+    // Exact equality and not a tolerance: `vector::hook` fires at `ArmAim` and re-casts
+    // nothing, so a rope that is 1 ULP off the crosshair's hit is a second computation of the
+    // same number somewhere (`docs/FINDINGS.md` FIND-047).
+    assert_eq!(left, centre, "Q flew at {left:?} instead of the crosshair's point {centre:?}");
+    assert_eq!(right, centre, "E flew at {right:?} instead of the crosshair's point {centre:?}");
+    assert_eq!(left, right, "the two ropes went to two different points — the fan is back");
 
-    // The hemispheres are not swappable: `Q` (`Side::Left`) is the LEFT one, and left of a
-    // player looking along -Z is -X (`docs/conventions.md`, the axis contract).
-    assert!(
-        left.x < right.x,
-        "Q fired at x = {}, E at x = {} — the two hemispheres are swapped",
-        left.x,
-        right.x
-    );
-
-    // §1A requirement 9 — *„und dann muss das seil auch dahin!!"*. What `hud::arm_aim` draws
-    // and what the rope flew at is **the same number in the same tick**, not two numbers that
-    // agree to within a tolerance: `vector::hook` fires at `ArmAim` and re-casts nothing.
-    // Exact equality on purpose — a marker that is 1 ULP off a target is a marker computed a
-    // second time somewhere (`docs/FINDINGS.md` FIND-047).
+    // And `F-023`'s surviving half: what the HUD draws is what the rope flew at, one number in
+    // one tick (`docs/FINDINGS.md` FIND-129).
     let arms = *app.world().get::<ArmAim>(e).expect("every player that aims carries an ArmAim");
     assert_eq!(arms.target_of(Side::Left), Some(left), "the Q marker is not where Q flew");
     assert_eq!(arms.target_of(Side::Right), Some(right), "the E marker is not where E flew");
     assert!(
         arms.side(Side::Left).anchorable && arms.side(Side::Right).anchorable,
-        "a shot left although the arm's own ray reports a surface that does not hold"
-    );
-
-    // And the centre ray is untouched: the crosshair still comes off `AimPoint`, and it still
-    // points at the block straight ahead.
-    let centre = aim_of(&app, e).point_m.expect("the small cube stands 10 m ahead");
-    assert!(
-        (centre.z + 10.0).abs() < 0.05 && centre.x.abs() < 0.05,
-        "the centre ray moved to {centre:?} — it is the crosshair's source and must not"
-    );
-}
-
-#[test]
-fn f002_a_side_ray_that_finds_nothing_falls_back_to_the_centre_ray() {
-    // **The line between a feature and a regression.** The spread is worth nothing if it
-    // costs hit rate on every target narrower than the spread itself: aiming at a lone tower
-    // has to keep working exactly as well as it did when both arms shared one point.
-    //
-    // The fixture is built out of the range, not out of the map, so that it does not depend on
-    // what stands 40 m away: the small sand-brown cube (0, 2, -12) has its near face 10.00 m
-    // ahead, and a side ray sitting `half` off the look direction needs 10 / cos(half) to reach
-    // the same face. `hook_range_m` is then set BETWEEN those two numbers, so the centre ray
-    // hits and both side rays reach nothing at all. It is read off the resolved fan and not
-    // hard-coded to the 11 m that fitted the old 28° half-angle: since the near field became
-    // governed (`aim_sep_full_reach_m`) the fan at 10 m is 9.6° and 11 m would let both side
-    // rays hit. The number is moved in `GameData` and not in the file, the same way
-    // `tests/vector_hooks.rs` moves the flight speed.
-    let mut app = app();
-    let (e, id) = test_player(&mut app, Vec3::new(0.0, 0.0, 0.0));
-    ticks(&mut app, 60);
-    let spread_deg = data(&app).game.vector.aim_spread_deg;
-    for _ in 0..20 {
-        look_and_press(&mut app, id, 0.0, 0.0, Buttons::NONE, spread_deg);
-    }
-    let half = app
-        .world()
-        .get::<AimSpread>(e)
-        .and_then(|s| s.half_rad)
-        .expect("a player that has aimed for twenty ticks carries a resolved fan");
-    let needs_m = 10.0 / half.cos();
-    let range_m = 0.5 * (10.0 + needs_m);
-    println!(
-        "f002 fallback fixture: fan {:.2}°, centre needs 10.00 m, a side ray needs {needs_m:.3} m, \
-         range set to {range_m:.3} m",
-        half.to_degrees()
-    );
-    assert!(range_m > 10.0 && range_m < needs_m, "the fixture has no gap to sit in");
-    app.world_mut().resource_mut::<GameData>().game.vector.hook_range_m = range_m;
-
-    let both = Buttons(Buttons::HOOK_LEFT.0 | Buttons::HOOK_RIGHT.0);
-    look_and_press(&mut app, id, 0.0, 0.0, both, spread_deg);
-
-    let centre = aim_of(&app, e).point_m.expect("the cube stands 10 m ahead, inside 11 m");
-    assert!((centre.z + 10.0).abs() < 0.05, "the centre ray landed at {centre:?}");
-    for side in Side::ALL {
-        assert!(
-            (fired_target(&app, e, side) - centre).length() < 1e-4,
-            "the {side:?} arm fired at {:?} instead of falling back to the centre {centre:?} \
-             — its own ray reaches nothing inside {} m",
-            fired_target(&app, e, side),
-            data(&app).game.vector.hook_range_m
-        );
-    }
-}
-
-/// Every context in one place, so the table below and the invariants below it cannot drift
-/// apart. `ctx(state, speed, Some(d))` is one player, one tick, one thing under the crosshair.
-fn ctx(
-    wheel_deg: f32,
-    v: &defeated_by_titan::data::VectorTuning,
-    state: MovementState,
-    speed_m_s: f32,
-    distance_m: Option<f32>,
-) -> SpreadContext {
-    let wheel = Intent { aim_spread_deg: wheel_deg, ..default() };
-    SpreadContext {
-        wheel_rad: wheel.aim_spread_rad(v.aim_spread_min_deg, v.aim_spread_max_deg),
-        state,
-        horizontal_speed_m_s: speed_m_s,
-        distance_m,
-    }
-}
-
-#[test]
-fn f023_the_side_ray_sits_at_half_the_wheel_at_every_pitch() {
-    // **The half of the old acceptance test that survives 2026-08-18 unchanged, and it has to
-    // survive:** it is the only guard on the property that the spread is a SCREEN spread,
-    // yawed around the camera's up axis and not around world Y. A yaw around world Y passes at
-    // pitch 0 and collapses to nothing at ±90°, which is the failure nobody sees.
-    //
-    // What is NOT here any more is the acceptance number `apart >= 45 m at 100 m`. That number
-    // said the two hooks must be a whole city block apart at range, and it is exactly what the
-    // user called too wide („der spread für seile ist zu weit auseinander", 2026-08-18). It is
-    // renegotiated in `f023_the_spread_is_a_separation_in_metres_at_every_range`, in the open,
-    // against the district's own rulers — not quietly relaxed here.
-    let app = app();
-    let v = data(&app).game.vector.clone();
-
-    let shipped = Intent { aim_spread_deg: v.aim_spread_deg, ..default() };
-    let wheel_rad = shipped.aim_spread_rad(v.aim_spread_min_deg, v.aim_spread_max_deg);
-    assert!(
-        (wheel_rad.to_degrees() - v.aim_spread_deg).abs() < 1e-4,
-        "the file's own starting value does not survive its own window"
-    );
-    // ★ **And this is where the unit of `aim_spread_deg` is asserted, once.** FIND-086 left it
-    // open — the file said half-angle (±28° = 56° of fan), `docs/NEXT.md` §1B said full angle
-    // (±14°) — and 2026-08-18 decided it for the brief, because the game has now been played:
-    // „der spread für seile ist zu weit auseinander". The wheel is the angle BETWEEN the rays.
-    // Make `wheel_half_rad` the identity again and this test is the one that goes red.
-    let spread_rad = wheel_half_rad(wheel_rad);
-
-    for pitch_deg in [-89.0_f32, -60.0, -30.0, 0.0, 30.0, 60.0, 89.0] {
-        for yaw_deg in [-170.0_f32, -45.0, 0.0, 90.0] {
-            let intent = Intent {
-                yaw: yaw_deg.to_radians(),
-                pitch: pitch_deg.to_radians(),
-                ..shipped
-            };
-            let look = intent.look_dir();
-            let [left, right] = side_dirs(&intent, spread_rad);
-            // Left is left: −X for a player looking along −Z (`docs/conventions.md`).
-            let side_of = |d: Vec3| (d - look).dot(Vec3::new(yaw_deg.to_radians().cos(), 0.0, -yaw_deg.to_radians().sin()));
-            assert!(
-                side_of(left) < 0.0 && side_of(right) > 0.0,
-                "yaw {yaw_deg} pitch {pitch_deg}: the hemispheres are swapped"
-            );
-            let between_deg = left.dot(right).clamp(-1.0, 1.0).acos().to_degrees();
-            assert!(
-                (between_deg - v.aim_spread_deg).abs() < 0.02,
-                "yaw {yaw_deg} pitch {pitch_deg}: the two rays are {between_deg:.3}° apart — \
-                 the wheel says {}° and that IS the angle between them",
-                v.aim_spread_deg
-            );
-            for dir in [left, right] {
-                assert!(
-                    (dir.length() - 1.0).abs() < 1e-5,
-                    "yaw {yaw_deg} pitch {pitch_deg}: {dir:?} is not a direction"
-                );
-                let off_deg = look.dot(dir).clamp(-1.0, 1.0).acos().to_degrees();
-                assert!(
-                    (off_deg - v.aim_spread_deg / 2.0).abs() < 0.01,
-                    "yaw {yaw_deg} pitch {pitch_deg}: the side ray sits {off_deg:.3}° off the \
-                     look direction instead of {:.3}° — `aim_spread_deg` is the angle BETWEEN \
-                     the two rays, so one ray sits at half of it (FIND-096)",
-                    v.aim_spread_deg / 2.0
-                );
-            }
-        }
-    }
-
-    // What an `Intent` nobody has wheeled yet means for THIS system. `0.0` is not "no spread"
-    // — at 0 both arms fire along one ray again, the state `F-023` exists to end (FIND-039) —
-    // so the narrowest the wheel ever gets is the file's floor, and never zero.
-    let narrow = Intent::default().aim_spread_rad(v.aim_spread_min_deg, v.aim_spread_max_deg);
-    assert!(
-        (narrow.to_degrees() - v.aim_spread_min_deg).abs() < 1e-4,
-        "an intent nobody has wheeled aims at {}° — 0° is one ray, not two",
-        narrow.to_degrees()
-    );
-}
-
-#[test]
-fn f023_the_spread_is_a_separation_in_metres_at_every_range() {
-    // ★ **THE DELIVERABLE, and it is answered at 10 m and 25 m or it is not answered.** The
-    // user, 2026-08-18: „der spread für seile ist zu weit auseinander und sollte mehr dynamisch
-    // sein!" — and the ranges he plays at are the near ones: Ashgate's houses are 6.5..11.5 m
-    // tall (`maps.ron` ashgate.layout), its streets 6 m wide, so a roof-to-roof hook across a
-    // street is **6..20 m** and a hook down the block is 20..45 m. A model that only narrows
-    // past 40 m is a measured no-op for the first hook of every flight.
-    //
-    // BEFORE is what the game shipped until 2026-08-18: `aim_spread_deg` read as a HALF-angle,
-    // so a constant 2 · d · sin(28°) that grows without bound — 9.4 m apart at 10 m (wider than
-    // an Ashgate house is tall) and 187.8 m at 200 m (four block pitches).
-    // AFTER is the model: the wheel is the angle BETWEEN the two rays, the target is a number
-    // of METRES that the state and the speed decide, and that budget is only fully available
-    // once you are looking `aim_sep_full_reach_m` away — nearer than that it scales with how
-    // much city is actually between you and the point.
-    let app = app();
-    let v = data(&app).game.vector.clone();
-
-    const RANGES: [f32; 9] = [5.0, 10.0, 15.0, 20.0, 25.0, 35.0, 50.0, 100.0, 200.0];
-    const NEAR_10: usize = 1;
-    const NEAR_25: usize = 4;
-    const FAR: [usize; 3] = [6, 7, 8];
-
-    let row = |label: &str, cells: &[f32; 9]| {
-        let mut line = format!("{label:<32}");
-        for c in cells {
-            line.push_str(&format!("{c:>9.2}"));
-        }
-        println!("{line}");
-    };
-    let mut head = format!("{:<32}", "context");
-    for d in RANGES {
-        head.push_str(&format!("{:>9}", format!("{d:.0} m")));
-    }
-    println!(
-        "\nF-023 metric separation of the two landing points, wheel {:.0}° between the rays\n{head}",
-        v.aim_spread_deg
-    );
-
-    let before = RANGES.map(|d| separation_m(v.aim_spread_deg.to_radians(), d));
-    row("BEFORE  28° as a HALF-angle", &before);
-
-    let rows: [(&str, MovementState, f32); 5] = [
-        ("AFTER   grounded, standing", MovementState::Grounded, 0.0),
-        ("AFTER   airborne, stepped off", MovementState::Airborne, 0.0),
-        ("AFTER   airborne, 30 m/s", MovementState::Airborne, 30.0),
-        ("AFTER   tethered, swing 19 m/s", MovementState::Tethered, 19.0),
-        ("AFTER   tethered, boost 50 m/s", MovementState::Tethered, 50.0),
-    ];
-    let mut table = [[0.0_f32; 9]; 5];
-    for (i, (name, state, speed)) in rows.iter().enumerate() {
-        table[i] = RANGES.map(|d| {
-            let half = effective_spread_rad(&v, ctx(v.aim_spread_deg, &v, *state, *speed, Some(d)));
-            separation_m(half, d)
-        });
-        row(name, &table[i]);
-        for (j, d) in RANGES.iter().enumerate() {
-            assert!(
-                table[i][j] <= before[j] + 1e-3,
-                "{name} at {d} m: {:.2} m apart against the old {:.2} m — the model may never \
-                 be WIDER than the game the user already called too wide",
-                table[i][j],
-                before[j]
-            );
-        }
-    }
-    let grounded = table[0];
-    let stepped_off = table[1];
-
-    // ★ **THE NEAR FIELD — the two columns the complaint is about.** The band is Ashgate's own
-    // rulers and not taste: at 10 m you are looking at the roof across a 6 m street and the two
-    // hooks have to land on THAT roof, so a fan wider than a house frontage (12 m) is two
-    // different buildings; at 25 m you are looking down the block and half a block face (36 m)
-    // is the most that is still one route. 3..5 m and 8..12 m are those two statements in
-    // metres, and the old game gave 9.4 m and 23.5 m — a whole house and two thirds of a block.
-    for (label, cells) in [("grounded", grounded), ("airborne, stepped off", stepped_off)] {
-        assert!(
-            (3.0..=5.0).contains(&cells[NEAR_10]),
-            "{label} at 10 m: the two ropes land {:.2} m apart — the near field has to sit in \
-             3..5 m (one Ashgate house is 6.5..11.5 m tall, its street 6 m wide). The old game \
-             gave {:.2} m and the user called it too wide.",
-            cells[NEAR_10],
-            before[NEAR_10]
-        );
-        assert!(
-            (8.0..=12.0).contains(&cells[NEAR_25]),
-            "{label} at 25 m: the two ropes land {:.2} m apart — the near field has to sit in \
-             8..12 m (one house frontage is {:.0} m, one block face {:.0} m). The old game gave \
-             {:.2} m.",
-            cells[NEAR_25],
-            v.aim_sep_floor_m,
-            v.aim_sep_stand_m,
-            before[NEAR_25]
-        );
-        for idx in [NEAR_10, NEAR_25] {
-            assert!(
-                cells[idx] <= before[idx] * 0.45,
-                "{label} at {} m: {:.2} m against the old {:.2} m is only {:.0} % narrower — \
-                 the round that made the fan dynamic was a measured NO-OP here, and that is the \
-                 half of „zu weit auseinander\" this test exists for",
-                RANGES[idx],
-                cells[idx],
-                before[idx],
-                100.0 * (1.0 - cells[idx] / before[idx])
-            );
-        }
-    }
-    // And the invariant the near field is derived FROM, checkable instead of argued: while what
-    // you look at is inside your own block face (`aim_sep_stand_m` = 36 m), the two hooks stay
-    // inside one house frontage (`aim_sep_floor_m` = 12 m). That is exactly what fixes
-    // `aim_sep_full_reach_m` — at d = 36 m the ramp reaches 36 · 36/108 = 12 m and hands over.
-    for (j, d) in RANGES.iter().enumerate() {
-        if *d <= v.aim_sep_stand_m {
-            assert!(
-                grounded[j] <= v.aim_sep_floor_m + 1e-3,
-                "standing and looking {d} m ahead — inside one block face ({:.0} m) — the two \
-                 ropes are {:.2} m apart, wider than the {:.0} m house frontage they are \
-                 supposed to straddle",
-                v.aim_sep_stand_m,
-                grounded[j],
-                v.aim_sep_floor_m
-            );
-        }
-    }
-
-    // The far field, unchanged by this round and verified by two adversaries before it: beyond
-    // the handover the two ropes land at most ONE BLOCK FACE apart and never less than ONE
-    // HOUSE FRONTAGE, instead of 46.9 / 93.9 / 187.8 m.
-    for j in FAR {
-        assert!(
-            grounded[j] <= v.aim_sep_stand_m + 0.05,
-            "standing at {} m the two ropes are {:.2} m apart — the block face is {:.1} m",
-            RANGES[j],
-            grounded[j],
-            v.aim_sep_stand_m
-        );
-        assert!(
-            grounded[j] >= v.aim_sep_floor_m,
-            "standing at {} m the two ropes are {:.2} m apart — under one house frontage \
-             ({:.1} m) both arms are on the same facade, which is FIND-039",
-            RANGES[j],
-            grounded[j],
-            v.aim_sep_floor_m
-        );
-    }
-    assert!(
-        grounded[7] < before[7] * 0.5,
-        "at 100 m the model gives {:.1} m against the old {:.1} m — that is not narrower \
-         enough to be the answer to „zu weit auseinander\"",
-        grounded[7],
-        before[7]
-    );
-}
-
-#[test]
-fn f023_the_effective_spread_never_exceeds_the_wheel() {
-    // **The one-line invariant that makes „too wide" impossible to regress into.** The user's
-    // own word decides the reading of the wheel — „wie weit auseinander es gehen DARF"
-    // (2026-08-12) — so it is a CEILING in every state, at every distance, at every notch.
-    // And the floor is a floor: at 0° both arms fire along one ray again (FIND-039).
-    let app = app();
-    let v = data(&app).game.vector.clone();
-    let floor_rad = v.aim_spread_floor_deg.to_radians();
-
-    let mut wheel_deg = v.aim_spread_min_deg;
-    while wheel_deg <= v.aim_spread_max_deg + 1e-4 {
-        for state in [
-            MovementState::Grounded,
-            MovementState::Airborne,
-            MovementState::Tethered,
-            MovementState::OnWall,
-            MovementState::Downed,
-        ] {
-            for speed in [0.0_f32, 6.0, 19.0, 43.0, 75.0] {
-                for d in [None, Some(0.5_f32), Some(3.0), Some(10.0), Some(50.0), Some(500.0)] {
-                    let c = ctx(wheel_deg, &v, state, speed, d);
-                    let half = effective_spread_rad(&v, c);
-                    let ceiling = wheel_half_rad(c.wheel_rad);
-                    assert!(
-                        half.is_finite(),
-                        "{state:?} at {speed} m/s, {d:?} m away, wheel {wheel_deg}°: resolved \
-                         {half} — a non-finite angle is a NaN transform two systems later"
-                    );
-                    assert!(
-                        half <= ceiling + 1e-6,
-                        "{state:?} at {speed} m/s, {d:?} m away, wheel {wheel_deg}°: resolved \
-                         {:.3}° — WIDER than the {:.3}° the player allowed. The wheel is the \
-                         angle BETWEEN the rays, so the ceiling on one of them is half of it.",
-                        half.to_degrees(),
-                        ceiling.to_degrees()
-                    );
-                    assert!(
-                        half >= floor_rad.min(ceiling) - 1e-6,
-                        "{state:?} at {speed} m/s, {d:?} m away, wheel {wheel_deg}°: resolved \
-                         {:.3}°, under the floor of {:.1}° — at 0° the two arms share one ray \
-                         again (FIND-039)",
-                        half.to_degrees(),
-                        v.aim_spread_floor_deg
-                    );
-                }
-            }
-        }
-        wheel_deg += v.aim_spread_step_deg;
-    }
-}
-
-#[test]
-fn f023_aiming_further_never_pulls_the_two_hooks_closer_together() {
-    // The monotonicity discipline, taken from the losing design that proved its own exponent's
-    // range instead of tuning it: `separation(d)` must be non-decreasing in `d`. A model that
-    // narrows faster than the distance grows would make the two hooks CONVERGE as you look
-    // further away, which reads as the second hook breaking.
-    let app = app();
-    let v = data(&app).game.vector.clone();
-    for state in [MovementState::Grounded, MovementState::Airborne, MovementState::Tethered] {
-        for speed in [0.0_f32, 19.0, 43.0] {
-            let mut prev = 0.0_f32;
-            let mut d = 2.0_f32;
-            while d <= 500.0 {
-                let half = effective_spread_rad(&v, ctx(v.aim_spread_deg, &v, state, speed, Some(d)));
-                let sep = separation_m(half, d);
-                assert!(
-                    sep >= prev - 1e-3,
-                    "{state:?} at {speed} m/s: aiming out to {d:.1} m brought the two hooks \
-                     {sep:.2} m apart, CLOSER than the {prev:.2} m one step nearer"
-                );
-                prev = sep;
-                d *= 1.05;
-            }
-        }
-    }
-}
-
-#[test]
-fn f023_what_you_are_doing_changes_the_spread_at_one_distance() {
-    // The second half of his sentence — „und sollte mehr dynamisch sein!". The test of dynamic
-    // is not that the number moves with range: it is that the SAME crosshair on the SAME wall
-    // gives a different answer depending on what the player is doing.
-    let app = app();
-    let v = data(&app).game.vector.clone();
-    let at = |state, speed| {
-        effective_spread_rad(&v, ctx(v.aim_spread_deg, &v, state, speed, Some(100.0))).to_degrees()
-    };
-    let standing = at(MovementState::Grounded, 0.0);
-    let searching = at(MovementState::Airborne, 0.0);
-    let swinging = at(MovementState::Tethered, 19.0);
-    let boosting = at(MovementState::Tethered, 50.0);
-    let blind = effective_spread_rad(&v, ctx(v.aim_spread_deg, &v, MovementState::Grounded, 0.0, None))
-        .to_degrees();
-    println!(
-        "f023 at 100 m: standing {standing:.2}° · searching {searching:.2}° · swinging \
-         {swinging:.2}° · boosting {boosting:.2}° · nothing under the crosshair {blind:.2}°"
-    );
-    assert!(
-        searching > standing + 0.5,
-        "airborne and untethered you are SEARCHING and may cross a street ({searching:.2}°), \
-         standing you are picking a route across one block face ({standing:.2}°)"
-    );
-    assert!(
-        standing > swinging + 1.0,
-        "the fan has to close while you are actually swinging: standing {standing:.2}° against \
-         {swinging:.2}° on the rope at 19 m/s"
-    );
-    assert!(
-        swinging > boosting,
-        "faster is tighter: {swinging:.2}° at 19 m/s against {boosting:.2}° at 50 m/s"
-    );
-    // Nothing under the crosshair is the ABSENCE of a distance, and then the wheel is the
-    // whole answer — half of it off each side, which is the widest the player has allowed.
-    // It is no longer *twice* the standing answer, and that is the halving of FIND-096 showing
-    // up: 14° against 9.6°, where the old game gave 28° against 27.9°.
-    let half_wheel = wheel_half_rad(
-        Intent { aim_spread_deg: v.aim_spread_deg, ..default() }
-            .aim_spread_rad(v.aim_spread_min_deg, v.aim_spread_max_deg),
-    )
-    .to_degrees();
-    assert!(
-        (blind - half_wheel).abs() < 1e-3,
-        "with nothing under the crosshair the world has said nothing, so the wheel is the \
-         angle: {blind:.2}° instead of {half_wheel:.2}°"
-    );
-    assert!(
-        blind > searching && searching > standing,
-        "sky {blind:.2}° · searching {searching:.2}° · standing {standing:.2}° — a crosshair \
-         that has found a wall must never open the fan wider than one that has found nothing"
-    );
-
-    // Horizontal speed and not total speed: a straight drop must NOT pin the fan shut at the
-    // moment a falling player wants the widest sweep.
-    let falling = effective_spread_rad(
-        &v,
-        SpreadContext { horizontal_speed_m_s: 0.0, ..ctx(v.aim_spread_deg, &v, MovementState::Airborne, 0.0, Some(100.0)) },
-    );
-    assert!(
-        (falling.to_degrees() - searching).abs() < 1e-4,
-        "a straight fall at terminal speed resolved {:.2}° instead of the searching {searching:.2}° \
-         — the speed term is reading the vertical component",
-        falling.to_degrees()
-    );
-}
-
-#[test]
-fn f023_a_centre_ray_that_finds_nothing_holds_the_last_distance() {
-    // **A miss is the ABSENCE of evidence about distance, not evidence of a far one.** Flying
-    // across a roofline the crosshair leaves the roof for the sky several times a second; a
-    // model that reset to "far" there would strobe the fan and both HUD markers with it. It
-    // also keeps the near-field fan over an edge, which is the one thing the old wide fan was
-    // genuinely good at.
-    let app = app();
-    let v = data(&app).game.vector.clone();
-    let dt = 1.0 / 60.0;
-    let settle = v.aim_spread_settle_s;
-
-    // Nothing has ever been seen: still nothing.
-    assert_eq!(settle_distance_m(None, None, settle, dt, v.min_rope_m, v.hook_range_m), None);
-    // The first hit snaps instead of sweeping in from a seed nobody chose.
-    let first = settle_distance_m(None, Some(12.0), settle, dt, v.min_rope_m, v.hook_range_m);
-    assert_eq!(first, Some(12.0), "the first hit has nothing to average against");
-    // The sky holds it.
-    assert_eq!(
-        settle_distance_m(first, None, settle, dt, v.min_rope_m, v.hook_range_m),
-        first,
-        "a tick that saw sky moved the aim distance — a miss is not a measurement"
-    );
-    // And a real depth discontinuity is a slide, not a snap: one tick of 12 m -> 300 m may
-    // cover only a fraction of the way, and it arrives inside ~3 tau.
-    let one = settle_distance_m(first, Some(300.0), settle, dt, v.min_rope_m, v.hook_range_m)
-        .expect("a hit is a distance");
-    assert!(
-        one > 12.0 && one < 30.0,
-        "one tick took the aim distance 12 m -> {one:.1} m; the filter is not filtering"
-    );
-    let mut d = first;
-    for _ in 0..(3.0 * settle / dt) as usize {
-        d = settle_distance_m(d, Some(300.0), settle, dt, v.min_rope_m, v.hook_range_m);
-    }
-    assert!(
-        d.expect("still a distance") > 250.0,
-        "after 3 tau the aim distance is {:?} — the filter never arrives",
-        d
-    );
-}
-
-#[test]
-fn f023_the_spread_keys_are_ordered() {
-    // The guards that a comment cannot hold. Each of these is a way to make the whole model
-    // silently collapse back to the constant angle, and none of them fails loudly on its own.
-    let app = app();
-    let v = data(&app).game.vector.clone();
-    assert!(
-        v.aim_spread_floor_deg > 0.0 && v.aim_spread_floor_deg < v.aim_spread_min_deg,
-        "the dynamic floor {}° has to sit strictly between 0 (one shared ray, FIND-039) and \
-         the wheel's own floor {}° — otherwise the model can never narrow past the wheel",
-        v.aim_spread_floor_deg,
-        v.aim_spread_min_deg
-    );
-    assert!(
-        v.aim_sep_floor_m > 0.0
-            && v.aim_sep_floor_m <= v.aim_sep_tether_m
-            && v.aim_sep_tether_m <= v.aim_sep_stand_m
-            && v.aim_sep_stand_m <= v.aim_sep_search_m,
-        "the four metre targets are out of order: floor {} · tether {} · stand {} · search {}",
-        v.aim_sep_floor_m,
-        v.aim_sep_tether_m,
-        v.aim_sep_stand_m,
-        v.aim_sep_search_m
-    );
-    // The near-field governor. Above the widest metre target, or the ramp is not a ramp and
-    // the whole near field collapses back onto the wheel's ceiling — which is the no-op this
-    // key exists to end (FIND-096). And the constant angle it fixes for the near field has to
-    // stay inside the wheel's own window at the neutral notch, or the ceiling is what the
-    // player feels again.
-    assert!(
-        v.aim_sep_full_reach_m > v.aim_sep_search_m,
-        "aim_sep_full_reach_m = {} is not beyond the widest metre target ({}) — the budget \
-         would be fully available before the ramp has done anything",
-        v.aim_sep_full_reach_m,
-        v.aim_sep_search_m
-    );
-    let near_deg = (v.aim_sep_search_m / (2.0 * v.aim_sep_full_reach_m)).asin().to_degrees();
-    assert!(
-        near_deg > v.aim_spread_floor_deg && near_deg < v.aim_sep_neutral_deg / 2.0,
-        "the near field resolves to a constant {near_deg:.2}° per side, outside the window \
-         between the dynamic floor ({}°) and half the neutral notch ({}°) — below the floor \
-         the two arms collapse to one ray (FIND-039), above half the notch the wheel's \
-         ceiling is what the player feels and the governor is dead",
-        v.aim_spread_floor_deg,
-        v.aim_sep_neutral_deg / 2.0
-    );
-    assert!(
-        v.aim_sep_calm_speed_m_s > 0.0 && v.aim_sep_calm_speed_m_s < v.aim_sep_fast_speed_m_s,
-        "calm {} m/s has to be under fast {} m/s, or the speed term divides by zero",
-        v.aim_sep_calm_speed_m_s,
-        v.aim_sep_fast_speed_m_s
-    );
-    assert!(
-        v.aim_sep_neutral_deg >= v.aim_spread_min_deg
-            && v.aim_sep_neutral_deg <= v.aim_spread_max_deg,
-        "the neutral notch {}° is outside the wheel's own window {}..{}°",
-        v.aim_sep_neutral_deg,
-        v.aim_spread_min_deg,
-        v.aim_spread_max_deg
-    );
-    assert!(
-        v.aim_spread_settle_s > 0.0 && v.aim_spread_slew_deg_s > 0.0,
-        "a settle time or a slew rate of zero freezes the fan at whatever it first resolved to"
-    );
-}
-
-#[test]
-fn f023_a_straight_fall_does_not_pin_the_fan_shut() {
-    // **The plumbing of the speed term, through the real system**, and the reason it reads the
-    // HORIZONTAL speed and not `Velocity::speed_m_s`: a straight 43 m/s drop would otherwise
-    // pin the fan to its floor at the exact moment a falling player wants the widest sweep.
-    //
-    // The fixture is built out of `GameData` and not out of the map, the same way the fallback
-    // test moves `hook_range_m`: standing at the origin the centre ray ends 10.00 m ahead, and
-    // at the shipped 36 m target the wheel's ceiling binds there — so the target is moved down
-    // until the model, and not the ceiling, is what decides the angle.
-    let mut app = app();
-    let (e, id) = test_player(&mut app, Vec3::ZERO);
-    ticks(&mut app, 60);
-    {
-        let mut d = app.world_mut().resource_mut::<GameData>();
-        // 40 / 2 and not 2 / 0.5: since the near-field ramp landed, a target of 2 m at 10 m
-        // resolves under `aim_spread_floor_deg` and both halves of this test read the floor.
-        // At 40 m of far-field budget the ramp gives 40 · 10/108 = 3.70 m at 10 m = 10.67°,
-        // clear of both the 2° floor and the 14° ceiling — so what this measures is the speed
-        // term and nothing else.
-        d.game.vector.aim_sep_stand_m = 40.0;
-        d.game.vector.aim_sep_floor_m = 2.0;
-    }
-    let wheel_deg = data(&app).game.vector.aim_spread_deg;
-
-    // Terminal velocity straight down. `Velocity` is injected once per tick because
-    // `SimulationSystems::Integrate` — the only writer — runs after `World`, where `aim` sits.
-    let mut resolved = |app: &mut App, v: Vec3| {
-        for _ in 0..20 {
-            app.world_mut().entity_mut(e).insert(Velocity(v));
-            look_and_press(app, id, 0.0, 0.0, Buttons::NONE, wheel_deg);
-        }
-        app.world()
-            .get::<AimSpread>(e)
-            .expect("a player that aims carries the model's memory")
-            .half_rad
-            .expect("the model resolved an angle")
-            .to_degrees()
-    };
-
-    let falling = resolved(&mut app, Vec3::new(0.0, -43.0, 0.0));
-    let running = resolved(&mut app, Vec3::new(43.0, 0.0, 0.0));
-    println!("f023 falling at 43 m/s: {falling:.2}° · moving at 43 m/s: {running:.2}°");
-    let reach_m = data(&app).game.vector.aim_sep_full_reach_m;
-    let want = (40.0_f32 * (10.0 / reach_m) / 20.0).asin().to_degrees();
-    assert!(
-        (falling - want).abs() < 0.05,
-        "a straight fall resolved {falling:.2}° instead of {want:.2}° — the speed term is \
-         reading the vertical component, and the fan shuts on a player who is falling"
-    );
-    assert!(
-        running < falling - 1.0,
-        "moving sideways at 43 m/s resolved {running:.2}° against {falling:.2}° falling — the \
-         speed term does not reach the running game"
-    );
-}
-
-#[test]
-fn f023_a_wheel_the_player_turns_down_binds_on_the_very_next_tick() {
-    // **The slew escape.** `aim` clamps the resolved angle to the wheel inside
-    // `effective_spread_rad` and then slews towards it — and the slew was never re-clamped, so
-    // for as long as the ramp lasts the fan sits WIDER than the ceiling the player just dialled.
-    // The user's own word makes that a contract and not a nicety: „wie weit auseinander es gehen
-    // DARF" (2026-08-12). A wheel dropped from the file's ceiling to its floor left the fan at
-    // 41/38/35/32/29/26/… degrees for ~11 ticks — about 0.19 s of a game that is doing exactly
-    // what he asked it not to.
-    let app = app();
-    let v = data(&app).game.vector.clone();
-    let dt = 1.0 / 60.0;
-    let step_rad = v.aim_spread_slew_deg_s.to_radians() * dt;
-
-    // The player was at the widest notch and wheels straight down to the narrowest.
-    let was = wheel_half_rad(v.aim_spread_max_deg.to_radians());
-    let ceiling = wheel_half_rad(v.aim_spread_min_deg.to_radians());
-    let floor = v.aim_spread_floor_deg.to_radians();
-
-    let mut half = was;
-    for tick in 1..=30 {
-        half = slew_spread_rad(Some(half), ceiling, step_rad, ceiling, floor);
-        assert!(
-            half <= ceiling + 1e-6,
-            "tick {tick} after the wheel went {:.0}° -> {:.0}°: the fan is {:.2}° off centre, \
-             wider than the {:.2}° the player allows — the slew escapes the ceiling",
-            v.aim_spread_max_deg,
-            v.aim_spread_min_deg,
-            half.to_degrees(),
-            ceiling.to_degrees()
-        );
-    }
-    // …and the clamp is a clamp, not a snap: the ramp is still a ramp in the other direction.
-    let opening = slew_spread_rad(Some(floor), wheel_half_rad(v.aim_spread_max_deg.to_radians()), step_rad, wheel_half_rad(v.aim_spread_max_deg.to_radians()), floor);
-    assert!(
-        (opening - floor - step_rad).abs() < 1e-6,
-        "opening up moved {:.3}° in one tick instead of the file's {:.3}° — the re-clamp ate \
-         the slew instead of bounding it",
-        (opening - floor).to_degrees(),
-        step_rad.to_degrees()
-    );
-    // And the floor still wins over a target under it, after the slew as before it.
-    let under = slew_spread_rad(Some(floor), 0.0, step_rad, ceiling, floor);
-    assert!(under >= floor - 1e-6, "the slew walked {:.3}° under the floor", under.to_degrees());
-}
-
-// ---------------------------------------------------------------------------------------
-// 12. `B-008` — a side ray that finds SOMETHING ELSE is a miss, not a target
-// ---------------------------------------------------------------------------------------
-//
-// `F-028`'s fallback asks *"did this side ray find anything anchorable?"* and hands the arm
-// the centre ray when the answer is no. In Ashgate the answer is **never** no: the district is
-// 100 % anchorable (the user: *„ueberall! ohne ausnahmen!"*) and the ground is always under
-// the cone, so a side ray that has left the surface the crosshair stands on carries on and
-// bites whatever it meets. Measured from 30 m over the street at (168.19, ., -50.12), looking
-// straight down: the crosshair is on the pavement at 30.1 m, the fan asks for **5.85 m** of
-// separation — and the two arms landed **11.50 m** and **10.77 m** away, on the two roof caps
-// beside the street. From every height over that street the same two roofs win.
-//
-// So the question is generalised: *"did this side ray find the thing the crosshair is on?"*
-
-#[test]
-fn b008_a_side_hit_that_left_the_crosshairs_surface_is_not_a_target() {
-    // The predicate on its own, against points typed out by hand (`docs/FINDINGS.md`
-    // FIND-103: a test that asks the code under test the same question twice proves nothing).
-    // Eye at the origin looking along -Z, the crosshair 30 m out, the fan 11.21° per side —
-    // the numbers the run above measured.
-    let eye_m = Vec3::ZERO;
-    let half = 11.21_f32.to_radians();
-    let k = data(&app()).game.vector.aim_side_coherence_k;
-    let crosshair = Vec3::new(0.0, 0.0, -30.0);
-    let centre = Some((crosshair, BodyId(573)));
-    // The fan's own ask at 30 m: 30 * sin(11.21°).
-    let asked_m = 30.0 * half.sin();
-    assert!((asked_m - 5.83).abs() < 0.05, "the fixture drifted: {asked_m}");
-
-    // 1. On the same body, however far along it — a facade seen at a grazing angle is still
-    //    the facade the crosshair is on, and that is the whole point of the spread.
-    assert!(
-        side_hit_is_coherent(centre, (Vec3::new(0.0, 0.0, -120.0), BodyId(573)), eye_m, half, k),
-        "a hit on the very body the crosshair stands on is the thing that was aimed at"
-    );
-    // 2. Another body, but inside the separation the fan asked for.
-    assert!(
-        side_hit_is_coherent(
-            centre,
-            (Vec3::new(asked_m * 1.02, 0.0, -30.0), BodyId(999)),
-            eye_m,
-            half,
-            k
-        ),
-        "a hit one fan-width off the crosshair is what F-023 asked for"
-    );
-    // 3. ★ The bug: another body, roughly twice as far off as the fan asked for. That is the
-    //    11.50 m the roof cap sat at against the 5.85 m the model wanted.
-    assert!(
-        !side_hit_is_coherent(
-            centre,
-            (Vec3::new(asked_m * 1.97, 0.0, -18.0), BodyId(2154)),
-            eye_m,
-            half,
-            k
-        ),
-        "a hit {:.2} m off a crosshair that asked for {asked_m:.2} m is a different part of \
-         town — that is B-008",
-        asked_m * 1.97
-    );
-    // 4. The crosshair on nothing at all. `F-023`'s promise is that the rope and the marker
-    //    are one number; a centre ray that found nothing has no number to be, and a side ray
-    //    that flies 429 m to a tower the player never saw is exactly what FIND-116 measured.
-    assert!(
-        !side_hit_is_coherent(None, (Vec3::new(30.0, 100.0, -420.0), BodyId(77)), eye_m, half, k),
-        "with nothing under the crosshair there is nothing for a side ray to be coherent with"
+        "a shot left although the arm's own point reports a surface that does not hold"
     );
 }
 
 #[test]
 fn b008_a_shot_aimed_straight_down_lands_on_what_the_crosshair_stands_on() {
-    // **The bug, in the shipped district and nowhere else** — it exists *because* Ashgate is
-    // 100 % anchorable, so it cannot be built in the graybox, where the ground carries no
-    // anchor bit at all and the fallback therefore still fires.
+    // **`B-008`, and the whole class of bug it names, is gone by construction.** It existed
+    // *because* Ashgate is 100 % anchorable: an arm's own side ray, cast `half_rad` off the
+    // look direction, left the pavement the crosshair stood on and bit a roof cap beside the
+    // street instead — measured 2026-08-19 at **11.50 m and 10.77 m** off the crosshair from
+    // 30 m over the street at `(168.19, ., -50.12)`. `side_hit_is_coherent` was the guard.
+    // Since 2026-08-23 there is no side ray to be incoherent: both arms carry the crosshair's
+    // own hit. The test stays because the *claim* stays — a shot goes where the player points,
+    // straight down included — and it would catch a second ray creeping back in.
     //
-    // Gravity off, so the shot is measured from the height it is fired at and not from
-    // wherever the player has fallen to by the time the fan has settled.
+    // Gravity off, so the shot is measured from the height it is fired at.
     use avian3d::prelude::Gravity;
     let mut app = app_on_current_map();
     app.insert_resource(Gravity(Vec3::ZERO));
     let (e, id) = test_player(&mut app, Vec3::new(168.19, 30.0, -50.12));
-    let spread_deg = data(&app).game.vector.aim_spread_deg;
-    let k = data(&app).game.vector.aim_side_coherence_k;
     // Straight down over the middle of the 4.30 m street of `scripts/f003-ashgate.txt` ACT 5.
     for _ in 0..30 {
-        look_and_press(&mut app, id, 0.0, -90.0, Buttons::NONE, spread_deg);
+        look_and_press(&mut app, id, 0.0, -90.0, Buttons::NONE);
     }
 
     let eye_m = eye(&app, e);
-    let half = app
-        .world()
-        .get::<AimSpread>(e)
-        .and_then(|s| s.half_rad)
-        .expect("a player who has aimed for thirty ticks carries a resolved fan");
     let centre = aim_of(&app, e);
     let crosshair = centre.point_m.expect("the street stands 30 m under him");
     assert!(centre.anchorable, "the whole district is anchorable — the pavement included");
-    let d_m = (crosshair - eye_m).length();
-    let asked_m = d_m * half.sin();
     let arms = *app.world().get::<ArmAim>(e).expect("every player that aims carries an ArmAim");
-    println!(
-        "b008: fan {:.2}°, crosshair {crosshair:?} at {d_m:.2} m, the fan asks for {asked_m:.2} m",
-        half.to_degrees()
-    );
+    println!("b008: crosshair {crosshair:?} at {:.2} m", (crosshair - eye_m).length());
     for side in Side::ALL {
         let arm = arms.side(side);
         let point = arm.point_m.expect("every ray in this district ends on something");
-        let off_m = (point - crosshair).length();
-        println!("  {side:?} -> {point:?} body {:?}, {off_m:.2} m off the crosshair", arm.body);
-        // ★ Red before the fix: `Left -> 11.50 m off`, `Right -> 10.77 m off`, both on roof
-        // caps (bodies 2154 and 2156) while the crosshair stood on the street (body 573).
-        assert!(
-            arm.body == centre.body || off_m <= k * asked_m,
-            "the {side:?} arm aims at {point:?} on body {:?} — {off_m:.2} m off a crosshair \
-             that stands on body {:?} and asked for {asked_m:.2} m. That is B-008: the arm \
-             flies at something the player never pointed at.",
-            arm.body,
-            centre.body
+        println!("  {side:?} -> {point:?} body {:?}", arm.body);
+        assert_eq!(
+            point, crosshair,
+            "the {side:?} arm aims at {point:?} on body {:?} while the crosshair stands on \
+             {crosshair:?} on body {:?} — a second ray has come back",
+            arm.body, centre.body
         );
     }
 }

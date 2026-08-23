@@ -466,12 +466,13 @@ impl DriveTuning {
 /// > schnell!"*
 ///
 /// ```text
-/// r̂ᵢ = unit(tipᵢ − h)   cᵢ = max(0, l̂ · r̂ᵢ)   w⁺ = max(0, move_y)   ê_right = (cos yaw, 0, −sin yaw)
-/// v* = clamp_len( (1/n)·Σᵢ r̂ᵢ·cᵢ · speed·w⁺  +  ê_right·lateral·mx , speed )
+/// r̂ᵢ = unit(tipᵢ − h)   cᵢ = max(0, l̂ · r̂ᵢ)   w⁺ = clamp(move_y, 0, 1)   ê_right = (cos yaw, 0, −sin yaw)
+/// v⁰ = v − ê_right·(v·ê_right) + ê_right·lateral·mx        (the flight, KEPT, steered sideways)
+/// v* = clamp_len( lerp( v⁰ , unit(Σᵢ r̂ᵢ·cᵢ)·speed·w⁺·maxᵢ cᵢ + ê_right·lateral·mx , w⁺ ) , speed )
 /// a  = (v* − v) / ramp
 /// ```
 ///
-/// ## The four things this function is, and why each one is that way
+/// ## The six things this function is, and why each one is that way
 ///
 /// 1. **It is a chase toward a velocity, not a push.** `(v* − v)/τ` is an acceleration whose
 ///    magnitude falls to zero as the velocity arrives, so the speed is **capped by
@@ -494,6 +495,33 @@ impl DriveTuning {
 ///    is the same predicate `vector::gas::steer_has_effect` already bills on, so the drive costs
 ///    gas exactly when it moves the player. Looking away from an anchor never hauls you at it.
 ///
+/// 5. **`maxᵢ cᵢ` for the strength, `unit(Σ r̂ᵢcᵢ)` for the direction — and NOT `1/n` for both.**
+///    [`rope_steer`] divides by `n` because a *force* is one budget shared between the arms.
+///    A target **velocity** is not a budget, and dividing it made the second hook a penalty:
+///    measured on the pure function, an anchor straight ahead plus a second one 60° off it came
+///    out at **0.661** of the single-rope target, i.e. hooking a second roof drove the player
+///    **34 % slower**. Direction still blends — two ropes take you between them — but the speed
+///    is the best-aligned arm's, and for one rope the whole expression is unchanged.
+///    (`tests/player.rs::f153_a_second_rope_does_not_halve_the_drive`.)
+/// 6. **`W` chases the whole velocity; `A`/`D` alone chase only their own axis.** The user,
+///    2026-08-23, after playing this model: *"wenn ich mich hooke und w drücke … dann soll ich
+///    erstmal ziemlich direkt daran gezogen werden. also ziemlich gerade. außer ich move nach
+///    links (a oder rechts d). **es darf ‚strenger‘ sein. also nicht so physics accurate aber
+///    mehr haptisch. also man macht was und man merkt es auch direkt!**"* — a design
+///    instruction that outranks physical plausibility, so `W` eats the crossing momentum
+///    instead of carrying it: that, and the ramp, is the whole of *"gerade"*.
+///    ⚠️ **But the full chase is exactly what made `A`/`D` a brake** (`Q-050`): with `W`
+///    released the target is `lateral` m/s sideways **and nothing else**, so the chase read the
+///    flight's own 52.9 m/s as an error and killed it — measured 52.9 → 20.9 m/s in one second
+///    in `scripts/f006-drive.txt`, **and nobody chose that.** So the released-`W` target keeps
+///    the player's own velocity on every axis it does not command and replaces only `ê_right`;
+///    `w⁺` lerps between the two targets, so a half-pressed stick gets half of each.
+///    ⚠️ **And the cap is outside the lerp on purpose.** A lateral that merely *adds* to a
+///    flight is the same mistake read the other way round: measured, `D` alone on a 70 m/s
+///    flight arrived at **75.000 m/s**, which is `vector.max_speed_m_s` — the avian clamp, i.e.
+///    the one number in this game nobody chose as a speed. Under the shared cap `A`/`D` is a
+///    **redirect**: same speed, 23° of it pointing somewhere else.
+///
 /// **What is deliberately NOT here: the fade.** `air_pull_fade_m` exists because at
 /// `min_rope_m` the *constraint* takes 17 m/s out of the player in one tick (`FIND-035`) — and
 /// under [`crate::data::RopeForceModel::Drive`] there is no constraint to run into. The drive
@@ -512,33 +540,46 @@ pub fn rope_drive(
     if to_anchors_m.is_empty() || !(t.ramp_s > 0.0) {
         return Vec3::ZERO;
     }
-    let forward = move_y.max(0.0);
+    let forward = move_y.clamp(0.0, 1.0);
 
-    let mut along = Vec3::ZERO;
+    // **Direction and strength are taken apart, and that is point 5.** `unit(Σ r̂ᵢ·cᵢ)` is the
+    // direction — a blend between the arms, and bit for bit the old answer for one rope; `max cᵢ`
+    // is the strength. The `/ n` that used to do both was [`rope_steer`]'s **force budget**
+    // carried into a place that has none.
+    let mut blend = Vec3::ZERO;
+    let mut gate = 0.0;
     for to_anchor in to_anchors_m {
         // Same guard as `rope_steer`: a tip exactly on the hand has no direction, and a `NaN`
-        // in a velocity is unrecoverable. Skipped **without** shrinking `n` — the budget stays
-        // shared between the arms the player really holds.
+        // in a velocity is unrecoverable.
         let Some(direction) = to_anchor.try_normalize() else {
             continue;
         };
-        along += direction * look_dir.dot(direction).max(0.0);
+        let aligned = look_dir.dot(direction).max(0.0);
+        blend += direction * aligned;
+        gate = f32::max(gate, aligned);
     }
+    let along = blend.try_normalize().unwrap_or(Vec3::ZERO) * (t.speed_m_s * forward * gate);
 
     let (sin, cos) = yaw.sin_cos();
     let right = Vec3::new(cos, 0.0, -sin);
-    let target = along / to_anchors_m.len() as f32 * (t.speed_m_s * forward)
-        + right * (t.lateral_m_s * move_x);
+    let sideways = right * (t.lateral_m_s * move_x);
+    let driven = along + sideways;
     // Point 2 above. Exact equality and not an epsilon: the three ways to get here are all
     // exact zeros (no key, `S` alone, or every rope behind the look), and an epsilon would put
     // a dead band where a player who *is* holding a key gets nothing.
-    if target == Vec3::ZERO {
+    if driven == Vec3::ZERO {
         return Vec3::ZERO;
     }
-    // One cap for both halves, so `W`+`D` is a direction between them at the drive's own top
+    // **Point 6, and it is a second TARGET, not a second chase.** With `W` released the drive
+    // commands the sideways axis and **keeps the flight on every other one** — the player's own
+    // velocity is the target there, so there is nothing to brake.
+    let kept = velocity_m_s - right * velocity_m_s.dot(right) + sideways;
+    // One cap for the whole thing, so `W`+`D` is a DIRECTION between them at the drive's own top
     // speed and not 1.06 of it — the same rule `air_thrust`'s `clamp_length_max` applies to the
-    // same two axes.
-    let target = target.clamp_length_max(t.speed_m_s);
+    // same two axes, and the reason it sits outside the `lerp` is that it has to hold for the
+    // kept flight too: without it `D` alone adds its 30 m/s to a 70 m/s flight and the player
+    // arrives at `vector.max_speed_m_s`, i.e. at the avian clamp — measured 75.000 exactly.
+    let target = kept.lerp(driven, forward).clamp_length_max(t.speed_m_s);
     (target - velocity_m_s) / t.ramp_s
 }
 
