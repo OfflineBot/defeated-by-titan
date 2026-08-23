@@ -526,6 +526,74 @@
         // what that guess was worth, and it is why the table is in the file.
         warp_rope_slack_m: 0.004,
         min_rope_m: 3.0,          // any closer would drag the camera into the wall
+        // ──────────────────────────────────────────────────────────────────────────────────
+        // FIND-149 — WHICH FORCE A HOOKED ROPE APPLIES. Pendulum or Drive. **One line.**
+        //
+        // The user played the reference (Attack on Titan Revolution) on Windows, beside this
+        // game, on 2026-08-23:
+        //
+        //   „wenn ich mich hooke: dann werde ich direkt rangezogen wenn ich ran gehe. mit a und
+        //    d kann man zur seite gehen. aber sonst wird man direkt hingezogen! WENN ICH NICHTS
+        //    DRUCKE DANN WIRD AUCH NICHT RANGEZOGEN!"   … „aber es ist ein etwas smoother
+        //    uebergang! aber recht schnell!"
+        //
+        // THE REFERENCE DRIVES, IT DOES NOT SWING. The rope is a DIRECTION; the key is the
+        // FORCE. Ours is the opposite by construction — an avian DistanceJoint plus gravity IS
+        // a pendulum, and that is what every number below `Pendulum` was measured against.
+        //
+        //   Pendulum  the game as it stood on 2026-08-22, bit for bit. The joint exists, the
+        //             B-005 ratchet shortens it, `air_pull_m_s2` steers it, and a player who
+        //             lets go of every key still swings. All of tests/vector_rope.rs is a
+        //             statement about THIS line.
+        //   Drive     no joint at all. `player::locomotion::rope_drive` chases a target
+        //             velocity along the rope while a movement key is held. NO KEY, NO PULL —
+        //             a hooked player who presses nothing falls exactly as if he had no hook.
+        //
+        // ⚠️ THE DEFAULT IS `Pendulum` AND THAT IS A SAFETY CHOICE, NOT A VERDICT. Only the
+        // player can decide which of the two is the game; the switch exists so he can A/B them
+        // in one session. To feel the reference's model, change this ONE line to `Drive`:
+        //
+        //     sed -i 's/rope_force_model: Pendulum/rope_force_model: Drive/' assets/data/game.ron
+        //
+        // ⚠️ Under `Drive` the reel-in (F-005, Ctrl) has nothing to shorten — there is no
+        // constraint — so it currently does nothing while still being billed by vector::gas.
+        // Q-049 and docs/FINDINGS.md FIND-151 carry that; it is deliberate scope, not an
+        // oversight.
+        rope_force_model: Pendulum,
+        // The three numbers the drive is made of. **All three are the user's to judge** — they
+        // are derived below, not measured, and no test in this repository can tell a good one
+        // from a bad one.
+        //
+        // ⚠️ UNTUNED. The speed W chases along the rope, in m/s.
+        //   - a pure swing on the pendulum runs 17-21 m/s (Q-018), so anything at or under that
+        //     would make the drive a downgrade and he would feel it instantly;
+        //   - max_speed_m_s (75) is the hard clamp and reaching it costs gas today. 50 is 2/3 of
+        //     it, so `Shift` still buys something on top and the CLAMP is not what he feels;
+        //   - the reference's own „Gear Shift" setting reads 600 in his menu. Roblox counts
+        //     STUDS (1 stud ~ 0.3 m), so that is ~180 m/s if it is a speed at all — and
+        //     FIND-149 records it as UNRESOLVED, which is why it is not the number here.
+        // If he says „zu langsam", this is the key, and it may go to 75 before anything else
+        // has to move.
+        drive_speed_m_s: 50.0,
+        // ⚠️ UNTUNED. The time constant of the ramp, in seconds — „ein etwas smoother uebergang!
+        // aber recht schnell!" is the whole specification.
+        //   - the velocity closes 63 % of the gap in one of these, 95 % in three: 0.25 s means
+        //     31 m/s of the 50 after a quarter second and 48 m/s after three quarters;
+        //   - LOWER bound 2/simulation_hz = 0.033 s. The drive is integrated explicitly, so a
+        //     constant under one tick overshoots instead of ramping — and under ~0.05 s it is a
+        //     snap, which is the half of his sentence that says „smoother";
+        //   - UPPER bound: much past 0.5 s and „recht schnell" is gone.
+        // Smaller = snappier. This is the key for „fuehlt sich traege an".
+        drive_ramp_s: 0.25,
+        // ⚠️ UNTUNED. What A/D add ACROSS the rope, in m/s — „das a d sorgt dafuer dass man
+        // nicht immer direkt zum seil gezogen wird", which is the whole reason the key exists.
+        //   - the figure is borrowed from player.air_lateral_m_s2 (18) so that the sideways
+        //     authority starts at the same number in both models. **The UNIT is different**
+        //     (m/s here, m/s^2 there), and that is exactly why this one is untuned;
+        //   - 36 % of drive_speed_m_s: enough to hold a line well off the anchor, not enough to
+        //     out-run the haul;
+        //   - bound: <= drive_speed_m_s, or A/D alone would hit the drive's own cap.
+        drive_lateral_m_s: 18.0,
         // Gauss-Seidel iterations over both rope constraints. With one iteration the second
         // constraint violates the first again; two are enough in the normal case (two roofs,
         // angle over 60 degrees) for under 1 % residual error. The degenerate case — both

@@ -36,9 +36,9 @@
 use avian3d::prelude::{DistanceJoint, Gravity, LinearVelocity, Position};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
-use defeated_by_titan::data::GameData;
+use defeated_by_titan::data::{GameData, RopeForceModel};
 use defeated_by_titan::shared::{
-    AimPoint, ArmAim, BodyId, BodyMask, Cli, HitStop, HitZone, Hook, HookReleased, HookState,
+    AimPoint, ArmAim, BodyId, BodyMask, Cli, Gas, HitStop, HitZone, Hook, HookReleased, HookState,
     IndexEntry,
     LocalPlayer, PlayerId, ReleaseReason, RopeLength, Side, SimulationSystems, SpatialIndex,
     TitanHit, TitanId, WarpPlayer,
@@ -167,7 +167,14 @@ fn hold_reel_in(app: &mut App) {
 /// rope grew under it every tick. `place` writes `Position` and does what this harness actually
 /// means: move the body, touch nothing else.
 fn hang(app: &mut App, e: Entity, player_pos: Vec3, nominal_length_m: f32) -> f32 {
-    let anchor = player_pos + Vec3::Y * nominal_length_m;
+    hang_on(app, e, player_pos, player_pos + Vec3::Y * nominal_length_m)
+}
+
+/// [`hang`] with the anchor spelled out instead of derived — the same harness for a rope that
+/// is not vertical. `FIND-149`'s drive is a statement about the direction *the player is
+/// looking along*, and an anchor straight overhead is the one geometry where the look gate
+/// `max(0, l̂·r̂)` is zero for a player with his default pitch.
+fn hang_on(app: &mut App, e: Entity, player_pos: Vec3, anchor: Vec3) -> f32 {
     let body = BodyId(80_001);
     app.world_mut().resource_mut::<SpatialIndex>().insert(IndexEntry {
         id: body,
@@ -1261,4 +1268,207 @@ fn b003_the_warp_slack_is_bounded_by_the_files_own_numbers() {
          may be moved",
         d.game.player.run_speed_m_s
     );
+}
+
+
+// ---------------------------------------------------------------------------------------
+// `FIND-149` — the DRIVE, in the whole app. `game.ron: vector.rope_force_model`.
+//
+// The user, playing *Attack on Titan Revolution* beside this game on 2026-08-23: *„wenn ich
+// mich hooke: dann werde ich direkt rangezogen wenn ich ran gehe. mit a und d kann man zur
+// seite gehen. aber sonst wird man direkt hingezogen! **wenn ich nichts drucke dann wird auch
+// nicht rangezogen!**"*
+//
+// The pure-function half is `tests/player.rs::f149_*`; the in-game evidence is
+// `scripts/f006-drive.txt`. What is measured **here** is the thing neither of those can see:
+// that the joint really is not built, and that gravity is the only thing left acting on a
+// hooked player who holds nothing.
+// ---------------------------------------------------------------------------------------
+
+fn select(app: &mut App, model: RopeForceModel) {
+    app.world_mut().resource_mut::<GameData>().game.vector.rope_force_model = model;
+}
+
+fn hold_key(app: &mut App, key: KeyCode) {
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+}
+
+/// Hangs a player on a 20 m rope straight above him, presses **nothing** for `ticks_n`, and
+/// returns how far he fell and how far he drifted sideways.
+///
+/// `dry` re-empties the tank every tick, and it is **not** a side note: with gas in the tank the
+/// drive never even runs for a key-less player, because `vector::gas::steer_has_effect` refuses
+/// the grant first. An empty tank is the one state in which `air_control` enters the drive
+/// branch with nothing held (`docs/NEXT.md` §1e, *„aber hälfte ca"*) — so it is the only case
+/// that can tell "the drive returns zero" apart from "the gas ledger happened to say no".
+/// Measured 2026-08-23: with the early return in `rope_drive` deleted, the wet run stayed green
+/// and this one went red.
+fn hangs_and_holds_nothing(model: RopeForceModel, ticks_n: u64, dry: bool) -> (f32, f32) {
+    let mut app = app();
+    select(&mut app, model);
+    let e = me(&mut app);
+    hang(&mut app, e, Vec3::new(0.0, 60.0, 0.0), 20.0);
+    let before = position(&app, e);
+    for _ in 0..ticks_n {
+        if dry {
+            app.world_mut().get_mut::<Gas>(e).expect("a player carries a tank").current = 0.0;
+        }
+        ticks(&mut app, 1);
+    }
+    let after = position(&app, e);
+    (before.y - after.y, (after.xz() - before.xz()).length())
+}
+
+#[test]
+fn f149_under_drive_a_hooked_player_who_presses_nothing_is_not_held_up_by_his_rope() {
+    // **The load-bearing sentence, measured.** Same app, same hook, same 20 m rope, same zero
+    // keys — the only difference is one line in `game.ron`.
+    //
+    // ⚠️ Gravity is ON here, deliberately and against this file's usual doctrine: the question
+    // is precisely *what happens when nothing but gravity is left*. The control that makes the
+    // number mean something is the other model in the same test — if the two ever answer the
+    // same, this is measuring the harness and not the rope.
+    let ticks_n = 30; // 0.5 s
+    let (drive_fall, drive_drift) = hangs_and_holds_nothing(RopeForceModel::Drive, ticks_n, false);
+    let (pendulum_fall, pendulum_drift) =
+        hangs_and_holds_nothing(RopeForceModel::Pendulum, ticks_n, false);
+    // The control that makes the first number worth anything — see [`hangs_and_holds_nothing`].
+    let (dry_fall, dry_drift) = hangs_and_holds_nothing(RopeForceModel::Drive, ticks_n, true);
+
+    // Free fall over half a second at the file's −20 m/s² is 2.5 m. The drive's rope holds
+    // nothing at all, so that is what has to come out.
+    assert!(
+        drive_fall > 2.0,
+        "under `Drive` a hooked player with no key held fell {drive_fall:.3} m in 0.5 s — free \
+         fall owes ~2.5 m, so something is still carrying him and the rope is not a direction"
+    );
+    // And the pendulum hangs, which is the whole of what the user says the reference does NOT do.
+    assert!(
+        pendulum_fall < 0.05,
+        "under `Pendulum` the same player fell {pendulum_fall:.3} m — the joint is supposed to \
+         hold him, and every number measured before 2026-08-23 assumes it does"
+    );
+    assert!(
+        drive_fall - pendulum_fall > 1.0,
+        "the two force models let the same player fall {drive_fall:.3} m and {pendulum_fall:.3} \
+         m — `vector.rope_force_model` is then a switch between one model and itself"
+    );
+    // Neither of them is *pulled* sideways. Under `Drive` because nothing acts at all; under
+    // `Pendulum` because the rope is vertical and taut. The assert is here so that a future
+    // "drive" that quietly hauls a key-less player at his anchor cannot pass this test.
+    assert!(
+        drive_drift < 0.05 && pendulum_drift < 0.05 && dry_drift < 0.05,
+        "a player who pressed nothing drifted {drive_drift:.3} m (Drive) / {pendulum_drift:.3} m \
+         (Pendulum) / {dry_drift:.3} m (Drive, empty tank) toward his anchor"
+    );
+    // **The one measurement the gas ledger cannot be responsible for.** With an empty tank the
+    // drive branch really is entered with no key held, so this number is `rope_drive`'s own
+    // answer and nothing else's.
+    assert!(
+        dry_fall > 2.0,
+        "under `Drive` with an EMPTY tank and no key held the player fell {dry_fall:.3} m in \
+         0.5 s instead of free-falling ~2.5 m — the drive is chasing a target of 0 m/s and \
+         braking him in mid-air, which is the exact opposite of „wenn ich nichts drucke dann \
+         wird auch nicht rangezogen\""
+    );
+}
+
+/// Holds `W` for 0.75 s — three of `drive_ramp_s` — and returns the speed reached along the
+/// rope, which points along −Z.
+///
+/// `hook` is the **control**: with it false nothing is anchored and the very same run measures
+/// the free air control alone. A drive test that passes with the rope deleted is measuring
+/// `air_accel_m_s2` (`CLAUDE.md` rule 5, the control habit).
+fn holds_w_toward_an_anchor(model: RopeForceModel, hook: bool) -> f32 {
+    let mut app = app();
+    select(&mut app, model);
+    let e = me(&mut app);
+    kill_gravity(&mut app); // the only thing allowed to bend this is the rope
+    // ⚠️ **300 m up, and the number is derived.** The first version of this ran at y = 60 in
+    // `maps.ron: current` and the velocity fell from 43.1 m/s to 17.3 m/s at tick 27 — the
+    // player had flown into a building. The tallest thing in the world is a tower at 123 m
+    // (`scripts/f029-grapple.txt` derives the same figure), so at 300 m the 60 m of rope ahead
+    // of him is empty air and the only thing bending the flight is the drive.
+    let start = Vec3::new(0.0, 300.0, 0.0);
+    if hook {
+        let eye = data(&app).game.player.eye_height_m;
+        // At hand height and straight along −Z, i.e. exactly where a player with yaw 0 and
+        // pitch 0 is looking: the look gate is then 1.0 and the geometry is out of the picture.
+        hang_on(&mut app, e, start, start + Vec3::Y * eye + Vec3::NEG_Z * 60.0);
+    } else {
+        // ⚠️ `warp` and not `place`: `place` writes `Position` alone, and avian syncs that back
+        // from the `Transform` the player still carries — the first version of this control
+        // left him standing on the ground at 0.00 m/s, which would have made "the control is
+        // slower than the drive" true for the wrong reason. A warp writes the `Transform`
+        // (`player::apply_warps`) and is the sanctioned path (§12c).
+        warp(&mut app, e, start);
+        app.update();
+    }
+    hold_key(&mut app, KeyCode::KeyW);
+    ticks(&mut app, 45);
+    velocity(&app, e).dot(Vec3::NEG_Z)
+}
+
+#[test]
+fn f149_under_drive_w_hauls_the_player_along_the_rope_and_without_a_rope_it_does_not() {
+    let d = GameData::load(&std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/data"));
+    let want = d.game.vector.drive_speed_m_s;
+
+    let drive = holds_w_toward_an_anchor(RopeForceModel::Drive, true);
+    let control = holds_w_toward_an_anchor(RopeForceModel::Drive, false);
+    let pendulum = holds_w_toward_an_anchor(RopeForceModel::Pendulum, true);
+
+    // 0.75 s is 3 x `drive_ramp_s`, i.e. 95 % of the target — plus whatever the free air
+    // thrust (`air_accel_m_s2`, aimed the same way) puts on top of it, which the drive treats
+    // as a disturbance and only partly cancels. The band is wide on purpose: all three keys
+    // are ⚠️ UNTUNED and are meant to move.
+    assert!(
+        drive > want * 0.8 && drive < want * 1.4,
+        "0.75 s of `W` on a drive rope reached {drive:.2} m/s against a `drive_speed_m_s` of \
+         {want} — 3 time constants owe ~95 % of it"
+    );
+    // **The control.** Same keys, same app, no rope.
+    assert!(
+        control < drive * 0.5,
+        "with NO rope at all the same 0.75 s of `W` reached {control:.2} m/s against the \
+         {drive:.2} m/s with one — this test would be measuring `air_accel_m_s2`"
+    );
+    // And the pendulum is a different number in the same run: it BUILDS speed at
+    // `air_pull_m_s2` instead of chasing one, so at this instant it is well short of the drive.
+    assert!(
+        (drive - pendulum).abs() > 5.0,
+        "the drive reached {drive:.2} m/s and the pendulum {pendulum:.2} m/s — the two models \
+         are supposed to be different things"
+    );
+}
+
+#[test]
+fn f149_the_drive_builds_no_joint_and_still_publishes_a_length() {
+    // The mechanism, not the feel. Under `Drive` **there is no `DistanceJoint` in the world at
+    // all** — that is what "the rope applies no force of its own" means here, and it is why
+    // `combat::hitstop` (which takes `JointDisabled` off every joint of a body when a freeze
+    // lifts) cannot bring the constraint back to life in the middle of a flight.
+    let mut driven = app();
+    select(&mut driven, RopeForceModel::Drive);
+    let e = me(&mut driven);
+    let published = hang(&mut driven, e, Vec3::new(0.0, 60.0, 0.0), 20.0);
+
+    assert_eq!(joint_count(&mut driven), 0, "a `Drive` rope built a distance joint");
+    assert!(
+        hook_state(&driven, e, Side::Left).is_anchored(),
+        "the arm is not anchored — then this test measured nothing"
+    );
+    // `RopeLength` is read by `vector::hook` (`overextended`) and drawn by the HUD. `0.0` means
+    // "no constraint" in that type, so a jointless rope publishes the length it really has.
+    assert!(
+        (published - 20.0).abs() < 1.0,
+        "a `Drive` rope published {published:.3} m for a 20 m rope — `vector::hook` reads this"
+    );
+
+    // The control: the same hook under the other model does build one.
+    let mut other = app();
+    select(&mut other, RopeForceModel::Pendulum);
+    let e = me(&mut other);
+    hang(&mut other, e, Vec3::new(0.0, 60.0, 0.0), 20.0);
+    assert_eq!(joint_count(&mut other), 1, "a `Pendulum` rope did NOT build a distance joint");
 }

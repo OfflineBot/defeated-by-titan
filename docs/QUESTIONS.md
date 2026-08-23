@@ -1925,3 +1925,83 @@ two ropes land.** If ours landing apart is what he wanted, this question closes 
 
 Related: `FIND-149` · `docs/NEXT.md` item 1 · `F-023` · `src/shared/gear.rs:156-168` ·
 `docs/gameplay/references.md`
+
+---
+
+## Q-049 — Pendulum or Drive? The switch is built, both work, and only you can answer it
+
+**Opened:** 2026-08-23, out of `FIND-149` / `FIND-152`.
+**Status:** 🔴 open — **his call, and this one is the whole feel of the game.**
+
+`game.ron: vector.rope_force_model` now picks between two rope physics, and both are live:
+
+- **`Pendulum`** — the game as it stood on 2026-08-22, bit for bit. An avian `DistanceJoint`
+  plus gravity, `air_pull_m_s2` steering it. Letting go of every key still carries you.
+- **`Drive`** — the reference's model, out of his own sentence: *„wenn ich nichts drucke dann
+  wird auch nicht rangezogen!"*. No joint at all. The rope is a **direction**, the key is the
+  **force**, and the velocity ramps toward `drive_speed_m_s` with `drive_ramp_s`.
+
+**To feel it — one line, no rebuild of anything but the binary:**
+
+```bash
+sed -i 's/rope_force_model: Pendulum/rope_force_model: Drive/' assets/data/game.ron
+cargo play                        # and the same sed the other way round to go back
+```
+
+### `ASSUMPTION:` the default stays `Pendulum` until he says otherwise
+
+Not because it is better — nobody here knows that — but because every measured number in this
+repository is a statement about it (`FIND-035`, `FIND-041`, `FIND-045`, `B-005`, all of
+`tests/vector_rope.rs`), and shipping the untested model as the default would silently invalidate
+them. **The `Drive` half is 🟨: built, tested against its own claims, never played by a human.**
+
+**Rollback point:** the one line above. Nothing else has to move in either direction.
+
+### The three numbers that are his to judge, and what each does
+
+| key | today | what it is | what to say if it is wrong |
+|---|---|---|---|
+| `drive_speed_m_s` | 50.0 | the speed `W` chases along the rope | *„zu langsam/zu schnell"* |
+| `drive_ramp_s` | 0.25 | the onset — 63 % of the gap in this long | *„zu träge"* / *„zu abrupt"* |
+| `drive_lateral_m_s` | 18.0 | what `A`/`D` chase across the rope | *„ich kann nicht genug lenken"* |
+
+**Measured, both models, one pinned binary (`scripts/f006-drive.txt`):** hooked with no key held,
+both fall at exactly 21.33 m/s — neither rope pulls a player who holds nothing, because the
+pendulum's rope is nearly slack in that geometry. 1.5 s of `W`: **52.94 m/s** under `Drive`
+(capped) against **59.66 m/s** under `Pendulum` (still climbing toward the 75 m/s clamp). 100 m
+from rest with `W` held: **2.15 s** against **2.27 s**.
+
+Related: `FIND-149` · `FIND-152` · `docs/NEXT.md` item 1 · `Q-050` · `scripts/f006-drive.txt`
+
+---
+
+## Q-050 — under `Drive` the reel does nothing and `A`/`D` alone is a brake. Both are consequences, not decisions
+
+**Opened:** 2026-08-23, with `Q-049`.
+**Status:** 🔴 open — two side effects of the drive that nobody chose, and that only playing can weigh.
+
+**1. The reel-in (`F-005`, `Ctrl`) has nothing to shorten.** `Drive` builds no `DistanceJoint`,
+so there is no enforced length, so `player::rope::shorten_ropes` never sees the rope —
+**and `vector::gas` still bills `gas_reel_per_s: 6` for the held key.** The reel is one of the
+three verbs of the Vector Gear and under this model it is currently inert.
+
+`ASSUMPTION:` that is left as it is for now, because "what a reel means when the rope is not a
+constraint" is a design question and not a repair. The two honest answers are *(a)* the reel
+raises `drive_speed_m_s` while held (a boost along the rope) or *(b)* the reel is what the drive
+**is**, and `W` and `Ctrl` collapse into one verb. **Rollback point:** neither has been built, so
+picking either is additive; the billing line is `src/vector/gas.rs` (foreign territory to the
+round that wrote this).
+
+**2. `A`/`D` with `W` released brakes you.** The drive chases a target velocity; with only a
+lateral key held that target is `drive_lateral_m_s` (18 m/s) and **nothing else**, so a player at
+52.9 m/s who taps `D` alone is pulled down to 20.9 m/s in a second (measured,
+`scripts/f006-drive.txt` ACT 3). Holding `W`+`D` together keeps the full speed — that is the
+normal input — but `D` on its own is a strong air brake that he never asked for.
+
+`ASSUMPTION:` kept, because it falls out of the model rather than being bolted on, and because a
+brake on a steering key may well be *why* the reference feels controllable. **Rollback point:**
+`player::locomotion::rope_drive`, the line `let target = along / n * (speed * forward) + right *
+(lateral * move_x)` — making the forward term keep the speed the player already has when `W` is
+released is a two-line change.
+
+Related: `Q-049` · `FIND-152` · `F-005` · `src/vector/gas.rs`

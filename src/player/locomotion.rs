@@ -149,7 +149,7 @@
 use avian3d::prelude::{Forces, LinearVelocity, WriteRigidBodyForces};
 use bevy::prelude::*;
 
-use crate::data::GameData;
+use crate::data::{GameData, RopeForceModel};
 use crate::shared::{Buttons, Gas, GasGrant, Hook, Intent, MovementState, RunAccel, Velocity};
 
 /// One tick of horizontal ground movement, as a function of nothing but its arguments.
@@ -426,6 +426,122 @@ pub fn rope_steer(
     pull / to_anchors_m.len() as f32 + right * (t.lateral_m_s2 * move_x)
 }
 
+/// The three numbers [`rope_drive`] is made of — `game.ron: vector.drive_*`, and **all three
+/// are the user's to judge** (`FIND-149`).
+///
+/// A struct and not three `f32` in a row, for [`SteerTuning`]'s reason: swap the speed and the
+/// lateral and the compiler says nothing while the drive silently becomes a strafe.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DriveTuning {
+    /// [`crate::data::VectorTuning::drive_speed_m_s`] — the speed `W` chases **along the rope**.
+    pub speed_m_s: f32,
+    /// [`crate::data::VectorTuning::drive_lateral_m_s`] — what `A`/`D` chase across it.
+    pub lateral_m_s: f32,
+    /// [`crate::data::VectorTuning::drive_ramp_s`] — the time constant of the ramp. `<= 0`
+    /// means **no drive at all**, which is the safe direction for a number that divides.
+    pub ramp_s: f32,
+}
+
+impl DriveTuning {
+    /// The same drive at a fraction of its speed — *„ohne gas kann man immernoch w a d nutzen um
+    /// etwas movement aufzubauen (aber hälfte ca)"* (`docs/NEXT.md` §1e).
+    ///
+    /// **The ramp is not scaled.** An empty tank makes the drive *weaker*, not *sluggish*: the
+    /// time constant is the feel of the onset and the user described it separately from the
+    /// strength.
+    #[must_use]
+    pub fn scaled(self, factor: f32) -> Self {
+        Self { speed_m_s: self.speed_m_s * factor, lateral_m_s: self.lateral_m_s * factor, ..self }
+    }
+}
+
+/// `FIND-149` — **the reference's rope: a velocity drive, in m/s², and `Vec3::ZERO` the moment
+/// no key is held.**
+///
+/// The user, playing *Attack on Titan Revolution* beside this game on 2026-08-23:
+///
+/// > *„wenn ich mich hooke: dann werde ich direkt rangezogen wenn ich ran gehe. mit a und d kann
+/// > man zur seite gehen. aber sonst wird man direkt hingezogen! **wenn ich nichts drucke dann
+/// > wird auch nicht rangezogen!**"* … *„aber es ist ein etwas smoother übergang! aber recht
+/// > schnell!"*
+///
+/// ```text
+/// r̂ᵢ = unit(tipᵢ − h)   cᵢ = max(0, l̂ · r̂ᵢ)   w⁺ = max(0, move_y)   ê_right = (cos yaw, 0, −sin yaw)
+/// v* = clamp_len( (1/n)·Σᵢ r̂ᵢ·cᵢ · speed·w⁺  +  ê_right·lateral·mx , speed )
+/// a  = (v* − v) / ramp
+/// ```
+///
+/// ## The four things this function is, and why each one is that way
+///
+/// 1. **It is a chase toward a velocity, not a push.** `(v* − v)/τ` is an acceleration whose
+///    magnitude falls to zero as the velocity arrives, so the speed is **capped by
+///    construction** and the onset is an exponential with time constant `τ` — 63 % of the gap
+///    closed in `τ`, 95 % in `3τ`. *„etwas smoother übergang, aber recht schnell"* is a time
+///    constant and nothing else. [`rope_steer`], the pendulum's term, is the opposite: a
+///    constant acceleration that builds speed for as long as it is held.
+/// 2. **No target, no drive — and that is the load-bearing sentence.** `w⁺` is zero unless a
+///    forward key is down, `mx` is zero unless a lateral one is, and if the whole target comes
+///    out `Vec3::ZERO` the function returns `Vec3::ZERO` *before* the subtraction. Without that
+///    early return a held-but-useless key would read as "chase 0 m/s" and **brake** a falling
+///    player — an air brake nobody asked for, and the exact opposite of what the sentence says.
+///    ⚠️ **Gravity is untouched either way.** He did not say you float; he said you are not
+///    *pulled*. A hooked player who presses nothing falls exactly as if he had no hook.
+/// 3. **`S` is not a haul.** The same `.max(0.0)` as [`air_thrust`] and [`rope_steer`], for the
+///    same sentence (*„mit s »spannt« man nur das seil!"*) and the same requirement
+///    (`docs/NEXT.md` §1A requirement 7).
+/// 4. **`cᵢ`, the look gate, is [`rope_steer`]'s and is kept deliberately.** It is what makes
+///    two anchors 180° apart usable — a mean *direction* would be the zero vector there — and it
+///    is the same predicate `vector::gas::steer_has_effect` already bills on, so the drive costs
+///    gas exactly when it moves the player. Looking away from an anchor never hauls you at it.
+///
+/// **What is deliberately NOT here: the fade.** `air_pull_fade_m` exists because at
+/// `min_rope_m` the *constraint* takes 17 m/s out of the player in one tick (`FIND-035`) — and
+/// under [`crate::data::RopeForceModel::Drive`] there is no constraint to run into. The drive
+/// is its own brake: arriving at the anchor, `r̂` swings past 90°, `cᵢ` goes to zero and the
+/// target with it.
+#[must_use]
+pub fn rope_drive(
+    to_anchors_m: &[Vec3],
+    look_dir: Vec3,
+    yaw: f32,
+    move_x: f32,
+    move_y: f32,
+    velocity_m_s: Vec3,
+    t: DriveTuning,
+) -> Vec3 {
+    if to_anchors_m.is_empty() || !(t.ramp_s > 0.0) {
+        return Vec3::ZERO;
+    }
+    let forward = move_y.max(0.0);
+
+    let mut along = Vec3::ZERO;
+    for to_anchor in to_anchors_m {
+        // Same guard as `rope_steer`: a tip exactly on the hand has no direction, and a `NaN`
+        // in a velocity is unrecoverable. Skipped **without** shrinking `n` — the budget stays
+        // shared between the arms the player really holds.
+        let Some(direction) = to_anchor.try_normalize() else {
+            continue;
+        };
+        along += direction * look_dir.dot(direction).max(0.0);
+    }
+
+    let (sin, cos) = yaw.sin_cos();
+    let right = Vec3::new(cos, 0.0, -sin);
+    let target = along / to_anchors_m.len() as f32 * (t.speed_m_s * forward)
+        + right * (t.lateral_m_s * move_x);
+    // Point 2 above. Exact equality and not an epsilon: the three ways to get here are all
+    // exact zeros (no key, `S` alone, or every rope behind the look), and an epsilon would put
+    // a dead band where a player who *is* holding a key gets nothing.
+    if target == Vec3::ZERO {
+        return Vec3::ZERO;
+    }
+    // One cap for both halves, so `W`+`D` is a direction between them at the drive's own top
+    // speed and not 1.06 of it — the same rule `air_thrust`'s `clamp_length_max` applies to the
+    // same two axes.
+    let target = target.clamp_length_max(t.speed_m_s);
+    (target - velocity_m_s) / t.ramp_s
+}
+
 /// `F-006` Swerve — WASD in the air, as an acceleration.
 ///
 /// **Sole writer of [`RunAccel`].** Contributor — never sole writer — of
@@ -506,6 +622,15 @@ pub fn air_control(
         // struct. `-` because the RON carries gravity as the negative number it is.
         lift_m_s2: -data.game.gravity_m_s2 * s.air_pull_lift_fraction,
     };
+    // `FIND-149`. Read once, outside the loop, like every other tuning value here — and read
+    // even under `Pendulum`, because a `game.ron` that is missing a `drive_*` key has to crash
+    // on load whichever model it selects (§4: no `serde(default)` for a game value).
+    let model = data.game.vector.rope_force_model;
+    let drive_tuning = DriveTuning {
+        speed_m_s: data.game.vector.drive_speed_m_s,
+        lateral_m_s: data.game.vector.drive_lateral_m_s,
+        ramp_s: data.game.vector.drive_ramp_s,
+    };
 
     for (intent, state, velocity, gas, hook, grant, transform, mut drive, forces) in &mut players {
         let wanted = if in_flight(*state, velocity.0.xz().length(), top_m_s) {
@@ -538,18 +663,52 @@ pub fn air_control(
             // `air_accel_empty_fraction` (*„ohne gas kann man immernoch w a d nutzen … aber
             // hälfte ca"*), the rope term is **zero**. Half a rope pull for no gas would be the
             // free thrust §1B was rewritten to remove.
-            if anchored > 0 && grant.steer {
-                look + rope_steer(
+            // `FIND-149` — **the fork, and it is one line in `game.ron`.** `Pendulum` is the
+            // branch that stood here before 2026-08-23, untouched; `Drive` is the reference's
+            // model, and the two must not be allowed to look alike
+            // (`tests/player.rs::f149_the_two_force_models_are_not_the_same_thing`).
+            //
+            // `look` is added in **both** branches and is the same term in both, so an unhooked
+            // player comes out of this function bit-identical under either model — which is
+            // what `f006_without_a_rope_the_air_control_is_bit_identical_to_before` asserts
+            // with `assert_eq!` and no epsilon.
+            let rope_term = match model {
+                RopeForceModel::Pendulum if anchored > 0 && grant.steer => rope_steer(
                     &to_anchors_m[..anchored],
                     intent.look_dir(),
                     intent.yaw,
                     intent.move_x,
                     intent.move_y,
                     steer,
-                )
-            } else {
-                look
-            }
+                ),
+                // **`grant.steer` OR an empty tank**, and the two are not the same gate.
+                // `grant.steer` means "a rope holds, a key is down and this tick's gas was
+                // paid" (`vector::gas`) — the drive is billed exactly like the pendulum's pull
+                // and through the same predicate, so `FIND-150`'s *idle costs nothing* survives
+                // unchanged. An **empty** tank is the user's own exception and not a hole in
+                // the ledger: *„ohne gas kann man immernoch w a d nutzen um etwas movement
+                // aufzubauen (aber hälfte ca)"* (`docs/NEXT.md` §1e) — there is nothing left to
+                // debit, so the drive runs at [`crate::data::PlayerTuning::air_accel_empty_fraction`]
+                // of its speed instead of stopping the player dead in the air.
+                RopeForceModel::Drive if anchored > 0 && (grant.steer || gas.is_empty()) => {
+                    let t = if gas.is_empty() {
+                        drive_tuning.scaled(s.air_accel_empty_fraction)
+                    } else {
+                        drive_tuning
+                    };
+                    rope_drive(
+                        &to_anchors_m[..anchored],
+                        intent.look_dir(),
+                        intent.yaw,
+                        intent.move_x,
+                        intent.move_y,
+                        velocity.0,
+                        t,
+                    )
+                }
+                _ => Vec3::ZERO,
+            };
+            look + rope_term
         } else {
             Vec3::ZERO
         };

@@ -1663,7 +1663,7 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 
 ## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
 
-**NEXT FREE ID: FIND-149.** Claim it by bumping this line in the same `cat >>` that
+**NEXT FREE ID: FIND-153.** Claim it by bumping this line in the same `cat >>` that
 appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
 file separately and both read the same maximum. One line beats a 108 kB grep.
  — and append with `>>`, never with an edit tool
@@ -9290,3 +9290,92 @@ the field twice. If the number tracks distance, it changes. If it is anything el
 
 Related: FIND-149 · FIND-150 · `docs/gameplay/references.md` (hook range: *unknown*) ·
 `docs/QUESTIONS.md` Q-033 · `docs/images/reference-aotr/README.md`
+
+---
+
+## FIND-152 — the drive is built, and the pendulum kept: one line in `game.ron` decides
+
+**Stage:** 🟨 — both models compile, both pass their own tests, both run a script to exit 0.
+**Nobody has played the `Drive` half**, and the three numbers in it are derived, not felt.
+
+`FIND-149` said the reference **drives** and does not swing, on the user's first-hand report. This
+is what was built out of it. **Neither model was allowed to win by argument**: `game.ron:
+vector.rope_force_model` selects `Pendulum` (today's game, bit for bit) or `Drive`, with no
+`serde(default)`, and the decision is `Q-049` — his.
+
+### What `Drive` actually is
+
+`player::locomotion::rope_drive`, an acceleration of `(v* − v) / drive_ramp_s` where
+
+```text
+v* = clamp_len( (1/n)·Σᵢ r̂ᵢ·max(0, l̂·r̂ᵢ) · drive_speed_m_s·max(0, move_y)
+                + ê_right·drive_lateral_m_s·move_x ,  drive_speed_m_s )
+```
+
+- **A chase toward a velocity, not a push.** The acceleration dies as the speed arrives, so the
+  cap is the construction and the onset is an exponential — *„etwas smoother übergang, aber recht
+  schnell"* is a time constant and nothing else.
+- **No target, no drive.** If the whole target comes out `Vec3::ZERO` the function returns before
+  the subtraction. Without that early return a held-but-useless key reads as "chase 0 m/s" and
+  **brakes a falling player** — measured, see the red run below.
+- **`Drive` builds no `DistanceJoint` at all.** Not `JointDisabled`: `combat::hitstop::advance`
+  removes that marker from every joint of a body when a freeze lifts
+  (`src/combat/hitstop.rs:295`), so a rope disabled for a *model* reason would come back to life
+  after the first hit the player takes, mid-flight, and nothing would say why.
+
+**A hooked player who presses nothing falls exactly as if he had no hook.** Gravity is untouched;
+he said you are not *pulled*, not that you float.
+
+### Measured — one pinned binary, both models, `scripts/f006-drive.txt`
+
+| at the mark | `Drive` | `Pendulum` |
+|---|---|---|
+| hooked, nothing held, 1.0 s | **21.33 m/s**, y 88.6 | **21.33 m/s**, y 88.6 |
+| + 1.5 s of `W` | **52.94 m/s** (capped) | **59.66 m/s** (climbing to the 75 clamp) |
+| + 1.0 s of `D` alone | 20.93 m/s | 22.32 m/s |
+| **100 m from rest, `W` held** | **2.15 s**, arriving at 52.5 m/s | **2.27 s**, arriving at 75.0 m/s |
+| 100 m with **no rope**, `W` held | 2.98 s, arriving at 67.0 m/s — that is a **fall** | — |
+
+The first row is the one worth reading twice: **in that geometry the two models are identical**,
+because a 198 m rope 13° off horizontal is nearly slack against a 10 m fall. A script cannot tell
+them apart there; `tests/vector_rope.rs::f149_under_drive_a_hooked_player_who_presses_nothing_is_not_held_up_by_his_rope`
+can, because it builds the anchor straight overhead: **2.499 m of fall against 0.000 m.**
+
+### `B-005`'s ratchet under the drive: irrelevant, and that is the finding
+
+The ratchet exists so a rope that is given slack spools it in, and it is what lifts an arc bottom
+off the ground. Under `Drive` there is no enforced length to ratchet — `shorten_ropes` queries
+`(&Rope, &mut DistanceJoint)` and a jointless rope simply does not match, so the whole mechanism
+is absent without an `if` anywhere. **The reel is absent with it, and is still billed** → `Q-050`.
+
+### The control that made the round honest, and the two red runs
+
+Rule 5, both directions, one line each:
+
+1. **The early return deleted** (`if target == Vec3::ZERO`): `tests/player.rs::f149_a_hooked_player_who_holds_nothing_is_not_driven_at_all`
+   went red at once — but the whole-app test **stayed green**, because with gas in the tank
+   `vector::gas::steer_has_effect` refuses the grant before `rope_drive` is ever called. The app
+   test was passing for the gas ledger's reason, not the drive's. It was rewritten to re-empty
+   the tank every tick — the one state in which `air_control` enters the drive branch with
+   nothing held (`docs/NEXT.md` §1e) — and then it went red too: *„fell 1.586 m in 0.5 s instead
+   of free-falling ~2.5 m"*.
+2. **`Drive` made to build the joint**: `f149_the_drive_builds_no_joint_and_still_publishes_a_length`
+   red with `left: 1, right: 0`.
+
+And the measurement control: `f149_under_drive_w_hauls_the_player_along_the_rope_and_without_a_rope_it_does_not`
+runs the identical 0.75 s of `W` **with the hook deleted**. Its first version put the player in
+place with `place()` (a raw `Position` write), which avian syncs back from the `Transform` — the
+control measured a player standing on the ground at 0.00 m/s and would have passed for the wrong
+reason. `warp` fixed it.
+
+### What did NOT move
+
+`scripts/f030-cortex.txt`, `f034-hitstop.txt` and `q030-reach.txt` produce **byte-identical
+filtered output under both models** (`hit mark: KILL on Cortex at 20.67 m/s`, 2 asserts held, 230
+ticks, exit 0 in all six runs). None of them fires a hook, so no approach speed moved and no
+photographed evidence is stale. `--lib` 241 · `--test player` 41 · `--test vector_rope` 19 ·
+`--test data` 57 · `--test combat` 39 · `--test titan` 31 · `--test vector_gas` 21 ·
+`--test vector_hooks` 33 — all green.
+
+Related: `FIND-149` · `FIND-150` · `Q-049` · `Q-050` · `docs/NEXT.md` item 1 ·
+`scripts/f006-drive.txt` · `src/player/locomotion.rs` · `src/player/rope.rs`

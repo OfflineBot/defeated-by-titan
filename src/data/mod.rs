@@ -287,6 +287,39 @@ pub struct PlayerTuning {
     pub max_ground_slope_deg: f32,
 }
 
+/// **Which force a hooked rope applies — the one switch behind `FIND-149`.**
+///
+/// The user played *Attack on Titan Revolution* on 2026-08-23 and reported, verbatim:
+/// *„wenn ich mich hooke: dann werde ich direkt rangezogen wenn ich ran gehe. mit a und d kann
+/// man zur seite gehen. aber sonst wird man direkt hingezogen! **wenn ich nichts drucke dann
+/// wird auch nicht rangezogen!**"* — and immediately after: *„aber es ist ein etwas smoother
+/// übergang! aber recht schnell!"*
+///
+/// **The reference drives. It does not swing.** The rope supplies a *direction*, the key
+/// supplies the *force*, and a hooked player who holds nothing is not pulled at all. Ours is
+/// the opposite by construction: a [`DistanceJoint`](avian3d::prelude::DistanceJoint) plus
+/// gravity **is** a pendulum, and a pure swing runs 17–21 m/s while
+/// [`VectorTuning::max_speed_m_s`] (75) needs gas.
+///
+/// **This is an enum and not a `bool`, and both variants are live**, because nobody in this
+/// repository can decide which one is right — only the player can, and only by feeling both in
+/// one session. So the swap is one line in `game.ron` and the pendulum stays bit-for-bit what
+/// it was (`tests/player.rs::f149_the_two_force_models_are_not_the_same_thing`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum RopeForceModel {
+    /// **Today's game.** The rope is a distance constraint; gravity and tension make an arc,
+    /// and letting go of every key still carries you. Everything measured before 2026-08-23 —
+    /// `FIND-035`, `FIND-041`, `FIND-045`, `B-005`'s ratchet, every number in
+    /// `tests/vector_rope.rs` — is a statement about **this** variant.
+    Pendulum,
+    /// **The reference's model.** No joint at all: the rope is a line with a direction, and
+    /// `player::locomotion::rope_drive` chases a target velocity along it while a movement key
+    /// is held. No key, no target, no drive — gravity is then the only thing acting, exactly as
+    /// if no hook existed.
+    Drive,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VectorTuning {
@@ -459,6 +492,23 @@ pub struct VectorTuning {
     /// kept warp may deliver stays below the speed the player walks at.
     pub warp_rope_slack_m: f32,
     pub min_rope_m: f32,
+    /// **Pendulum or drive — `FIND-149`.** See [`RopeForceModel`]; there is no default and a
+    /// `game.ron` without this key crashes on load, because "which physics does the rope have"
+    /// is not a question a missing line may answer.
+    pub rope_force_model: RopeForceModel,
+    /// **⚠️ UNTUNED — the first of the three numbers the user is asked to feel.** The speed
+    /// [`RopeForceModel::Drive`] chases along the rope while `W` is held, in m/s. Ignored
+    /// entirely by [`RopeForceModel::Pendulum`].
+    pub drive_speed_m_s: f32,
+    /// **⚠️ UNTUNED — the second.** The drive's time constant in seconds: the velocity closes
+    /// `1 − 1/e` = 63 % of the gap to the target in this long, 95 % in three of them. *„ein
+    /// etwas smoother übergang! aber recht schnell!"* is the whole specification of this
+    /// number. Must be `> 0`.
+    pub drive_ramp_s: f32,
+    /// **⚠️ UNTUNED — the third.** What `A`/`D` add across the rope under
+    /// [`RopeForceModel::Drive`], in m/s. *„das a d sorgt dafür dass man nicht immer direkt zum
+    /// seil gezogen wird"* — this is how far off the anchor line the player can hold himself.
+    pub drive_lateral_m_s: f32,
     /// Gauss-Seidel iterations over both rope constraints (`shared::rope::rope_step`).
     pub rope_iterations: u32,
     pub gas_tank: f32,

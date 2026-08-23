@@ -104,7 +104,7 @@ use avian3d::prelude::{
 };
 use bevy::prelude::*;
 
-use crate::data::GameData;
+use crate::data::{GameData, RopeForceModel};
 use crate::shared::{
     BodyGone, BodyId, HitStop, Hook, HookAnchored, HookReleased, PlayerId, ReelSpeed, RopeLength,
     Side, WarpPlayer,
@@ -221,6 +221,7 @@ pub fn attach_ropes(
     ropes: Query<(Entity, &Rope)>,
 ) {
     let min_rope_m = data.game.vector.min_rope_m;
+    let model = data.game.vector.rope_force_model;
     let warped: Vec<(PlayerId, Vec3)> = if warped.is_empty() {
         Vec::new()
     } else {
@@ -284,12 +285,12 @@ pub fn attach_ropes(
                 anchor,
                 body_entity,
             },
-            // `(0, L)`: pulls, never pushes. See the module header.
-            DistanceJoint::new(anchor, body_entity)
-                .with_local_anchor1(Vec3::ZERO)
-                .with_local_anchor2(Vec3::ZERO)
-                .with_limits(0.0, length_m),
         );
+        // `(0, L)`: pulls, never pushes. See the module header.
+        let joint = DistanceJoint::new(anchor, body_entity)
+            .with_local_anchor1(Vec3::ZERO)
+            .with_local_anchor2(Vec3::ZERO)
+            .with_limits(0.0, length_m);
         // `B-004`, third face — a hook that bites **inside** an impact frame. A disabled body
         // has no island (`combat::hitstop`, header), and `add_joint` merges the islands of the
         // two ends, so a live joint born here aborts the process in `merge_islands` with
@@ -303,10 +304,25 @@ pub fn attach_ropes(
         // ⚠️ **In the bundle, not as a second `insert`.** `Commands::spawn` is applied on its
         // own and triggers avian's `On<Add, DistanceJoint>` observer right there; a marker
         // queued behind it arrives one command too late and the joint is already registered.
-        if frozen {
-            commands.spawn((rope, JointDisabled));
-        } else {
-            commands.spawn(rope);
+        //
+        // `FIND-149`, and it is the whole of [`RopeForceModel::Drive`]: **the joint is simply
+        // not built.** Not `JointDisabled` — `combat::hitstop::advance` takes that marker off
+        // every joint of a body when the freeze lifts (`src/combat/hitstop.rs:295`), so a rope
+        // disabled for a *model* reason would come alive again after the first hit the player
+        // takes, in the middle of a flight, and nothing would say why. A rope with no
+        // `DistanceJoint` is invisible to `hitstop::joints_of`, to [`shorten_ropes`] and to
+        // avian's island bookkeeping — and that is the correct meaning of "the rope applies no
+        // force of its own".
+        match model {
+            RopeForceModel::Drive => {
+                commands.spawn(rope);
+            }
+            RopeForceModel::Pendulum if frozen => {
+                commands.spawn((rope, joint, JointDisabled));
+            }
+            RopeForceModel::Pendulum => {
+                commands.spawn((rope, joint));
+            }
         }
 
         info!(
@@ -338,7 +354,7 @@ pub fn detach_ropes(
     mut released: MessageReader<HookReleased>,
     mut gone: MessageReader<BodyGone>,
     mut warped: MessageReader<WarpPlayer>,
-    ropes: Query<(Entity, &Rope, &DistanceJoint)>,
+    ropes: Query<(Entity, &Rope, Option<&DistanceJoint>)>,
     anchors: Query<&Transform>,
 ) {
     // Collected once instead of read per rope: a `MessageReader` has one cursor, and the
@@ -364,12 +380,19 @@ pub fn detach_ropes(
     let slack_m = data.game.vector.warp_rope_slack_m;
 
     for (entity, rope, joint) in &ropes {
+        // **A rope with no joint cannot be dragged by a teleport, so a teleport cannot cut it**
+        // (`FIND-149`, [`RopeForceModel::Drive`]). `B-003` exists because the constraint
+        // corrects the excess inside one substep and throws the player 14 m/s per centimetre of
+        // it; with no constraint there is no excess and no kick. What still ends such a rope is
+        // [`sync_rope_length`]'s `overextended` — the wall winning at `hook_range_m` — one tick
+        // later, which is the same path an ordinary flight out of range takes.
+        let enforced_m = joint.map_or(f32::INFINITY, |j| j.limits.max);
         // The rule, and the only place it is decided: a teleport that lands inside the rope's
         // own length has nothing for the joint to correct, so the rope survives it. A missing
         // anchor transform counts as "cut" — the safe direction.
         let by_warp = warped.iter().find(|(id, _)| *id == rope.player).is_some_and(|(_, dest)| {
             let keep = anchors.get(rope.anchor).is_ok_and(|a| {
-                warp_keeps_the_rope(*dest, a.translation, joint.limits.max, slack_m)
+                warp_keeps_the_rope(*dest, a.translation, enforced_m, slack_m)
             });
             if !keep {
                 let reach_m =
@@ -380,7 +403,7 @@ pub fn detach_ropes(
                 // says by how much, so a script author can see whether he was 5 cm or 55 m out.
                 info!(
                     "rope {:?} of player {} cut: the warp left him {reach_m:.2} m from his                      anchor on a {:.2} m rope (B-003)",
-                    rope.side, rope.player.0, joint.limits.max
+                    rope.side, rope.player.0, enforced_m
                 );
             }
             !keep
@@ -523,12 +546,13 @@ pub fn shorten_ropes(
 pub fn sync_rope_length(
     data: Res<GameData>,
     mut warped: MessageReader<WarpPlayer>,
-    ropes: Query<(&Rope, &DistanceJoint)>,
+    ropes: Query<(&Rope, Option<&DistanceJoint>)>,
     anchors: Query<&Transform>,
     mut players: Query<(&PlayerId, &Position, &Hook, &mut RopeLength)>,
 ) {
     let hook_range_m = data.game.vector.hook_range_m;
     let slack_m = data.game.vector.warp_rope_slack_m;
+    let min_rope_m = data.game.vector.min_rope_m;
     // Collected once instead of read per player — a `MessageReader` has one cursor, and the
     // second player would find it empty. `Vec::new()` does not allocate.
     let warped: Vec<(PlayerId, Vec3)> = if warped.is_empty() {
@@ -547,10 +571,20 @@ pub fn sync_rope_length(
                 continue;
             }
             let i = rope.side.index();
-            next.lengths_m[i] = joint.limits.max;
-            if let Ok(anchor) = anchors.get(rope.anchor) {
-                next.overextended[i] =
-                    (anchor.translation - position.0).length() > hook_range_m;
+            let reach_m: Option<f32> =
+                anchors.get(rope.anchor).ok().map(|a| (a.translation - position.0).length());
+            // **With no joint there is no enforced length, so what is published is the length
+            // the rope really has** (`FIND-149`, [`RopeForceModel::Drive`]). The type's contract
+            // is "the enforced rope length per side, `0.0` means no constraint", and `0.0` here
+            // would be a lie of a different kind: `vector::hook` would keep an arm anchored on a
+            // rope the HUD draws as absent. The floor is `min_rope_m` for the same reason
+            // [`attach_ropes`] applies it — a length under it is not a length this game has.
+            next.lengths_m[i] = match joint {
+                Some(joint) => joint.limits.max,
+                None => reach_m.unwrap_or(min_rope_m).max(min_rope_m),
+            };
+            if let Some(reach_m) = reach_m {
+                next.overextended[i] = reach_m > hook_range_m;
             }
         }
         if let Some((_, dest_m)) = warped.iter().find(|(w, _)| w == id) {
@@ -573,7 +607,12 @@ pub fn sync_rope_length(
                     .iter()
                     .find(|(rope, _)| rope.player == *id && rope.side == side)
                     .and_then(|(rope, joint)| {
-                        anchors.get(rope.anchor).ok().map(|a| (a.translation, joint.limits.max))
+                        // A jointless rope (`Drive`) has nothing that could drag the player, so
+                        // it survives every teleport — the same rule [`detach_ropes`] applies,
+                        // and it has to be the same one or the flag and the joint would
+                        // disagree about whether the rope still exists.
+                        let enforced_m = joint.map_or(f32::INFINITY, |j| j.limits.max);
+                        anchors.get(rope.anchor).ok().map(|a| (a.translation, enforced_m))
                     })
                     .is_some_and(|(anchor_m, length_m)| {
                         warp_keeps_the_rope(*dest_m, anchor_m, length_m, slack_m)

@@ -44,7 +44,9 @@ use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::player::integrator::movement_state;
-use defeated_by_titan::player::locomotion::{SteerTuning, air_thrust, rope_steer};
+use defeated_by_titan::player::locomotion::{
+    DriveTuning, SteerTuning, air_thrust, rope_drive, rope_steer,
+};
 use defeated_by_titan::player::spawn_player;
 use defeated_by_titan::shared::{
     Block, BodyId, Buttons, Cli, Gas, Hook, HookState, IdCounter, Intent, LocalPlayer, MovementState,
@@ -1597,5 +1599,197 @@ fn f005_the_gravity_relief_is_a_fraction_between_the_droop_and_weightlessness() 
     assert!(
         left_over >= 1.0,
         "{left_over:.2} m/s² of weight left at full alignment is not a world to swing in"
+    );
+}
+
+
+// ---------------------------------------------------------------------------------------
+// `FIND-149` — the DRIVE. `locomotion::rope_drive` directly, without an `App`.
+//
+// The user played the reference beside this game on 2026-08-23: *„wenn ich mich hooke: dann
+// werde ich direkt rangezogen wenn ich ran gehe. mit a und d kann man zur seite gehen. aber
+// sonst wird man direkt hingezogen! **wenn ich nichts drucke dann wird auch nicht
+// rangezogen!**"* … *„aber es ist ein etwas smoother übergang! aber recht schnell!"*
+//
+// The whole-app half of these claims is `tests/vector_rope.rs::f149_*` and
+// `scripts/f006-drive.txt`. Every number below is read out of `game.ron`.
+// ---------------------------------------------------------------------------------------
+
+fn drive_tuning(d: &GameData) -> DriveTuning {
+    DriveTuning {
+        speed_m_s: d.game.vector.drive_speed_m_s,
+        lateral_m_s: d.game.vector.drive_lateral_m_s,
+        ramp_s: d.game.vector.drive_ramp_s,
+    }
+}
+
+#[test]
+fn f149_a_hooked_player_who_holds_nothing_is_not_driven_at_all() {
+    // **The load-bearing sentence, as a function call.** A rope 40 m ahead, the player looking
+    // straight at it — the most "obviously about to be pulled" geometry there is — and no key.
+    let d = game_data();
+    let t = drive_tuning(&d);
+    let ahead = anchor_at(0.0, 40.0);
+    let look = Intent::default().look_dir();
+    // Falling at 20 m/s, so that a wrong sign or a missing early return would show up as a
+    // brake instead of hiding in a zero velocity.
+    let falling = Vec3::new(0.0, -20.0, 0.0);
+
+    let nothing = rope_drive(&[ahead], look, 0.0, 0.0, 0.0, falling, t);
+    assert_eq!(
+        nothing,
+        Vec3::ZERO,
+        "a hooked player with no key held was driven at {nothing:?} — „wenn ich nichts drucke \
+         dann wird auch nicht rangezogen\" is the whole of this model"
+    );
+    // `S` is the rope's tension key and never a thrust (`docs/NEXT.md` §1A requirement 7).
+    let s_key = rope_drive(&[ahead], look, 0.0, 0.0, -1.0, falling, t);
+    assert_eq!(s_key, Vec3::ZERO, "`S` drove the player at {s_key:?} — it tensions, it never hauls");
+    // And looking away from the anchor is the same answer, with `W` held: the look gate is
+    // `max(0, l̂·r̂)`, so there is no angle at which a rope behind you drags you backwards.
+    let behind = rope_drive(&[anchor_at(std::f32::consts::PI, 40.0)], look, 0.0, 0.0, 1.0, falling, t);
+    assert_eq!(behind, Vec3::ZERO, "a rope 180° behind the look drove the player at {behind:?}");
+}
+
+#[test]
+fn f149_the_drive_chases_a_speed_instead_of_building_one() {
+    // *„es ist ein etwas smoother übergang! aber recht schnell!"* — an exponential with the
+    // file's time constant, and an acceleration that dies as the speed arrives. That last
+    // property is what makes it a drive and not a thrust: `rope_steer` at the same geometry
+    // pushes just as hard at 50 m/s as it does at 0.
+    let d = game_data();
+    let t = drive_tuning(&d);
+    let ahead = anchor_at(0.0, 40.0);
+    let look = Intent::default().look_dir();
+    let target = Vec3::NEG_Z * t.speed_m_s;
+
+    // From rest: the full gap over the ramp, along the rope.
+    let from_rest = rope_drive(&[ahead], look, 0.0, 0.0, 1.0, Vec3::ZERO, t);
+    let due = t.speed_m_s / t.ramp_s;
+    assert!(
+        (from_rest - Vec3::NEG_Z * due).length() < 1e-3,
+        "from rest the drive gave {from_rest:?}; {due:.2} m/s² along −Z is `drive_speed_m_s / \
+         drive_ramp_s` and nothing else"
+    );
+    // **At the target it is exactly zero** — the cap is the construction, not a clamp.
+    let arrived = rope_drive(&[ahead], look, 0.0, 0.0, 1.0, target, t);
+    assert!(
+        arrived.length() < 1e-4,
+        "a player already travelling at the drive speed was still accelerated at {arrived:?} — \
+         then it is a thrust and `drive_speed_m_s` means nothing"
+    );
+    // Past the target it BRAKES, which is the same rule read from the other side.
+    let too_fast = rope_drive(&[ahead], look, 0.0, 0.0, 1.0, target * 1.5, t);
+    assert!(
+        too_fast.dot(Vec3::NEG_Z) < 0.0,
+        "at 1.5x the drive speed the drive still pushed forward ({too_fast:?})"
+    );
+    // One ramp of explicit integration closes 1 − 1/e of the gap, and that is the number the
+    // user is being asked to feel. 60 Hz, so the discrete sum is a little under the analytic
+    // 63.2 % — the assert is the shape, not the third digit.
+    let dt = 1.0 / d.game.simulation_hz as f32;
+    let mut v = Vec3::ZERO;
+    for _ in 0..(t.ramp_s / dt).round() as u32 {
+        v += rope_drive(&[ahead], look, 0.0, 0.0, 1.0, v, t) * dt;
+    }
+    let closed = v.length() / t.speed_m_s;
+    assert!(
+        (0.55..0.68).contains(&closed),
+        "after one time constant the drive had closed {:.1} % of the gap, not the ~63 % an \
+         exponential owes — `drive_ramp_s` is not the ramp it claims to be",
+        closed * 100.0
+    );
+}
+
+#[test]
+fn f149_a_and_d_hold_a_line_off_the_anchor_and_stay_horizontal() {
+    // *„mit a und d kann man zur seite gehen"* / *„das a d sorgt dafür dass man nicht immer
+    // direkt zum seil gezogen wird"*. The lateral rides the horizontal look-right, so a strafe
+    // in a fast swing — where the player is looking at the street — does not drive him into it.
+    let d = game_data();
+    let t = drive_tuning(&d);
+    let below = Vec3::new(0.0, -30.0, 0.0); // the anchor under him: pitch cannot help here
+    let look = Intent { pitch: -60.0_f32.to_radians(), ..default() }.look_dir();
+
+    let strafe = rope_drive(&[below], look, 0.0, 1.0, 0.0, Vec3::ZERO, t);
+    assert!(
+        (strafe.x - t.lateral_m_s / t.ramp_s).abs() < 1e-3,
+        "`D` alone gave {strafe:?}; `drive_lateral_m_s / drive_ramp_s` along +X is what the file \
+         buys"
+    );
+    assert!(
+        strafe.y.abs() < 1e-4 && strafe.z.abs() < 1e-4,
+        "`D` while looking 60° down drove {strafe:?} — the strafe is tilting with the pitch"
+    );
+    // And it works with **no** forward key at all, which is the difference between steering and
+    // being hauled: `A`/`D` are the player's own thrust across the rope.
+    assert!(strafe.length() > 0.0, "`D` on an anchored rope did nothing");
+}
+
+#[test]
+fn f149_the_two_force_models_are_not_the_same_thing() {
+    // The regression guard the whole switch exists for. Same geometry, same keys, same file —
+    // and if these two ever answer the same, one of the branches in `air_control` is dead and
+    // the user's A/B is measuring one model twice.
+    let d = game_data();
+    let ahead = anchor_at(0.0, 40.0);
+    let look = Intent::default().look_dir();
+    let fast = Vec3::NEG_Z * d.game.vector.drive_speed_m_s;
+
+    let steer = rope_steer(&[ahead], look, 0.0, 0.0, 1.0, steer_tuning(&d));
+    let drive = rope_drive(&[ahead], look, 0.0, 0.0, 1.0, Vec3::ZERO, drive_tuning(&d));
+    assert!(
+        (steer - drive).length() > 1.0,
+        "the pendulum's pull and the drive answered the same thing ({steer:?} vs {drive:?}) — \
+         `game.ron: vector.rope_force_model` would then be a switch between one model and itself"
+    );
+    // The sharpest difference, and the one the player feels: at the drive's own top speed the
+    // drive is spent and the pendulum's pull is not.
+    let steer_fast = rope_steer(&[ahead], look, 0.0, 0.0, 1.0, steer_tuning(&d));
+    let drive_fast = rope_drive(&[ahead], look, 0.0, 0.0, 1.0, fast, drive_tuning(&d));
+    assert!(
+        steer_fast.length() > 1.0 && drive_fast.length() < 1e-3,
+        "at {} m/s the pendulum pulled {:.2} m/s² and the drive {:.2} m/s² — the pendulum BUILDS \
+         speed and the drive CHASES one; a test that cannot tell those apart is not a test",
+        d.game.vector.drive_speed_m_s,
+        steer_fast.length(),
+        drive_fast.length()
+    );
+}
+
+#[test]
+fn f149_the_three_drive_numbers_are_the_ones_the_file_can_defend() {
+    // ⚠️ Here and not in `tests/data.rs` for the reason the hook ceiling's bounds are: the
+    // meaning of these three is `rope_drive`'s. All three are UNTUNED and are meant to move —
+    // what is guarded is the shape, not the value.
+    let d = game_data();
+    let t = drive_tuning(&d);
+    let dt = 1.0 / d.game.simulation_hz as f32;
+
+    // A pure swing on the pendulum runs 17–21 m/s (`Q-018`); a drive at or under that would be
+    // a downgrade the player feels in the first second.
+    assert!(t.speed_m_s > 21.0, "drive_speed_m_s is {} — slower than the swing it replaces", t.speed_m_s);
+    // And `vector.max_speed_m_s` is a CLAMP, not a speed anybody chose. A drive that reaches it
+    // would make the clamp the thing the player feels.
+    assert!(
+        t.speed_m_s <= d.game.vector.max_speed_m_s,
+        "drive_speed_m_s is {} against a max_speed_m_s of {}",
+        t.speed_m_s,
+        d.game.vector.max_speed_m_s
+    );
+    // The ramp is integrated explicitly, once per tick. Under two ticks it overshoots instead
+    // of ramping, and „ein etwas smoother übergang" is gone either way.
+    assert!(
+        t.ramp_s > 2.0 * dt,
+        "drive_ramp_s is {} s against a tick of {dt:.4} s — that is a snap, not a ramp",
+        t.ramp_s
+    );
+    assert!(t.ramp_s < 1.0, "drive_ramp_s is {} s — „recht schnell\" it is not", t.ramp_s);
+    // `A`/`D` share the drive's own cap, so a lateral above it could never be reached.
+    assert!(
+        t.lateral_m_s > 0.0 && t.lateral_m_s <= t.speed_m_s,
+        "drive_lateral_m_s is {} against a drive_speed_m_s of {}",
+        t.lateral_m_s,
+        t.speed_m_s
     );
 }

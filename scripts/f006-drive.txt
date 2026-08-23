@@ -1,0 +1,103 @@
+# f006-drive — FIND-149: THE ROPE DRIVES, IT DOES NOT SWING. Three claims, in his words.
+#
+# The user played *Attack on Titan Revolution* on Windows, beside this game, on 2026-08-23:
+#
+#   „wenn ich mich hooke: dann werde ich direkt rangezogen wenn ich ran gehe. mit a und d kann
+#    man zur seite gehen. aber sonst wird man direkt hingezogen! WENN ICH NICHTS DRUCKE DANN
+#    WIRD AUCH NICHT RANGEZOGEN!"   … „aber es ist ein etwas smoother uebergang! aber recht
+#    schnell!"
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/f006-drive.txt --ticks 500
+#
+# and, as a SEPARATE run, the one that returns a usable exit code:
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/f006-drive.txt --ticks 500 >/dev/null 2>&1; echo $?
+#
+# ## The model this describes, and how to select it
+#
+# `game.ron: vector.rope_force_model` picks between `Pendulum` (the game before 2026-08-23) and
+# `Drive` (the reference's model). **The default is `Pendulum`.** To feel the drive:
+#
+#   sed -i 's/rope_force_model: Pendulum/rope_force_model: Drive/' assets/data/game.ron
+#   cargo build && cargo play          # and the same sed the other way round to go back
+#
+# ⚠️ **This script is GREEN under BOTH models, on purpose** — every band below is wide enough
+# that a tuning change does not turn it red, and the two models are told apart by the numbers in
+# the table, not by an assert on a knife edge. What DOES tell them apart, with a control:
+# `tests/vector_rope.rs::f149_*` and `tests/player.rs::f149_*`.
+#
+# Measured 2026-08-23 [offlinebot], one pinned binary, the same run under both models:
+#
+#   at the mark                    Drive        Pendulum
+#   hooked, nothing held, 1.0 s    21.33 m/s    21.33 m/s   <- gravity, and nothing else, in BOTH
+#                                  y 88.6       y 88.6         (bit-identical: neither rope pulls)
+#   +1.5 s of W                    52.94 m/s    59.66 m/s   <- the drive CAPS at ~52.5 (= 50 + the
+#                                  y 67.5       y 59.4         free look thrust); the pendulum is
+#                                                              still building toward the 75 m/s
+#                                                              `vector.max_speed_m_s` CLAMP
+#   +1.0 s of D alone              20.93 m/s    22.32 m/s   <- see ACT 3
+#
+#   time to cross 100 m from rest, W held (tests/vector_rope.rs harness, 300 m rope, gravity on):
+#     Drive      129 ticks = 2.15 s, arriving at 52.5 m/s (its own speed)
+#     Pendulum   136 ticks = 2.27 s, arriving at 75.0 m/s (the clamp)
+#     no rope    179 ticks = 2.98 s, arriving at 67.0 m/s (that is a FALL, not a flight)
+#
+# ## The geometry, and why it is in the sky
+#
+# The player stands 100 m over Ashgate at z = +250 and looks 13 deg below the horizon along −Z.
+# The ray runs 198 m and bites the 60 m platform's face at (0.00, 56.38, 56.50), so **the rope
+# is nearly horizontal** — the only geometry in which a speed assert says something about the
+# ROPE instead of about gravity. He never comes under 45 m, so nothing in this run touches the
+# roofscape (<= 18 m) or the wall (30 m).
+#
+# ⚠️ `hook right 5.5` is HELD for the whole run. A first version held it 3.0 s, the arm let go
+# at t=287 in the middle of ACT 2, and the run measured a free fall — with every assert about
+# the ROPE still nominally in place. Whoever lengthens an act lengthens this number too.
+#
+# ⚠️ `assert speed` is the 3-D magnitude (`shared::Velocity::speed_m_s`), gravity included.
+# That is why ACT 1's number is arithmetic and not a feeling: one second of the file's
+# −20 m/s² is 20 m/s, and a rope that pulled would have to add to it.
+
+wait 1.5                # world, camera, meshes and the render pipelines come up (90 ticks)
+
+# ---- ACT 1 · hooked, and NOTHING held ------------------------------------------------------
+# „wenn ich nichts drucke dann wird auch nicht rangezogen!"
+warp 0 100 250          # `warp` zeroes the velocity (player::apply_warps)
+look 0 -13
+wait 0.20               # 12 ticks of falling: 4 m/s
+mark f006-about-to-hook
+hook right 5.5          # HELD — the way Q/E are held in the reference (FIND-149)
+wait 0.30
+mark f006-hooked
+assert rope > 0         # it bit; the log above says on which body and at what distance
+
+wait 0.50               # ← THE MEASUREMENT: half a second with not one key held
+mark f006-half-a-second-with-nothing-held
+# 1.0 s of fall since the warp. Gravity owes 20 m/s, the rope owes nothing, measured 21.33.
+assert speed < 26
+
+# ---- ACT 2 · W · „dann werde ich direkt rangezogen wenn ich ran gehe" -----------------------
+key W 1.5
+wait 1.5
+mark f006-a-second-and-a-half-of-w
+# It really hauls, and it does it fast: 1.5 s is 6 x `drive_ramp_s`, measured 52.94 m/s against
+# the 21.33 m/s he had without a key. That difference IS the drive.
+assert speed > 40
+# And it is a speed and not a build-up: 75 m/s is `vector.max_speed_m_s`, i.e. the CLAMP, and a
+# run that reaches it is not being driven any more, it is being cut off.
+assert speed < 70
+assert rope > 0         # nothing let go on the way
+
+# ---- ACT 3 · A/D · „mit a und d kann man zur seite gehen" -----------------------------------
+# W is released and only D is held. Under the drive the target becomes the LATERAL speed alone
+# (`drive_lateral_m_s`, 18), so the 52.9 m/s is chased back down to 20.9 — A/D on its own is a
+# steering key AND a brake, not a second throttle.
+# ⚠️ That braking is a consequence of the velocity chase and NOT something the user described.
+# It is written down as his to judge: docs/QUESTIONS.md Q-050.
+key D 1.0
+wait 1.0
+mark f006-a-second-of-d-alone
+assert speed > 12       # D on its own really drives him sideways
+assert speed < 34       # and it is a speed, not a build-up
+assert rope > 0
+assert height > 40      # he never came near the roofscape — see the header
