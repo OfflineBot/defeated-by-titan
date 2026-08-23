@@ -1863,3 +1863,65 @@ Your sentence is three words and it fits four different defects. This round meas
 **If „hitboxen passen noch nich" was about any of those three, say which and the next round goes
 straight at it.** If it was about the nape, this round is the answer and the three knobs above are
 yours to move.
+
+---
+
+## Q-048 — both ropes to the crosshair, or the left/right split you asked for?
+
+**Opened:** 2026-08-23, while the user played the reference on the Windows machine (`FIND-149`).
+**Status:** 🔴 open — **his call, because both sides of it are his own words.**
+
+### The conflict
+
+**2026-08-12, about ours:**
+
+> *„es muss mehr rechts und links spreaden!! … und da wo das seil am ende auch landet soll die
+> markierung hin vom seil"*
+
+That became `F-023` and is built: `src/shared/gear.rs:156-168` (`ArmAim`) splits the candidate set
+relative to the camera forward axis — *„Q bedient ausschliesslich die linke Menge, E
+ausschliesslich die rechte"* — with a fallback to the centre ray when a side ray finds nothing
+anchorable. `vector::aim::aim` is the single writer, and the HUD draws the same value the hook
+fires at.
+
+**2026-08-23, about the reference:**
+
+> *„zudem gehen die seile nicht nahc ausen. diese gehen auf das fadenkreuz! und dann mit q und e
+> festhalten."*
+
+**No split there.** One aim point, two ropes that both go to it, `Q`/`E` **held** rather than
+tapped. That matches the research from the patch record (commit `0a317a9`): their assist **widens
+the cursor ray**; it does not rank a candidate set, so there is no left set and no right set to
+begin with.
+
+### Why this is not mine to decide
+
+It is not derivation-vs-user, where the user wins by the standing rule. It is **his instruction
+against his own observation**, and the two are about different games. The 2026-08-12 sentence may
+still be exactly what he wants *for ours* — a deliberate divergence from the reference, and the
+whole point of `F-023` was that the two hooks should not land on top of each other.
+
+### ASSUMPTION the work continues under
+
+**`F-023` stays as built. Nothing is changed on the strength of this observation.** The split is
+tested, seen and shipped; the observation is one sentence typed while playing, and the reference
+being different is not by itself an argument that we are wrong.
+
+**What IS being treated as settled by `FIND-149`:** that `Q`/`E` are **held** in the reference,
+and that the force comes from the key rather than from the rope. Those are about the *drive*, not
+about the *split*, and they feed `docs/NEXT.md` item 1.
+
+### Rollback point if he decides the other way
+
+One file, one function: `vector::aim::aim` in `src/vector/aim.rs` — make both arms resolve to the
+centre ray instead of to their hemisphere, and `ArmAim.arms` collapses to two copies of one
+answer. `hud::arm_aim` needs no change (it draws whatever `ArmAim` holds), and the `F-023` tests
+would go red as designed. **Nothing else reads the split.**
+
+### What would make the answer cheap
+
+He now has both games on one machine. **Fire both hooks at one wall in each and compare where the
+two ropes land.** If ours landing apart is what he wanted, this question closes as "no change".
+
+Related: `FIND-149` · `docs/NEXT.md` item 1 · `F-023` · `src/shared/gear.rs:156-168` ·
+`docs/gameplay/references.md`

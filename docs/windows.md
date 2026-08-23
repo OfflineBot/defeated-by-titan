@@ -1,13 +1,13 @@
 # windows — getting it running on the machine that also runs the reference
 
-Updated: 2026-08-20 · Stage: ⬜ (**never built or run on Windows by anyone**)
+Updated: 2026-08-23 · Stage: 🟧 (**built, run and played on Windows — see the result section below**)
 
 **Why this file exists.** The user asked for it so he can run *Defeated by Titan* on Windows
 **with the reference game open beside it**, and compare them directly. That comparison is worth
 more than any research round — a wiki tells you what a patch changed, it does not tell you what
 the first thirty seconds feel like.
 
-⚠️ **Everything below is derived, not tested.** There is no Windows machine in this project. What
+⚠️ **The prompt below was derived, not tested, when it was written.** It has since been run — what actually happened is in `## What actually happened` at the end of this file, and it differs from the prediction in one place. There is no Windows machine in this project. What
 *is* checked (2026-08-20): `src/` contains **no** `cfg(target_os)`, **no** `cfg(unix)`, **no**
 `/dev/`, **no** `std::os::unix`. The game code does not know what operating system it is on. What
 is unproven is the dependency tree, the asset path, and the graphics backend.
@@ -109,3 +109,85 @@ this project has turned — the fan, the assist, the gas, the hitboxes — sits 
 
 Related: [`gameplay/references.md`](gameplay/references.md) · [`environment.md`](environment.md) ·
 [`gameplay/pillars.md`](gameplay/pillars.md)
+
+---
+
+## What actually happened — 2026-08-23, the first Windows run
+
+**It built, it ran, and the prediction above was right in every place but one.**
+
+### The machine
+
+Windows 11 Home 10.0.26200, RTX 3080 (driver 32.0.15.9186), Visual Studio 2022 Community with
+MSVC 14.44 and Windows SDK 10.0.26100 **already present** — so the C++ toolchain, which is the
+usual Windows blocker, cost nothing. Installed on the day: **Rust 1.98.0**
+(`stable-x86_64-pc-windows-msvc`, the right toolchain) and **Python 3.14.7**. Nothing else.
+
+⚠️ **Rust 1.98.0 is newer than both other machines** (A: 1.97.1, B: 1.95.0). The project's floor
+stays **1.95.0** — what compiles here is not proof it compiles on B. See `environment.md`.
+
+### The build
+
+```
+cargo build --no-default-features --features windows
+Finished `dev` profile [optimized + debuginfo] target(s) in 17m 02s
+```
+
+**0 errors, 0 warnings, 358 crates**, `defeated_by_titan.exe` at 117 MB. Inside the predicted
+10–25 minutes. **The `windows` feature compiled on its first attempt anywhere** — the whole
+dependency tree, wgpu and avian and winit included, resolved on Windows with no change to
+`Cargo.toml` and no `cfg(target_os)` anywhere in `src/`.
+
+### The headless run
+
+```
+./target/debug/defeated_by_titan.exe --headless --ticks 300
+INFO defeated_by_titan::world::map: map "Ashgate": 2871 blocks built (215 placed, 2656 generated),
+                                    2871 of them anchorable
+exit 0
+```
+
+**Failure (a) did not happen.** `data::assets_dir()` resolves `assets\` from a Windows working
+directory, run from the repository root, with no separator trouble.
+
+**One benign error is logged and can be ignored in headless:**
+
+```
+ERROR bevy_render::extract_resource: Render app did not exist when trying to add
+      `extract_resource` for <bevy_camera::clear_color::ClearColor>.
+```
+
+### What is still unproven on Windows
+
+- **The window.** `cargo run` with a window was not attempted this session — the machine was busy
+  running the reference game beside it. Failure (c), "opens black or closes at once", is untested.
+- **`cargo test`.** The suite has never run on Windows. Test binaries would need their own link
+  pass (~15 min), and it was not spent.
+- **Failure (d)** — running the `.exe` from outside the repository root — was not tried either,
+  though the headless run from the root makes the asset root look healthy.
+
+### 🔴 And the comparison the file was written for: it delivered
+
+The five questions in `## What the comparison is FOR` were the point of this whole file. **The
+first one is answered and it is the load-bearing one.**
+
+> **The reference DRIVES. It does not swing.** No input, no pull — the rope is a direction and the
+> key is the force. → **`FIND-149`**
+
+Two more results came out of the same session, neither of them planned:
+
+- **`FIND-150`** — the reference's gas burn, read off its own HUD across 20 timed screenshots:
+  **~400 s per tank at ordinary flight, ~100 s pushed, exactly 0 while idle.** `references.md` had
+  filed tank and burn rate as *"unknown and not obtainable"*. Our tank sits in the same band, and
+  the `gas_tank: 300.0` rollback recorded in `game.ron` would put us **~25x** below the reference.
+- **`Q-048`** — both of the reference's ropes fly at the crosshair, with `Q`/`E` **held**. Ours
+  splits left/right by `F-023`, which is also the user's instruction. His observation against his
+  own earlier instruction — not this session's to resolve.
+
+**Still open from the five:** whether speed builds over swings, whether it survives release, and
+**the unit** — `Gear Shift` reads **600 m/s** in his settings, above the 500 the research
+recorded, and there is **no speed readout in the reference's HUD** to check it against. The one
+candidate is the `N/A` field under the crosshair; untested.
+
+**The screenshots are in the repository** so this can continue on Linux:
+[`images/reference-aotr/`](images/reference-aotr/README.md).

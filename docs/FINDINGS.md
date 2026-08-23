@@ -9046,3 +9046,247 @@ the ticks it decides, in the same round.** `grep -rl 'tick 15[0-9]' scripts/` is
 
 Related: FIND-147 (the reach change) · FIND-113 · FIND-112 · FIND-073 · FIND-032 ·
 `docs/QUESTIONS.md` Q-030 · `tests/combat.rs::f030_the_cortex_wins_over_the_body_it_hides_in`
+
+---
+
+## FIND-149 — the reference is a DRIVE, not a pendulum: no input, no pull
+
+**Stage:** 🟨 — first-hand observation by the user, played on Windows 2026-08-23. No number, no
+measurement, nobody has attacked it.
+
+**How it was obtained.** The Windows build (`docs/windows.md`) put *Attack on Titan Revolution*
+and this project on the same machine for the first time. The user played, the session captured
+the screen. This entry is what he reported while playing, verbatim.
+
+### The load-bearing sentence
+
+> *„wenn ich mich hooke: dann werde ich direkt rangezogen wenn ich ran gehe. mit a und d kann man
+> zur seite gehen. aber sonst wird man direkt hingezogen! wenn ich nichts drucke dann wird auch
+> nicht rangezogen!"*
+
+and immediately after:
+
+> *„aber es ist ein etwas smoother ybergang! aber recht schnell!"*
+
+**`docs/windows.md` names exactly one question as the one research could not settle: DOES THE
+REFERENCE DRIVE YOU TOWARD A SPEED, OR SWING YOU? This answers it. It drives.**
+
+- The rope applies **no force of its own**. Hooked and holding nothing = not pulled.
+- The force comes from the **key**, and the rope supplies the **direction**.
+- `A`/`D` steer laterally so you are not dragged straight at the anchor.
+- The onset **ramps** — "etwas smoother Übergang" — but the ramp is short ("recht schnell").
+  That is a velocity drive with a small time constant, not an instant snap and not an
+  acceleration you have to build up.
+
+**Ours is the opposite by construction.** A physical pendulum: hook, let go, and gravity does the
+rest — a pure swing runs 17–21 m/s and `max_speed_m_s` (75) is only reached by spending gas on
+boost (`FIND-045`/`FIND-046`). In the reference, letting go does nothing at all.
+
+### 🔴 And the user's own air-control spec was never a wish — it was a description
+
+`docs/NEXT.md` item 1 carries this, migrated out of `user-messages.md` on 2026-08-12:
+
+> *„wenn man w drückt und verbunden ist bekommt man schon movement! bei a und d movement zur
+> seite. mit s »spannt« man nur das seil! … das a d sorgt dafür dass man nicht immer direkt zum
+> seil gezogen wird!"*
+
+**That is the same control scheme, key for key.** It has been read here as a preference to be
+weighed against our pendulum. It is not. He was describing how the reference already works, and
+that reframes item 1 from a design decision into a rebuild with a working model in front of it.
+The anti-parallel bug and the `boost_rope_fraction` blend that item 1 supersedes are downstream of
+a force model the reference does not have.
+
+### The second observation, in the same breath
+
+> *„zudem gehen die seile nicht nahc ausen. diese gehen auf das fadenkreuz! und dann mit q und e
+> festhalten."*
+
+**Both hooks fly at the crosshair, and `Q`/`E` are HELD, not tapped.** This confirms from the game
+itself what `FIND-` (the reference research, commit `0a317a9`) had only read off a patch record:
+their assist **widens the cursor ray**, it does not rank a candidate set. There is no left set and
+no right set — there is one aim point and two ropes that go to it.
+
+**Ours splits.** `src/shared/gear.rs:156-168` (`ArmAim`) implements `F-023`: *"the candidate set is
+split relative to the camera forward axis, Q bedient ausschliesslich die linke Menge, E
+ausschliesslich die rechte"*. That split is itself a user instruction, from 2026-08-12:
+*„es muss mehr rechts und links spreaden!!"*.
+
+⚠️ **So this is a conflict between two things the user said, not between him and a derivation** —
+and it is not this session's to resolve silently. → `docs/QUESTIONS.md` Q-048.
+
+### What is still open, and what would settle it
+
+| question | status |
+|---|---|
+| Does speed **build** over several swings, or is it constant from the first? | open |
+| On release, do you **keep** the speed? | open |
+| Does holding `W` reach the `Gear Shift` cap, or is the cap only a ceiling? | open |
+| The ramp's time constant | open — a 10 s clip would give it |
+| **The unit.** `Gear Shift` reads **600 m/s** in his settings (his eyes, not yet screenshotted) | 🔴 unresolved, see below |
+
+### 🔴 The unit question got worse, not better
+
+The research recorded `Gear Shift` as *"a flat maximum value between 50 m/s and 500 m/s"*. His
+setting screen shows **600 m/s**, so the recorded range is already wrong at the top. Against our
+`max_speed_m_s: 75` that is a factor of 8.
+
+**Do not take the label at face value.** Roblox computes in **studs**, not metres. A Roblox
+character is ~5 studs tall at ~1.7 m, so **1 stud ≈ 0.3 m** — a field labelled "600 m/s" that
+counts studs/s is **~180 m/s** in real units. Still far above 75, but not 600.
+
+**Nothing in the menu can decide this.** It needs a known distance and a stopwatch, and the in-game
+HUD carries **no speed readout** (screenshotted 2026-08-23: gas %, blade count 3/3, five ability
+slots, GOLD/LUCK/EXP multipliers, objectives — no velocity anywhere). The one candidate is the
+`N/A` field under the crosshair, which may be a target distance; untested.
+
+Related: `docs/windows.md` · `docs/gameplay/references.md` (the ODM section) · `docs/NEXT.md` item 1 ·
+`docs/QUESTIONS.md` Q-048 · FIND-045 · FIND-046
+
+---
+
+## FIND-150 — the reference's gas burn, measured off its own HUD: ~400 s per tank
+
+**Stage:** 🟨 — measured from 20 screenshots of one player's 76-second stretch. Real numbers,
+uncontrolled conditions, nobody has attacked it.
+
+**`docs/gameplay/references.md` (commit `0a317a9`) lists "absolute tank and burn rate" as
+"unknown and not obtainable"** — the wiki gives letter grades and a percentage bar, so the search
+stopped there. **It was obtainable. It stands in the HUD of every frame.**
+
+### How it was measured
+
+`docs/images/reference-aotr/aotr-shiganshina-01..20.png` — 20 captures of the reference's window,
+**exactly 4 seconds apart**, taken while the user played on 2026-08-23 (Windows machine,
+`FIND-149`). The gas percentage was cropped out of all 20 and read off one stitched strip, so the
+reading cost one image instead of twenty.
+
+```
+61 61 60 59 58 55 54 53 52 51 50 48 47 46 42 41 41 39 39 37     [% of tank, every 4 s]
+```
+
+**61 % → 37 % over 19 intervals = 76 s → 0.316 %/s average.**
+
+The per-interval drops carry more than the average does:
+
+| drop per 4 s | count | rate | reading |
+|---|---|---|---|
+| 0 % | 3 | 0 | **idle costs nothing** |
+| 1 % | 11 | 0.25 %/s | the normal case |
+| 2 % | 3 | 0.50 %/s | |
+| 3–4 % | 2 | 0.75–1.0 %/s | the peak |
+
+**A full tank is therefore ~400 s of ordinary flying and ~100 s of holding everything down.**
+The spread between idle and peak is at least 4x, and idle is exactly zero — consistent with
+`FIND-149`: no input, no drive, no cost.
+
+### Against ours
+
+`assets/data/game.ron`: `gas_tank: 15000`, `gas_boost_per_s: 18`, `gas_steer_per_s: 16`,
+`gas_reel_per_s: 6`.
+
+| | full tank lasts |
+|---|---|
+| boost only | 15000/18 = **833 s** |
+| boost + steer | 15000/34 = **441 s** |
+| boost + steer + reel | 15000/40 = **375 s** |
+| **reference, ordinary flying** | **~400 s** |
+| **reference, pushed** | **~100 s** |
+
+**Ours sits in the same band, and our all-on case (375 s) is within 7 % of their ordinary case.**
+
+### 🔴 What that does to the rollback note in `game.ron`
+
+`assets/data/game.ron:557-565` records the tank being multiplied by **50** on the user's explicit
+order — *„immernoch viel zu wenig gas. man kann nicht testen! mach das 50"* — and files it as a
+testing accommodation with **"the one-line rollback is `gas_tank: 300.0`"**.
+
+**At 300 the tank lasts 16.7 s (boost only) or 7.5 s (all on).** Against a reference that gives
+~400 s, that is **24x to 53x too tight**.
+
+**So the 50x was not an over-correction to make testing bearable. It landed the tank within ~10 %
+of the game we are benchmarking against, and the documented rollback would undo that.** His gut
+call was the accurate one and the derived value was the wrong one — the same precedence the
+project already records (`Q-002`, `scale.ron`), but this time with a number on both sides.
+
+**Recommendation to the main head, not an edit:** strike the `gas_tank: 300.0` rollback line, or
+re-label it as "the pre-measurement value, known to be ~25x short". Leaving it standing invites a
+future session to "restore the real value" and break the one thing that is measurably right.
+
+### What this does NOT establish
+
+- **One player, one 76-second stretch, uncontrolled.** He was playing, not running a burn test.
+  The duty cycle is his, not a specification.
+- **No absolute tank.** The percentage is a fraction of an unknown capacity. What is comparable —
+  and what is used above — is **seconds of flight per tank**, not units of anything.
+- **No refill was observed** (the series is monotonic down), so nothing here says how refills work.
+- **Our column assumes continuous consumption**, which real play never reaches. Both sides carry
+  the same duty-cycle uncertainty, which is why the claim is "same band", not "same number".
+
+**What would tighten it:** a controlled run in the reference — hold boost from a standing start
+and time the tank to zero. Two minutes of play, and it removes the duty-cycle caveat from their
+half entirely.
+
+Related: FIND-149 · `docs/gameplay/references.md` (the ODM section) · `assets/data/game.ron:534-565` ·
+`docs/QUESTIONS.md` Q-033 · `docs/images/reference-aotr/README.md`
+
+---
+
+## FIND-151 — the refill is instant, finite and keyed; and the crosshair carries a DISTANCE
+
+**Stage:** 🟨 — read off two screenshot series taken 2026-08-23. Real, but each number comes from
+one observation.
+
+**Evidence:** `docs/images/reference-aotr/aotr-refill-01..10.png` — 10 captures 1.5 s apart at a
+refill station, requested by the user (*„mach doch noch ein screenshot vom refill!"*).
+
+### The refill
+
+The station is **indoors**, a supply room with gas cylinders and crates, and it prints one line
+over the player:
+
+```
+REFILLS: 9 / 10 [R]
+```
+
+| what | reading |
+|---|---|
+| **How it is triggered** | a key — **`R`** — not proximity, not a timer |
+| **How fast** | **instant.** Gas was 37 % at the end of the previous series and reads **100 %** in the first refill frame; all ten frames, over 13.5 s, read 100 %. Whatever the fill takes, it is under 1.5 s |
+| **What it restores** | gas **and blades** — `3/3` in every frame |
+| **How often** | **finite and counted: 9 of 10 left.** The station is a consumable, not furniture |
+
+This confirms from the game what the research (commit `0a317a9`) had only read off a patch record:
+*"their tank is small because refills are scattered and finite — marked stations, use counts
+balanced like a weapon"*. **The use count is real and it is displayed.**
+
+⚠️ **It also amends `FIND-150`**, which recorded *"no refill was observed (the series is monotonic
+down), so nothing here says how refills work."* It does now: **not a regen curve, a keyed instant
+full restore from a station with a budget.** That is much closer to our
+`f018_an_idle_tank_never_refills_on_its_own` than to any regen model — the difference is that
+theirs is *portable and countable*, ours is *the main base only* (`Q-033`, the user 2026-08-12:
+*"gas refillt nur im main"*).
+
+### 🔴 The bigger find: the crosshair number
+
+The field under the crosshair read **`N/A`** in the open-world frames (`FIND-149`). In this frame,
+aiming at a wall a few metres away, it reads **`37`**.
+
+**So it is a readout, and `N/A` means "nothing in range" rather than "no such feature".** The most
+likely reading is **distance to what you are aiming at** — which, if true, is the instrument this
+whole comparison has been missing:
+
+| what it would give | how |
+|---|---|
+| **The hook's range** | the largest number it will ever show before flipping to `N/A` |
+| **A speed, directly** | aim at a fixed anchor and fly at it — the number's fall per second **is** the closing speed, in whatever unit the game thinks |
+| **The unit itself** | that number against a length we can measure another way |
+
+⚠️ **Not yet established, and one coincidence has to be ruled out first:** the previous series
+ended at gas **37 %** and this field reads **37**. Those are almost certainly unrelated — the gas
+bar reads 100 % in the very same frame — but "almost certainly" is not a measurement.
+
+**What settles it in thirty seconds:** stand still, aim at a near wall and at a far one, and read
+the field twice. If the number tracks distance, it changes. If it is anything else, it will not.
+
+Related: FIND-149 · FIND-150 · `docs/gameplay/references.md` (hook range: *unknown*) ·
+`docs/QUESTIONS.md` Q-033 · `docs/images/reference-aotr/README.md`

@@ -265,6 +265,10 @@ ASSET_PACKS = {
                         r"|^TEX-[A-Z0-9-]+\.felder\.ron$|^README\.md$|^index\.html$"),
     # The hand-kept sources. **The PNG is output** — this is what gets edited.
     "assets/texturen/quelle": r"^TEX-[A-Z0-9-]+\.svg$",
+    # Screenshots of the REFERENCE game, not of ours — captured on the Windows machine
+    # 2026-08-23 (FIND-149). They are a batch to be looked through, not evidence for one
+    # F-ID, so the mention rule would fire once per healthy file. See the folder's README.
+    "docs/images/reference-aotr": r"^aotr-[a-z0-9-]+-\d{2}\.png$|^README\.md$",
 }
 
 # What a `.glb` may point at from the inside, and where it lands. The models carry
