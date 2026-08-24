@@ -135,8 +135,26 @@ pub fn read_input(
     // produce two second-taps on the same tick without the player holding both keys, in which
     // case `move_x` is 0 and `vector::gas` refuses the flip anyway.
     let flip_window = data.game.vector.flip_double_tap_window_ticks;
-    let flip_left = flips[0].feed(keys.pressed(KeyCode::KeyA), false, tick.0, flip_window);
-    let flip_right = flips[1].feed(keys.pressed(KeyCode::KeyD), false, tick.0, flip_window);
+    let a_down = keys.pressed(KeyCode::KeyA);
+    let d_down = keys.pressed(KeyCode::KeyD);
+    let flip_left = flips[0].feed(a_down, false, tick.0, flip_window);
+    let flip_right = flips[1].feed(d_down, false, tick.0, flip_window);
+    // 🔴 **A press on one side cancels a pending arm on the other**, and a test found this
+    // missing rather than a design meeting. `tests/input.rs::f009_a_left_then_a_right_is_not_a_
+    // flip` played `A · D · A · D` at two-tick spacing and got TWO flips: the third key is an
+    // `A`, the first key was an `A`, and four ticks is well inside the 18-tick window — so two
+    // independent detectors happily called it a double tap. That is a player **changing
+    // direction**, which is what `A`/`D` are for in a swing (`docs/NEXT.md` §1a), and it would
+    // have billed `gas_flip` for ordinary steering.
+    //
+    // Disarmed **after** the feed, never before: doing it first would eat the second tap of an
+    // honest `A · nothing · A` on any tick the other key happened to be held.
+    if d_down {
+        flips[0].disarm();
+    }
+    if a_down {
+        flips[1].disarm();
+    }
 
     let mut t = Buttons::NONE;
     // The first tap of a dodge is **still a jump**, and so is the second. Nothing here consumes
@@ -262,6 +280,20 @@ impl DodgeTap {
             }
         }
         fired
+    }
+
+    /// **Forget the tap that is waiting for a partner.**
+    ///
+    /// `F-009` needs it and `F-008` does not: the dash has one detector and nothing can
+    /// interrupt it, while the flip has **two** — one for `A`, one for `D` — and a press on
+    /// either side has to cancel the other's pending arm, or `A · D · A` reads as a double tap
+    /// of `A`. See the call site in [`read_input`] for the test that found it.
+    ///
+    /// It does **not** touch `space_down`/`dodge_key_down`: those are the previous tick's key
+    /// state, i.e. a fact about the keyboard, and clearing them would manufacture an edge on
+    /// the next tick out of a key that never went up.
+    pub fn disarm(&mut self) {
+        self.armed_at = None;
     }
 }
 

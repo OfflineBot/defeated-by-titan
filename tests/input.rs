@@ -710,3 +710,104 @@ fn f008_the_window_is_inclusive_at_both_ends() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------------------
+// `F-009` — the flip's gesture: „Doppeltipp A/D".
+// ---------------------------------------------------------------------------------------
+//
+// 🔴 **This block exists because of `FIND-152`**: a whole-app test that never reached the code
+// it was testing. `tests/vector_boost.rs` proves what a granted flip DOES by writing
+// `Buttons::FLIP` into an `Intent` by hand — which proves nothing at all about whether a human
+// pressing `A` twice ever produces that bit. This is the half that closes the loop, and it is
+// the same shape as the `f008_*` block above it.
+
+/// Which of `[FLIP, move_x]` each tick of `script` produced, off the **real** input path.
+fn flip_script(script: &[&[KeyCode]]) -> Vec<(bool, f32)> {
+    let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    app.update();
+
+    let mut out = Vec::with_capacity(script.len());
+    for held in script {
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release_all();
+            for key in *held {
+                keys.press(*key);
+            }
+        }
+        app.update();
+        let mut players = app.world_mut().query_filtered::<&Intent, With<LocalPlayer>>();
+        let i = players.iter(app.world()).next().expect("the local player exists");
+        out.push((i.buttons.contains(Buttons::FLIP), i.move_x));
+    }
+    out
+}
+
+const A: &[KeyCode] = &[KeyCode::KeyA];
+const D: &[KeyCode] = &[KeyCode::KeyD];
+
+#[test]
+fn f009_two_a_taps_inside_the_window_are_one_flip_and_the_side_rides_on_move_x() {
+    let ticks = flip_script(&[A, NOTHING, A, NOTHING, NOTHING]);
+    let fired: Vec<usize> = ticks
+        .iter()
+        .enumerate()
+        .filter(|(_, (flip, _))| *flip)
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(fired, vec![2], "the flip lands on the SECOND press and on no other: {ticks:?}");
+    // The whole reason `Buttons::FLIP` carries no side: on the tick it fires, the key that
+    // produced it is down, so `move_x` already says which way. Two bits saying one thing is
+    // two bits that can disagree.
+    assert_eq!(ticks[2].1, -1.0, "`A` is -1 on the strafe axis: {ticks:?}");
+}
+
+#[test]
+fn f009_two_d_taps_are_a_flip_the_other_way() {
+    let ticks = flip_script(&[D, NOTHING, D, NOTHING]);
+    assert!(ticks[2].0, "two D presses have to flip as well: {ticks:?}");
+    assert_eq!(ticks[2].1, 1.0, "`D` is +1: {ticks:?}");
+}
+
+#[test]
+fn f009_a_left_then_a_right_is_not_a_flip() {
+    // The reason `net::local` keeps TWO arming states and not one. `A`-then-`D` is a player
+    // changing direction, not asking for anything — with one shared tick it would fire a flip
+    // (and bill 20 gas) every time somebody strafed back and forth.
+    let ticks = flip_script(&[A, NOTHING, D, NOTHING, A, NOTHING, D, NOTHING]);
+    assert!(
+        ticks.iter().all(|(flip, _)| !*flip),
+        "changing direction fired a flip: {ticks:?}"
+    );
+}
+
+#[test]
+fn f009_a_held_a_is_strafing_and_never_a_flip() {
+    // The same property `f008_a_held_space_is_a_jump_and_never_a_dodge` holds for the dash, and
+    // it matters more here: `A` is held for most of every swing (`docs/NEXT.md` §1a — *„das a d
+    // sorgt dafür dass man nicht immer direkt zum seil gezogen wird"*), so a held key that
+    // fired would bill `gas_flip` sixty times a second for ordinary steering.
+    let ticks = flip_script(&[A, A, A, A, A, A, A, A]);
+    assert_eq!(
+        ticks.iter().filter(|(flip, _)| *flip).count(),
+        0,
+        "a held A produced a flip: {ticks:?}"
+    );
+    assert!(ticks.iter().all(|(_, x)| *x == -1.0), "…while still strafing the whole time");
+}
+
+#[test]
+fn f009_a_second_tap_after_the_window_is_only_a_strafe() {
+    let window = window_ticks() as usize;
+    let mut script: Vec<&[KeyCode]> = vec![A];
+    script.resize(window + 3, NOTHING);
+    script.push(A);
+    let ticks = flip_script(&script);
+    assert_eq!(
+        ticks.iter().filter(|(flip, _)| *flip).count(),
+        0,
+        "a tap {} ticks after the first still flipped — the window is {window}: {ticks:?}",
+        window + 2
+    );
+}
