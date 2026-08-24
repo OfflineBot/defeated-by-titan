@@ -1915,3 +1915,216 @@ fn f153_the_drive_is_felt_inside_a_fifth_of_a_second() {
         t.speed_m_s
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// `F-010` Slide-Dodge am Boden — „Gleit-Ausweichmanoever am Boden mit I-Frames und
+// Momentum-Erhalt. Slide vermeidet Stomp-Angriff; geht fliessend in Sprint ueber."
+// ---------------------------------------------------------------------------------------
+//
+// The three claims of the row, and each of them is a way the move can be built wrong:
+//
+// 1. **Momentum-Erhalt** — a slide out of a fast landing must not slow the player down. Built
+//    as "set the velocity to `slide_speed_m_s`" it would be a BRAKE at every speed above 12,
+//    which is every speed a swing hands over (17-21 m/s, `Q-018`).
+// 2. **I-Frames** — and shorter than the slide, or the move is a dodge nobody has to time.
+// 3. **geht fliessend in Sprint ueber** — when the deadline passes nothing is reset. Built as
+//    "restore the velocity afterwards" it would eat the very momentum claim 1 protects.
+//
+// `C` and not a double-tapped `Space`: both routes reach `Buttons::DODGE`
+// (`net::local::DodgeTap`), and the single key is the one a test can hold without a gesture.
+
+fn slide_of(app: &App, e: Entity) -> defeated_by_titan::shared::Slide {
+    *app.world().get::<defeated_by_titan::shared::Slide>(e).expect("a player carries a slide")
+}
+
+fn iframes_of(app: &App, e: Entity) -> u64 {
+    app.world()
+        .get::<defeated_by_titan::shared::Invulnerable>(e)
+        .expect("a player carries an i-frame deadline")
+        .until_tick
+}
+
+#[test]
+fn f010_a_slide_keeps_the_speed_it_started_with_instead_of_setting_it() {
+    let mut app = app();
+    let e = me(&mut app);
+    // 30 m/s is well above `slide_speed_m_s` (12) and is what a real swing hands over.
+    launch_on_the_ground(&mut app, e, 30.0);
+    let before = ground_speed(&app, e);
+
+    hold(&mut app, KeyCode::KeyC);
+    app.update();
+    assert!(slide_of(&app, e).active(tick_now(&app)), "C on the ground has to start a slide");
+
+    let during = ground_speed(&app, e);
+    assert!(
+        during >= before - 0.5,
+        "the slide BRAKED him from {before:.2} to {during:.2} m/s — `Momentum-Erhalt` means the \
+         larger of the two, and `player.slide_speed_m_s` is a FLOOR, not a speed"
+    );
+}
+
+#[test]
+fn f010_a_slide_below_the_floor_is_lifted_to_it_and_holds_its_direction() {
+    let mut app = app();
+    let e = me(&mut app);
+    let d = data(&app);
+    // Below `slide_speed_m_s` (12) and above `slide_min_speed_m_s` (3): the floor has to lift.
+    launch_on_the_ground(&mut app, e, 6.0);
+
+    hold(&mut app, KeyCode::KeyC);
+    app.update();
+    let during = ground_speed(&app, e);
+    assert!(
+        (during - d.game.player.slide_speed_m_s).abs() < 0.5,
+        "a 6 m/s slide came out at {during:.2}; the floor is {}",
+        d.game.player.slide_speed_m_s
+    );
+    // And it goes where he was going (+Z), not where the camera or the stick points.
+    let v = app.world().get::<LinearVelocity>(e).unwrap().0;
+    assert!(v.z > 0.0 && v.x.abs() < 0.5, "the slide left its own direction: {v:?}");
+}
+
+#[test]
+fn f010_you_cannot_slide_from_standing() {
+    let mut app = app();
+    let e = me(&mut app);
+    ticks(&mut app, 120); // land and come to rest
+    assert_eq!(state(&app, e), MovementState::Grounded);
+    assert!(ground_speed(&app, e) < 1.0, "he has to be still for this test to mean anything");
+
+    hold(&mut app, KeyCode::KeyC);
+    ticks(&mut app, 5);
+    assert!(
+        !slide_of(&app, e).active(tick_now(&app)),
+        "a slide is momentum redirected, and there is nothing to redirect from standing \
+         (`player.slide_min_speed_m_s`)"
+    );
+    assert_eq!(iframes_of(&app, e), 0, "and it must not hand out free i-frames either");
+}
+
+#[test]
+fn f010_the_i_frames_are_shorter_than_the_slide_and_both_come_out_of_the_file() {
+    let mut app = app();
+    let e = me(&mut app);
+    let d = data(&app);
+    launch_on_the_ground(&mut app, e, 20.0);
+
+    hold(&mut app, KeyCode::KeyC);
+    app.update();
+    let started = tick_now(&app);
+    let s = slide_of(&app, e);
+    let hz = d.game.simulation_hz as f32;
+    let want_slide = (d.game.player.slide_duration_s * hz).round() as u64;
+    let want_iframes = (d.game.player.slide_iframes_s * hz).round() as u64;
+
+    assert!(
+        s.until_tick.abs_diff(started + want_slide) <= 1,
+        "the slide ends at {} and `slide_duration_s` says {}",
+        s.until_tick,
+        started + want_slide
+    );
+    assert!(
+        iframes_of(&app, e).abs_diff(started + want_iframes) <= 1,
+        "the i-frames end at {} and `slide_iframes_s` says {}",
+        iframes_of(&app, e),
+        started + want_iframes
+    );
+    assert!(
+        iframes_of(&app, e) < s.until_tick,
+        "the i-frames ({}) must end BEFORE the slide ({}) — the tail is what carries him out \
+         from under the foot, and a window as long as the movement is a dodge nobody has to time",
+        iframes_of(&app, e),
+        s.until_tick
+    );
+}
+
+#[test]
+fn f010_a_slide_flows_into_the_run_instead_of_being_reset() {
+    let mut app = app();
+    let e = me(&mut app);
+    let d = data(&app);
+    launch_on_the_ground(&mut app, e, 25.0);
+
+    hold(&mut app, KeyCode::KeyC);
+    app.update();
+    release(&mut app, KeyCode::KeyC);
+    let slide_ticks = (d.game.player.slide_duration_s * d.game.simulation_hz as f32).round() as u64;
+    ticks(&mut app, slide_ticks + 2);
+
+    assert!(
+        !slide_of(&app, e).active(tick_now(&app)),
+        "the slide has to be over by now"
+    );
+    // Nothing is reset when it ends: `ground_step`'s μg brake takes over from wherever the
+    // slide left him, and one tick of that is 20/60 = 0.33 m/s. Anything near zero would mean
+    // the velocity was thrown away at the end of the move.
+    let after = ground_speed(&app, e);
+    assert!(
+        after > d.game.player.run_speed_m_s,
+        "he came out of the slide at {after:.2} m/s — a slide that ends by resetting the \
+         velocity eats the very momentum `Momentum-Erhalt` is about"
+    );
+}
+
+#[test]
+fn f010_the_cooldown_is_measured_from_the_start_and_includes_the_slide() {
+    let mut app = app();
+    let e = me(&mut app);
+    let d = data(&app);
+    // 8 m/s and not 25: at 25 the slide covers 13.75 m and the graybox has buildings in it,
+    // so the second half of this test would be measuring what he ran into rather than the
+    // clock. The cooldown does not care how fast the slide was.
+    launch_on_the_ground(&mut app, e, 8.0);
+
+    // ⚠️ **A held `C` fires ONCE.** `net::local::DodgeTap::feed` makes both routes to
+    // `Buttons::DODGE` an EDGE — a held key that produced sixty dodges a second would empty a
+    // tank in seven ticks, and the rate limit is that edge. So this test cannot "hold C and
+    // wait"; it has to let go and press again, which is what a player does anyway.
+    hold(&mut app, KeyCode::KeyC);
+    // **`W` as well, and it is not decoration.** Without it the first run of this test was red
+    // for a reason that has nothing to do with the cooldown: after the slide ends, `ground_step`
+    // brakes an unsteered player at μg = 20 m/s², so 25 m/s is gone in 75 ticks — and by the
+    // time the 54-tick cooldown is up he is below `slide_min_speed_m_s` (3) and could not have
+    // slid again whatever the cooldown said. Holding `W` keeps him at `run_speed_m_s`, which is
+    // above the floor, so the only thing left that can refuse the second slide is the clock.
+    hold(&mut app, KeyCode::KeyW);
+    app.update();
+    let first = slide_of(&app, e).started_at_tick.expect("the first slide started");
+
+    // One whole slide plus a tick: the move is over, the cooldown is not — and the player
+    // presses again, properly, with a release in between so the edge really fires.
+    let slide_ticks = (d.game.player.slide_duration_s * d.game.simulation_hz as f32).round() as u64;
+    release(&mut app, KeyCode::KeyC);
+    ticks(&mut app, slide_ticks);
+    hold(&mut app, KeyCode::KeyC);
+    ticks(&mut app, 2);
+    assert_eq!(
+        slide_of(&app, e).started_at_tick,
+        Some(first),
+        "a second press re-entered the slide the tick it ended — `slide_cooldown_s` ({} s) is \
+         measured from the START and therefore includes the {} s of sliding",
+        d.game.player.slide_cooldown_s,
+        d.game.player.slide_duration_s,
+    );
+
+    // …and past the cooldown it may start again — on a fresh press, because the button is an
+    // edge (see above).
+    let cooldown_ticks =
+        (d.game.player.slide_cooldown_s * d.game.simulation_hz as f32).round() as u64;
+    release(&mut app, KeyCode::KeyC);
+    ticks(&mut app, cooldown_ticks);
+    hold(&mut app, KeyCode::KeyC);
+    ticks(&mut app, 2);
+    assert!(
+        slide_of(&app, e).started_at_tick.is_some_and(|t| t > first),
+        "past the cooldown a held C has to slide again, and it did not: state={:?} speed={:.2}          tick={} first={first} cooldown={cooldown_ticks}",
+        state(&app, e),
+        ground_speed(&app, e),
+        tick_now(&app),
+    );
+}
+
+fn tick_now(app: &App) -> u64 {
+    app.world().resource::<defeated_by_titan::shared::Tick>().0
+}

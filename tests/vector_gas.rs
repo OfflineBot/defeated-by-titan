@@ -501,13 +501,18 @@ fn f018_the_priority_list_names_every_consumer_exactly_once() {
     // doubled entry is a data error even though `vector::gas::book` refuses to debit twice.
     let d = data(&app());
     let list = &d.game.vector.gas_priority;
-    for consumer in
-        [GasConsumer::Boost, GasConsumer::Steer, GasConsumer::ReelIn, GasConsumer::Dodge]
-    {
+    for consumer in [
+        GasConsumer::Boost,
+        GasConsumer::Steer,
+        GasConsumer::ReelIn,
+        GasConsumer::Dodge,
+        // `F-009`, since 2026-08-24 — the second consumer that is not a rate.
+        GasConsumer::Flip,
+    ] {
         let n = list.iter().filter(|c| **c == consumer).count();
         assert_eq!(n, 1, "game.ron: vector.gas_priority names {consumer:?} {n} times: {list:?}");
     }
-    assert_eq!(list.len(), 4, "and nothing else: {list:?}");
+    assert_eq!(list.len(), 5, "and nothing else: {list:?}");
 }
 
 #[test]

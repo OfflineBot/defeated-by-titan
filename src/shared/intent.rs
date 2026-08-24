@@ -69,6 +69,14 @@ impl Buttons {
     pub const SLASH_RIGHT: Buttons = Buttons(1 << 6);
     pub const DODGE: Buttons = Buttons(1 << 7);
     pub const MARK: Buttons = Buttons(1 << 8);
+    /// `F-009` — the sideways flip. **True on exactly one tick per gesture**, like
+    /// [`DODGE`](Self::DODGE): `net::local::read_input` sets it when a second `A` (or a second
+    /// `D`) lands inside `vector.flip_double_tap_window_ticks`.
+    ///
+    /// It carries no side of its own — the side is `Intent::move_x`, which is `-1` or `+1` on
+    /// that very tick because the key producing the gesture is down. A `FLIP_LEFT`/`FLIP_RIGHT`
+    /// pair would be two bits saying what one already says, and they could disagree.
+    pub const FLIP: Buttons = Buttons(1 << 9);
 
     pub fn contains(self, other: Buttons) -> bool {
         self.0 & other.0 == other.0 && other.0 != 0

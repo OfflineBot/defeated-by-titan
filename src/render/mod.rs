@@ -35,7 +35,9 @@ pub mod rope;
 use bevy::prelude::*;
 
 use crate::data::GameData;
-use crate::shared::{Block, LocalPlayer, PlayerSettings};
+use avian3d::prelude::LinearVelocity;
+
+use crate::shared::{Block, LocalPlayer, PlayerSettings, SupplyStation};
 
 pub struct RenderPlugin;
 
@@ -58,6 +60,10 @@ impl Plugin for RenderPlugin {
                     attach_camera,
                     apply_field_of_view,
                     build_block_meshes,
+                    // `.chain()`: the material has to exist before the colour is written into
+                    // it, and Bevy's sync point between two chained systems is what makes
+                    // that true in the same frame.
+                    (build_station_meshes, mark_supply_stations).chain(),
                     camera::rotate_camera,
                     light::follow_the_eye,
                     log_frame_time.run_if(|| std::env::var_os("DBT_FRAMETIME").is_some()),
@@ -234,13 +240,28 @@ fn attach_camera(
 /// world every frame, and re-marking it as changed for a value that did not move is exactly what
 /// §6 rule 6 is about.
 fn apply_field_of_view(
+    data: Res<GameData>,
     settings: Res<PlayerSettings>,
+    players: Query<&LinearVelocity, With<LocalPlayer>>,
     mut cameras: Query<&mut Projection, With<Camera3d>>,
 ) {
-    if !settings.is_changed() {
-        return;
-    }
-    let want = settings.fov_deg.to_radians();
+    // **`F-017` is why the early-out is gone.** Until 2026-08-24 this system returned unless
+    // `PlayerSettings` had changed, which was right when the field of view was a preference and
+    // nothing else. It is now a function of the player's speed as well, and speed changes on
+    // every tick without anybody touching a setting — an early-out on `is_changed()` would have
+    // meant the curve fires once, on the frame the slider moves, and never again. The write is
+    // still guarded, one line down, by comparing the value: that is the guard that matters
+    // (§6 rule 6), and it is the one that was doing the work all along.
+    let speed_m_s = players.iter().next().map_or(0.0, |v| v.0.length());
+    let want = speed_fov_deg(
+        settings.fov_deg,
+        data.game.camera.fov_max_speed_deg,
+        data.game.camera.fov_speed_from_m_s,
+        data.game.vector.max_speed_m_s,
+        speed_m_s,
+        settings.speed_fov_pct,
+    )
+    .to_radians();
     for mut projection in &mut cameras {
         // Read through `&*` first: a `DerefMut` on a `Mut<Projection>` marks it changed even
         // when nothing is written, and the change would travel into the render world.
@@ -252,6 +273,152 @@ fn apply_field_of_view(
         }
         if let Projection::Perspective(perspective) = &mut *projection {
             perspective.fov = want;
+        }
+    }
+}
+
+/// `F-017` **Geschwindigkeits-Feedback** — the field of view as a function of speed, and it is
+/// a free function so it can be checked without an app, a camera or a window.
+///
+/// > *„Speedlines, Kamera-FOV-Kurve, Windrauschen und Vignette skalieren mit Velocity. Verkauft
+/// > Tempo ohne echte Physikaenderung."* — the backlog row. **This is the FOV half**, which is
+/// the one the design calls the *biggest lever* (`game.ron: camera`) and the only one of the
+/// four that needs no new asset.
+///
+/// ```text
+///   fov
+///    |                              ______ fov_max_speed_deg (90)
+///    |                        _____/
+///    |  ______________ ______/
+///    |                 base = settings.fov_deg (60, and the player's, not the file's)
+///    +--------------|--------------|------> |v|
+///                  from           max_speed
+///                (22 m/s)         (75 m/s)
+/// ```
+///
+/// Four things that are decisions and not arithmetic:
+///
+/// - **It interpolates from the PLAYER's base, not the file's.** `settings.fov_deg` is what he
+///   set in the options; a curve anchored at `game.ron: camera.fov_deg` would silently undo his
+///   slider the moment he moved.
+/// - **`pct` scales the WIDENING, not the result.** At 0 % the return value is `base` exactly —
+///   the same `f32`, not a value that rounds to it — which is what makes
+///   *„abschaltbar fuer Motion Sickness"* a real off switch and not a quieter version of the
+///   effect. Multiplying the whole result would move the resting field of view instead.
+/// - **It is stepless.** *„FOV und Audio reagieren stufenlos"* is the acceptance sentence, so
+///   this is `lerp` and never a set of thresholds.
+/// - **Above `max_speed_m_s` it saturates.** That is not a guard against a bug, it is the
+///   physics: `vector.max_speed_m_s` is an avian `MaxLinearSpeed` on the body, so `|v|` cannot
+///   exceed it — the `clamp` is what keeps the function honest if it ever does.
+///
+/// Degenerate spans (`from >= max`, a `pct` outside 0..100) collapse to the base rather than to
+/// a NaN: a NaN `fov` is a black screen, and a black screen is the one failure a player cannot
+/// report usefully.
+pub fn speed_fov_deg(
+    base_deg: f32,
+    max_speed_deg: f32,
+    from_m_s: f32,
+    max_speed_m_s: f32,
+    speed_m_s: f32,
+    pct: f32,
+) -> f32 {
+    let span = max_speed_m_s - from_m_s;
+    if !(span > 0.0) || !speed_m_s.is_finite() {
+        return base_deg;
+    }
+    let t = ((speed_m_s - from_m_s) / span).clamp(0.0, 1.0);
+    // ⚠️ **`clamp` does not clean a NaN** — `f32::clamp` returns the NaN it was given
+    // (`core`: "if self is NaN, returns NaN"), so a non-finite `speed_fov_pct` came straight
+    // through here and made the projection's `fov` a NaN, which is a black screen. Found by
+    // `tests/render.rs::f017_a_degenerate_span_or_a_nan_speed_falls_back_to_the_base` on the
+    // first run; the `speed` guard above was already written this way and the `pct` one was not.
+    let strength = if pct.is_finite() { (pct / 100.0).clamp(0.0, 1.0) } else { 0.0 };
+    base_deg + (max_speed_deg - base_deg) * t * strength
+}
+
+/// `F-019` — **the empty station is marked, and the running one is too.**
+///
+/// The acceptance sentence asks only for *„leere Station wird visuell markiert"*; the middle
+/// state is here because without it a player cannot tell a station that is pumping *for him*
+/// from one that is simply there, and the 1.5 s he is being asked to stand still for is exactly
+/// the time in which he needs to know.
+///
+/// | state | colour | what it says |
+/// |---|---|---|
+/// | reloads left, idle | **cyan** | come here |
+/// | pumping | **amber** | it is running, stay |
+/// | empty | `ash_dark` | this one is spent, fly on |
+///
+/// Cyan and amber are two of the three signal colours, and `docs/conventions.md` §3 reserves
+/// them for gameplay and forbids them everywhere else — so a cyan pole in a grey street is by
+/// construction a thing that does something for you. Empty leaves the signal set entirely and
+/// drops into the palette, which is the point: it is no longer gameplay.
+///
+/// **It compares before it writes.** `Assets::get_mut` marks the material changed and the change
+/// travels into the render world; a station pumps for 90 ticks and its `SupplyStation` reports
+/// itself changed on every one of them (`charge_s` really does move), so writing unguarded
+/// would push a material through the pipeline ninety times to say the same amber.
+/// `F-019` — **draws the station**, because nothing else does any more.
+///
+/// It got its mesh from [`build_block_meshes`] via a `Block` component for about a minute, and
+/// two guard tests said no in one run: `Block` means *a cuboid of the city*, `tests/world.rs`
+/// counts them against `world::map::plan_blocks`, and four stations made the count 2875 against
+/// 2871 (`src/world/supply.rs` carries the whole note). So the station carries its own marker
+/// and this is its own builder — one more system, and the city's guard stays a guard.
+///
+/// The pole is deliberately **small and tall** (1.5 x 4 x 1.5 m): visible over a 7 m street,
+/// standing inside a 6 m trigger sphere, and far too thin to be the thing you land on.
+fn build_station_meshes(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    fresh: Query<Entity, (With<SupplyStation>, Without<Mesh3d>)>,
+) {
+    for e in &fresh {
+        let mesh = meshes.add(Cuboid::new(1.5, 4.0, 1.5));
+        // The colour is left to `mark_supply_stations`, which runs in the same schedule and
+        // knows the three states. Seeding it here as well would be two writers of one field for
+        // the sake of one frame.
+        let material = materials.add(StandardMaterial {
+            metallic: 0.0,
+            perceptual_roughness: 0.95,
+            ..default()
+        });
+        commands.entity(e).insert((Mesh3d(mesh), MeshMaterial3d(material)));
+    }
+}
+
+fn mark_supply_stations(
+    data: Res<GameData>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    stations: Query<(&SupplyStation, &MeshMaterial3d<StandardMaterial>)>,
+) {
+    for (station, handle) in &stations {
+        let key = if station.empty() {
+            None
+        } else if station.running() {
+            Some("amber")
+        } else {
+            Some("cyan")
+        };
+        let want = match key {
+            Some(signal) => data.maps.signals.get(signal).map(|(r, g, b)| [*r, *g, *b]),
+            None => data.maps.palette.get("ash_dark").map(|(r, g, b)| [*r, *g, *b]),
+        };
+        let Some([r, g, b]) = want else {
+            continue;
+        };
+        let want = Color::linear_rgb(r, g, b);
+        // Read first. A `get_mut` that writes the colour it already holds is a change signal
+        // for nothing, sixty times a second, for every station on the map.
+        let Some(material) = materials.get(&handle.0) else {
+            continue;
+        };
+        if material.base_color == want {
+            continue;
+        }
+        if let Some(mut material) = materials.get_mut(&handle.0) {
+            material.base_color = want;
         }
     }
 }

@@ -2498,3 +2498,94 @@ fn f032_the_cost_of_one_thousand_limb_refinements() {
         cost.0, cost.1
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// `F-009` / `F-010` — the i-frames, and the only place in this game where a player's damage
+// is refused.
+// ---------------------------------------------------------------------------------------
+//
+// Both backlog rows are written as an *avoidance*, not as a movement:
+//
+//   F-009  „Flip vermeidet einen Titanengriff, wenn im Fenster ausgeloest."
+//   F-010  „Slide vermeidet Stomp-Angriff; geht fliessend in Sprint ueber."
+//
+// so the acceptance of both is a blow that does not land. This pair of tests is that sentence
+// and its control: the same husk, the same distance, the same 400 ticks — once with the window
+// open and once without. The control is the point (`FIND-103`): a test that only asserts
+// "no damage" passes just as well when the husk never swung.
+
+#[test]
+fn f009_a_player_inside_the_i_frame_window_takes_nothing_at_all() {
+    let mut app = app();
+    let husk_at = Vec3::new(0.0, 0.0, -10.0);
+    spawn_husk(&mut app, husk_at);
+    place(&mut app, in_his_face(husk_at, 5.0), Vec3::ZERO);
+
+    // A window that covers the whole run. `F-009`'s real one is 21 ticks and `F-010`'s 18 —
+    // what is being tested here is the RULE in `combat::strike::land`, not the length, which is
+    // `tests/vector_boost.rs` and `tests/player.rs` respectively.
+    let me = player(&mut app);
+    app.world_mut()
+        .entity_mut(me)
+        .insert(defeated_by_titan::shared::Invulnerable { until_tick: u64::MAX });
+
+    let w = watch(&mut app, 400);
+    assert!(
+        w.strikes >= 3,
+        "the husk began only {} strikes in 400 ticks — without swings this test proves nothing \
+         at all, which is exactly the shape FIND-103 warns about",
+        w.strikes
+    );
+    assert!(
+        w.drops.is_empty(),
+        "an invulnerable player still lost health {} time(s): {:?}",
+        w.drops.len(),
+        w.drops
+    );
+    assert!(w.downed_at.is_none(), "and he certainly must not go down");
+}
+
+#[test]
+fn f009_the_control_the_same_husk_without_the_window_lands_three_blows() {
+    // The control run, and it is the half that makes the test above mean something. Identical
+    // in every line except the component.
+    let mut app = app();
+    let husk_at = Vec3::new(0.0, 0.0, -10.0);
+    spawn_husk(&mut app, husk_at);
+    place(&mut app, in_his_face(husk_at, 5.0), Vec3::ZERO);
+
+    let w = watch(&mut app, 400);
+    assert_eq!(
+        w.drops.len(),
+        3,
+        "the same setup WITHOUT i-frames has to land three blows (P5's own claim); it landed \
+         {}: {:?}",
+        w.drops.len(),
+        w.drops
+    );
+}
+
+#[test]
+fn f009_an_expired_window_is_not_a_window() {
+    // The deadline is a tick, not a flag, and nothing removes the component when it passes
+    // (`shared::Invulnerable`). So a stale `Invulnerable` sitting on a player must behave
+    // exactly like no component at all — otherwise every player who ever flipped once would be
+    // immortal from his second flip onwards.
+    let mut app = app();
+    let husk_at = Vec3::new(0.0, 0.0, -10.0);
+    spawn_husk(&mut app, husk_at);
+    place(&mut app, in_his_face(husk_at, 5.0), Vec3::ZERO);
+
+    let me = player(&mut app);
+    app.world_mut()
+        .entity_mut(me)
+        .insert(defeated_by_titan::shared::Invulnerable { until_tick: 5 });
+
+    let w = watch(&mut app, 400);
+    assert_eq!(
+        w.drops.len(),
+        3,
+        "a window that ended at tick 5 still stopped {} of 3 blows over 400 ticks",
+        3 - w.drops.len()
+    );
+}

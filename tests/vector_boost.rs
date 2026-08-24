@@ -877,8 +877,8 @@ fn f008_the_priority_list_can_refuse_a_dodge_the_tank_cannot_pay() {
     let mut gas = Gas { current: 1.0, ..Gas::full(300.0) };
     let g = book(
         &[GasConsumer::Boost, GasConsumer::ReelIn, GasConsumer::Dodge],
-        Wants { boost: true, reel_in: false, steer: false, dodge: true },
-        Costs { boost: 0.3, reel_in: 0.1, steer: 0.2667, dodge: 45.0 },
+        Wants { boost: true, reel_in: false, steer: false, dodge: true, flip: false },
+        Costs { boost: 0.3, reel_in: 0.1, steer: 0.2667, dodge: 45.0, flip: 20.0 },
         &mut gas,
     );
     assert!(g.boost, "1.0 gas covers a boost tick of 0.3");
@@ -888,4 +888,248 @@ fn f008_the_priority_list_can_refuse_a_dodge_the_tank_cannot_pay() {
         "the refused dodge took gas anyway — tank at {}",
         gas.current
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// 6. `F-008` — WHAT BOUNDS A DASH, now that the gas price does not
+// ---------------------------------------------------------------------------------------
+//
+// `docs/QUESTIONS.md` Q-046 / `docs/FINDINGS.md` FIND-152, measured 2026-08-20: the tank went
+// `300 -> 15000` for testability, so `gas_dodge: 45` went from **6.7 dashes per sortie to 333**
+// — and the cooldown the backlog row asks for did not exist (FIND-067). At 333 the price bounds
+// nothing.
+//
+// These two tests are the bound. Both are written so that **deleting the gate reproduces a
+// different number**, which is the habit rule 5 asks for: without `DodgeCharges::ready` a held
+// `DODGE` spends `200 x 45 = 9000` gas out of a 15000 tank instead of `3 x 45 = 135`, i.e. the
+// assertion is off by a factor of 66 and not by a rounding.
+
+/// The magazine as `vector::dodge` sees it.
+fn charges(app: &App, e: Entity) -> f32 {
+    app.world()
+        .get::<defeated_by_titan::shared::DodgeCharges>(e)
+        .expect("a player carries a dodge magazine")
+        .left
+}
+
+#[test]
+fn f008_a_held_dodge_spends_the_magazine_and_not_one_dash_more() {
+    let mut app = app();
+    let e = flier(&mut app, 0.0);
+    ticks(&mut app, 5); // out of `Grounded` and into a settled free fall
+    steer(&mut app, e, 0.0, 0.0, 0.0, 1.0);
+    set_dodge(&mut app, e, true);
+
+    let d = data(&app);
+    let full = tank(&app, e);
+    // 200 ticks = 3.33 s. Long enough for the whole magazine at `dodge_cooldown_s` 0.6 s
+    // spacing (0, 36, 72), short enough that `dodge_recharge_s` 4.0 has not put a fourth
+    // charge back (200/240 = 0.83 of one).
+    ticks(&mut app, 200);
+    let spent = full - tank(&app, e);
+
+    let want = d.game.vector.gas_dodge * d.game.vector.dodge_charges;
+    assert!(
+        (spent - want).abs() < 0.01,
+        "a held DODGE spent {spent:.1} gas over 200 ticks; the magazine is \
+         {} charges x {} gas = {want}. Without the charge gate this is 200 x {} = {:.0} — a \
+         factor of {:.0}, which is what makes this assertion able to tell the two apart.",
+        d.game.vector.dodge_charges,
+        d.game.vector.gas_dodge,
+        d.game.vector.gas_dodge,
+        200.0 * d.game.vector.gas_dodge,
+        200.0 / d.game.vector.dodge_charges,
+    );
+}
+
+#[test]
+fn f008_the_magazine_empties_and_then_refills_at_the_rate_from_the_file() {
+    let mut app = app();
+    let e = flier(&mut app, 0.0);
+    ticks(&mut app, 5);
+    steer(&mut app, e, 0.0, 0.0, 0.0, 1.0);
+
+    let d = data(&app);
+    assert!(
+        (charges(&app, e) - d.game.vector.dodge_charges).abs() < 1e-4,
+        "a player deploys with a loaded magazine, got {}",
+        charges(&app, e)
+    );
+
+    set_dodge(&mut app, e, true);
+    ticks(&mut app, 200);
+    assert!(
+        charges(&app, e) < 1.0,
+        "three dashes and a 0.6 s spacing empty the magazine inside 200 ticks; {} left",
+        charges(&app, e)
+    );
+
+    // Let go and wait exactly one recharge period. One charge, not three: the refill is a rate.
+    set_dodge(&mut app, e, false);
+    let before = charges(&app, e);
+    let period = (d.game.vector.dodge_recharge_s * d.game.simulation_hz as f32).round() as u64;
+    ticks(&mut app, period);
+    let after = charges(&app, e);
+    assert!(
+        (after - before - 1.0).abs() < 0.05,
+        "one period of {}s gave back {:.3} charges instead of 1.0 ({before:.3} -> {after:.3})",
+        d.game.vector.dodge_recharge_s,
+        after - before,
+    );
+    assert!(
+        after <= d.game.vector.dodge_charges + 1e-4,
+        "the magazine overfilled to {after}"
+    );
+}
+
+#[test]
+fn f008_a_refused_dash_costs_no_gas_at_all() {
+    // 🔴 The FIND-152 lesson, read the right way round: the gate has to sit IN FRONT of the
+    // money. A check behind the booking debits 45 gas for an impulse that never happens, and a
+    // leak you cannot see is worse than one you can.
+    let mut app = app();
+    let e = flier(&mut app, 0.0);
+    ticks(&mut app, 5);
+    steer(&mut app, e, 0.0, 0.0, 0.0, 1.0);
+    set_dodge(&mut app, e, true);
+    ticks(&mut app, 200); // empty the magazine
+
+    let empty = tank(&app, e);
+    let dv_before = velocity(&app, e);
+    ticks(&mut app, 30); // 30 more ticks of a held button on an empty magazine
+    let spent = empty - tank(&app, e);
+    assert!(
+        spent.abs() < 1e-3,
+        "a refused dash still cost {spent:.3} gas — the gate is behind the booking"
+    );
+    // And it really is refused, not merely unbilled. The bar is **half a dash**, and that
+    // number is measured rather than picked: over these 30 ticks the horizontal velocity moves
+    // by 2.88 m/s all on its own, because `player::locomotion::air_control` gives free-air
+    // thrust for the held `W` and that thrust is never gated on gas (it only halves on an empty
+    // tank, `air_accel_empty_fraction`). One granted dash is `dodge_impulse_m_s` = 24 m/s in a
+    // single tick. 2.88 against 24 is a factor of 8, so a bar at 12 cannot confuse the two —
+    // and an assertion at 0.5 would have been red for a reason that has nothing to do with
+    // `F-008` (it was, on the first run).
+    let dv = velocity(&app, e) - dv_before;
+    let d = data(&app);
+    assert!(
+        dv.xz().length() < d.game.vector.dodge_impulse_m_s * 0.5,
+        "a refused dash still threw the player {:.2} m/s horizontally; one dash is {} m/s and          30 ticks of held-W air control alone are 2.88",
+        dv.xz().length(),
+        d.game.vector.dodge_impulse_m_s,
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// 7. `F-009` — the flip: „Doppeltipp A/D erzeugt seitlichen Ausweichsprung in der Luft mit
+//    kurzen I-Frames."
+// ---------------------------------------------------------------------------------------
+
+fn set_flip(app: &mut App, e: Entity, on: bool) {
+    let mut intent = app.world_mut().get_mut::<Intent>(e).expect("a player has an intent");
+    intent.buttons.set(Buttons::FLIP, on);
+}
+
+fn iframes_until(app: &App, e: Entity) -> u64 {
+    app.world()
+        .get::<defeated_by_titan::shared::Invulnerable>(e)
+        .expect("a player carries an i-frame deadline")
+        .until_tick
+}
+
+#[test]
+fn f009_a_flip_goes_sideways_and_never_where_the_camera_looks() {
+    // The same shape as `f008_a_dodge_goes_where_the_movement_input_points`: the camera looks
+    // 60° DOWN and the only key is `D`. A flip that took the pitch with it would put 15 m/s of
+    // the 18 into the street — which is the one situation the move exists for.
+    let mut app = app();
+    let e = flier(&mut app, 0.0);
+    let twin = flier(&mut app, 60.0);
+    ticks(&mut app, 5);
+    steer(&mut app, e, 0.0, -60.0, 1.0, 0.0);
+    steer(&mut app, twin, 0.0, -60.0, 1.0, 0.0);
+    set_flip(&mut app, e, true);
+
+    let d = data(&app);
+    let before = velocity(&app, e);
+    let before_twin = velocity(&app, twin);
+    app.update();
+    let dv = (velocity(&app, e) - before) - (velocity(&app, twin) - before_twin);
+
+    let want_x = d.game.vector.flip_impulse_m_s;
+    let want_y = d.game.vector.flip_up_m_s;
+    assert!(
+        (dv.x - want_x).abs() < want_x * 0.02,
+        "the flip put {:.3} m/s into +X; game.ron: vector.flip_impulse_m_s = {want_x}",
+        dv.x
+    );
+    assert!(
+        (dv.y - want_y).abs() < want_y * 0.05,
+        "the flip put {:.3} m/s of lift; game.ron: vector.flip_up_m_s = {want_y}",
+        dv.y
+    );
+    assert!(
+        dv.z.abs() < 0.5,
+        "the camera looks 60° down and the flip followed it: {:.3} m/s of Z",
+        dv.z
+    );
+}
+
+#[test]
+fn f009_a_flip_buys_i_frames_and_a_dash_does_not() {
+    let mut app = app();
+    let flipper = flier(&mut app, 0.0);
+    let dasher = flier(&mut app, 60.0);
+    ticks(&mut app, 5);
+    steer(&mut app, flipper, 0.0, 0.0, 1.0, 0.0);
+    steer(&mut app, dasher, 0.0, 0.0, 1.0, 0.0);
+
+    assert_eq!(iframes_until(&app, flipper), 0, "nobody is born invulnerable");
+
+    set_flip(&mut app, flipper, true);
+    set_dodge(&mut app, dasher, true);
+    app.update();
+
+    let d = data(&app);
+    let want = (d.game.vector.flip_iframes_s * d.game.simulation_hz as f32).round() as u64;
+    let got = iframes_until(&app, flipper);
+    assert!(got > 0, "the flip granted no i-frames at all");
+    assert!(
+        got.abs_diff(tick_of(&app) + want) <= 1,
+        "the flip's window ends at tick {got}, and {} ticks of `flip_iframes_s` from tick {} \
+         is {}",
+        want,
+        tick_of(&app),
+        tick_of(&app) + want,
+    );
+    assert_eq!(
+        iframes_until(&app, dasher),
+        0,
+        "the DASH must not grant i-frames — that is what the flip is FOR, and it is the whole \
+         reason the flip is cheaper and weaker (18 m/s for 20 gas against 24 for 45)"
+    );
+}
+
+#[test]
+fn f009_a_flip_with_no_sideways_key_costs_nothing_and_does_nothing() {
+    // The cost-follows-the-effect rule, for the third verb. `move_x == 0` has no side to throw
+    // the player to, so `vector::gas` must not bill `gas_flip` for it.
+    let mut app = app();
+    let e = flier(&mut app, 0.0);
+    ticks(&mut app, 5);
+    steer(&mut app, e, 0.0, 0.0, 0.0, 1.0); // W only
+    set_flip(&mut app, e, true);
+
+    let full = tank(&app, e);
+    app.update();
+    assert!(
+        (full - tank(&app, e)).abs() < 1e-3,
+        "a flip with no A/D still cost {:.3} gas",
+        full - tank(&app, e)
+    );
+    assert_eq!(iframes_until(&app, e), 0, "and it must not hand out i-frames either");
+}
+
+fn tick_of(app: &App) -> u64 {
+    app.world().resource::<defeated_by_titan::shared::Tick>().0
 }

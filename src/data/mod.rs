@@ -204,6 +204,22 @@ pub struct Game {
 pub struct PlayerTuning {
     pub height_m: f32,
     pub radius_m: f32,
+    /// `F-010` — the speed a slide **guarantees**, in m/s. *„Momentum-Erhalt"* is the other
+    /// half: `player::locomotion::slide` takes the larger of this and the speed the player
+    /// already had, so a slide out of a fast landing never slows him down.
+    pub slide_speed_m_s: f32,
+    /// `F-010` — how long a slide lasts, in seconds. Seconds in the file, ticks in the code.
+    pub slide_duration_s: f32,
+    /// `F-010` — the i-frames a slide buys, in seconds. Deliberately **shorter than**
+    /// [`Self::slide_duration_s`]: the tail of the slide is the part that carries you out, and
+    /// invulnerability that lasts as long as the movement is a dodge you never have to time.
+    pub slide_iframes_s: f32,
+    /// `F-010` — the floor between two slides, in seconds, measured from the tick a slide
+    /// **starts**. Without it a held `C` is permanent invulnerability.
+    pub slide_cooldown_s: f32,
+    /// `F-010` — below this horizontal speed there is no slide at all, in m/s. You cannot
+    /// slide from standing; a slide is momentum you already have, redirected.
+    pub slide_min_speed_m_s: f32,
     /// `P5`. **⚠️ UNTUNED.** The second of the two ways to lose. At zero the player is
     /// [`MovementState::Downed`] — **a state with a timer, never a despawned entity.**
     ///
@@ -503,6 +519,31 @@ pub struct VectorTuning {
     /// a rounding nobody can see. The conversion belongs in the comment, not in the code:
     /// `18` is 0.300 s at `simulation_hz: 60`.
     pub dodge_double_tap_window_ticks: u64,
+    /// `F-008` — **how many dashes in a row**, i.e. the "Anzahl der Dashes" the backlog row
+    /// calls a stat. A float because [`DodgeCharges`](crate::shared::DodgeCharges) refills
+    /// fractionally and one number is better than a number plus an accumulator.
+    pub dodge_charges: f32,
+    /// `F-008` — seconds for **one** charge to come back. The magazine refills continuously,
+    /// so a full one from empty takes `dodge_charges * this`.
+    pub dodge_recharge_s: f32,
+    /// `F-008` — the floor between two dashes, in seconds. The charge count says how many, this
+    /// says how fast; without it a full magazine empties in three ticks and the stat means
+    /// nothing.
+    pub dodge_cooldown_s: f32,
+    /// `F-009` — how much **sideways** speed one flip adds, in m/s. A velocity change like
+    /// [`Self::dodge_impulse_m_s`], divided by the timestep in `vector::dodge`.
+    pub flip_impulse_m_s: f32,
+    /// `F-009` — how much **upward** speed rides along with a flip, in m/s. A flip that is
+    /// purely lateral drives you into the wall you were trying to leave.
+    pub flip_up_m_s: f32,
+    /// `F-009` — the i-frames a flip buys, in seconds. Seconds in the file, ticks in the code.
+    pub flip_iframes_s: f32,
+    /// `F-009` — how many ticks may lie between the two `A` (or two `D`) presses for them to be
+    /// one flip. Ticks, for [`Self::dodge_double_tap_window_ticks`]'s reason.
+    pub flip_double_tap_window_ticks: u64,
+    /// `F-009` — what one flip costs, flat, like [`Self::gas_dodge`] and for the same reason:
+    /// it is an impulse, not a rate, so it must never grow a `_per_s`.
+    pub gas_flip: f32,
     pub max_speed_m_s: f32,
 }
 
@@ -524,6 +565,20 @@ pub enum GasConsumer {
     /// [`gas_dodge`](VectorTuning::gas_dodge) once, on the tick the double-tap lands, and
     /// nothing on any other tick.
     Dodge,
+    /// `F-009` flip. **The second consumer that is not a rate** — it bills
+    /// [`gas_flip`](VectorTuning::gas_flip) once, on the tick a double-tap of `A` or `D`
+    /// lands in the air, and nothing on any other tick.
+    ///
+    /// It is **last** in `game.ron: vector.gas_priority`, and unlike the dodge's position that
+    /// is worth arguing about: a flip costs 20 flat, so being served last can cost it at most
+    /// the 0.4 gas the three rates take in one tick — 2 % of its own price. What decides its
+    /// place is the sentence the list already makes: the explicit presses come before the
+    /// ambient ones, and among the explicit presses the one that keeps you alive is the one you
+    /// can least afford to have refused. That would argue for putting it FIRST — and it is not,
+    /// because on a tank that thin the flip is not what saves you anyway, and moving `Boost`
+    /// off the front would overturn the user's own answer to `Q-017` as a side effect of adding
+    /// a verb. It is `docs/QUESTIONS.md` Q-052 and the assumption is written there.
+    Flip,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -535,6 +590,14 @@ pub struct CameraTuning {
     /// Field of view at `vector.max_speed_m_s`. `F-017` will interpolate between the two
     /// later; the **curve** belongs in the code, the two **ends** belong in the RON.
     pub fov_max_speed_deg: f32,
+    /// `F-017` — **where the speed curve starts**, in m/s. Below it the image stays at
+    /// [`Self::fov_deg`]; from here to `vector.max_speed_m_s` the field of view opens linearly
+    /// to [`Self::fov_max_speed_deg`].
+    ///
+    /// It is not `0.0` on purpose: walking is 6 m/s and a walk that already widens the lens
+    /// sells nothing — the effect has to mean *fast*, and the number is what says where fast
+    /// begins.
+    pub fov_speed_from_m_s: f32,
     pub mouse_deg_per_px: f32,
     pub pitch_limit_deg: f32,
     pub smoothing_half_life_s: f32,
@@ -637,6 +700,30 @@ pub struct Map {
     /// and costs the exterior its shadows 1:1, and the boxes in the room stay flat
     /// rectangles because nothing gives them a lit face and a dark one.
     pub lights: Vec<MapLight>,
+    /// `F-019` — **the refuel points that stand out in the field**, placed by hand exactly
+    /// like a [`MapBlock`] and a [`MapLight`].
+    ///
+    /// **Explicit, never defaulted** (§4): a map that forgets the key fails to load. A map
+    /// with no supply writes `supply_stations: []` and says so — and `graybox` does exactly
+    /// that, because it is the fixture a dozen tests reason about at `y = 0` and a station is
+    /// a thing in the world.
+    pub supply_stations: Vec<SupplyPoint>,
+}
+
+/// One `F-019` refuel point — **a place, and a number of reloads.**
+///
+/// Everything else about it (how far it reaches, how long a reload takes, what one reload is
+/// worth) is the same for every station in the game and lives in `gear.ron: resupply`. What is
+/// per-station is where it stands and how much is in it, and that is what a map author places.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SupplyPoint {
+    /// World centre. The visible marker is drawn around it and the trigger circle is measured
+    /// from it in 3D — a player 40 m above a station is not standing at it.
+    pub center_m: (f32, f32, f32),
+    /// How many reloads **this** station holds. Per station and not per map, because a depot
+    /// beside the wall and a lone pole in the ruins are not the same promise.
+    pub uses: u32,
 }
 
 /// The stepped ground under the district — every number the plateaus and their stairs need.
@@ -1051,6 +1138,27 @@ pub struct ResupplyTuning {
     pub blade_pairs_per_s: f32,
     /// How fast the pair in the harness is honed back towards `sharpness == 1.0`.
     pub sharpen_per_s: f32,
+
+    // -----------------------------------------------------------------------------------
+    // F-019 — the stations that stand OUT IN THE FIELD, and they are a different thing from
+    // the racks of the hub above.
+    // -----------------------------------------------------------------------------------
+    /// `F-019` — **how many reloads one field station has before it is empty**, and it is the
+    /// number that closes `Q-044`: a tank that buys ~16.7 s of held boost against a 330 s
+    /// sortie, with no refuel anywhere in the world, is a sortie you cannot fly.
+    ///
+    /// Finite, because the reference's are (`docs/references.md`, `FIND-150`) and because an
+    /// infinite one turns every fight into "fly back to the pole". A `u32` and not a `u8`: the
+    /// count is per station **per sortie** and a map may one day want a depot.
+    pub station_uses: u32,
+    /// `F-019` — **how long one reload takes**, in seconds. The acceptance sentence names it
+    /// outright: *„Nachladen dauert 1,5 s"*. It is what makes a refill a decision — 1.5 s
+    /// standing still is an eternity with a titan in the street.
+    pub station_refill_s: f32,
+    /// `F-019` — how far a field station reaches, in meters. Wider than the hub's
+    /// [`Self::range_m`] on purpose: you arrive at a hub on foot and at a field station at
+    /// 40 m/s, and a 4 m circle at 40 m/s is 6 ticks wide.
+    pub station_radius_m: f32,
 }
 
 // ---------------------------------------------------------------------------

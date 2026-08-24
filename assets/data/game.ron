@@ -33,6 +33,36 @@
         // — so EXACTLY, not roughly: every size comparison in the image hangs on this number.
         height_m: 1.8,
         radius_m: 0.35,
+
+        // -----------------------------------------------------------------------------------
+        // F-010 — the ground slide: „Gleit-Ausweichmanoever am Boden mit I-Frames und
+        // Momentum-Erhalt. Slide vermeidet Stomp-Angriff; geht fliessend in Sprint ueber."
+        // -----------------------------------------------------------------------------------
+        // ⚠️ UNTUNED, and the one verb in this round that costs **no gas at all**. That is a
+        // decision and not an omission: gas is what the GEAR burns (gear.ron, `vector.gas_*`),
+        // and a slide is legs. Billing it would make the one move a player has left on an empty
+        // tank cost the thing he has run out of, which is the shape of a death spiral. What
+        // bounds it instead is `slide_cooldown_s` and the fact that you must already be moving.
+        //
+        // 12 m/s against run_speed_m_s: a slide is faster than a run and slower than a swing
+        // (17-21 m/s, Q-018), so it reads as a burst and never as traversal. And it is a FLOOR,
+        // not a speed: `player::locomotion::slide` keeps the larger of this and what you had,
+        // which is the *„Momentum-Erhalt"* half of the row — landing at 30 m/s and sliding
+        // keeps 30.
+        slide_speed_m_s: 12.0,
+        // 0.55 s = 33 ticks of slide. Long enough to cross the 7 m street the size table gives
+        // (12 m/s x 0.55 = 6.6 m), short enough that it is a move and not a stance.
+        slide_duration_s: 0.55,
+        // 0.30 s = 18 ticks, and deliberately **shorter than the slide itself**: the tail of
+        // the slide is the part that carries you out from under the foot, and i-frames that
+        // last the whole movement are a dodge nobody has to time. 55 % of the duration.
+        slide_iframes_s: 0.30,
+        // Measured from the tick the slide STARTS, so it includes the slide: 0.9 - 0.55 = 0.35 s
+        // of standing between two. A held C is then one slide per 54 ticks, never a stance.
+        slide_cooldown_s: 0.9,
+        // You cannot slide from standing. 3 m/s is half a walk — enough that a player who is
+        // actually moving always gets it, enough that a stationary tap does nothing.
+        slide_min_speed_m_s: 3.0,
         // P5. ⚠️ UNTUNED. Two ways to lose is the bar (docs/PLAN-GAME.md §1), and one of
         // them is this number reaching zero. 100 against a husk's damage of 34 means
         // **three strikes and you are down** — which is what makes a telegraphed wind-up
@@ -624,7 +654,12 @@
         // deliberate press: Shift means "I need speed NOW", while W/A/D on a rope is held almost
         // continuously in flight — putting Steer first would let the ambient input eat the drop
         // the explicit one asked for, and an ignored Shift reads as a broken game.
-        gas_priority: [Boost, Steer, ReelIn, Dodge],
+        // F-009 Flip is APPENDED, exactly as Dodge was, and for the same arithmetic: it costs
+        // 20 flat while the three rates together cost 0.4 in a tick, so its position can cost
+        // it at most 2 % of its own price. Putting it in front of Boost would look like a
+        // decision and would overturn the user's answer to Q-017 as a side effect of adding a
+        // verb — docs/QUESTIONS.md Q-052 records that and the assumption it runs under.
+        gas_priority: [Boost, Steer, ReelIn, Dodge, Flip],
         boost_m_s2: 34.0,
         // How much of the boost DIRECTION comes from the rope instead of from the look
         // direction: 0.0 = pure look direction (the behaviour up to 2026-08-10), 1.0 = straight
@@ -692,6 +727,72 @@
         // against exploits, not a target speed, and what the factor of x1.5 named by the
         // user refers to is open. It is not changed before there is an answer.
         max_speed_m_s: 75.0,
+
+        // ---------------------------------------------------------------------------
+        // F-008 — WHAT BOUNDS A DASH, now that the gas price does not
+        // ---------------------------------------------------------------------------
+        // Q-046 / FIND-152, measured 2026-08-20: the tank went 300 -> 15000 for testability, so
+        // `gas_dodge: 45` went from 6.7 dashes per sortie to **333**. At 333 the price is not a
+        // limiter, it is a rounding error, and the backlog row for F-008 says in so many words
+        // *„mit eigenem Cooldown ... Anzahl der Dashes ist ein Stat"* — neither half existed.
+        //
+        // So the answer to "what now bounds a dash" is THESE THREE NUMBERS and not the gas:
+        //
+        //   dodge_charges     how many in a row      3
+        //   dodge_recharge_s  how fast they return   4 s each -> 12 s for a full magazine
+        //   dodge_cooldown_s  how fast they leave    0.6 s between two
+        //
+        // ⚠️ UNTUNED, and the three are chosen against each other rather than felt:
+        //   - 3 is the smallest number that is a *magazine* and not a cooldown. At 2 the stat
+        //     has one step in it; at 5 the burst is longer than the 0.6 s spacing can shape.
+        //   - 0.6 s is 36 ticks — twice `dodge_double_tap_window_ticks` (18), so the gesture
+        //     that fires a dash can never accidentally fire the next one, and a player drumming
+        //     on Space gets exactly one dash per 36 ticks instead of one per 18.
+        //   - 4 s per charge makes a burst of three cost 12 s of restraint. Against a 330 s
+        //     sortie that is 27 full magazines, which is generous — the number is a **shape**,
+        //     not a scarcity, and scarcity is `F-019`'s job.
+        //
+        // 🔴 What this does NOT do: bill anything. `gas_dodge: 45` is still charged on top, and
+        // the charge gate sits IN FRONT of the bill (`vector::gas::gas_budget` reads
+        // `DodgeCharges::ready`) — a dash refused for want of a charge costs nothing. That
+        // ordering is FIND-152 read the right way round: the gate must not sit behind the money.
+        dodge_charges: 3.0,
+        dodge_recharge_s: 4.0,
+        dodge_cooldown_s: 0.6,
+
+        // ---------------------------------------------------------------------------
+        // F-009 — the sideways flip: „Doppeltipp A/D erzeugt seitlichen Ausweichsprung in der
+        // Luft mit kurzen I-Frames."
+        // ---------------------------------------------------------------------------
+        // ⚠️ UNTUNED. The flip is the ACROBATIC verb, not the fast one, and every number here
+        // is set against the dash it must not replace:
+        //
+        //   dodge_impulse_m_s  24.0  costs 45 gas and a charge, goes where WASD points
+        //   flip_impulse_m_s   18.0  costs 20 gas and NO charge, goes strictly sideways
+        //
+        // 18 < 24 on purpose: the flip is cheaper and always available, so it must buy less
+        // distance, or nobody would ever pay for the dash. What it buys instead is the
+        // i-frame window — the dash has none.
+        flip_impulse_m_s: 18.0,
+        // Sideways only would drive a flip into the wall you are trying to leave: hugging a
+        // facade, `A` throws you along it and gravity has you back on it in a third of a
+        // second. 6 m/s of lift is 1.8 m of rise at gravity_m_s2 -20, i.e. one body length —
+        // enough to clear a window ledge, far short of a jump (jump_speed_m_s 6.5).
+        flip_up_m_s: 6.0,
+        // 0.35 s = 21 ticks. The acceptance sentence is *„Flip vermeidet einen Titanengriff,
+        // wenn im Fenster ausgeloest"* — so this is a WINDOW, and it has to be short enough
+        // that mistiming it is a real mistake. A titan's Strike lands on one tick
+        // (`combat::strike::land` + `StrikeSpent`), so 21 ticks is 21 chances to be the one.
+        flip_iframes_s: 0.35,
+        // The same 18 ticks as the dash's window, and deliberately the same number: two
+        // gestures on one keyboard that need different timings is a control scheme nobody
+        // learns. If one moves, both move.
+        flip_double_tap_window_ticks: 18,
+        // Flat, never a rate — the same contract `gas_dodge` carries. 20 against the dash's 45:
+        // per m/s bought that is 20/18 = 1.11 against 45/24 = 1.875, so the flip is the cheaper
+        // impulse and the dash stays the expensive one (the ratio `tests/vector_boost.rs`
+        // already holds against the boost).
+        gas_flip: 20.0,
     ),
 
     camera: (
@@ -716,6 +817,18 @@
         // — not an invented second number. F-017 names „abschaltbar fuer Motion Sickness";
         // whoever wants the effect off sets this value to fov_deg.
         fov_max_speed_deg: 90.0,
+        // F-017 — where the speed curve starts, in m/s. Below it the image is exactly
+        // `fov_deg` and F-017 is invisible; from here to `vector.max_speed_m_s` (75) it opens
+        // linearly to `fov_max_speed_deg`.
+        //
+        // ⚠️ UNTUNED. 22 m/s is picked off a measurement and not off a feeling: a pure swing
+        // runs 17-21 m/s (Q-018), so at 22 the lens is still at rest while you are merely
+        // swinging, and it starts to open the moment the drive or a dash puts you above what
+        // a rope alone can do. Walking (run_speed_m_s) is nowhere near it, which is the point
+        // — a walk that widens the lens sells nothing.
+        //
+        // The 22 -> 75 span is 53 m/s wide and covers 30 degrees of FOV, i.e. 0.57 deg per m/s.
+        fov_speed_from_m_s: 22.0,
         mouse_deg_per_px: 0.08,
         pitch_limit_deg: 89.0,
         smoothing_half_life_s: 0.05,

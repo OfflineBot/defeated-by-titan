@@ -1,0 +1,84 @@
+# f019-supply — NACHSCHUB-STATIONEN, and the hole they close is a measured one.
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/f019-supply.txt --ticks 900
+#
+# and, as a SEPARATE run, the one that returns a usable exit code:
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/f019-supply.txt --ticks 900 >/dev/null 2>&1; echo $?
+#
+# ## What was wrong before 2026-08-24
+#
+# docs/QUESTIONS.md Q-044, measured: at the honest tank (gas_tank: 300) a sortie buys 16.7 s of
+# held boost against a 330 s mission — and there was **no refuel anywhere outside the
+# headquarters**. `mission::hub::refuel_at_stations` serves the two racks inside the hall, and
+# the hall is what you leave when the sortie starts. The user's own answer to Q-033 says the
+# refills happen away from base; the stations had never been built. That is also why `gas_tank`
+# had to go 50x (300 -> 15000) to be testable at all: the tank was papering over a missing
+# world feature.
+#
+# ## The four stations of `ashgate`, and why they stand where they stand
+#
+#   (0, 2, 45)     the first one out of the gate — THE ONE THIS SCRIPT MEASURES
+#   (0, 2, 105)    mid-lane, under the gantry at z = 122.5
+#   (0, 2, 190)    the far north end of the swing spine
+#   (-30, 2, -60)  off the lane, on the way to the wall gallery
+#
+# All four sit ON the gantry line (x = 0, pillars at x = ±14), i.e. on the route a player
+# actually flies, at a pitch of ~85 m — a little under one hook range (90 m), so the supply line
+# is a chain you can fly rather than a set of places you have to remember.
+#
+# ## The three numbers under it (gear.ron: resupply)
+#
+#   station_uses: 3        reloads per station, PER VISIT — standing still does not drain it
+#   station_refill_s: 1.5  „Nachladen dauert 1,5 s", the acceptance sentence verbatim
+#   station_radius_m: 6.0  wider than the hub's 4: you ARRIVE here at 40 m/s
+#
+# One reload is a WHOLE TANK, delivered at gas_tank / station_refill_s = 10000 gas/s for 1.5 s.
+#
+# ⚠️ THE CONTROL. Delete ACT 3's `warp` (the line that puts him on the station) and ACT 3's
+# assert goes red at the same ~14750 ACT 2 measured — nothing else in this game refills a tank
+# outside the hall. That is the check that this script measures the station and not the clock.
+
+look 0 0
+
+# ---------------------------------------------------------------------------------------
+# ACT 1 — stand somewhere no station reaches. 91 m from the nearest one.
+# ---------------------------------------------------------------------------------------
+warp 80 3 60
+wait 1.0
+mark act1-away-from-any-station
+assert gas > 14990
+
+# ---------------------------------------------------------------------------------------
+# ACT 2 — burn gas. Held boost is 18/s; three dashes are 45 flat each (vector.gas_dodge).
+#         `key C` and not a double-tapped Space: both routes reach Buttons::DODGE and the
+#         single key is the one a script can press without a gesture (src/net/local.rs).
+#         The 0.7 s between them is `vector.dodge_cooldown_s` (0.6) plus a tick of margin —
+#         F-008's magazine is 3, so a fourth press inside this act would buy nothing.
+# ---------------------------------------------------------------------------------------
+# ⚠️ 2.3 s and not 9: the first run of this script held `Shift` for nine seconds, so the boost
+# was STILL BURNING 18 gas/s while ACT 3's pump ran, and ACT 3 read 14961.6 instead of 15000.
+# The hold has to end before the station is reached, or this script measures the difference of
+# two rates instead of the reload.
+key W 2.3
+key Shift 2.3
+key C 0.1
+wait 0.7
+key C 0.1
+wait 0.7
+key C 0.1
+wait 1.0
+mark act2-drained
+assert gas < 14900
+
+# ---------------------------------------------------------------------------------------
+# ACT 3 — stand on the station at (0, 2, 45) and wait out one reload.
+#         1.5 s of pump plus a tick of message latency (the request is written in PostStep and
+#         applied in the next tick's Intent, `vector::gas::apply_refuel_requests`).
+# ---------------------------------------------------------------------------------------
+warp 0 3 45
+wait 2.5
+mark act3-refuelled
+assert gas > 14999
+
+end

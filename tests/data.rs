@@ -383,11 +383,29 @@ const TANK_SCRIPTS_DELTA: &[&str] = &[
     "f-018-gas.txt",
     "f-flight-cut.txt",
     "f003-ashgate.txt",
+    "f008-dash.txt",
     "f018-budget.txt",
+    "f019-supply.txt",
     "f070-hub.txt",
     "f170-hud.txt",
 ];
-const TANK_SCRIPTS_QUIET_ON_RAISE: &[&str] = &["f-flight-cut.txt", "f070-hub.txt"];
+const TANK_SCRIPTS_QUIET_ON_RAISE: &[&str] = &[
+    "f-flight-cut.txt",
+    "f070-hub.txt",
+    // ⚠️ Both of the 2026-08-24 scripts are in TWO groups, and they belong in both.
+    //
+    // `f008-dash.txt` brackets `15000 - 3 x gas_dodge = 14865` to ±10 — a DELTA, the width has
+    // to survive and the centre has to move. Its opening `assert gas > 14999` is the other
+    // kind: raise the tank and that bound stops failing without ever going red.
+    //
+    // `f019-supply.txt` is the same shape twice over: `assert gas < 14900` is what says the
+    // tank was DRAINED (a DELTA off 15000 minus 2.3 s of boost and three dashes), and
+    // `assert gas > 14999` is what says the station filled it again — and THAT one is the
+    // dangerous kind squared, because a refill that overshoots and a tank that was raised look
+    // identical to it.
+    "f008-dash.txt",
+    "f019-supply.txt",
+];
 const TANK_SCRIPTS_QUIET_ON_LOWER: &[&str] = &["f-001-hooks.txt", "game-full.txt"];
 
 fn as_paths(names: &[&str]) -> String {
@@ -651,7 +669,13 @@ fn t005_gas_priority_names_every_consumer_exactly_once() {
     // Who pays when the tank runs low is a game-value decision (docs/QUESTIONS.md Q-017).
     // If a consumer is missing it never gets gas, and nobody goes looking for it in the RON.
     let r = &data().game.vector.gas_priority;
-    for who in [GasConsumer::Boost, GasConsumer::Steer, GasConsumer::ReelIn, GasConsumer::Dodge] {
+    for who in [
+        GasConsumer::Boost,
+        GasConsumer::Steer,
+        GasConsumer::ReelIn,
+        GasConsumer::Dodge,
+        GasConsumer::Flip,
+    ] {
         assert_eq!(
             r.iter().filter(|x| **x == who).count(),
             1,
@@ -660,7 +684,12 @@ fn t005_gas_priority_names_every_consumer_exactly_once() {
     }
     // Four since 2026-08-13: `Steer` (docs/NEXT.md §1B, FIND-082) is the rope half of the air
     // control, and it is a rate like the first two.
-    assert_eq!(r.len(), 4, "gas_priority = {r:?} — exactly four consumers, no more");
+    // **Five since 2026-08-24:** `Flip` (`F-009`) is the second consumer that is not a rate —
+    // it bills `vector.gas_flip` once, on the tick a double-tap of `A` or `D` lands in the air.
+    // It is a fifth consumer and not a second meaning for `Dodge` because the two differ in
+    // price, in direction and in what they buy, and one field with two prices is a ledger
+    // nobody can audit (`docs/QUESTIONS.md` Q-052 §4 for why it is LAST).
+    assert_eq!(r.len(), 5, "gas_priority = {r:?} — exactly five consumers, no more");
 }
 
 #[test]

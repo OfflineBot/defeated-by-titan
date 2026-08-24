@@ -1,0 +1,63 @@
+# f008-dash — WHAT BOUNDS A DASH, now that the gas price does not.
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/f008-dash.txt --ticks 900
+#   ./target/debug/defeated_by_titan --headless --script scripts/f008-dash.txt --ticks 900 >/dev/null 2>&1; echo $?
+#
+# docs/QUESTIONS.md Q-046 / FINDINGS FIND-152, measured 2026-08-20: the tank went 300 -> 15000
+# for testability, so `vector.gas_dodge: 45` went from **6.7 dashes per sortie to 333**. The
+# backlog row asks for „einen kurzen, harten Impuls mit eigenem Cooldown" and „Anzahl der
+# Dashes ist ein Stat" — and neither half existed (FIND-067 named the missing cooldown a
+# fortnight ago). At 333 dashes the price bounds nothing at all.
+#
+# What bounds it now (game.ron: vector):
+#
+#   dodge_charges: 3.0       how many in a row
+#   dodge_recharge_s: 4.0    how fast one comes back  -> 12 s for a full magazine
+#   dodge_cooldown_s: 0.6    how fast they leave      -> 36 ticks, twice the tap window
+#
+# ## The arithmetic this script asserts
+#
+# FIVE presses, 0.7 s apart (just over the 0.6 s cooldown), inside 3.5 s — far short of the
+# 4 s a single charge needs to come back. So THREE are granted and two are refused:
+#
+#   granted  3 x vector.gas_dodge 45 = 135 gas
+#   refused  2 x 0                   =   0 gas   <- the refusal costs NOTHING, and that is
+#                                                   FIND-152 read the right way round: the gate
+#                                                   sits in front of the money, not behind it
+#
+# 15000 - 135 = 14865. The band below is ±10 gas, which is 22 % of one dash — so a fourth dash
+# (14820) and a missing third (14910) are both outside it.
+#
+# ⚠️ THE CONTROL, and it is a one-line edit: in `src/vector/gas.rs` replace
+# `let can_dash = charges.is_none_or(|c| c.ready(tick.0, cooldown_ticks));` with
+# `let can_dash = true;` and this act reads 14775 (five dashes) instead of 14865. Measured.
+#
+# ⚠️ No Shift anywhere in this script. Held boost is 18/s and would put 0.3 gas per tick into
+# the same number the dashes are being counted in — the band would then be measuring the
+# wall-clock length of the run.
+
+look 0 0
+warp 80 60 60
+wait 0.5
+mark act1-airborne
+assert gas > 14999
+
+# `W` for a direction — a dash with no movement key has nowhere to throw the player, so
+# `vector::gas` refuses to bill it at all (`boost::dodge_direction` answers None).
+key W 6.0
+key C 0.1
+wait 0.7
+key C 0.1
+wait 0.7
+key C 0.1
+wait 0.7
+key C 0.1
+wait 0.7
+key C 0.1
+wait 0.7
+
+mark act2-five-presses-three-dashes
+assert gas > 14855
+assert gas < 14875
+
+end

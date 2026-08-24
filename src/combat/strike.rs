@@ -71,7 +71,7 @@
 use bevy::prelude::*;
 
 use crate::data::{GameData, TitanKind};
-use crate::shared::{Health, PlayerId, SimulationSystems, TitanId, TitanState};
+use crate::shared::{Health, Invulnerable, PlayerId, SimulationSystems, Tick, TitanId, TitanState};
 
 /// What one titan's blow costs and how far it carries. **Resolved once**, at the first tick the
 /// titan is seen, out of `titan.ron` and `scale.ron`.
@@ -234,7 +234,13 @@ pub fn land(
         (Entity, &TitanState, &Transform, &StrikeTuning, Has<StrikeSpent>),
         (With<TitanId>, Without<PlayerId>),
     >,
-    mut players: Query<(&PlayerId, &Transform, &mut Health), Without<TitanId>>,
+    tick: Res<Tick>,
+    // `Option`, and it is the same argument `vector::gas` makes for `DodgeCharges`: a
+    // `&Invulnerable` in the filter would drop every player who does not carry one **out of the
+    // query entirely** — and a player nothing can hit is not the failure mode you want out of a
+    // missing component. `None` therefore means "takes it", which is what every fixture in
+    // `tests/combat.rs` did before `F-009`/`F-010` existed and still does.
+    mut players: Query<(&PlayerId, &Transform, &mut Health, Option<&Invulnerable>), Without<TitanId>>,
 ) {
     for (entity, state, at, tuning, spent) in &titans {
         if *state != TitanState::Strike {
@@ -251,8 +257,26 @@ pub fn land(
         if tuning.damage <= 0.0 {
             continue;
         }
-        for (id, player_at, mut health) in &mut players {
+        for (id, player_at, mut health, iframes) in &mut players {
             if !tuning.reaches(at.translation, at.forward(), player_at.translation) {
+                continue;
+            }
+            // **`F-009` / `F-010` — the i-frames, and this is the only place in the game a
+            // player's damage is refused.** A flip or a slide fired inside the window is the
+            // acceptance sentence of both rows (*„Flip vermeidet einen Titanengriff, wenn im
+            // Fenster ausgeloest"* · *„Slide vermeidet Stomp-Angriff"*), and it has to be
+            // decided here rather than in the move: `StrikeSpent` is inserted above, so the
+            // blow is over for the titan whatever happens to the player, and one titan cannot
+            // hit an invulnerable player twice by trying again next tick.
+            //
+            // It is checked **after** `reaches` on purpose. The reach test is the one that
+            // decides whether this blow was aimed at this player at all; asking the i-frames
+            // first would log a dodge for every player on the map every time anything swung.
+            if iframes.is_some_and(|i| i.active(tick.0)) {
+                info!(
+                    "strike: player {} is INVULNERABLE at tick {} — {:.1} damage avoided (F-009/F-010)",
+                    id.0, tick.0, tuning.damage
+                );
                 continue;
             }
             let left = health.damage(tuning.damage);

@@ -221,6 +221,16 @@ pub struct GasGrant {
     /// the second `Space` press lands and on no other, so a reader may treat `true` as "the
     /// impulse happens now" and needs no edge detection of its own.
     pub dodge: bool,
+    /// `F-009` flip — **true on exactly one tick per double-tap of `A` or `D`**, like
+    /// [`dodge`](Self::dodge) and for the same reason: `net::local::read_input` presses
+    /// `Buttons::FLIP` on the tick the second press lands and on no other.
+    ///
+    /// The flip is billed like the dodge — flat, once, `vector.gas_flip` — and it is a
+    /// **fifth** consumer rather than a second meaning for `dodge`, because the two differ in
+    /// price, in direction and in what they buy: a dodge is 24 m/s where WASD points for 45
+    /// gas, a flip is 18 m/s strictly sideways plus i-frames for 20. One field with two prices
+    /// is the shape a ledger cannot audit.
+    pub flip: bool,
 }
 
 /// Contribution of ground run and air control, in m/s².
@@ -255,6 +265,174 @@ pub struct ReelSpeed {
 /// rollback (`docs/multiplayer.md` rules 3 and 5).
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PrevButtons(pub Buttons);
+
+/// `F-019` — **a refuel point out in the field**, and the thing `Q-044` said was missing.
+///
+/// ## Why it lives in `shared/` and not in `world/`
+///
+/// Two domains have to see it and neither may see the other: `world` spawns it out of
+/// `maps.ron` and runs the pump, and `render` has to paint an empty one differently
+/// (*„leere Station wird visuell markiert"*). `docs/architecture.md` already names exactly
+/// this case — *"`world` spawns entities with components out of `shared/`, and `render`
+/// queries those components without knowing this domain"* — so the component is the seam and
+/// no allow-list line is bought.
+///
+/// ## The one rule that keeps it from being an exploit
+///
+/// **A use is spent when the refill STARTS, not when it finishes.** The obvious alternative —
+/// pay out gradually, charge the use at the end — lets a player tap in and out of the circle
+/// forever and drink an unbounded amount for nothing. The alternative to *that* — pay out
+/// nothing until 1.5 s have elapsed — makes a station that is interrupted worth exactly zero,
+/// which is a rule a player cannot see happening to him.
+///
+/// So: entering an idle station with `uses_left > 0` costs the use immediately and starts the
+/// pump. The pump then runs its `refill_s` **whether he stays or not** — a running pump keeps
+/// pumping — and everyone standing in the circle drinks from it, which is what makes one
+/// station a squad's decision rather than a queue (`docs/multiplayer.md`).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct SupplyStation {
+    /// How far the circle reaches, in meters. Measured in **3D** from the centre: a player
+    /// 40 m above a station is not standing at it.
+    pub radius_m: f32,
+    /// Reloads still in it. `0` is an empty station, and an empty station is still there —
+    /// it is marked, not despawned, or a player learns nothing from having drained it.
+    pub uses_left: u32,
+    /// Seconds left on the refill that is running. `0.0` means idle.
+    pub charge_s: f32,
+    /// What one reload takes, out of `gear.ron: resupply.station_refill_s`. Copied onto the
+    /// component at spawn, like `mission::hub::RefuelStation` does with its rate, so the pump
+    /// is a function of what stands in the world and needs no `GameData` per player per tick.
+    pub refill_s: f32,
+    /// Gas per second while the pump runs. One reload is a **whole tank**, so this is
+    /// `vector.gas_tank / station_refill_s` — 10000/s at today's numbers, which sounds absurd
+    /// and is exactly right: it runs for 1.5 s and `Gas::refill` caps at the tank.
+    pub gas_per_s: f32,
+    /// **One reload per visit.** True from the tick a pump starts until the circle is empty
+    /// again.
+    ///
+    /// Without it a player who merely stands on a station drains every reload in it back to
+    /// back — measured, `3 -> 0` in 4.5 s with nobody pressing anything, which is not *„begrenzte
+    /// Nachladungen"* but a station that empties itself. With it, three uses are three
+    /// **visits**: you take your tank, you leave, and coming back is a decision you make again.
+    pub served_this_visit: bool,
+}
+
+impl SupplyStation {
+    pub fn running(&self) -> bool {
+        self.charge_s > 0.0
+    }
+
+    pub fn empty(&self) -> bool {
+        self.uses_left == 0 && !self.running()
+    }
+}
+
+/// `F-008` — **what actually bounds a dash**, and it exists because the gas price stopped
+/// bounding it.
+///
+/// Measured on 2026-08-20 (`docs/QUESTIONS.md` Q-046, `docs/FINDINGS.md` FIND-152): the
+/// testability tank went `300 -> 15000`, so `vector.gas_dodge: 45` went from **6.7 dashes per
+/// sortie** to **333**. The backlog row says *"mit eigenem Cooldown ... Anzahl der Dashes ist
+/// ein Stat"* and neither half existed — a dash was a traversal move you could hold down.
+///
+/// Two limits and they answer two different questions:
+///
+/// - [`left`](Self::left) is *how many in a row* — the stat. It refills one charge every
+///   `vector.dodge_recharge_s`, and only up to [`max`](Self::max).
+/// - [`spent_at_tick`](Self::spent_at_tick) is *how fast* — `vector.dodge_cooldown_s` between
+///   two dashes, so a full magazine cannot be emptied in three ticks.
+///
+/// **The charge is what the gas grant asks, and `vector::dodge` is the one writer.**
+/// `vector::gas::gas_budget` reads it and refuses to bill a dash it will not get
+/// (`FIND-152`'s shape in reverse: the gate has to be in front of the money, not behind it).
+///
+/// `left` is a float and not a `u8` on purpose: the recharge accumulator would otherwise need
+/// a second field, and a second field is a second thing that can disagree with the first.
+/// Only `left >= 1.0` is a dash.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DodgeCharges {
+    /// Whole and fractional charges. A dash costs exactly `1.0`.
+    pub left: f32,
+    /// The ceiling, out of `game.ron: vector.dodge_charges`. Never a number in Rust.
+    pub max: f32,
+    /// The tick the last dash was granted on. `None` means "never dashed", which is the only
+    /// state in which the cooldown cannot refuse.
+    pub spent_at_tick: Option<u64>,
+}
+
+impl DodgeCharges {
+    pub fn new(max: f32) -> Self {
+        Self { left: max, max, spent_at_tick: None }
+    }
+
+    /// Whether a dash may fire **this** tick: a whole charge in the magazine and the cooldown
+    /// elapsed since the last one.
+    ///
+    /// `saturating_sub` for the same reason `net::local::DodgeTap::feed` uses it — a tick
+    /// counter that ever ran backwards yields `0`, i.e. "not yet", instead of an underflow
+    /// panic in the middle of the simulation.
+    pub fn ready(&self, tick: u64, cooldown_ticks: u64) -> bool {
+        self.left >= 1.0
+            && self.spent_at_tick.is_none_or(|t| tick.saturating_sub(t) >= cooldown_ticks)
+    }
+}
+
+/// `F-009` / `F-010` — **the only invulnerability a player has**, and it is a deadline, not a
+/// flag.
+///
+/// A tick and not a countdown: a countdown needs somebody to tick it down every frame and it
+/// is wrong the moment two systems do. A deadline is written once by the move that grants it
+/// and read by `combat::strike::land`, which already knows the tick.
+///
+/// ⚠️ **It is never removed.** An expired deadline is simply in the past, so there is no
+/// despawn system, no `Option`, and no window in which the component exists but means nothing.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Invulnerable {
+    /// The first tick on which blows land again.
+    pub until_tick: u64,
+}
+
+impl Invulnerable {
+    /// Extends, never shortens. Two moves whose windows overlap give the longer of the two —
+    /// a flip out of a slide must not cut the slide's i-frames short.
+    pub fn extend_to(&mut self, tick: u64) {
+        self.until_tick = self.until_tick.max(tick);
+    }
+
+    pub fn active(&self, tick: u64) -> bool {
+        tick < self.until_tick
+    }
+}
+
+/// `F-010` — the ground slide: **a deadline and a direction**, and nothing else.
+///
+/// The same shape as [`Invulnerable`] and for the same reason. `dir_m` is a horizontal unit
+/// vector in world space, fixed at the tick the slide starts: a slide you can steer is a run,
+/// and *„geht fliessend in Sprint ueber"* is about what happens when it **ends**, not during.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Slide {
+    /// The first tick on which the player runs again. `0` means "not sliding" and is the
+    /// value a fresh player carries.
+    pub until_tick: u64,
+    /// World-space horizontal unit vector. Meaningless while `until_tick` is in the past.
+    pub dir_m: Vec3,
+    /// The tick the last slide **started** — the cooldown clock, so that a slide cannot be
+    /// re-entered on the tick it ends.
+    pub started_at_tick: Option<u64>,
+}
+
+impl Slide {
+    pub fn active(&self, tick: u64) -> bool {
+        tick < self.until_tick
+    }
+
+    /// Whether a new slide may start: not already sliding, and `slide_cooldown_ticks` since
+    /// the last one began.
+    pub fn ready(&self, tick: u64, cooldown_ticks: u64) -> bool {
+        !self.active(tick)
+            && self.started_at_tick.is_none_or(|t| tick.saturating_sub(t) >= cooldown_ticks)
+    }
+}
 
 #[cfg(test)]
 mod tests {

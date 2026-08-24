@@ -80,7 +80,10 @@
 use bevy::prelude::*;
 
 use crate::data::{GameData, GasConsumer};
-use crate::shared::{Buttons, Gas, GasGrant, Hook, Intent, PlayerId, RefuelRequest};
+use crate::shared::{
+    Buttons, DodgeCharges, Gas, GasGrant, Hook, Intent, MovementState, PlayerId, RefuelRequest,
+    Tick,
+};
 
 /// Puts gas back — **the only thing in the game that ever raises a tank** (Q-033).
 ///
@@ -179,12 +182,13 @@ pub fn steer_has_effect(
 #[derive(Default)]
 pub struct Ledger {
     tick: u64,
-    /// Gas actually debited, per consumer, in the order `[boost, steer, reel_in, dodge]`.
-    spent: [f32; 4],
+    /// Gas actually debited, per consumer, in the order
+    /// `[boost, steer, reel_in, dodge, flip]`.
+    spent: [f32; 5],
     /// Ticks in which the consumer *wanted* gas.
-    wanted: [u32; 4],
+    wanted: [u32; 5],
     /// Ticks in which it was *granted* — below `wanted` only on a tank that ran short.
-    granted: [u32; 4],
+    granted: [u32; 5],
     /// What really left the tank, summed straight off `Gas::current`. The four `spent` entries
     /// have to add up to this; if they do not, something bills gas that this file does not see.
     debited: f32,
@@ -203,7 +207,23 @@ pub fn gas_budget(
     time: Res<Time<Fixed>>,
     data: Res<GameData>,
     mut ledger: Local<Ledger>,
-    mut players: Query<(&Intent, &Hook, &mut Gas, &mut GasGrant, &Transform)>,
+    tick: Res<Tick>,
+    // `Option` on both of the new ones, and that is not laziness — it is what keeps this
+    // system's contract the same for a fixture as for a real player. A `&DodgeCharges` in the
+    // filter would drop every test player that does not carry one **out of the query
+    // entirely**, and a player who is not billed is a player who never runs out of gas: the
+    // exact shape of `FIND-152`, where a whole-app test never reached the code it was testing.
+    // `None` therefore means "no magazine to ask" and behaves as it did before `F-008` — and
+    // `player::spawn_player_with_id` gives every real body both components from tick 1.
+    mut players: Query<(
+        &Intent,
+        &Hook,
+        &mut Gas,
+        &mut GasGrant,
+        &Transform,
+        Option<&DodgeCharges>,
+        Option<&MovementState>,
+    )>,
 ) {
     let vector = &data.game.vector;
     // `Time<Fixed>` and not `1.0 / simulation_hz`: the timestep is set from the very same
@@ -224,8 +244,15 @@ pub fn gas_budget(
     // are billed per tick; a dodge is one impulse and is billed once, on the tick the double-tap
     // lands. `gas_dodge` therefore has no `_per_s` in its name and must not grow one.
     let dodge_cost = vector.gas_dodge;
+    // Seconds in the file, ticks in the code (`docs/conventions.md`). `round`, not `as u64`:
+    // 0.6 s at 60 Hz is 36.000004 in f32 and truncating would make the cooldown 36 ticks on one
+    // machine and 35 on the next.
+    let cooldown_ticks = (vector.dodge_cooldown_s as f64 * data.game.simulation_hz).round() as u64;
+    // `F-009`, flat like the dodge and for the identical reason: it is an impulse, not a rate,
+    // so it must never be multiplied by `dt` and must never grow a `_per_s` in its name.
+    let flip_cost = vector.gas_flip;
 
-    for (intent, hook, mut gas, mut grant, transform) in &mut players {
+    for (intent, hook, mut gas, mut grant, transform, charges, state) in &mut players {
         let wants_boost = intent.pressed(Buttons::BOOST);
         let wants_reel_in = intent.pressed(Buttons::REEL_IN) && hook.anchored_count() > 0;
         // The same shape as the line above it, and for the same reason: **the cost follows the
@@ -233,8 +260,28 @@ pub fn gas_budget(
         // throw the player in (`boost::dodge_direction` answers `None`), so `vector::boost`
         // would write zero — and billing 15 % of a tank for zero thrust is the invisible leak
         // that whole detour exists to prevent. One rule, one function, two callers.
-        let wants_dodge =
-            intent.pressed(Buttons::DODGE) && super::boost::dodge_direction(intent).is_some();
+        // 🔴 **`F-008`'s magazine, and the gate sits IN FRONT OF THE MONEY.** Q-046 measured
+        // that the price stopped bounding the dash the day the tank went 300 -> 15000 (333
+        // dashes per sortie), so what bounds it now is `DodgeCharges` — and asking it *here*,
+        // in the same expression as the direction, is what makes a refused dash cost nothing
+        // at all. Booking first and refusing later would debit 45 gas for an impulse that never
+        // happens, which is precisely the invisible leak the `dodge_direction` clause above was
+        // added to prevent. One rule, one place.
+        let can_dash =
+            charges.is_none_or(|c| c.ready(tick.0, cooldown_ticks));
+        let wants_dodge = intent.pressed(Buttons::DODGE)
+            && can_dash
+            && super::boost::dodge_direction(intent).is_some();
+        // **`F-009`, and it is an AIR move.** *„Doppeltipp A/D erzeugt seitlichen
+        // Ausweichsprung **in der Luft**"* — on the ground the same evasion is `F-010`'s
+        // slide, which is a different move with a different cost (none). Without this clause
+        // a player standing in the street would pay `gas_flip` for a sideways hop, and the
+        // ground would have two evasive verbs that do the same thing at two prices.
+        //
+        // `None` counts as airborne: a fixture with no `MovementState` is not standing
+        // anywhere, and refusing the flip would make the feature untestable without a floor.
+        let airborne = state.is_none_or(|s| *s != MovementState::Grounded);
+        let wants_flip = intent.pressed(Buttons::FLIP) && airborne && intent.move_x != 0.0;
         // **`docs/NEXT.md` §1B, and the same rule a third time: the cost follows the effect.**
         // The rope term of the mixing rule is `n > 0 && (w⁺ > 0 || mx ≠ 0)` — no anchored hook
         // means there is no rope direction to push along and no lateral boost to add, and no
@@ -270,7 +317,7 @@ pub fn gas_budget(
             data.game.player.air_pull_fade_m,
         );
 
-        if !wants_boost && !wants_reel_in && !wants_dodge && !wants_steer {
+        if !wants_boost && !wants_reel_in && !wants_dodge && !wants_steer && !wants_flip {
             // Nobody wants anything, so **the tank is not touched at all** — not even to
             // write the same number back. `Changed<Gas>` is a signal the HUD and one day the
             // wire read, and a tank that reports a change every tick without changing is a
@@ -290,20 +337,23 @@ pub fn gas_budget(
                 reel_in: wants_reel_in,
                 steer: wants_steer,
                 dodge: wants_dodge,
+                flip: wants_flip,
             },
             Costs {
                 boost: boost_cost,
                 reel_in: reel_cost,
                 steer: steer_cost,
                 dodge: dodge_cost,
+                flip: flip_cost,
             },
             &mut tank,
         );
         if ledger_enabled() {
-            let wants = [wants_boost, wants_steer, wants_reel_in, wants_dodge];
-            let grants = [booked.boost, booked.steer, booked.reel_in, booked.dodge];
-            let costs = [boost_cost, steer_cost, reel_cost, dodge_cost];
-            for i in 0..4 {
+            let wants = [wants_boost, wants_steer, wants_reel_in, wants_dodge, wants_flip];
+            let grants =
+                [booked.boost, booked.steer, booked.reel_in, booked.dodge, booked.flip];
+            let costs = [boost_cost, steer_cost, reel_cost, dodge_cost, flip_cost];
+            for i in 0..5 {
                 ledger.wanted[i] += u32::from(wants[i]);
                 ledger.granted[i] += u32::from(grants[i]);
                 if grants[i] {
@@ -326,7 +376,7 @@ pub fn gas_budget(
             let total: f32 = ledger.spent.iter().sum();
             let tank = data.game.vector.gas_tank;
             info!(
-                "gas ledger t={t} spent={total:.1} of {debited:.1} debited ({pct:.2}% of tank) | boost={b:.1} steer={s:.1} reel={r:.1} dodge={d:.1} | wanted_ticks boost={wb} steer={ws} reel={wr} dodge={wd} | granted_ticks boost={gb} steer={gs} reel={gr} dodge={gd}",
+                "gas ledger t={t} spent={total:.1} of {debited:.1} debited ({pct:.2}% of tank) | boost={b:.1} steer={s:.1} reel={r:.1} dodge={d:.1} flip={f:.1} | wanted_ticks boost={wb} steer={ws} reel={wr} dodge={wd} flip={wf} | granted_ticks boost={gb} steer={gs} reel={gr} dodge={gd} flip={gf}",
                 t = ledger.tick,
                 debited = ledger.debited,
                 // ⚠️ `.2`, not `.0`. At `gas_tank: 15000` a whole ordinary sortie spends
@@ -340,14 +390,17 @@ pub fn gas_budget(
                 s = ledger.spent[1],
                 r = ledger.spent[2],
                 d = ledger.spent[3],
+                f = ledger.spent[4],
                 wb = ledger.wanted[0],
                 ws = ledger.wanted[1],
                 wr = ledger.wanted[2],
                 wd = ledger.wanted[3],
+                wf = ledger.wanted[4],
                 gb = ledger.granted[0],
                 gs = ledger.granted[1],
                 gr = ledger.granted[2],
                 gd = ledger.granted[3],
+                gf = ledger.granted[4],
             );
         }
     }
@@ -388,6 +441,11 @@ pub fn book(priority: &[GasConsumer], wants: Wants, costs: Costs, gas: &mut Gas)
                     grant.dodge = gas.try_spend(costs.dodge);
                 }
             }
+            GasConsumer::Flip => {
+                if wants.flip && !grant.flip {
+                    grant.flip = gas.try_spend(costs.flip);
+                }
+            }
         }
     }
     grant
@@ -408,6 +466,10 @@ pub struct Wants {
     /// `S`. Both halves are the effect, not the button.
     pub steer: bool,
     pub dodge: bool,
+    /// `F-009` flip: the double-tap landed, the player is **not** `Grounded`, and `move_x` is
+    /// not zero. All three halves are the effect, not the button — a flip with no sideways
+    /// input has no direction to throw anybody in.
+    pub flip: bool,
 }
 
 /// What one tick of each consumer costs, in gas.
@@ -422,6 +484,8 @@ pub struct Costs {
     pub reel_in: f32,
     pub steer: f32,
     pub dodge: f32,
+    /// `F-009`, and flat like `dodge`: `vector.gas_flip`, never multiplied by `dt`.
+    pub flip: f32,
 }
 
 #[cfg(test)]
@@ -435,17 +499,19 @@ mod tests {
     const STEER: f32 = 16.0 / 60.0; // 0.26667
     /// `F-008`, and **flat** — not divided by 60. The dodge is billed once, not per second.
     const DODGE: f32 = 45.0;
+    /// `F-009`, flat as well, 20.0 from `game.ron` as of 2026-08-24.
+    const FLIP: f32 = 20.0;
 
     /// The two oldest continuous consumers as every test below spells them; `F-006` and `F-008`
     /// are off unless a test says otherwise. A helper and not four literals per call, so that
     /// adding a fifth consumer one day touches one line rather than nine — which is exactly what
     /// `Steer` did on 2026-08-13.
     fn wants(boost: bool, reel_in: bool) -> Wants {
-        Wants { boost, reel_in, steer: false, dodge: false }
+        Wants { boost, reel_in, steer: false, dodge: false, flip: false }
     }
 
     fn costs() -> Costs {
-        Costs { boost: BOOST, reel_in: REEL, steer: STEER, dodge: DODGE }
+        Costs { boost: BOOST, reel_in: REEL, steer: STEER, dodge: DODGE, flip: FLIP }
     }
 
     #[test]

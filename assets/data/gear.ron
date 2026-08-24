@@ -170,5 +170,39 @@
         // pairs come, because a half-blunt blade is the thing you fix before you top the
         // harness up — 0.0 to 1.0 takes half a second.
         sharpen_per_s: 2.0,
+
+        // -------------------------------------------------------------------------------
+        // F-019 — NACHSCHUB-STATIONEN, out in the field. The hole Q-044 measured.
+        // -------------------------------------------------------------------------------
+        // The arithmetic that made this a prio-1 row rather than a nice-to-have:
+        //
+        //   gas_tank                    15000       (game.ron: vector)
+        //   gas_boost_per_s                18
+        //   -> a full tank of HELD boost  833 s     at the 50x testability tank
+        //   -> at the honest 300 tank      16.7 s   against a 330 s sortie (Q-044)
+        //
+        // and there was **no refuel anywhere in the world**: `mission::hub::refuel_at_stations`
+        // serves the two racks *inside the headquarters*, which you leave when the sortie
+        // starts. The user's own answer to Q-033 says refills happen away from base; the
+        // stations were never built. That is why `gas_tank` had to go 50x to be testable at
+        // all — the tank was papering over a missing world feature.
+        //
+        // ⚠️ UNTUNED. Three numbers, and each is set against something measurable:
+        //
+        // 3 reloads is the smallest number that is a **decision**. At 1 the station is a
+        // one-shot pickup and you never plan a route through it; at 5 you never plan one
+        // either, because it is always there. At 3 a squad has to share it (docs/multiplayer.md
+        // — the count is per station, so two players draw from the same three).
+        station_uses: 3,
+        // The acceptance sentence, verbatim: „Nachladen dauert 1,5 s". Not instant, for the
+        // same reason `blade_pairs_per_s` is not instant — standing still has to be the price.
+        // 1.5 s is 90 ticks; a husk's wind-up is readable inside that, so a refill under
+        // pressure is a real gamble and not a formality.
+        station_refill_s: 1.5,
+        // 6 m and not the hub's 4. You walk into a hub rack; you ARRIVE at a field station,
+        // and at 40 m/s a 4 m circle is six ticks wide — a target you cannot hit on purpose.
+        // 6 m is 12 m of diameter, i.e. 18 ticks at 40 m/s, and still smaller than the 7 m
+        // street it stands in.
+        station_radius_m: 6.0,
     ),
 )

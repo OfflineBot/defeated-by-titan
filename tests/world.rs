@@ -2842,3 +2842,189 @@ fn f003_the_rubble_takes_the_ground_and_the_ruin_takes_the_lane() {
         k.spill_m
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// `F-019` Nachschub-Stationen — „Statische Punkte auf der Map fuellen Gas und Klingen.
+// Begrenzte Nachladungen pro Mission." Acceptance: „Nachladen dauert 1,5 s; Zaehler sichtbar;
+// leere Station wird visuell markiert."
+// ---------------------------------------------------------------------------------------
+//
+// The hole these close is measured, not felt (`docs/QUESTIONS.md` Q-044): a tank buys ~16.7 s
+// of held boost at the honest `gas_tank: 300` against a **330 s sortie**, and until 2026-08-24
+// there was **no refuel anywhere outside the headquarters**. That is why `gas_tank` had to go
+// 50x to be testable at all — the tank was papering over a missing world feature.
+
+fn stations(app: &mut App) -> Vec<(Entity, Vec3, defeated_by_titan::shared::SupplyStation)> {
+    let mut q = app
+        .world_mut()
+        .query::<(Entity, &Transform, &defeated_by_titan::shared::SupplyStation)>();
+    let mut all: Vec<_> =
+        q.iter(app.world()).map(|(e, t, s)| (e, t.translation, *s)).collect();
+    all.sort_by(|a, b| a.1.z.total_cmp(&b.1.z));
+    all
+}
+
+#[test]
+fn f019_the_map_that_is_flown_has_supply_stations_standing_in_it() {
+    let mut app = built_world();
+    let d = data();
+    let map = d.current_map().expect("maps.ron: current names a map");
+    let found = stations(&mut app);
+
+    assert_eq!(
+        found.len(),
+        map.supply_stations.len(),
+        "maps.ron lists {} stations for {:?} and the world built {}",
+        map.supply_stations.len(),
+        d.maps.current,
+        found.len()
+    );
+    assert!(
+        !found.is_empty(),
+        "the map that is actually flown ({:?}) has NO refuel station in it, which is the whole \
+         of Q-044 — a 330 s sortie against a tank worth 16.7 s of boost",
+        d.maps.current
+    );
+    for (_, at, s) in &found {
+        assert_eq!(s.radius_m, d.gear.resupply.station_radius_m, "at {at:?}");
+        assert_eq!(s.refill_s, d.gear.resupply.station_refill_s, "at {at:?}");
+        assert!(s.uses_left > 0, "a station that ships empty at {at:?}");
+        assert!(!s.running(), "a station idles until somebody stands in it, at {at:?}");
+        // One reload is a whole tank over `station_refill_s` — the rate falls out of the two
+        // numbers instead of being a third one that can disagree with them.
+        let want = d.game.vector.gas_tank / d.gear.resupply.station_refill_s;
+        assert!((s.gas_per_s - want).abs() < 1e-3, "{} instead of {want} at {at:?}", s.gas_per_s);
+    }
+}
+
+#[test]
+fn f019_a_station_is_not_a_wall_and_not_an_anchor() {
+    // The one property that makes adding four of them to `ashgate` unable to move a single
+    // number in any test that already stands: a station carries **no `Collider` and no `Body`**,
+    // so it is neither in avian's world nor in the spatial index. It is a place and a marker.
+    let mut app = stepped_world();
+    let found = stations(&mut app);
+    assert!(!found.is_empty());
+    for (e, at, _) in found {
+        assert!(
+            app.world().get::<Collider>(e).is_none(),
+            "the station at {at:?} has a collider — it is now something a player bounces off"
+        );
+        assert!(
+            app.world().get::<Body>(e).is_none(),
+            "the station at {at:?} is in the spatial index — every hook raycast can now find it"
+        );
+        assert!(
+            app.world().get::<Block>(e).is_none(),
+            "the station at {at:?} carries a `Block` — `Block` means A CUBOID OF THE CITY, it \
+             is what `f003_the_city_comes_from_the_file_and_not_twice` counts against \
+             `plan_blocks`, and four stations wearing one made that count 2875 against 2871. \
+             The station is drawn by `render::build_station_meshes` off its own component."
+        );
+    }
+}
+
+#[test]
+fn f019_one_reload_fills_a_tank_in_the_time_the_file_says_and_costs_exactly_one_use() {
+    use defeated_by_titan::player::spawn_player;
+    use defeated_by_titan::shared::{Gas, IdCounter};
+
+    let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    app.update();
+    app.update();
+
+    let d = data();
+    let (station, at, before) = stations(&mut app).into_iter().next().expect("a station");
+
+    // A second player, standing exactly on it. Not a `Transform` write on the local player: a
+    // raw position is synced back off the body, and `spawn_player` is the door every body in
+    // this game comes through anyway.
+    let e = {
+        let world = app.world_mut();
+        let data = world.resource::<GameData>().clone();
+        let mut ids = world.resource::<IdCounter>().to_owned();
+        let mut commands = world.commands();
+        let e = spawn_player(&mut commands, &mut ids, &data, at, false);
+        *world.resource_mut::<IdCounter>() = ids;
+        e
+    };
+    app.update();
+    // Empty the tank. `Gas` has one writer in the simulation (`vector::gas`), and this is a
+    // test setting a starting condition, not a second authority.
+    app.world_mut().get_mut::<Gas>(e).expect("a player has a tank").current = 0.0;
+
+    let refill_ticks = (d.gear.resupply.station_refill_s * d.game.simulation_hz as f32).round() as u64;
+    // `+ 3`: the request is written in `PostStep` and applied in the NEXT tick's `Intent`
+    // (`vector::gas::apply_refuel_requests`), so the last drop arrives one tick after the pump
+    // stops. Two more for the spawn tick and the arithmetic.
+    for _ in 0..refill_ticks + 3 {
+        app.update();
+    }
+
+    let tank = app.world().get::<Gas>(e).expect("a tank").current;
+    assert!(
+        (tank - d.game.vector.gas_tank).abs() < d.game.vector.gas_tank * 0.02,
+        "{:.1} s at a station gave {tank:.0} of {} gas back — one reload is a WHOLE tank",
+        d.gear.resupply.station_refill_s,
+        d.game.vector.gas_tank
+    );
+
+    let after = *app
+        .world()
+        .get::<defeated_by_titan::shared::SupplyStation>(station)
+        .expect("the station is still there");
+    assert_eq!(
+        after.uses_left,
+        before.uses_left - 1,
+        "one reload has to cost exactly one use ({} -> {})",
+        before.uses_left,
+        after.uses_left
+    );
+    assert!(!after.running(), "and the pump has to have stopped by now");
+
+    // …and the station is still in the world when it is spent. It goes dark, it does not
+    // vanish — a station that disappears teaches the player that he misremembered the map.
+    assert!(app.world().get_entity(station).is_ok());
+}
+
+#[test]
+fn f019_a_spent_station_gives_nothing_and_stays_where_it_is() {
+    use defeated_by_titan::player::spawn_player;
+    use defeated_by_titan::shared::{Gas, IdCounter, SupplyStation};
+
+    let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    app.update();
+    app.update();
+
+    let d = data();
+    let (station, at, _) = stations(&mut app).into_iter().next().expect("a station");
+    // Drain it by hand — 3 x 90 ticks of standing is a slower way of writing the same line.
+    app.world_mut().get_mut::<SupplyStation>(station).unwrap().uses_left = 0;
+
+    let e = {
+        let world = app.world_mut();
+        let data = world.resource::<GameData>().clone();
+        let mut ids = world.resource::<IdCounter>().to_owned();
+        let mut commands = world.commands();
+        let e = spawn_player(&mut commands, &mut ids, &data, at, false);
+        *world.resource_mut::<IdCounter>() = ids;
+        e
+    };
+    app.update();
+    app.world_mut().get_mut::<Gas>(e).unwrap().current = 0.0;
+    for _ in 0..200 {
+        app.update();
+    }
+
+    assert_eq!(
+        app.world().get::<Gas>(e).unwrap().current,
+        0.0,
+        "an empty station still refuelled — `uses_left` is then a number nobody reads"
+    );
+    assert!(
+        app.world().get::<SupplyStation>(station).is_some_and(|s| s.empty()),
+        "and it has to report itself empty, because that is what `render::supply` paints"
+    );
+}

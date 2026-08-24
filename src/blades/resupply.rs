@@ -186,6 +186,12 @@ mod tests {
             range_m: 4.0,
             blade_pairs_per_s: 1.5,
             sharpen_per_s: 2.0,
+            // `F-019`'s three, spelled out for the same reason as the four above them. They are
+            // the FIELD stations' numbers and nothing in this file reads them — a rack in the
+            // hub is infinite and has no duration (`src/world/supply.rs` has the table).
+            station_uses: 3,
+            station_refill_s: 1.5,
+            station_radius_m: 6.0,
         }
     }
 

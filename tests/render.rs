@@ -2832,3 +2832,137 @@ fn f033_the_pairs_own_hands_land_on_a_1_80_m_bodys_hands() {
         eye_m - top_m
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// `F-017` Geschwindigkeits-Feedback — „Speedlines, Kamera-FOV-Kurve, Windrauschen und Vignette
+// skalieren mit Velocity. Verkauft Tempo ohne echte Physikaenderung."
+// Acceptance: „FOV und Audio reagieren stufenlos; abschaltbar fuer Motion Sickness."
+// ---------------------------------------------------------------------------------------
+//
+// This is the **FOV half** — the one the design itself calls the biggest lever
+// (`assets/data/game.ron: camera`) and the only one of the four that needs no new asset.
+// `game.ron` has carried `fov_max_speed_deg` since the file existed, with a comment saying
+// `F-017` "will later" interpolate to it. It is later.
+//
+// Everything below drives the free function, because that is where the rule is. The system
+// around it does one thing the function cannot be blamed for — reading `LinearVelocity` — and
+// `scripts/f017-speed.txt` is what shows the picture moving.
+
+use defeated_by_titan::render::speed_fov_deg;
+
+/// The four numbers this feature is made of, straight out of the files rather than typed here.
+///
+/// Read off `assets/` directly and not out of an `App`: this whole block drives a free
+/// function, and building a Bevy app to read four floats would make six pure-arithmetic tests
+/// cost a startup each.
+fn fov_knobs() -> (f32, f32, f32, f32) {
+    let d = GameData::load(&assets_dir().join("data"));
+    (
+        d.game.camera.fov_deg,
+        d.game.camera.fov_max_speed_deg,
+        d.game.camera.fov_speed_from_m_s,
+        d.game.vector.max_speed_m_s,
+    )
+}
+
+#[test]
+fn f017_below_the_threshold_the_lens_is_exactly_where_the_player_set_it() {
+    let (base, max_deg, from, top) = fov_knobs();
+    for speed in [0.0, 1.0, from * 0.5, from - 0.001, from] {
+        let got = speed_fov_deg(base, max_deg, from, top, speed, 100.0);
+        assert_eq!(
+            got, base,
+            "at {speed} m/s the field of view is {got} and not the base {base}. Walking is \
+             6 m/s and a walk that widens the lens sells nothing — `fov_speed_from_m_s` is \
+             where fast begins"
+        );
+    }
+}
+
+#[test]
+fn f017_at_the_clamp_it_is_exactly_the_second_number_from_the_file() {
+    let (base, max_deg, from, top) = fov_knobs();
+    let got = speed_fov_deg(base, max_deg, from, top, top, 100.0);
+    assert!(
+        (got - max_deg).abs() < 1e-4,
+        "at `vector.max_speed_m_s` ({top}) the lens is {got} and `camera.fov_max_speed_deg` is \
+         {max_deg}"
+    );
+    // …and it saturates rather than running away. `max_speed_m_s` is an avian `MaxLinearSpeed`
+    // on the body, so `|v|` cannot exceed it — this is what keeps the function honest if it
+    // ever does.
+    let over = speed_fov_deg(base, max_deg, from, top, top * 3.0, 100.0);
+    assert!((over - max_deg).abs() < 1e-4, "over the clamp the lens ran on to {over}");
+}
+
+#[test]
+fn f017_the_curve_is_stepless_and_monotone() {
+    // „stufenlos" is the acceptance word, so a set of thresholds is the wrong shape and this is
+    // what says so: 200 samples, each at least as wide as the one before, none of them equal to
+    // its neighbour inside the ramp.
+    let (base, max_deg, from, top) = fov_knobs();
+    let mut last = speed_fov_deg(base, max_deg, from, top, 0.0, 100.0);
+    let mut distinct = 0;
+    for i in 0..=200 {
+        let speed = top * i as f32 / 200.0;
+        let got = speed_fov_deg(base, max_deg, from, top, speed, 100.0);
+        assert!(got >= last - 1e-4, "the curve went backwards at {speed} m/s: {last} -> {got}");
+        if (got - last).abs() > 1e-5 {
+            distinct += 1;
+        }
+        last = got;
+    }
+    assert!(
+        distinct > 100,
+        "only {distinct} of 200 samples differed from their neighbour — that is a staircase, \
+         and the row asks for `stufenlos`"
+    );
+}
+
+#[test]
+fn f017_zero_percent_is_the_game_that_shipped_before_it_bit_for_bit() {
+    // „abschaltbar fuer Motion Sickness" is an accessibility control, not a taste slider: a
+    // widening lens is the commonest trigger for simulator sickness, and a player who cannot
+    // switch it off cannot play at all. So OFF has to be **exactly** the old behaviour and not
+    // a quieter version of the new one — `assert_eq` on the f32, not a tolerance.
+    let (base, max_deg, from, top) = fov_knobs();
+    for i in 0..=100 {
+        let speed = top * i as f32 / 100.0;
+        assert_eq!(
+            speed_fov_deg(base, max_deg, from, top, speed, 0.0),
+            base,
+            "at 0 % and {speed} m/s the lens moved"
+        );
+    }
+}
+
+#[test]
+fn f017_a_percentage_scales_the_widening_and_never_the_resting_lens() {
+    // The other way of building this — multiplying the RESULT by the percentage — would move
+    // the resting field of view, so a player on 50 % would walk around at 30 degrees. What is
+    // scaled is the WIDENING.
+    let (base, max_deg, from, top) = fov_knobs();
+    let half = speed_fov_deg(base, max_deg, from, top, top, 50.0);
+    assert!(
+        (half - (base + (max_deg - base) * 0.5)).abs() < 1e-3,
+        "50 % at top speed gave {half}; half the widening of {base} -> {max_deg} is {}",
+        base + (max_deg - base) * 0.5
+    );
+    assert_eq!(
+        speed_fov_deg(base, max_deg, from, top, 0.0, 50.0),
+        base,
+        "and standing still it still has to be the base"
+    );
+}
+
+#[test]
+fn f017_a_degenerate_span_or_a_nan_speed_falls_back_to_the_base() {
+    // A NaN `fov` is a black screen, and a black screen is the one failure a player cannot
+    // report usefully (`docs/architecture.md` §9d, the same argument every guard in
+    // `vector::boost` makes).
+    let (base, max_deg, _, top) = fov_knobs();
+    assert_eq!(speed_fov_deg(base, max_deg, top, top, 50.0, 100.0), base, "from == max");
+    assert_eq!(speed_fov_deg(base, max_deg, top + 10.0, top, 50.0, 100.0), base, "from > max");
+    assert_eq!(speed_fov_deg(base, max_deg, 22.0, top, f32::NAN, 100.0), base, "NaN speed");
+    assert!(speed_fov_deg(base, max_deg, 22.0, top, 40.0, f32::NAN).is_finite());
+}

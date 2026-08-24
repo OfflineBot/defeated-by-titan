@@ -22,7 +22,8 @@
 //! | `aim.rs` | `F-002`, `F-003` | `AimPoint` |
 //! | `gas.rs` | `F-018` | `Gas`, `GasGrant` |
 //! | `hook.rs` | `F-001` | `Hook`, `PrevButtons` |
-//! | `boost.rs` | `F-007` | `BoostAccel` |
+//! | `boost.rs` | `F-007`, `F-008` (the impulse) | `BoostAccel` |
+//! | `dodge.rs` | `F-008` (the magazine), `F-009` | `DodgeCharges`, `Invulnerable` |
 //! | `reel.rs` | `F-005` | `ReelSpeed` |
 //!
 //! What is **not** here: `Velocity`, `Transform`, `RopeLength`. Those are written by the
@@ -32,6 +33,7 @@ pub mod reel;
 pub mod gas;
 pub mod hook;
 pub mod boost;
+pub mod dodge;
 pub mod aim;
 
 use bevy::prelude::*;
@@ -69,7 +71,24 @@ impl Plugin for VectorPlugin {
             // **Deliberately without `.chain()`**: both write their own component by
             // assignment, the `&mut` sets are disjoint, so the order is provably
             // irrelevant — and Bevy really does run them in parallel.
-            .add_systems(FixedUpdate, (boost::gas_boost, reel::reel_in).in_set(SimulationSystems::Drive))
+            // **Deliberately without `.chain()`**: each writes its own component by
+            // assignment and the `&mut` sets are disjoint — `BoostAccel`, `ReelSpeed`,
+            // `DodgeCharges`, `Invulnerable`, one writer each — so the order is provably
+            // irrelevant, and Bevy really does run them in parallel.
+            //
+            // All four read this tick's `GasGrant`, which `gas::gas_budget` wrote back in
+            // `Intent`. `dodge::spend_and_recharge` therefore charges for the very dash
+            // `boost::gas_boost` is throwing on the same tick — not for last tick's.
+            .add_systems(
+                FixedUpdate,
+                (
+                    boost::gas_boost,
+                    reel::reel_in,
+                    dodge::spend_and_recharge,
+                    dodge::flip,
+                )
+                    .in_set(SimulationSystems::Drive),
+            )
             .add_systems(
                 FixedUpdate,
                 hook::store_prev_buttons.in_set(SimulationSystems::PostStep),

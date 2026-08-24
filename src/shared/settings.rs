@@ -101,6 +101,22 @@ pub struct PlayerSettings {
     /// **Wired since 2026-08-19** (`docs/FINDINGS.md` FIND-104): the consumer is
     /// `vector::aim::aim`, and it is the only one.
     pub assist_strength_pct: f32,
+    /// **How much of `F-017`'s speed effect this machine wants**, 0..100 %.
+    ///
+    /// The backlog row asks for it in so many words: *„abschaltbar fuer Motion Sickness"*. A
+    /// widening lens is the single most common trigger for simulator sickness, and a player who
+    /// cannot switch it off cannot play the game at all — so this is an accessibility control,
+    /// not a taste slider, and it lives beside the other two 0..100 knobs.
+    ///
+    /// **0 % is exactly the behaviour that shipped before `F-017`**: the field of view is
+    /// [`Self::fov_deg`] at every speed, bit for bit, because `render::speed_fov` returns the
+    /// base without touching the arithmetic at all. 100 % is the full curve to
+    /// `game.ron: camera.fov_max_speed_deg`. In between it is a fraction of the widening, which
+    /// is the useful shape — most people who cannot take the full effect can take a third of it.
+    ///
+    /// It seeds at 100: the effect is the feature, and a feature that ships off is a feature
+    /// nobody sees.
+    pub speed_fov_pct: f32,
 }
 
 /// The slowest a mouse may be set to. Below this a 180° turn takes more desk than anybody has.
@@ -161,6 +177,12 @@ impl FromWorld for PlayerSettings {
             // invented in `game.ron` for either of them (§6 rule 2).
             assist_catch_pct: 0.0,
             assist_strength_pct: 0.0,
+            // `F-017` ships **on**, and that is the one of these three that is not zero. The
+            // two above are 0 because 0 is the absence of an aim assist and the assist has to
+            // be asked for; this one is 100 because the speed effect IS the feature, and a
+            // feature that ships off is a feature nobody sees. Off is one slider away, and
+            // that is what `abschaltbar` asks for.
+            speed_fov_pct: 100.0,
         }
     }
 }
@@ -272,6 +294,7 @@ mod tests {
             pitch_limit_deg: 89.0,
             assist_catch_pct: 0.0,
             assist_strength_pct: 0.0,
+            speed_fov_pct: 100.0,
         };
         for _ in 0..500 {
             s.nudge_mouse(-1.0);
@@ -307,6 +330,7 @@ mod tests {
             pitch_limit_deg: 89.0,
             assist_catch_pct: 0.0,
             assist_strength_pct: 0.0,
+            speed_fov_pct: 100.0,
         };
         // Off is off, and it is off in the geometry too — not "almost zero degrees".
         assert!(!s.assist_is_on());

@@ -2028,3 +2028,73 @@ lateral that merely *adds* to the flight took `D`-alone to **75.000 m/s exactly*
 same speed, ~20° of it pointing somewhere else. Measured 71.12 m/s in ACT 3.
 
 Related: `Q-049` · `FIND-152` · `F-005` · `src/vector/gas.rs`
+
+---
+
+## Q-052 — five movement verbs landed. Four numbers in them are yours, and one of them replaces the gas price as the thing that limits a dash (2026-08-24)
+
+`F-008` `F-009` `F-010` `F-017` `F-019` are built (🟨/🟧, see the commit). Every one of them
+runs under an `ASSUMPTION:` because you were not here, and each says what to roll back.
+
+### 1. What bounds a dash is no longer the gas price
+
+You already know the arithmetic (`Q-046`): the tank went `300 -> 15000` for testability, so
+`gas_dodge: 45` went from **6.7 dashes per sortie to 333**, and the cooldown the backlog row
+asks for did not exist. A dash was a traversal move.
+
+**ASSUMPTION:** a dash is now a **magazine** — `game.ron: vector.dodge_charges: 3.0`,
+`dodge_recharge_s: 4.0` (12 s for a full reload), `dodge_cooldown_s: 0.6` (twice the
+double-tap window, so drumming on Space cannot fire two). The gas price rides on top,
+unchanged, and still makes the dash the expensive impulse next to the boost.
+**Roll back:** delete the three keys from `game.ron: vector`, the three fields from
+`data::VectorTuning`, and `DodgeCharges` from `src/shared/gear.rs` /
+`src/vector/dodge.rs::spend_and_recharge`; `vector::gas` then falls back to the old line
+because it asks `charges.is_none_or(...)`.
+**The question is the SHAPE, not the numbers:** is a magazine what you want, or is a plain
+cooldown enough? Three-in-a-row is a burst you can spend badly; a single 0.6 s cooldown is not.
+
+### 2. A station is three VISITS, not three seconds of standing
+
+`F-019` (below) gives each field station `gear.ron: resupply.station_uses: 3`. The first build
+let a player who simply stood on one drain all three in 4.5 s without pressing anything — a
+station that empties itself.
+**ASSUMPTION:** one reload **per visit**. The latch closes when a pump starts and only opens
+when the circle is empty, so three uses are three arrivals.
+**Roll back:** `SupplyStation::served_this_visit` in `src/shared/gear.rs` and the two lines that
+read it in `src/world/supply.rs::run_the_pumps`.
+
+### 3. Where the four stations stand
+
+Four, on `ashgate`, at `(0,2,20)`, `(0,2,105)`, `(0,2,190)` and `(-30,2,-60)` —
+**on the gantry line**, i.e. on the swing spine itself, at a pitch of ~85 m so the next one is
+always inside one hook range (90 m).
+**ASSUMPTION:** supply belongs on the route, not beside it — a station off the lane is a station
+nobody visits.
+**Roll back:** `assets/data/maps.ron: ashgate.supply_stations` — it is a list of coordinates and
+nothing reads it but `world::supply::build_stations`.
+⚠️ **`graybox` deliberately has none** (`supply_stations: []`): it is the fixture a dozen tests
+reason about at `y = 0`.
+
+### 4. `F-009` flip is last in `gas_priority`, and that is the one position worth arguing about
+
+`gas_priority` is now `[Boost, Steer, ReelIn, Dodge, Flip]`. A flip costs 20 flat while the three
+rates together cost 0.4 per tick, so its place can cost it at most 2 % of its own price — but of
+the five it is the one that **keeps you alive**, and that argues for putting it first.
+**ASSUMPTION:** appended, because moving `Boost` off the front would overturn your own answer to
+`Q-017` as a side effect of adding a verb.
+**Roll back:** one word in `assets/data/game.ron: vector.gas_priority`.
+
+### 5. Two things `F-017` and `F-019` are missing, and both are somebody else's file
+
+- **`F-017`'s off switch has no UI.** `PlayerSettings::speed_fov_pct` exists, seeds at 100, and
+  `0` is bit-for-bit the game that shipped before the curve — but the row that would move it
+  lives in `src/menu/settings.rs`, which was another agent's while this landed. The backlog
+  sentence *„abschaltbar fuer Motion Sickness"* is therefore **half done**: the mechanism is
+  there, the slider is not.
+- **`F-019`'s counter is not on the HUD.** *„Zaehler sichtbar"* is answered today by the colour
+  (cyan = has reloads, amber = pumping, `ash_dark` = spent) and by a log line, not by a number.
+  `src/hud/mod.rs` was another agent's. **The patch is: one text node reading
+  `SupplyStation::uses_left` of the nearest station inside `radius_m`.**
+
+Related: `Q-033` · `Q-044` · `Q-046` · `Q-017` · `docs/FINDINGS.md` FIND-158 · `F-008` `F-009`
+`F-010` `F-017` `F-019`

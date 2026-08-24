@@ -32,8 +32,8 @@ pub mod settings;
 pub use schedule::{IntentSystems, SimulationSystems, Tick};
 pub use geometry::{player_aabb, AnchorSurface, Block, Ground, Body, BodyMask};
 pub use gear::{
-    ReelSpeed, RunAccel, BoostAccel, GasGrant, Hook, HookArm, HookState,
-    RopeLength, Side, PrevButtons, AimPoint, ArmAim,
+    ReelSpeed, RunAccel, BoostAccel, DodgeCharges, GasGrant, Hook, HookArm, HookState,
+    Invulnerable, RopeLength, Side, Slide, SupplyStation, PrevButtons, AimPoint, ArmAim,
 };
 pub use ids::{IdCounter, BodyId, LocalPlayer, PlayerId, TitanId, TitanKindName};
 pub use intent::{LookOverride, Intent, Buttons};

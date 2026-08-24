@@ -37,6 +37,7 @@
 
 pub mod index;
 pub mod map;
+pub mod supply;
 
 use bevy::prelude::*;
 
@@ -57,7 +58,17 @@ impl Plugin for WorldPlugin {
         // The observer instead of `RemovedComponents` — reasoning in `world::index`.
         app.add_observer(index::on_body_removed);
 
-        app.add_systems(Startup, map::build_map)
-            .add_systems(FixedUpdate, index::maintain_index.in_set(SimulationSystems::Spatial));
+        app.add_systems(Startup, (map::build_map, supply::build_stations))
+            .add_systems(
+                FixedUpdate,
+                (
+                    index::maintain_index.in_set(SimulationSystems::Spatial),
+                    // `F-019` — in `PostStep`, exactly where `mission::hub` runs its own
+                    // stations, so the position it judges is the one this tick's integration
+                    // produced. It writes only `RefuelRequest`/`BladeRestockRequest`; the
+                    // owning domains apply them next tick (`src/world/supply.rs`).
+                    supply::run_the_pumps.in_set(SimulationSystems::PostStep),
+                ),
+            );
     }
 }

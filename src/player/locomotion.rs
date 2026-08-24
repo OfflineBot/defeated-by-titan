@@ -150,7 +150,10 @@ use avian3d::prelude::{Forces, LinearVelocity, WriteRigidBodyForces};
 use bevy::prelude::*;
 
 use crate::data::{GameData, RopeForceModel};
-use crate::shared::{Buttons, Gas, GasGrant, Hook, Intent, MovementState, RunAccel, Velocity};
+use crate::shared::{
+    Buttons, Gas, GasGrant, Hook, Intent, Invulnerable, MovementState, RunAccel, Slide, Tick,
+    Velocity,
+};
 
 /// One tick of horizontal ground movement, as a function of nothing but its arguments.
 ///
@@ -200,7 +203,8 @@ pub fn ground_step(
 /// Runs in `SimulationSystems::Integrate`, before **every** avian system.
 pub fn ground_locomotion(
     data: Res<GameData>,
-    mut players: Query<(&Intent, &MovementState, &mut LinearVelocity)>,
+    tick: Res<Tick>,
+    mut players: Query<(&Intent, &MovementState, &mut LinearVelocity, Option<&Slide>)>,
 ) {
     let s = &data.game.player;
     // The tick length out of the file, not out of `Time::delta_secs()`: the simulation runs at
@@ -212,10 +216,35 @@ pub fn ground_locomotion(
     // — the module header, and `super::integrator::ground_top_speed_m_s` for the number.
     let top_m_s = super::integrator::ground_top_speed_m_s(&data);
 
-    for (intent, state, mut velocity) in &mut players {
+    for (intent, state, mut velocity, slide) in &mut players {
         // On the rope the body belongs to `vector`; downed and on the wall are states of
         // their own. This system speaks only for a player standing on the ground.
         if *state != MovementState::Grounded {
+            continue;
+        }
+
+        // **`F-010` — a slide is not a run, and this is where the two are told apart.**
+        //
+        // *„Gleit-Ausweichmanoever am Boden mit I-Frames und Momentum-Erhalt ... geht fliessend
+        // in Sprint ueber."* The slide holds ONE direction — the one it started in — and one
+        // speed: the larger of `player.slide_speed_m_s` and what the player already had. That
+        // `max` is the *„Momentum-Erhalt"* half of the row in one line: landing at 30 m/s and
+        // sliding keeps 30, and a slide can therefore never be a brake.
+        //
+        // **It bypasses `ground_step` entirely, and that is the decision.** `ground_step` is
+        // the run: it decelerates anything above `run_speed_m_s` at μg and it steers with the
+        // stick. Both are wrong for a slide — a slide you can steer is a run, and a slide that
+        // decays is not a dodge. When the deadline passes, this branch simply stops running and
+        // `ground_step` picks the velocity up **where the slide left it**: nothing is reset,
+        // nothing is zeroed, which is exactly *„geht fliessend in Sprint ueber"*.
+        //
+        // `velocity.y` is untouched, so gravity and the ground contact keep doing their work
+        // and a slide off a ledge becomes a fall instead of a hover.
+        if let Some(slide) = slide.filter(|s| s.active(tick.0)) {
+            let kept = velocity.0.xz().length().max(s.slide_speed_m_s);
+            let v = slide.dir_m * kept;
+            velocity.x = v.x;
+            velocity.z = v.z;
             continue;
         }
 
@@ -253,6 +282,95 @@ pub fn ground_locomotion(
             // head (v²/2g), and it stays that number no matter what the capsule weighs.
             velocity.y = s.jump_speed_m_s;
         }
+    }
+}
+
+/// `F-010` **Slide-Dodge am Boden** — starts a slide, and grants the i-frames that are the
+/// point of it.
+///
+/// > *„Gleit-Ausweichmanoever am Boden mit I-Frames und Momentum-Erhalt."* — `F-010`.
+/// > Acceptance: *„Slide vermeidet Stomp-Angriff; geht fliessend in Sprint ueber."*
+///
+/// ## One button, two verbs, and the state decides which
+///
+/// `Buttons::DODGE` is the dash in the air (`F-008`, `vector::boost`) and the slide on the
+/// ground. That is not a saving of keys, it is what the reference does and what a player
+/// expects: the evasive button evades with whatever you are standing on. `vector::gas` reads
+/// the same `MovementState` from the other side and refuses to bill a **flip** on the ground
+/// for the identical reason — one evasion per state, never two at two prices.
+///
+/// ## Why it costs no gas
+///
+/// It is the only verb in this round that is free, and that is a decision: gas is what the
+/// **gear** burns, and a slide is legs. Billing it would make the one move a player has left on
+/// an empty tank cost the thing he has run out of, which is a death spiral wearing a mechanic's
+/// hat. What bounds it instead is `player.slide_cooldown_s` — measured from the tick a slide
+/// *starts*, so it includes the slide itself — and the fact that
+/// `player.slide_min_speed_m_s` refuses one from standing. A held `C` is then one slide per 54
+/// ticks and never a stance.
+///
+/// ## The i-frames are shorter than the movement, on purpose
+///
+/// `slide_iframes_s` (0.30 s) against `slide_duration_s` (0.55 s): the tail of the slide is the
+/// part that carries you out from under the foot, and invulnerability that lasts as long as the
+/// whole movement is a dodge nobody has to time. The acceptance sentence says *avoids* a stomp,
+/// not *ignores* one.
+///
+/// **Sole writer of [`Slide`].** Contributor to [`Invulnerable`] through
+/// [`Invulnerable::extend_to`], which is a `max` and therefore cannot shorten a window
+/// `vector::dodge::flip` granted.
+///
+/// Runs in `SimulationSystems::Integrate` **before** [`ground_locomotion`] (`.chain()` in
+/// `player::PlayerPlugin`), so a slide that starts this tick is already driving this tick's
+/// velocity — a one-tick delay on an evasive move is a blow that lands.
+pub fn start_slides(
+    data: Res<GameData>,
+    tick: Res<Tick>,
+    mut players: Query<(
+        &Intent,
+        &MovementState,
+        &LinearVelocity,
+        &mut Slide,
+        &mut Invulnerable,
+    )>,
+) {
+    let s = &data.game.player;
+    let hz = data.game.simulation_hz;
+    // Seconds in the file, ticks in the code (`docs/conventions.md`). `round` and not `as`:
+    // 0.55 s at 60 Hz is 33.000002 in f32 and truncating would silently cost a tick.
+    let duration_ticks = (s.slide_duration_s as f64 * hz).round().max(0.0) as u64;
+    let iframe_ticks = (s.slide_iframes_s as f64 * hz).round().max(0.0) as u64;
+    let cooldown_ticks = (s.slide_cooldown_s as f64 * hz).round().max(0.0) as u64;
+
+    for (intent, state, velocity, mut slide, mut iframes) in &mut players {
+        if *state != MovementState::Grounded || !intent.pressed(Buttons::DODGE) {
+            continue;
+        }
+        if !slide.ready(tick.0, cooldown_ticks) {
+            continue;
+        }
+        // **The direction is the one he is already going**, not the one he is looking or
+        // steering. A slide is momentum redirected, and there is nothing to redirect if there
+        // is no momentum: below `slide_min_speed_m_s` there is no slide at all, which is also
+        // what keeps `normalize_or_zero` from ever being asked for the zero vector.
+        let flat = velocity.0.xz();
+        if flat.length() < s.slide_min_speed_m_s {
+            continue;
+        }
+        let dir = flat.normalize_or_zero();
+        *slide = Slide {
+            until_tick: tick.0 + duration_ticks,
+            dir_m: Vec3::new(dir.x, 0.0, dir.y),
+            started_at_tick: Some(tick.0),
+        };
+        iframes.extend_to(tick.0 + iframe_ticks);
+        info!(
+            "F-010: slide at tick {} — {:.1} m/s carried, until tick {}, i-frames to {}",
+            tick.0,
+            flat.length(),
+            slide.until_tick,
+            iframes.until_tick,
+        );
     }
 }
 

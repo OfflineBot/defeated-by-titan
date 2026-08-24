@@ -78,6 +78,9 @@ pub fn read_input(
     settings: Res<PlayerSettings>,
     mut look: Local<Look>,
     mut space: Local<DodgeTap>,
+    // `F-009` — `[A, D]`, one arming state per side. See the comment at the call site for why
+    // it cannot be one shared state.
+    mut flips: Local<[DodgeTap; 2]>,
     local: Query<&PlayerId, With<LocalPlayer>>,
 ) {
     // There is no such thing as "the player" — but there is exactly one that is ME. If he
@@ -120,6 +123,21 @@ pub fn read_input(
         data.game.vector.dodge_double_tap_window_ticks,
     );
 
+    // `F-009` — **two independent double-tap detectors, one per side**, and they are literally
+    // [`DodgeTap`]s: the gesture is the same one `Space` performs, so it gets the same code
+    // rather than a second implementation with the same three off-by-ones in it. The `false`
+    // is the type's second route (`C` for the dash) — a flip has no single-key binding today,
+    // and the day it gets one it goes exactly there.
+    //
+    // Two states and not one, because `A`-then-`D` must **not** be a flip: that is a player
+    // changing direction, not asking for anything, and one shared arming tick would fire on it
+    // constantly. Left is checked first only because a tie is impossible — one keyboard cannot
+    // produce two second-taps on the same tick without the player holding both keys, in which
+    // case `move_x` is 0 and `vector::gas` refuses the flip anyway.
+    let flip_window = data.game.vector.flip_double_tap_window_ticks;
+    let flip_left = flips[0].feed(keys.pressed(KeyCode::KeyA), false, tick.0, flip_window);
+    let flip_right = flips[1].feed(keys.pressed(KeyCode::KeyD), false, tick.0, flip_window);
+
     let mut t = Buttons::NONE;
     // The first tap of a dodge is **still a jump**, and so is the second. Nothing here consumes
     // `Space` — a dodge on the ground is a jump that then throws you, and swallowing the jump
@@ -148,6 +166,13 @@ pub fn read_input(
     //     survives as the *feel* the user asked for. Neither replaces the other.
     // Both arrive as **one tick** of `DODGE` — see [`DodgeTap`] for why a held `C` may not.
     t.set(Buttons::DODGE, dodge);
+    // `F-009`. **One bit and no side**, because the side is `move_x` on this very tick: the key
+    // that produced the gesture is down, so `move_x` is -1 or +1 and `vector::dodge` reads it.
+    // Two bits saying what one already says is two bits that can disagree.
+    //
+    // Nothing here consumes `A`/`D` — the strafe axis below is written from the same keys, the
+    // way the first tap of a dodge is still a jump. A flip adds a verb, it does not steal one.
+    t.set(Buttons::FLIP, flip_left || flip_right);
     // The ropes are on the keyboard and the blades are on the mouse (user, 2026-08-10, after
     // the first time a human played this: the ropes have to be **steerable**). A hand can hold
     // `Q` and `E` and still aim; it cannot hold both mouse buttons and still aim. `MARK` had to

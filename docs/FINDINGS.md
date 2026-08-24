@@ -1663,7 +1663,7 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 
 ## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
 
-**NEXT FREE ID: FIND-155.** Claim it by bumping this line in the same `cat >>` that
+**NEXT FREE ID: FIND-159.** Claim it by bumping this line in the same `cat >>` that
 appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
 file separately and both read the same maximum. One line beats a 108 kB grep.
  — and append with `>>`, never with an edit tool
@@ -9689,3 +9689,46 @@ same defect as a registry row nothing can spawn, one level up.
 
 Related: `Q-048` · `FIND-096` · `FIND-104` · `FIND-129` · `FIND-133` · `FIND-149` ·
 `src/vector/aim.rs` · `src/hud/arm_aim.rs` · `scripts/q048-one-point.txt`
+
+---
+
+## FIND-158 — `Block` means "a cuboid of the city", and two guard tests said so within one run (2026-08-24)
+
+**Measured `[offlinebot]`, 2026-08-24.** `F-019`'s supply stations were given a
+`shared::Block` so that `render::build_block_meshes` would draw them — the obvious move, since
+`Block` is what every visible box in this game carries. Four stations on `ashgate`, and the very
+next `cargo test --test world` produced:
+
+```
+f003_the_city_comes_from_the_file_and_not_twice
+  2875 entities with Block, but 2871 planned cuboids (215 placed + 2656 generated)
+f003_every_anchor_tag_in_the_world_comes_from_the_file_and_the_mask_agrees
+  supply_station_0 stands in the world but not in the plan
+```
+
+Both are **right**, and that is the finding. `Block` is not "a thing that is drawn": it is the
+type `world::map::plan_blocks` plans and `tests/world.rs` counts its output against. Anything
+else wearing one is an entity the city's own guard has to explain — and the guard's whole job is
+to fail when the count and the plan disagree, which is exactly what it did.
+
+**The fix is not to widen the guard.** It is one more system:
+`render::build_station_meshes` builds a mesh off `SupplyStation` itself, the station carries no
+`Block`, and the city's count is a city count again. Cost: ~15 lines. What it buys: adding four
+stations to the map cannot move a single anchor, a single ray, a single collision or a single
+number in any test that already stands.
+
+**The general shape, and it is the one worth carrying:** *a component that a guard test counts
+is part of that guard's contract.* Before hanging an existing component on a new kind of entity,
+`grep -n '<Component>' tests/` — here that would have been two lines and would have found both
+tests before the feature was written. This is the same family as the round's own standing
+warning about *a map that grew 2048 -> 2059 blocks between an A run and a B run*: same
+component, same count, same class of surprise.
+
+⚠️ **And one thing the same round shows the other way round.** The station deliberately carries
+**no `Collider` and no `Body`** either, and there `tests/world.rs::f019_a_station_is_not_a_wall_
+and_not_an_anchor` is the guard that keeps it so — because a 6 m box on the swing spine, or a
+station in the spatial index that every hook raycast can find, would be exactly the kind of
+change that shows up three days later as "the rope feels different in the north street".
+
+Related: `F-019` · `src/world/supply.rs` · `src/render/mod.rs::build_station_meshes` ·
+`tests/world.rs` · `docs/QUESTIONS.md` Q-052

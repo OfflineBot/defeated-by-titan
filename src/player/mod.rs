@@ -49,8 +49,9 @@ use bevy::prelude::*;
 
 use crate::data::GameData;
 use crate::shared::{
-    AimPoint, Blades, BoostAccel, Cli, Gas, GasGrant, Hook, IdCounter, Intent, LocalPlayer,
-    MovementState, PlayerId, PrevButtons, ReelSpeed, RopeLength, RunAccel, SeatPlayer,
+    AimPoint, Blades, BoostAccel, Cli, DodgeCharges, Gas, GasGrant, Hook, IdCounter, Intent,
+    Invulnerable, LocalPlayer,
+    MovementState, PlayerId, PrevButtons, ReelSpeed, RopeLength, RunAccel, SeatPlayer, Slide,
     SimulationSystems, UnseatPlayer, Velocity, WarpPlayer, LAYER_PLAYER, PLAYER_COLLIDES_WITH,
 };
 
@@ -70,7 +71,11 @@ impl Plugin for PlayerPlugin {
                     // Before EVERY avian system, not just before `Prepare`: what is written
                     // here is the input to the step, and `PhysicsSystems::First` already
                     // carries avian's own `assert_components_finite` in a debug build.
-                    (apply_warps, locomotion::ground_locomotion)
+                    // `F-010`: `start_slides` is chained **in front of**
+                    // `ground_locomotion`, so a slide that begins this tick already drives
+                    // this tick's velocity. A one-tick delay on an evasive move is a blow
+                    // that lands.
+                    (apply_warps, locomotion::start_slides, locomotion::ground_locomotion)
                         .chain()
                         .before(PhysicsSystems::First),
                     // After the writeback, so that what is read back is this step's result
@@ -159,6 +164,19 @@ pub fn spawn_player_with_id(
             BoostAccel::default(),
             ReelSpeed::default(),
             PrevButtons::default(),
+        ),
+        // **The three that bound a verb**, all present from tick 1 for the same reason as the
+        // eight above: a system that filters on a missing component silently skips the player.
+        (
+            // `F-008`. Full at spawn — you deploy with a loaded magazine, and the number is the
+            // file's (`game.ron: vector.dodge_charges`), never a literal here.
+            DodgeCharges::new(data.game.vector.dodge_charges),
+            // `F-009`/`F-010`. `until_tick: 0` is "vulnerable", which is what a fresh player is
+            // — the deadline is in the past on tick 0 and on every tick after it.
+            Invulnerable::default(),
+            // `F-010`. `until_tick: 0` is "not sliding", and `started_at_tick: None` is the one
+            // state in which the slide cooldown cannot refuse.
+            Slide::default(),
         ),
         // The physics body. See the module header for why each of these is here.
         (

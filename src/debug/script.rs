@@ -696,6 +696,7 @@ assert speed > 25
             pitch_limit_deg: 89.0,
             assist_catch_pct: 0.0,
             assist_strength_pct: 0.0,
+            speed_fov_pct: 100.0,
         }
     }
 

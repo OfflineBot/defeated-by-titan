@@ -361,6 +361,13 @@
             // The field carries no `serde(default)` (rule 2), so leaving it out is a load
             // error and not a silently dark room.
             lights: [],
+
+            // F-019 — and the empty list is the statement, exactly like `lights` above. The
+            // graybox is the FIXTURE: eight tests in `tests/vector_aiming.rs` and four in
+            // `tests/player.rs` reason about `y = 0` on it, and a station is a thing in the
+            // world with a trigger circle around it. It gets none. The stations stand in
+            // `ashgate`, which is `current` and which is what a sortie is flown in.
+            supply_stations: [],
         ),
 
         // ================================================================================
@@ -1358,6 +1365,57 @@
                 // Its range is the tighter of the two only because it stands 12 m from the
                 // door: 11.0 keeps the sphere off the street apron with 3.7 m to spare.
                 (center_m: (-27.0, 8.5, 0.0), color: "lamp_warm", intensity_lm: 35000000.0, range_m: 11.0, shadows: false),
+            ],
+
+            // ================================================================================
+            // F-019 — NACHSCHUB-STATIONEN. Four of them, and their placement is the feature.
+            // ================================================================================
+            // Q-044 measured the hole: at the honest tank a sortie buys ~16.7 s of held boost
+            // against a 330 s mission, and until this list existed **there was no refuel
+            // anywhere outside the headquarters**. The user's own answer to Q-033 says refills
+            // happen away from base; the racks in the hall are base.
+            //
+            // ⚠️ Placement rule, and it is why these four coordinates and not four others:
+            // **a station stands ON THE SWING SPINE, not beside it.** The gantry line runs
+            // along x = 0 from z = 227.5 to z = -87.5 (the pillars sit at x = ±14, so x = 0 is
+            // 10 m of clear street between them), and that lane is the route a player actually
+            // flies. A station off the route is a station nobody visits; a station on it is a
+            // decision — dive out of the swing, stand still for 1.5 s, climb back in.
+            //
+            // The pitch is ~85 m, i.e. **a little under one hook range** (90 m,
+            // scale.ron: vector.anchor_range_m). That is deliberate: from any station the next
+            // one is inside a single rope, so the supply line is a chain you can fly rather
+            // than a set of places you have to remember.
+            //
+            //   z = 45     the first one out of the gate. This is the one
+            //              `scripts/f019-supply.txt` measures against.
+            //   z = 105    mid-lane, under the gantry at z = 122.5
+            //   z = 190    the far north end, one rope short of the z = 227.5 gantry
+            //   the fourth is deliberately OFF the lane, at (-30, 2, -60): the route to the
+            //              wall gallery has to have one too, or the whole south of the district
+            //              is a place you can only leave.
+            //
+            // y = 2.0, not 0: the trigger is a 6 m sphere (gear.ron: resupply.station_radius_m)
+            // measured in 3D from the centre, so lifting it clear of the ground slab gives a
+            // player who arrives 4 m up the same catch as one who lands on it.
+            supply_stations: [
+                // 🔴 **z = 45 and NOT z = 20, and a test is why.** The first placement put it
+                // at z = 20 — 4.47 m from the `recruit` deployment pad at (0, 0, 16), which is
+                // INSIDE the 6 m trigger. `tests/mission.rs::f072_a_station_is_a_hub_thing_and_
+                // does_not_follow_you_into_a_sortie` went red with 166.7 gas appearing out of
+                // nowhere in a running sortie, and it was right twice over: a field station on
+                // the doorstep tops your tank up for free at the start of every mission, which
+                // is the exact opposite of *„begrenzte Nachladungen"*.
+                //
+                // The rule that came out of it: **a station must clear every deployment pad by
+                // `station_radius_m` + the pad's own `radius_m`** — 6 + 3 = 9 m here. z = 45 is
+                // 29 m from the nearest pad and 45 m from the hub spawn, i.e. half a hook range
+                // out of the gate, and the 45 -> 105 -> 190 pitch (60 m, 85 m) is still inside
+                // one rope everywhere.
+                (center_m: (0.0, 2.0, 45.0), uses: 3),
+                (center_m: (0.0, 2.0, 105.0), uses: 3),
+                (center_m: (0.0, 2.0, 190.0), uses: 3),
+                (center_m: (-30.0, 2.0, -60.0), uses: 3),
             ],
         ),
     },
