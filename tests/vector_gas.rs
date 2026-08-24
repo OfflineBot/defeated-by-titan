@@ -35,7 +35,7 @@ use defeated_by_titan::data::{GameData, GasConsumer};
 use defeated_by_titan::player::spawn_player;
 use defeated_by_titan::shared::{
     BodyId, Buttons, Cli, Gas, GasGrant, Hook, HookState, IdCounter, Intent, LocalPlayer,
-    PlayerId, RefuelRequest, Side,
+    MovementState, PlayerId, RefuelRequest, Side,
 };
 
 /// Builds the **real** app, headless, one simulation step per `update()`.
@@ -1117,5 +1117,197 @@ fn f006_the_steer_is_billed_exactly_when_the_rope_really_thrusts() {
         "{disagreements} of {} geometries charge for a thrust that is not delivered (or \
          deliver one that is not charged). The first: {first}",
         directions.len() * lengths_m.len() * looks.len() * keys.len()
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// 9. One button, one verb per state — and the price follows the verb (2026-08-25)
+// ---------------------------------------------------------------------------------------
+
+/// Puts the player on the ground, moving fast enough for `F-010` to accept a slide.
+///
+/// `MovementState` is written here directly rather than by running the player into the floor:
+/// `player::integrator::readback` is its one writer in the app and it writes exactly this value
+/// for a body in contact, so the fixture is the state the game produces — and forcing it makes
+/// the test about the **billing rule**, not about how long avian takes to settle a capsule.
+fn stand_on_the_ground(app: &mut App, e: Entity, speed_m_s: f32) {
+    *app.world_mut().get_mut::<MovementState>(e).expect("a player has a state") =
+        MovementState::Grounded;
+    app.world_mut().get_mut::<avian3d::prelude::LinearVelocity>(e).expect("a body").0 =
+        Vec3::new(0.0, 0.0, -speed_m_s);
+}
+
+#[test]
+fn f010_one_press_of_the_dodge_button_on_the_ground_is_a_slide_and_is_not_billed() {
+    // 🔴 **The leak this test exists for, measured on 2026-08-25 before the fix:** one press of
+    // `C` while running fired `F-010`'s slide *and* `F-008`'s dash. `scripts/game-full.txt`'s
+    // map, running at 6 m/s: `F-010: slide at tick 156 — 6.0 m/s carried`, gas **15000.000 ->
+    // 14955.000** (that is `vector.gas_dodge`, 45, to the digit) and a `DodgeCharges` gone. The
+    // dash's own gate asked for a charge and a direction and never once asked what the player
+    // was standing on, while `player::locomotion::start_slides` two files away required
+    // `Grounded` — so the ground had two evasive verbs at two prices, and `game.ron` says in
+    // writing that the ground one is free.
+    //
+    // Break it again in one line: put `in_the_air` back to `state.is_none_or(|s| *s !=
+    // Grounded)` — no — put it back to **nothing at all** by deleting `&& in_the_air` from
+    // `wants_dodge` in `src/vector/gas.rs`, and this goes red at 45.0 gas spent.
+    let mut app = app();
+    let e = me(&mut app);
+    stand_on_the_ground(&mut app, e, 6.0);
+    let before = gas(&app, e).current;
+
+    // ⚠️ **`W` is held, and without it this test passes for the wrong reason.** A dash needs a
+    // direction: `vector::boost::dodge_direction` answers `None` for an empty stick, so a
+    // stationary `C` is refused by *that* clause and the ground clause is never reached.
+    // Measured while breaking the fix on purpose (Rule 5): with `W` released the test stayed
+    // **green** with `&& in_the_air` deleted. The leak was found on a player who was running.
+    hold(&mut app, KeyCode::KeyW);
+    hold(&mut app, KeyCode::KeyC);
+    ticks(&mut app, 1);
+    release(&mut app, KeyCode::KeyC);
+    ticks(&mut app, 4);
+
+    let spent = before - gas(&app, e).current;
+    assert!(
+        spent.abs() < 1e-3,
+        "a slide is legs, not gear: `C` on the ground spent {spent} gas (the dash's price is {})",
+        data(&app).game.vector.gas_dodge
+    );
+}
+
+#[test]
+fn f008_the_dodge_button_still_buys_a_dash_in_the_air() {
+    // The control for the test above, and the reason it is not one test with two asserts: an
+    // `in_the_air` that is wired the wrong way round — or a `&& false` — makes the first test
+    // pass for the worst possible reason. **Delete the thing you think you are measuring and
+    // check the number moves:** the same press, the same tick count, the same tank, one field
+    // different.
+    let mut app = app();
+    let e = me(&mut app);
+    *app.world_mut().get_mut::<MovementState>(e).expect("a player has a state") =
+        MovementState::Airborne;
+    app.world_mut().get_mut::<avian3d::prelude::LinearVelocity>(e).expect("a body").0 =
+        Vec3::new(0.0, 0.0, -6.0);
+    let d = data(&app);
+    let before = gas(&app, e).current;
+
+    // A dash needs a direction — `boost::dodge_direction` answers `None` for an empty stick and
+    // the price would be refused for **that** reason instead of for the state.
+    hold(&mut app, KeyCode::KeyW);
+    hold(&mut app, KeyCode::KeyC);
+    ticks(&mut app, 1);
+    release(&mut app, KeyCode::KeyC);
+    ticks(&mut app, 4);
+
+    let spent = before - gas(&app, e).current;
+    assert!(
+        (spent - d.game.vector.gas_dodge).abs() < 1e-3,
+        "in the air the same press has to buy the dash and cost {}: spent {spent}",
+        d.game.vector.gas_dodge
+    );
+}
+
+#[test]
+fn f009_a_downed_player_cannot_flip_and_is_not_charged_for_trying() {
+    // `Downed` is *„out of the fight instead of dead"* and `player::locomotion::in_flight`
+    // refuses it by name. The flip's own gate read `*s != Grounded`, which says **yes** to
+    // `Downed` and to `OnWall` — a body that may not walk could still buy 20 gas of sideways
+    // hop. One `matches!` closed it; deleting `MovementState::Downed` from the refused set
+    // (i.e. writing `!matches!(s, MovementState::Grounded)`) takes this red.
+    let mut app = app();
+    let e = me(&mut app);
+    *app.world_mut().get_mut::<MovementState>(e).expect("a player has a state") =
+        MovementState::Downed;
+    let before = gas(&app, e).current;
+
+    // The double-tap `A` · pause · `A`, inside `flip_double_tap_window_ticks`.
+    hold(&mut app, KeyCode::KeyA);
+    ticks(&mut app, 1);
+    release(&mut app, KeyCode::KeyA);
+    ticks(&mut app, 4);
+    hold(&mut app, KeyCode::KeyA);
+    ticks(&mut app, 2);
+    release(&mut app, KeyCode::KeyA);
+    ticks(&mut app, 2);
+
+    let spent = before - gas(&app, e).current;
+    assert!(
+        spent.abs() < 1e-3,
+        "a downed player bought a flip for {spent} gas (the price is {})",
+        data(&app).game.vector.gas_flip
+    );
+}
+
+#[test]
+fn f005_a_reel_whose_rope_is_already_at_the_floor_is_not_billed() {
+    // `Q-050`, the half that is a leak and not a design question. Both models refuse to move a
+    // rope that is already at `vector.min_rope_m` — `player::rope::shorten_ropes` clamps its
+    // `limits.max` there, `player::locomotion::rope_winch` drops the arm out of its blend at the
+    // same number — and this line kept charging `gas_reel_per_s` for it. Same shape as
+    // `FIND-139`'s steer, one verb further along.
+    //
+    // Red again by deleting the `.length() > vector.min_rope_m` clause from `wants_reel_in`.
+    let mut app = app();
+    let e = me(&mut app);
+    let d = data(&app);
+    // An anchor **inside** the floor: 2 m up from the hand, `min_rope_m` is 3.
+    let before = gas(&app, e).current;
+
+    // Re-anchored every tick, for the reason spelled out in the control test below.
+    hold(&mut app, KeyCode::ControlLeft);
+    for _ in 0..30 {
+        // The hand is re-measured every tick and not hoisted: the player is still settling on
+        // the floor, and a tip pinned to where he *was* drifts out past the floor within ten
+        // ticks. Measured with it hoisted: 1.0957 gas spent, i.e. eleven ticks of a rope that
+        // was no longer short.
+        let hand_m = {
+            let world = app.world();
+            world.get::<Transform>(e).expect("a transform").translation
+                + Vec3::Y * d.game.player.eye_height_m
+        };
+        let mut hook = app.world_mut().get_mut::<Hook>(e).expect("two hooks");
+        hook.arms[Side::Left.index()].state =
+            HookState::Anchored { body: BodyId(1), local_m: Vec3::ZERO };
+        hook.arms[Side::Left.index()].tip_m = hand_m + Vec3::Y * (d.game.vector.min_rope_m - 1.0);
+        drop(hook);
+        app.update();
+    }
+    release(&mut app, KeyCode::ControlLeft);
+
+    let spent = before - gas(&app, e).current;
+    assert!(
+        spent.abs() < 1e-3,
+        "half a second of `Ctrl` on a rope that is already at {} m cost {spent} gas",
+        d.game.vector.min_rope_m
+    );
+}
+
+#[test]
+fn f005_a_reel_on_a_rope_that_has_room_left_is_still_billed() {
+    // The control for the test above — the clause has to be able to tell the two apart, and a
+    // `wants_reel_in` that is simply `false` would pass the first test perfectly.
+    let mut app = app();
+    let e = me(&mut app);
+    let d = data(&app);
+    let before = gas(&app, e).current;
+
+    // Re-anchored every tick, exactly like
+    // `f018_boost_and_reel_in_together_cost_the_sum_and_not_one_of_them`:
+    // `vector::hook::update_hooks` is the one writer of an arm's state and it lets go of an
+    // anchor on a `BodyId` the spatial index does not know, so a hook written once survives
+    // exactly one tick. Without the loop this measured 0.0996 gas — one tick of it — and looked
+    // like the new floor clause refusing.
+    hold(&mut app, KeyCode::ControlLeft);
+    for _ in 0..60 {
+        anchor_left(&mut app, e); // 22.36 m out, far beyond the floor
+        app.update();
+    }
+    release(&mut app, KeyCode::ControlLeft);
+
+    let spent = before - gas(&app, e).current;
+    let want = d.game.vector.gas_reel_per_s;
+    assert!(
+        (spent - want).abs() < 0.2,
+        "a second of `Ctrl` on a 22 m rope has to cost gas_reel_per_s ({want}): spent {spent}"
     );
 }

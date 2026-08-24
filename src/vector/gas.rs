@@ -253,8 +253,32 @@ pub fn gas_budget(
     let flip_cost = vector.gas_flip;
 
     for (intent, hook, mut gas, mut grant, transform, charges, state) in &mut players {
+        // **The hand and the two rope directions, once**, for the three verbs below that all
+        // need them. Hoisted above `wants_reel_in` on 2026-08-25 — it used to sit further down,
+        // next to `wants_steer`, and the reel could not see it.
+        let hand_m = transform.translation + Vec3::Y * data.game.player.eye_height_m;
+        let mut to_anchors_m = [Vec3::ZERO; 2];
+        let mut anchored = 0;
+        for arm in &hook.arms {
+            if arm.state.is_anchored() {
+                to_anchors_m[anchored] = arm.tip_m - hand_m;
+                anchored += 1;
+            }
+        }
+
         let wants_boost = intent.pressed(Buttons::BOOST);
-        let wants_reel_in = intent.pressed(Buttons::REEL_IN) && hook.anchored_count() > 0;
+        // **The cost follows the effect, and `anchored_count() > 0` was not enough.** A reel
+        // whose rope is already at the floor moves nobody: under `Pendulum`
+        // `player::rope::shorten_ropes` clamps `limits.max` at `vector.min_rope_m` and stops,
+        // under `Drive` `player::locomotion::rope_winch` drops that arm out of its blend at the
+        // very same number. Both did it silently while this line kept billing
+        // `gas_reel_per_s` — the same shape as `FIND-139`'s steer, one verb further along
+        // (`Q-050`). The distance is the arm's own, so **one arm at the floor and one out at
+        // 40 m still pays**, which is right: the far one really is winding in.
+        let wants_reel_in = intent.pressed(Buttons::REEL_IN)
+            && to_anchors_m[..anchored].iter().any(|to_anchor| {
+                to_anchor.length() > vector.min_rope_m
+            });
         // The same shape as the line above it, and for the same reason: **the cost follows the
         // effect, not the button.** A double-tap with no movement key held has no direction to
         // throw the player in (`boost::dodge_direction` answers `None`), so `vector::boost`
@@ -267,9 +291,32 @@ pub fn gas_budget(
         // at all. Booking first and refusing later would debit 45 gas for an impulse that never
         // happens, which is precisely the invisible leak the `dodge_direction` clause above was
         // added to prevent. One rule, one place.
+        // 🔴 **ONE predicate, and since 2026-08-25 BOTH air verbs ask it** (`FIND-`, below).
+        // *„auf dem Boden ist die gleiche Ausweichbewegung `F-010`s Slide"* is the rule the
+        // flip already obeyed and the dash did not, and the hole was not theoretical: measured
+        // on `scripts/game-full.txt`'s map, **one press of `C` while running fired the slide
+        // AND the dash** — gas 15000 -> 14955, a charge gone, and the slide's promised
+        // `max(current, 12)` delivered **38.166 m/s**, because `vector::boost::gas_boost` adds
+        // `dodge_impulse_m_s` on the same tick, on top of the velocity
+        // `player::locomotion::ground_locomotion` had just written. One button, two moves, two
+        // prices — and `game.ron` says in writing that the ground one is free.
+        //
+        // **Exhaustive, and no longer `!= Grounded`.** `OnWall` is `F-013`'s state and `Downed`
+        // is *„out of the fight instead of dead"* — neither is flying, and a body that may not
+        // walk may certainly not flip. That is `player::locomotion::in_flight`'s own list of
+        // what is never flight, arrived at from the other side; it cannot be *called* from here
+        // because `vector -> player` is not on the allow list of `docs/architecture.md`, so a
+        // `match` that a new `MovementState` variant makes the compiler complain about is the
+        // next best thing.
+        //
+        // `None` still counts as air, unchanged: a fixture with no `MovementState` is not
+        // standing anywhere, and refusing both verbs would make them untestable without a floor.
+        let in_the_air = state
+            .is_none_or(|s| matches!(s, MovementState::Airborne | MovementState::Tethered));
         let can_dash =
             charges.is_none_or(|c| c.ready(tick.0, cooldown_ticks));
         let wants_dodge = intent.pressed(Buttons::DODGE)
+            && in_the_air
             && can_dash
             && super::boost::dodge_direction(intent).is_some();
         // **`F-009`, and it is an AIR move.** *„Doppeltipp A/D erzeugt seitlichen
@@ -278,10 +325,10 @@ pub fn gas_budget(
         // a player standing in the street would pay `gas_flip` for a sideways hop, and the
         // ground would have two evasive verbs that do the same thing at two prices.
         //
-        // `None` counts as airborne: a fixture with no `MovementState` is not standing
-        // anywhere, and refusing the flip would make the feature untestable without a floor.
-        let airborne = state.is_none_or(|s| *s != MovementState::Grounded);
-        let wants_flip = intent.pressed(Buttons::FLIP) && airborne && intent.move_x != 0.0;
+        // The same `in_the_air` the dash asks, and the reason it is one binding and not two
+        // copies: two copies drift, and the drift is what let the dash fire on the ground for a
+        // day while this line refused.
+        let wants_flip = intent.pressed(Buttons::FLIP) && in_the_air && intent.move_x != 0.0;
         // **`docs/NEXT.md` §1B, and the same rule a third time: the cost follows the effect.**
         // The rope term of the mixing rule is `n > 0 && (w⁺ > 0 || mx ≠ 0)` — no anchored hook
         // means there is no rope direction to push along and no lateral boost to add, and no
@@ -299,15 +346,6 @@ pub fn gas_budget(
         // `tests/vector_gas.rs::f006_the_steer_is_billed_exactly_when_the_rope_really_thrusts`
         // holds the two against each other over 750 geometries, so the copy here cannot drift
         // away from the formula it is paying for.
-        let hand_m = transform.translation + Vec3::Y * data.game.player.eye_height_m;
-        let mut to_anchors_m = [Vec3::ZERO; 2];
-        let mut anchored = 0;
-        for arm in &hook.arms {
-            if arm.state.is_anchored() {
-                to_anchors_m[anchored] = arm.tip_m - hand_m;
-                anchored += 1;
-            }
-        }
         let wants_steer = steer_has_effect(
             &to_anchors_m[..anchored],
             intent.look_dir(),

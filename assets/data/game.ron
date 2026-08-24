@@ -352,7 +352,26 @@
         // ⚠️ UNTUNED — this is the knob to move if he says the assist feels too eager.
         assist_margin_full: 0.25,
         // ──────────────────────────────────────────────────────────────────────────────────
-        reel_speed_m_s: 28.0,        // F-005 Reel-In
+        // F-005 Reel-In. **Two mechanisms read this one number, and they are not the same
+        // mechanism** (`docs/QUESTIONS.md` Q-050, closed 2026-08-25):
+        //
+        //   Pendulum  metres per second taken off the rope's LENGTH
+        //             (`player::rope::shorten_ropes`, on the joint's `limits.max`). The
+        //             player's speed is then whatever the constraint makes of it — a reel
+        //             multiplies the tangential velocity by `L_prev/L_new`, which is why ACT 1
+        //             of `scripts/game-full.txt` arrived at 28.741 m/s and not at 28.
+        //   Drive     metres per second of CLOSING SPEED along the rope
+        //             (`player::locomotion::rope_winch`). `Drive` builds no joint at all
+        //             (FIND-152), so there is no length to shorten: the winch commands the
+        //             rope axis directly and leaves every other axis of the flight alone.
+        //             Same script, same act, measured 26.695 m/s and the same 35.000 m roof.
+        //
+        // ⚠️ The number is NOT re-tuned for the drive, on purpose: the two readings land within
+        // 8 % of each other on the one act that has ever been photographed, and a second key
+        // would be a second thing to get wrong. If he says the winch is too slow, THIS is the
+        // line — it is bounded above only by `max_speed_m_s` and below by `run_speed_m_s`
+        // (a winch slower than walking is not a verb).
+        reel_speed_m_s: 28.0,
         // ──────────────────────────────────────────────────────────────────────────────────
         // B-003. How much LONGER than it is a `warp` may leave a rope and still keep it.
         //
@@ -389,7 +408,11 @@
         // bounds a POSITION step and says nothing about a solver impulse). The table above is
         // what that guess was worth, and it is why the table is in the file.
         warp_rope_slack_m: 0.004,
-        min_rope_m: 3.0,          // any closer would drag the camera into the wall
+        // Any closer would drag the camera into the wall — and since 2026-08-25 it is also
+        // **where the reel ends under BOTH models**: `shorten_ropes` clamps `limits.max` here,
+        // `rope_winch` drops an arm out of its blend here, and `vector::gas` stops billing
+        // `gas_reel_per_s` here. One number, one place to end, one place to stop paying.
+        min_rope_m: 3.0,
         // ──────────────────────────────────────────────────────────────────────────────────
         // FIND-149 — WHICH FORCE A HOOKED ROPE APPLIES. Pendulum or Drive. **One line.**
         //

@@ -137,7 +137,29 @@ hook left 6.0           # and the left one — held, because the rope only exist
 wait 0.4
 mark game-left-anchored
 
-key Ctrl 5.0            # REEL_IN: the rope gets shorter and the player goes with it
+# 🔴 **THE VERB UNDER THIS KEY CHANGED ON 2026-08-25 AND NOT ONE ASSERT IN THIS ACT DID.**
+# `vector.rope_force_model` is `Drive` since 2026-08-23, and `Drive` builds no `DistanceJoint`
+# (`docs/FINDINGS.md` FIND-152) — so there was no length for the reel to shorten, `Ctrl` moved
+# nobody, and this act reported `Speed 0.000 · Height 0.300`, four of the 24 asserts red, on a
+# build that was pushed. What `Ctrl` means under the drive is now
+# `player::locomotion::rope_winch`: **closing speed along the rope**, `vector.reel_speed_m_s`,
+# no look gate, stopping at `vector.min_rope_m` (`docs/QUESTIONS.md` Q-050).
+#
+# Measured against one pinned binary, this act, the two models side by side:
+#
+#                        at `game-reeled`          at `game-on-the-roof`
+#   Pendulum (length)    28.741 m/s · 15.521 m     0.000 m/s · 35.000 m
+#   Drive    (winch)     26.695 m/s · 13.394 m     0.000 m/s · 35.000 m
+#
+# **The claim is the same claim**: the rope — and nothing else — takes a standing player past
+# 25 m/s and 12 m up, and leaves him at rest on a 35 m roof. The gap in the first column is the
+# amplification a constraint gives a reel and a winch cannot (`L_prev/L_new`,
+# `shared::rope::rope_reel_in`); both readings clear the tripwire this act exists to trip, and
+# `assert speed > 25` was written for 25 and is met by 26.695 with 1.7 m/s to spare.
+# ⚠️ **That margin is thinner than the pendulum's 3.7 and it is the number to watch.** If this
+# line goes red after a tuning change, `vector.reel_speed_m_s` is the key, not this file.
+key Ctrl 5.0            # REEL_IN: under `Pendulum` the rope gets shorter and the player goes
+                        # with it; under `Drive` the winch pulls him up the rope at 28 m/s
 wait 0.6
 mark game-reeled
 

@@ -45,7 +45,7 @@ use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::player::integrator::movement_state;
 use defeated_by_titan::player::locomotion::{
-    DriveTuning, SteerTuning, air_thrust, rope_drive, rope_steer,
+    DriveTuning, SteerTuning, WinchTuning, air_thrust, rope_drive, rope_steer, rope_winch,
 };
 use defeated_by_titan::player::spawn_player;
 use defeated_by_titan::shared::{
@@ -2127,4 +2127,248 @@ fn f010_the_cooldown_is_measured_from_the_start_and_includes_the_slide() {
 
 fn tick_now(app: &App) -> u64 {
     app.world().resource::<defeated_by_titan::shared::Tick>().0
+}
+
+// ---------------------------------------------------------------------------------------
+// `F-005` UNDER THE DRIVE — the winch. `Q-050`'s dead key, given a job (2026-08-25)
+//
+// `Drive` builds no `DistanceJoint` (`FIND-152`), so `player::rope::shorten_ropes` never sees
+// the rope: `Ctrl` moved nobody while `vector::gas` billed `gas_reel_per_s` for it. What it
+// does now is [`rope_winch`] — closing speed along the rope, no look gate, stops at
+// `min_rope_m`. The four tests below are its four properties, and the fifth is the wiring.
+// ---------------------------------------------------------------------------------------
+
+/// Anchors the left arm on a body that is **further away than `min_rope_m`**, and hands back
+/// the real hand-to-tip vector after `vector::hook::update_hooks` has written `tip_m`.
+///
+/// 🔴 **Not `a_real_body`, and that is a fixture bug both winch tests made.** The first body in
+/// the index is the graybox **ground**, whose centre sits **1.70 m** from the hand — inside
+/// `vector.min_rope_m`, so the winch correctly refuses and the test measures its own fixture.
+/// `f005_under_the_pendulum_ctrl_adds_no_acceleration_at_all` was **green with the model fork
+/// deleted** because of exactly that (Rule 5, 2026-08-25): it was asserting `ZERO` against a
+/// rope that was already at the floor. Writing `tip_m` by hand does not help either —
+/// `update_hooks` is its one writer and overwrites it inside the same tick, one system set
+/// ahead of `air_control`.
+fn anchor_on_a_body_with_rope_left(app: &mut App, e: Entity, d: &GameData) -> Vec3 {
+    let body = {
+        let hand = at(app, e) + Vec3::Y * d.game.player.eye_height_m;
+        let index = app.world().resource::<SpatialIndex>();
+        (1..200)
+            .map(BodyId)
+            .filter_map(|id| index.body(id).map(|entry| (id, entry.center_m)))
+            .map(|(id, c)| (id, (c - hand).length()))
+            .filter(|(_, len)| {
+                *len > d.game.vector.min_rope_m + 5.0 && *len < d.game.vector.hook_range_m
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .expect("the graybox has to hold one body between 8 m and a hook range away")
+            .0
+    };
+    hold(app, KeyCode::KeyQ); // or `update_hooks` lets go of the arm on the next tick
+    app.world_mut().get_mut::<Hook>(e).expect("two hooks").arms[Side::Left.index()].state =
+        HookState::Anchored { body, local_m: Vec3::ZERO };
+    app.update(); // `update_hooks` is the one writer of `tip_m` — it puts it on the body
+
+    let hand_m = at(app, e) + Vec3::Y * d.game.player.eye_height_m;
+    let tip_m = app.world().get::<Hook>(e).unwrap().arm(Side::Left).tip_m;
+    let to_anchor = tip_m - hand_m;
+    assert!(
+        to_anchor.length() > d.game.vector.min_rope_m + 1.0,
+        "the fixture needs a rope with room left in it, not one already at the floor: {:.2} m",
+        to_anchor.length()
+    );
+    to_anchor
+}
+
+fn winch_tuning(d: &GameData) -> WinchTuning {
+    WinchTuning {
+        speed_m_s: d.game.vector.reel_speed_m_s,
+        min_rope_m: d.game.vector.min_rope_m,
+        ramp_s: d.game.vector.drive_ramp_s,
+    }
+}
+
+#[test]
+fn f005_the_winch_can_never_brake_a_flight_that_is_already_closing_faster() {
+    // Property 1, and it is the one that keeps `Q-050`'s other half from coming back in a new
+    // key: the released-`W` chase read a 52.9 m/s flight as an error and killed it (`FIND-153`).
+    // A winch that *sets* the closing speed would do the same at 28.
+    //
+    // Red in one line: drop the `if closing_m_s >= t.speed_m_s { return ZERO }` guard — the term
+    // then comes out **negative** along the rope, i.e. a brake of (28 − 40)/0.08 = −150 m/s².
+    let d = game_data();
+    let t = winch_tuning(&d);
+    let along = Vec3::new(0.0, 1.0, 0.0);
+    let to_anchor = along * 40.0;
+
+    let fast = along * (t.speed_m_s + 12.0);
+    assert_eq!(
+        rope_winch(&[to_anchor], fast, t),
+        Vec3::ZERO,
+        "a player already closing at {} m/s must get nothing from the winch, not a brake",
+        t.speed_m_s + 12.0
+    );
+
+    // And the control, so the assertion above can tell the two apart: half that speed and the
+    // winch really does push.
+    let slow = along * (t.speed_m_s * 0.5);
+    let a = rope_winch(&[to_anchor], slow, t);
+    let due = (t.speed_m_s * 0.5) / t.ramp_s;
+    assert!(
+        (a - along * due).length() < 1e-3,
+        "at half the winch speed the term has to be {due:.1} m/s² along the rope, not {a:?}"
+    );
+}
+
+#[test]
+fn f005_the_winch_touches_the_rope_axis_and_leaves_the_crossing_momentum_alone() {
+    // Property 2 — the half of the pendulum's reel that survives without a constraint.
+    // `shared::rope::rope_reel_in` scales the **tangential** velocity while it shortens; the
+    // winch cannot scale it, but it must not eat it either, or reeling in the middle of a swing
+    // would be a brake wearing a reel's name.
+    //
+    // Red by returning `(along * t.speed_m_s - velocity_m_s) / t.ramp_s` — the whole-velocity
+    // chase — which puts 750 m/s² across the rope to kill the 60 m/s of crossing flight.
+    let d = game_data();
+    let t = winch_tuning(&d);
+    let along = Vec3::new(0.0, 1.0, 0.0);
+    let across = Vec3::new(0.0, 0.0, -1.0);
+    let v = across * 60.0; // pure crossing momentum, nothing along the rope at all
+
+    let a = rope_winch(&[along * 40.0], v, t);
+
+    assert!(
+        a.dot(across).abs() < 1e-4,
+        "the winch put {:.4} m/s² across the rope — it may only ever act along it: {a:?}",
+        a.dot(across)
+    );
+    let due = t.speed_m_s / t.ramp_s;
+    assert!(
+        (a.dot(along) - due).abs() < 1e-3,
+        "and along it exactly (28 − 0)/ramp = {due:.1} m/s², measured {:.1}",
+        a.dot(along)
+    );
+}
+
+#[test]
+fn f005_the_winch_stops_at_min_rope_m_and_the_arm_inside_it_contributes_nothing() {
+    // Property 3 — the same floor `player::rope::shorten_ropes` clamps `limits.max` to, so the
+    // two models stop at the same distance. Without it a player who has arrived is driven into
+    // the wall he is hanging on, and `try_normalize` eventually hands back a direction built out
+    // of numerical noise.
+    //
+    // Red by deleting the `if to_anchor.length() <= t.min_rope_m { continue }`.
+    let d = game_data();
+    let t = winch_tuning(&d);
+    let up = Vec3::Y;
+
+    let inside = up * (t.min_rope_m - 0.5);
+    assert_eq!(
+        rope_winch(&[inside], Vec3::ZERO, t),
+        Vec3::ZERO,
+        "an arm {:.1} m from its anchor is at the floor and winds in nothing",
+        t.min_rope_m - 0.5
+    );
+
+    let outside = up * (t.min_rope_m + 0.5);
+    assert_ne!(
+        rope_winch(&[outside], Vec3::ZERO, t),
+        Vec3::ZERO,
+        "half a metre further out it has to pull again — otherwise this test passes because \
+         the winch is broken, not because the floor works"
+    );
+
+    // Two arms, one of each: the far one still winds in. That is the rule the gas gate copies.
+    let both = rope_winch(&[inside, outside], Vec3::ZERO, t);
+    assert!(
+        (both - rope_winch(&[outside], Vec3::ZERO, t)).length() < 1e-4,
+        "with one arm at the floor and one out past it, the far arm alone decides: {both:?}"
+    );
+}
+
+#[test]
+fn f005_under_the_drive_ctrl_winds_in_a_player_who_is_standing_still_on_the_ground() {
+    // **The wiring, and it is the one that `scripts/game-full.txt` ACT 1 hangs on.** The act
+    // begins with the player standing still — `MovementState::Grounded`, so [`in_flight`] is
+    // false — and climbs a 35 m church roof on `Ctrl` alone. Under `Pendulum` that works
+    // because the reel moves the joint's `limits.max` and never asks about the player's state;
+    // the winch is an acceleration on the **body**, so it had to be lifted out of
+    // `air_control`'s flight branch or ACT 1 would have measured `Height 0.300` forever — which
+    // is exactly what the pushed build did measure, four asserts red.
+    //
+    // Red by putting the winch back inside `if in_flight(...)`.
+    let mut app = app();
+    app.world_mut().resource_mut::<GameData>().game.vector.rope_force_model =
+        defeated_by_titan::data::RopeForceModel::Drive;
+    ticks(&mut app, 30); // the player lands and settles on the graybox floor
+    let e = me(&mut app);
+    let d = data(&app);
+    assert_eq!(
+        state(&app, e),
+        MovementState::Grounded,
+        "the fixture is a player STANDING — if he is airborne this test proves nothing"
+    );
+
+    let to_anchor = anchor_on_a_body_with_rope_left(&mut app, e, &d);
+    let along = to_anchor.normalize();
+    let velocity_before = app.world().get::<Velocity>(e).expect("a player carries a Velocity").0;
+
+    // WARNING: the closing speed is read BEFORE the tick, not after it. `air_control` decides
+    // on `Velocity`, which `player::integrator::readback` writes at the END of the previous
+    // tick — reading `LinearVelocity` after `update()` measures the tick's own result and the
+    // number came out 22 m/s2 short. A fixture bug this test made once, kept as a warning.
+    let closing = velocity_before.dot(along);
+    let due = (d.game.vector.reel_speed_m_s - closing) / d.game.vector.drive_ramp_s;
+
+    hold(&mut app, KeyCode::ControlLeft);
+    app.update();
+
+    let a = run_accel(&app, e);
+    assert!(
+        (a - along * due).length() < 1.0,
+        "`Ctrl` on a {:.1} m rope has to wind a STANDING player in at ({} − {closing:.2})/{} = \
+         {due:.1} m/s² along it. Measured {a:?}",
+        to_anchor.length(),
+        d.game.vector.reel_speed_m_s,
+        d.game.vector.drive_ramp_s,
+    );
+
+    // The control that makes the number mean something: the same tick, the same held key, the
+    // hook let go of. If this is not ZERO the test above was measuring gravity, a jump or the
+    // look term — not the rope. (`CLAUDE.md` §6 rule 5: delete the thing you think you are
+    // measuring and check the number moves.)
+    let_go_of_the_left_hook(&mut app, e);
+    app.update();
+    assert_eq!(
+        run_accel(&app, e),
+        Vec3::ZERO,
+        "with no rope the very same held `Ctrl` must move nothing at all"
+    );
+}
+
+#[test]
+fn f005_under_the_pendulum_ctrl_adds_no_acceleration_at_all() {
+    // The model fork. The pendulum's reel is a **length**, carried out by
+    // `player::rope::shorten_ropes` on the joint — it must never grow a second, additive
+    // acceleration on the body, or the reel would be paid once and delivered twice.
+    //
+    // Red by deleting the `RopeForceModel::Drive` arm of the winch `match` (making it fire under
+    // both models).
+    let mut app = app();
+    app.world_mut().resource_mut::<GameData>().game.vector.rope_force_model =
+        defeated_by_titan::data::RopeForceModel::Pendulum;
+    ticks(&mut app, 30);
+    let e = me(&mut app);
+    let d = data(&app);
+    // The same fixture as the `Drive` test, and it has to be: a rope already at the floor makes
+    // this assertion pass no matter what the `match` says.
+    anchor_on_a_body_with_rope_left(&mut app, e, &d);
+    hold(&mut app, KeyCode::ControlLeft);
+    app.update();
+
+    assert_eq!(
+        run_accel(&app, e),
+        Vec3::ZERO,
+        "under `Pendulum` the reel is the joint's business and this function contributes nothing"
+    );
 }

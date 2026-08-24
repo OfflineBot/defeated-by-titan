@@ -346,7 +346,23 @@ pub fn start_slides(
         if *state != MovementState::Grounded || !intent.pressed(Buttons::DODGE) {
             continue;
         }
+        // **`F-028`'s rule, on the one button that now has no fallback.** Until 2026-08-25 a
+        // grounded `C` that this system refused still bought a *dash* — `vector::gas` had no
+        // ground test, so the press always did *something*. It does not any more, and a press
+        // that answers with nothing is the failure `F-028` exists to remove. The hint belongs
+        // on the HUD (`src/hud/arm_aim.rs`, somebody else's file); this is the log line that
+        // says which of the two refusals it was. It cannot spam: `Buttons::DODGE` is an **edge**
+        // — `net::local::DodgeTap` presses it on at most one tick per gesture.
         if !slide.ready(tick.0, cooldown_ticks) {
+            // The clock is `started_at_tick` and not `until_tick`, because that is the one
+            // `Slide::ready` counts from — a message that measures a different clock than the
+            // refusal is a message that will one day say "0.00 s to go" while refusing.
+            let ready_at = slide.started_at_tick.map_or(slide.until_tick, |t| t + cooldown_ticks);
+            info!(
+                "F-010: no slide at tick {} — still cooling down, {:.2} s to go",
+                tick.0,
+                ready_at.saturating_sub(tick.0) as f64 / hz,
+            );
             continue;
         }
         // **The direction is the one he is already going**, not the one he is looking or
@@ -355,6 +371,12 @@ pub fn start_slides(
         // what keeps `normalize_or_zero` from ever being asked for the zero vector.
         let flat = velocity.0.xz();
         if flat.length() < s.slide_min_speed_m_s {
+            info!(
+                "F-010: no slide at tick {} — {:.1} m/s is under slide_min_speed_m_s {:.1}",
+                tick.0,
+                flat.length(),
+                s.slide_min_speed_m_s,
+            );
             continue;
         }
         let dir = flat.normalize_or_zero();
@@ -701,6 +723,119 @@ pub fn rope_drive(
     (target - velocity_m_s) / t.ramp_s
 }
 
+/// The three numbers [`rope_winch`] is made of — and **not one of them is new**: they are
+/// `vector.reel_speed_m_s`, `vector.min_rope_m` and `vector.drive_ramp_s`, already in
+/// `game.ron` and already tuned.
+///
+/// A struct and not three `f32` in a row, for [`DriveTuning`]'s reason: swap the speed and the
+/// floor and the compiler says nothing while the winch silently becomes a 3 m/s crawl that
+/// stops 28 m short of the anchor.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WinchTuning {
+    /// [`crate::data::VectorTuning::reel_speed_m_s`] — the closing speed `Ctrl` winds in at.
+    pub speed_m_s: f32,
+    /// [`crate::data::VectorTuning::min_rope_m`] — the floor. The pendulum clamps its
+    /// `limits.max` here; the winch simply stops here.
+    pub min_rope_m: f32,
+    /// [`crate::data::VectorTuning::drive_ramp_s`] — the same time constant the drive uses, on
+    /// purpose: one rope, one onset. `<= 0` means **no winch at all**, the safe direction for a
+    /// number that divides.
+    pub ramp_s: f32,
+}
+
+/// `F-005` Reel-in **under [`crate::data::RopeForceModel::Drive`]** — the winch: closing speed
+/// along the rope, and nothing else.
+///
+/// ```text
+/// r̂ = unit( Σᵢ unit(tipᵢ − h) )   over the arms further away than `min_rope_m`
+/// c  = v · r̂                                          (the closing speed the player already has)
+/// a  = r̂ · max(0, reel_speed − c) / ramp
+/// ```
+///
+/// ## Why this exists at all, and why it is not `W`
+///
+/// `Drive` builds **no `DistanceJoint`** (`FIND-152`), so there is no length for
+/// `player::rope::shorten_ropes` to shorten and `Ctrl` was a dead key that `vector::gas` still
+/// billed (`Q-050`). The three honest answers were: fold the reel into the drive, retire it, or
+/// give it a job of its own. **It has a job of its own, and `F-005`'s own acceptance sentence
+/// names it:** *„Spieler kann aus dem Tiefpunkt Hoehe gewinnen"*. At the low point of a flight
+/// the anchor is **behind and above** you and you are looking where you are going — and `W`'s
+/// look gate `cᵢ = max(0, l̂ · r̂ᵢ)` is exactly zero there, by construction. The drive cannot
+/// gain you that height without making you stare at your own anchor. The winch can.
+///
+/// So the two verbs are one trade and the player can feel which is which:
+///
+/// | | `W` — the drive | `Ctrl` — the winch |
+/// |---|---|---|
+/// | speed | `drive_speed_m_s` 70 | `reel_speed_m_s` 28 |
+/// | aim | **look-gated** — you go where you look | none: straight up the rope |
+/// | axes | the whole velocity (`W`), one axis (`A`/`D`) | the rope axis, and only that |
+/// | ends | when `r̂` swings past your look | at `min_rope_m` |
+///
+/// ## The four properties, and each one is a test
+///
+/// 1. **It can never brake.** The coefficient is `max(0, reel_speed − c)`, so the winch only
+///    ever *raises* the closing speed toward `reel_speed_m_s`. Already closing at 40 m/s? The
+///    term is `Vec3::ZERO`. That is not a nicety: `Q-050`'s other half was a released `W` whose
+///    chase read a 52.9 m/s flight as an error and killed it, and a winch that *sets* the
+///    closing speed would be the same bug in a new key.
+/// 2. **It touches the rope axis and nothing else.** Your crossing momentum is not part of the
+///    dot product and never appears in the output, so winching in the middle of a swing keeps
+///    the swing. That is the one thing the pendulum's reel is famous for
+///    (`shared::rope::rope_reel_in` scales the tangential velocity instead of eating it), and
+///    it is the half of it that survives without a constraint. **What does NOT survive is the
+///    amplification** — `L_prev/L_new` is the constraint's doing and there is no constraint.
+/// 3. **It stops at `min_rope_m`,** per arm, the same floor `shorten_ropes` clamps its
+///    `limits.max` to. An arm inside the floor contributes no direction at all, so a player who
+///    has arrived is not pushed into the wall he is hanging on.
+/// 4. **No look gate, and that is the whole point** (see the table). It is also why the winch
+///    is **not** billed through `steer_has_effect`: `vector::gas` bills it on its own predicate,
+///    `Ctrl` held and an arm beyond the floor.
+///
+/// ⚠️ **The one shape that is still ugly, measured and not explained away:** hold `Ctrl` through
+/// an anchor in **open air** — a hook that bit a lamp post rather than a wall — and you shoot
+/// past it, `r̂` flips, and the winch hauls you back. It is bounded by `reel_speed_m_s` and it
+/// is exactly what the pendulum does at `min_rope_m` (`FIND-035`: 17 m/s out of the player in
+/// one tick), so it is not a regression — but it is not designed either. Anchors sit on
+/// surfaces, which is why it is hard to reach: the wall arrives before the flip does.
+/// → `docs/QUESTIONS.md` Q-050.
+#[must_use]
+pub fn rope_winch(to_anchors_m: &[Vec3], velocity_m_s: Vec3, t: WinchTuning) -> Vec3 {
+    // Both guards are the safe direction for a number out of a file: a ramp of zero divides,
+    // and a winch speed of zero is a winch that is switched off.
+    if to_anchors_m.is_empty() || !(t.ramp_s > 0.0) || !(t.speed_m_s > 0.0) {
+        return Vec3::ZERO;
+    }
+    let mut blend = Vec3::ZERO;
+    for to_anchor in to_anchors_m {
+        // Property 3. `length` and not `length_squared` against a squared floor, because the
+        // floor is read from the file in metres and squaring it here would be a second place to
+        // get `min_rope_m` wrong.
+        if to_anchor.length() <= t.min_rope_m {
+            continue;
+        }
+        // Same guard as [`rope_drive`]: a tip exactly on the hand has no direction, and a NaN
+        // in a velocity is unrecoverable (§9d).
+        let Some(direction) = to_anchor.try_normalize() else {
+            continue;
+        };
+        blend += direction;
+    }
+    // Two arms 180° apart cancel, and then there is no rope axis to wind along — `ZERO`, not a
+    // NaN and not an arbitrary pick between them.
+    let Some(along) = blend.try_normalize() else {
+        return Vec3::ZERO;
+    };
+    // Property 1, and it is one `max`.
+    let closing_m_s = velocity_m_s.dot(along);
+    if closing_m_s >= t.speed_m_s {
+        return Vec3::ZERO;
+    }
+    // Property 2: the whole output lies on `along`, so no other axis of the velocity is read
+    // and none is written.
+    along * ((t.speed_m_s - closing_m_s) / t.ramp_s)
+}
+
 /// `F-006` Swerve — WASD in the air, as an acceleration.
 ///
 /// **Sole writer of [`RunAccel`].** Contributor — never sole writer — of
@@ -790,26 +925,40 @@ pub fn air_control(
         lateral_m_s: data.game.vector.drive_lateral_m_s,
         ramp_s: data.game.vector.drive_ramp_s,
     };
+    // `F-005` under `Drive` — three numbers that already existed, read here for the first
+    // time together. The ramp is the drive's on purpose: one rope, one onset.
+    let winch_tuning = WinchTuning {
+        speed_m_s: data.game.vector.reel_speed_m_s,
+        min_rope_m: data.game.vector.min_rope_m,
+        ramp_s: data.game.vector.drive_ramp_s,
+    };
 
     for (intent, state, velocity, gas, hook, grant, transform, mut drive, forces) in &mut players {
-        let wanted = if in_flight(*state, velocity.0.xz().length(), top_m_s) {
+        // The hand, not the feet — the same point `vector::hook` fires from and
+        // `hud::crosshair` measures from, so the rope this steers along is the rope that is
+        // drawn (`player.eye_height_m`, one key, three readers).
+        //
+        // ⚠️ **Hoisted out of the flight branch on 2026-08-25, and that is a decision, not
+        // tidying.** The winch below has to work on the ground: `scripts/game-full.txt` ACT 1
+        // starts with a player *standing still* — `MovementState::Grounded`, so
+        // [`in_flight`] is false — and `F-005`'s whole acceptance sentence is that he gets off
+        // it. The pendulum's reel never had this problem, because it works on the rope's
+        // `limits.max` and not on the body. Two subtractions per tick; nothing else moved.
+        let hand_m = transform.translation + Vec3::Y * s.eye_height_m;
+        let mut to_anchors_m = [Vec3::ZERO; 2];
+        let mut anchored = 0;
+        for arm in &hook.arms {
+            if arm.state.is_anchored() {
+                to_anchors_m[anchored] = arm.tip_m - hand_m;
+                anchored += 1;
+            }
+        }
+
+        let flight = if in_flight(*state, velocity.0.xz().length(), top_m_s) {
             let accel_m_s2 =
                 if gas.is_empty() { full_m_s2 * s.air_accel_empty_fraction } else { full_m_s2 };
             let look =
                 air_thrust(intent.look_dir(), intent.yaw, intent.move_x, intent.move_y, accel_m_s2);
-
-            // The hand, not the feet — the same point `vector::hook` fires from and
-            // `hud::crosshair` measures from, so the rope this steers along is the rope that is
-            // drawn (`player.eye_height_m`, one key, three readers).
-            let hand_m = transform.translation + Vec3::Y * s.eye_height_m;
-            let mut to_anchors_m = [Vec3::ZERO; 2];
-            let mut anchored = 0;
-            for arm in &hook.arms {
-                if arm.state.is_anchored() {
-                    to_anchors_m[anchored] = arm.tip_m - hand_m;
-                    anchored += 1;
-                }
-            }
 
             // **`grant.steer` is the whole check** — it already means "a rope holds, a key is
             // down and this tick's gas was paid" (`vector::gas`). And the branch is a branch and
@@ -871,6 +1020,33 @@ pub fn air_control(
         } else {
             Vec3::ZERO
         };
+
+        // **`F-005` under `Drive`: the winch** (`Q-050`, [`rope_winch`]). `Drive` builds no
+        // joint, so `player::rope::shorten_ropes` never sees the rope and `Ctrl` was a key that
+        // did nothing while `vector::gas` billed `gas_reel_per_s` for it. It does something now.
+        //
+        // - **`grant.reel_in` is the whole check**, exactly as `grant.steer` is for the drive:
+        //   it already means *„`Ctrl` held, an arm is anchored beyond `min_rope_m`, and this
+        //   tick's gas was paid"* (`vector::gas`). One rule, one place, and the winch therefore
+        //   costs gas exactly when it moves the player.
+        // - **No empty-tank exception, and the drive has one.** *„ohne gas kann man immernoch w
+        //   a d nutzen"* (`docs/NEXT.md` §1e) names `W`/`A`/`D` and not the reel, and the
+        //   pendulum's reel stops dead on an empty tank too (`vector::reel` writes `ReelSpeed`
+        //   only on a grant). An empty tank takes the winch with it under both models.
+        // - **Outside the `in_flight` gate**, see `hand_m` above.
+        let winch = match model {
+            RopeForceModel::Drive if anchored > 0 && grant.reel_in => {
+                rope_winch(&to_anchors_m[..anchored], velocity.0, winch_tuning)
+            }
+            _ => Vec3::ZERO,
+        };
+
+        // Two terms, added, never chosen — `vector::boost::gas_boost`'s rule for the boost and
+        // the dash, for its reason: holding `Ctrl` through a drive is a thing a player does in
+        // his first minute, and either winning over the other would be a rule nobody can see.
+        // Under `Pendulum` the second term is `Vec3::ZERO` by construction, so that model comes
+        // out of this function bit for bit as it did before the winch existed.
+        let wanted = flight + winch;
 
         drive.set_if_neq(RunAccel(wanted));
 

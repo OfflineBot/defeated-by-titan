@@ -83,6 +83,9 @@ pub struct GameData {
     pub missions: Missions,
     pub traits: Traits,
     pub maps: Maps,
+    /// `progress.ron` — the progression spine (`F-120`, `F-121`, `F-122`): what a sortie
+    /// earns, what a level costs, what a gear budget buys and which rank it is worth.
+    pub progress: Progress,
     /// The **one truth about sizes**, laid down by the user. Every other file only mirrors it;
     /// `tests/data.rs` falls over the moment one of them deviates from this.
     pub scale: Scale,
@@ -98,6 +101,7 @@ impl GameData {
             missions: load_ron(dir, "missions.ron"),
             traits: load_ron(dir, "traits.ron"),
             maps: load_ron(dir, "maps.ron"),
+            progress: load_ron(dir, "progress.ron"),
             scale: load_ron(dir, "scale.ron"),
         }
     }
@@ -1875,8 +1879,22 @@ pub struct HubLayout {
     pub name: String,
     /// Where a player stands when he enters the hub — at launch and after every sortie.
     pub spawn_m: (f32, f32, f32),
-    /// How long the verdict stays on screen before the hub takes you back. Seconds in the
-    /// file, ticks in the code (`docs/conventions.md`).
+    /// How long `WON`/`LOST` stands over the field the sortie was decided on, before the
+    /// **debrief** comes up. Seconds in the file, ticks in the code (`docs/conventions.md`).
+    ///
+    /// ⚠️ **This field carried the name `debrief_s` until 2026-08-24** and it meant "verdict to
+    /// hub". It was split when the debrief became a phase of its own (`F-175`): the verdict is
+    /// one hold and the report the player reads is another, and a single number cannot be both
+    /// without one of the two being wrong.
+    pub verdict_s: f32,
+    /// How long the **debrief** stands before the hub takes you back — in a run that has no
+    /// screen to hold it.
+    ///
+    /// ⚠️ A windowed run never spends this: `menu::Screen::Debrief` comes up with the phase and
+    /// a screen stops `Time<Virtual>`, so the ticks this is counted in do not happen until the
+    /// player has clicked out of it (`src/menu/debrief.rs`). It is what a `--headless` or
+    /// `--script` run — which has no window and therefore no menu at all — waits instead, and
+    /// it is what `scripts/f175-loop.txt` asserts the phase inside of.
     pub debrief_s: f32,
     /// The doors. **One per difficulty** — a game with mouse-look and no cursor cannot offer
     /// a menu here, so the choice is a place you walk to.
@@ -1968,4 +1986,117 @@ pub struct TraitDef {
     pub name: String,
     pub cost: u32,
     pub description: String,
+}
+
+// ---------------------------------------------------------------------------
+// progress.ron — the progression spine: F-120 the curve, F-121 the rank, F-122 the budget
+// ---------------------------------------------------------------------------
+
+/// Everything `progress` and `save` need in order to say what a sortie was worth.
+///
+/// **Rule 2, in full force.** Not one of these numbers stands in Rust, and none of them has a
+/// `serde(default)`: a `progress.ron` that is missing a field crashes at startup with the file
+/// name, exactly like every other tuning file. The *save* file is the one place that is allowed
+/// to fill a missing value, and the reason is written down in `src/save/file.rs`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Progress {
+    pub xp: XpTuning,
+    pub levels: LevelTuning,
+    pub gear: GearTuning,
+    /// Ascending by `min_gear_points`, and `tests/progress.rs` is what keeps them that way —
+    /// a rank list out of order would silently hand out the wrong letter.
+    pub ranks: Vec<RankTier>,
+    /// `"<template>"` or `"<template>/<difficulty>"` -> the lowest rank that may fly it.
+    /// **Empty ships nothing locked** (`assets/data/progress.ron` says why).
+    pub gates: BTreeMap<String, String>,
+}
+
+/// `F-120` — what one finished sortie earns. Facts in, experience out.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct XpTuning {
+    pub per_sortie_flown: f32,
+    pub per_sortie_won: f32,
+    pub per_titan_felled: f32,
+    pub per_minute_in_the_field: f32,
+    /// Keyed by `missions.ron: <template>.difficulties`.
+    pub difficulty_multipliers: BTreeMap<String, f32>,
+    /// The direct drop-in (`--mission tutorial`), which belongs to no tier.
+    pub without_a_difficulty: f32,
+}
+
+impl XpTuning {
+    /// The multiplier for a tier, or **the loud fallback**.
+    ///
+    /// A tier that is in `missions.ron` and not in `progress.ron` is a data error, and
+    /// `tests/progress.rs::f120_every_difficulty_in_missions_ron_has_an_xp_multiplier` is what
+    /// catches it before it ships. At runtime it must not crash — a career is not worth losing
+    /// over a missing multiplier — so it earns the direct drop-in's rate and says so.
+    pub fn multiplier_for(&self, difficulty: Option<&str>) -> f32 {
+        let Some(tier) = difficulty else { return self.without_a_difficulty };
+        match self.difficulty_multipliers.get(tier) {
+            Some(m) => *m,
+            None => {
+                error!(
+                    "progress.ron: no xp multiplier for difficulty {tier:?} — this sortie is \
+                     paid at the no-tier rate {}",
+                    self.without_a_difficulty
+                );
+                self.without_a_difficulty
+            }
+        }
+    }
+}
+
+/// `F-120` — the curve, as three numbers instead of a hundred rows.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LevelTuning {
+    pub max_level: u32,
+    /// What the step from level 1 to level 2 costs.
+    pub first_step_xp: f32,
+    /// Every further step costs this much more than the one before it.
+    pub step_growth: f32,
+    pub skill_points_per_level: u32,
+    pub gear_points_at_level_one: u32,
+    pub gear_points_per_level: u32,
+}
+
+/// `F-122` — one budget over several axes, with the couplings that make it a choice.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GearTuning {
+    /// `< 1.0` or the strongest build is always a single-axis dump. **The whole design.**
+    pub diminishing_exponent: f32,
+    /// In the order a screen would show them.
+    pub axes: OrderedMap<String, GearAxis>,
+    pub couplings: Vec<GearCoupling>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GearAxis {
+    /// What one unit of this axis's effect is worth when a build is weighed against another.
+    /// **A stand-in for a measured sortie**, and it is the one number in this file that is a
+    /// property of the *test* rather than of the game (`docs/FINDINGS.md` FIND-155).
+    pub strength_weight: f32,
+}
+
+/// "Speed costs control, damage costs durability" — one line per sentence.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GearCoupling {
+    pub spends: String,
+    pub costs: String,
+    /// How much of the spender's effect is taken back off the axis it costs.
+    pub drag: f32,
+}
+
+/// `F-121` — one rung of the E..S ladder.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RankTier {
+    pub name: String,
+    pub min_gear_points: u32,
 }

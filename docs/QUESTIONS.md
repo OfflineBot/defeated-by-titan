@@ -1995,20 +1995,64 @@ Related: `FIND-149` · `FIND-152` · `docs/NEXT.md` item 1 · `Q-050` · `script
 ## Q-050 — under `Drive` the reel does nothing and `A`/`D` alone is a brake. Both are consequences, not decisions
 
 **Opened:** 2026-08-23, with `Q-049`.
-**Status:** 🟡 **half closed 2026-08-23** — the `A`/`D` brake is fixed (`FIND-153`); the reel is
-still inert and still billed, and that half is a design question, not a repair.
+**Status:** 🟢 **closed 2026-08-25** — the `A`/`D` brake was fixed on 2026-08-23 (`FIND-153`);
+the reel got a verb of its own on 2026-08-25 (`FIND-159`). **One thing in it is still yours**,
+and it is section 1c below.
 
-**1. The reel-in (`F-005`, `Ctrl`) has nothing to shorten.** `Drive` builds no `DistanceJoint`,
-so there is no enforced length, so `player::rope::shorten_ropes` never sees the rope —
-**and `vector::gas` still bills `gas_reel_per_s: 6` for the held key.** The reel is one of the
-three verbs of the Vector Gear and under this model it is currently inert.
+**1. ✅ ANSWERED 2026-08-25 — `Ctrl` under the drive is a WINCH.**
 
-`ASSUMPTION:` that is left as it is for now, because "what a reel means when the rope is not a
-constraint" is a design question and not a repair. The two honest answers are *(a)* the reel
-raises `drive_speed_m_s` while held (a boost along the rope) or *(b)* the reel is what the drive
-**is**, and `W` and `Ctrl` collapse into one verb. **Rollback point:** neither has been built, so
-picking either is additive; the billing line is `src/vector/gas.rs` (foreign territory to the
-round that wrote this).
+The problem, first: `Drive` builds no `DistanceJoint`, so there was no enforced length, so
+`player::rope::shorten_ropes` never saw the rope — **and `vector::gas` billed `gas_reel_per_s: 6`
+for the held key anyway.** It also broke the flagship run: `scripts/game-full.txt` climbs a 35 m
+church roof by reeling, and under `Drive` it reported **4 of 24 asserts failed** —
+`Speed 0.000`, `Height 0.300`.
+
+**a. What it does now.** `player::locomotion::rope_winch`:
+`a = r̂ · max(0, reel_speed_m_s − v·r̂) / drive_ramp_s`, over the arms further out than
+`min_rope_m`. **Closing speed along the rope, and nothing else** — no look gate, one axis, and
+it can never brake, because the coefficient is a `max(0, …)`.
+
+**b. Why this and not the two answers this entry proposed on 2026-08-23.** Both of them were
+*„fold it into `W`"* in different words, and `W` cannot do the job `F-005`'s own acceptance
+sentence asks for: *„Spieler kann aus dem Tiefpunkt Hoehe gewinnen"*. At the low point of a
+flight the anchor is behind and above you and you are looking where you are going, and the
+drive's look gate `cᵢ = max(0, l̂ · r̂ᵢ)` is **exactly zero** there, by construction. So the two
+verbs are one trade the player can feel:
+
+| | `W` — the drive | `Ctrl` — the winch |
+|---|---|---|
+| speed | `drive_speed_m_s` **70** | `reel_speed_m_s` **28** |
+| aim | look-gated: you go where you look | none: straight up the rope |
+| axes | the whole velocity | the rope axis only — your swing survives it |
+| ends | when `r̂` swings past your look | at `min_rope_m` |
+
+**c. 🔴 THE PART THAT IS YOURS: is 28 m/s the right winch, and is a slower second gear what you
+want at all?** `ASSUMPTION:` yes, and `reel_speed_m_s` is **not re-tuned** for the drive — the
+same 28 that the pendulum's length used. On the one act that has ever been photographed the two
+readings land within 8 % of each other (28.741 m/s against **26.695 m/s**, both onto the same
+35.000 m roof), so a second key would be a second thing to get wrong.
+**Rollback point:** one number, `assets/data/game.ron: vector.reel_speed_m_s`. Raising it is
+free up to `max_speed_m_s` (75). Deleting the verb instead is the `RopeForceModel::Drive` arm of
+the winch `match` in `src/player/locomotion.rs::air_control` plus the `Ctrl` binding in
+`src/net/local.rs` — and then `scripts/game-full.txt` ACT 1 has to be re-flown, because nothing
+else in this game lifts a standing player onto a roof.
+
+**d. And the billing is honest again**, under both models: `vector::gas` stops charging
+`gas_reel_per_s` the moment the arm is inside `min_rope_m`, which is where both mechanisms stop
+moving anybody. Red test: `tests/vector_gas.rs::f005_a_reel_whose_rope_is_already_at_the_floor_is_not_billed`.
+
+**e. ⚠️ One shape is measured and NOT designed.** Hold `Ctrl` through an anchor in open air — a
+hook that bit a lamp post rather than a wall — and you shoot past it, `r̂` flips, and the winch
+hauls you back. It is bounded by `reel_speed_m_s` and it is no worse than what the pendulum does
+at `min_rope_m` (`FIND-035`: 17 m/s out of the player in one tick), but nobody chose it. Anchors
+sit on surfaces, which is why it is hard to reach in practice. If you feel it, say so and it
+gets a latch.
+
+**f. ⚠️ And one reported symptom did not reproduce.** *„a running player loses ground contact on
+single ticks, so `F-009`'s flip fires on the ground"* — four probe runs on flat `ashgate`
+(standing, running at 6 m/s, skidding at 39 m/s, mid-jump), `A`·pause·`A` at four tap spacings,
+never once billed `gas_flip`. What **was** measured and closed is the other half of the same
+line: the old predicate said yes to `Downed` and to `OnWall`. The flicker stays open here.
 
 **2. ✅ FIXED 2026-08-23 (`FIND-153`) — `A`/`D` with `W` released brakes you.** The drive chased
 a target velocity; with only a lateral key held that target was `drive_lateral_m_s` (18 m/s) and
@@ -2027,7 +2071,88 @@ lateral that merely *adds* to the flight took `D`-alone to **75.000 m/s exactly*
 `clamp_length_max(drive_speed_m_s)` now sits outside the blend, so `A`/`D` is a **redirect**:
 same speed, ~20° of it pointing somewhere else. Measured 71.12 m/s in ACT 3.
 
-Related: `Q-049` · `FIND-152` · `F-005` · `src/vector/gas.rs`
+Related: `Q-049` · `FIND-152` · `FIND-153` · `FIND-159` · `F-005` ·
+`src/player/locomotion.rs::rope_winch` · `src/vector/gas.rs`
+
+---
+
+## Q-051 — the progression spine is built (F-120/F-121/F-122). Two decisions inside it are yours, and one of them is whether it should exist yet (2026-08-24)
+
+**You asked for features — *„es fehlen SEHR viele features!"* — and twelve of the unbuilt prio-1
+rows are `progress`.** So a sortie now earns experience, experience is a level, a level is a gear
+budget, and a gear budget is a rank from E to S. `assets/data/progress.ron` holds every number;
+`src/progress/career.rs` and `src/progress/gear.rs` hold the mechanics and no numbers at all.
+
+### 1. This stands on the line the design draws, and you are the one who may move it
+
+`docs/gameplay/pillars.md` and `docs/PLAN-GAME.md` §10 both say it plainly: **no meta system
+before the Vector Gear gate is passed**, and `F-120`, `F-121` and `F-122` are named in that
+forbidden list by their ids. The gate is a blind test against Attack on Titan Revolution with ten
+human testers, and it has not been run.
+
+`ASSUMPTION:` **your instruction outranks the plan**, so it is built — but built as the *smallest
+honest version*: a number that grows, a budget that is earned, and a rank derived from it.
+**Nothing that was forbidden downstream of it was started**: no skill tree (`F-123`), no perks
+(`F-126`), no currencies (`F-140`), no loot tables, no pity counters (`F-128`/`F-142`), no
+lineages, no shop. And **no gear point changes a gameplay number** — `game.ron` and `gear.ron`
+are untouched, so the movement you are judging is exactly the movement you judged yesterday.
+
+**Rollback point:** delete `assets/data/progress.ron`, the `progress:` field in
+`src/data/mod.rs::GameData`, `src/progress/career.rs`, `src/progress/gear.rs`,
+`tests/progress.rs` and the `xp` / `gear` fields of `save::Profile` (schema back to 1). The
+career counters `F-200` already shipped are untouched by all of it.
+
+### 2. Does the rank come from what you have EARNED or from what you have SPENT?
+
+`F-121` says the rank *"rises through gear improvement"*. That is ambiguous the moment the points
+exist but the screen to spend them does not (`F-125` loadouts is ⬜).
+
+`ASSUMPTION:` **earned**. `rank_for` reads the budget the level hands out, not the points
+currently allocated. Two reasons: a player who has not yet redistributed his points is not less
+experienced than one who has, and a rank derived from spending would gate content behind a screen
+that does not exist — which is the shape of bug that ships as "the game is locked and I cannot
+find out why".
+
+**Rollback point:** one line — `src/progress/career.rs::Career::of` passes `earned` to
+`rank_for`; passing `gear::spent_points(&profile.gear)` instead is the other reading, and
+`tests/progress.rs::f121_a_rank_begins_exactly_at_its_own_threshold` does not care which.
+
+### 3. What the numbers currently say, so you can tell me they are wrong
+
+- A won recruit skirmish with eight kills in four minutes is **400 xp**. A loss with the same
+  kills is 280. Elite pays 2.2x, veteran 1.5x.
+- **The first level costs 300**, so your first good sortie is a level. The whole ladder to 100 is
+  513 838 xp — about 1 280 sorties at that rate. **⚠️ Untuned, and that last number is the one I
+  would expect you to hate first.**
+- A level is **1 skill point** (unspendable until `F-123`) and **2 gear points**. Level 1 starts
+  with 6, level 100 has 204.
+- Rank **D** at 12 gear points (level 4), **C** at 26 (11), **B** at 48 (22), **A** at 90 (43),
+  **S** at 150 (73).
+- **Nothing is gated.** `progress.ron: gates` is empty on purpose — locking a difficulty you can
+  fly today, to demonstrate a rank, is the wrong trade while the movement is still the open
+  question. One line in that file locks one door.
+
+### 4. The four gear axes, and the one thing I could not test
+
+`speed`, `control`, `power`, `endurance`, with your row's own two sentences as numbers: **speed
+costs control, power costs endurance**. Points have diminishing returns, so the strongest build is
+always a spread — measured, at every budget from 6 to 60 the best build puts at most 29 % of its
+points on one axis, and the four builds that lead with the four different axes are within 0.2 % of
+each other.
+
+⚠️ **That is measured against a stand-in and I want you to know it.** "Strength" is a weighted sum
+whose weights live in the same file as the design they judge (`docs/FINDINGS.md` FIND-155). It can
+prove no build structurally dominates. It cannot prove a build is fun, and it cannot prove
+anything at all until a gear point actually moves `game.ron` — which is the next step and is
+**not** taken.
+
+Related: `F-120` · `F-121` · `F-122` · `F-200` · `docs/FINDINGS.md` FIND-155 ·
+`assets/data/progress.ron`
+
+**The evidence run for all of it is `scripts/f120-career.txt`** — three separate processes against
+one `DBT_SAVE_DIR`: one that migrates a save written before the curve existed, one that flies a
+sortie and books what it earned, one that starts cold and reads the level back off the disk. The
+numbers are in the commit message, not here.
 
 ---
 
@@ -2052,6 +2177,18 @@ unchanged, and still makes the dash the expensive impulse next to the boost.
 because it asks `charges.is_none_or(...)`.
 **The question is the SHAPE, not the numbers:** is a magazine what you want, or is a plain
 cooldown enough? Three-in-a-row is a burst you can spend badly; a single 0.6 s cooldown is not.
+
+🔴 **AMENDED 2026-08-25 — a dash is an AIR move now, and it was not one when this was written.**
+`vector::gas` never asked what the player was standing on, so one press of `C` while running
+bought `F-010`'s slide **and** the dash: gas 15000 -> 14955, a charge gone, and the slide's
+promised `max(current, 12)` delivered **38.166 m/s** (12 + `dodge_impulse_m_s` 24). On the
+ground `C` is the slide, in the air it is the dash — one evasion per state, which is the rule
+the flip already obeyed. `docs/FINDINGS.md` FIND-159.
+⚠️ **The consequence you may not want:** a grounded `C` under `player.slide_min_speed_m_s`
+(3 m/s) now answers with **nothing at all**, where it used to answer with a dash. `F-028`'s rule
+says no press without an answer, so `start_slides` logs which of the two refusals it was — but
+the HUD hint that belongs next to it lives in `src/hud/arm_aim.rs` and was not this job's file.
+**Rollback:** delete `&& in_the_air` from `wants_dodge` in `src/vector/gas.rs`.
 
 ### 2. A station is three VISITS, not three seconds of standing
 

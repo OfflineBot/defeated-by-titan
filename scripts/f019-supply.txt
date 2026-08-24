@@ -44,7 +44,19 @@ look 0 0
 # ---------------------------------------------------------------------------------------
 # ACT 1 — stand somewhere no station reaches. 91 m from the nearest one.
 # ---------------------------------------------------------------------------------------
-warp 80 3 60
+# 🔴 **200 m up and not 3 m, since 2026-08-25 — and this is a RE-AIM, not a loosening.**
+# ACT 2 below burns its gas with three `C` dashes, and until that day `C` bought a dash **on
+# the ground as well**, on top of `F-010`'s slide: one button, two moves, two prices (measured:
+# gas 15000 -> 14955 per press *and* a slide, `docs/FINDINGS.md` FIND-159). `vector::gas` now
+# asks what the player is standing on, exactly as the flip already did — so a dash is an air
+# move and this act has to be flown. Standing, it measured **14958.327** against
+# `assert gas < 14900`: the boost's 41.4 gas and no dashes at all.
+#
+# A fall from 200 m is 4.47 s at g = 20 (`sqrt(2h/g)`), and ACT 1 + ACT 2 together take 3.9 s —
+# so all three dashes land in the air with margin, and ACT 3 warps him onto the station
+# regardless of where the flight ended. Nothing else in this file moved: not a wait, not an
+# assert, not a threshold.
+warp 80 200 60
 wait 1.0
 mark act1-away-from-any-station
 assert gas > 14990

@@ -1663,7 +1663,7 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 
 ## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
 
-**NEXT FREE ID: FIND-159.** Claim it by bumping this line in the same `cat >>` that
+**NEXT FREE ID: FIND-160.** Claim it by bumping this line in the same `cat >>` that
 appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
 file separately and both read the same maximum. One line beats a 108 kB grep.
  — and append with `>>`, never with an edit tool
@@ -9692,6 +9692,175 @@ Related: `Q-048` · `FIND-096` · `FIND-104` · `FIND-129` · `FIND-133` · `FIN
 
 ---
 
+## FIND-155 — a balance test whose metric lives in the file it judges can only catch a *structural* dominant build (2026-08-24, F-122)
+
+**`F-122`'s acceptance is comparative:** *"no dominant build exists; at least 4 builds are within
+10 percent of equally strong."* To check that, something has to say how strong a build is — and
+the only thing that can, today, is a weighted sum whose weights (`progress.ron:
+gear.axes.*.strength_weight`) sit in the same file as the axes they weigh. **I chose them so the
+four axes come out even.** A test that then reports "the four axes come out even" has asked the
+design and the metric the same question, which is `FIND-103`'s shape exactly.
+
+**So the metric was made to be refutable on the one axis it can be.** Two measurements, both real:
+
+| `gear.diminishing_exponent` | strongest build at budget 42 | share on one axis |
+|---|---|---|
+| **0.62** (shipped) | `(12, 11, 10, 9)` over speed/control/power/endurance | **28.6 %** |
+| **1.0** (linear) | `(42, 0, 0, 0)` | **100 %** |
+
+`tests/progress.rs::f122_the_strongest_build_is_never_a_single_axis_dump` asserts ≤ 40 % at seven
+budgets from 6 to 60, and it goes red at every one of them the moment the exponent reaches 1.0.
+**That assertion is about the structure and not about the weights**, so it survives a rebalance —
+which is what makes it worth having. The 10 %-window test beside it is the row's literal wording
+and is the weaker of the two: with the weights tuned it passes at an exponent of 1.0 as well.
+
+**A second measurement, and it moved a number in the file.** At a budget of **4** points the four
+axis-leading builds span **11.5 %** — not because the design is unbalanced but because four
+integer points over four axes cannot express a lean. At 5 they span 0.9 %. So
+`levels.gear_points_at_level_one` is **6 and not 4**: below five points the test measures
+granularity rather than design, and a criterion that fails for arithmetic reasons teaches nobody
+anything.
+
+**What this finding is really for:** the honest metric is *fly the build and measure the sortie*,
+and it cannot exist until a gear point changes a number in `game.ron` or `gear.ron`. Nothing does
+that yet (`src/progress/gear.rs` header). Until then `F-122`'s acceptance criterion is **🟨 and
+must stay 🟨** — "no dominant build" is proven only in the sense that the arithmetic cannot
+produce one, not in the sense that a player cannot find one.
+
+Related: `F-122` · `FIND-103` · `docs/QUESTIONS.md` Q-051 · `assets/data/progress.ron` ·
+`src/progress/gear.rs`
+
+---
+
+## FIND-156 — a screen that opens itself from a phase deadlocks the session, and a screen that stops the clock IS the timer (2026-08-24, F-175)
+
+**The round:** the loop `title → lobby → sortie → verdict → debrief → lobby` (`F-175`). Three
+things were measured that are not obvious from either side.
+
+### 1. The lobby was built, worked, and could not be reached — and the doc comment hid it
+
+`Screen::Lobby` listed every mission in `missions.ron`, had ten tests behind it and a squad
+section. Its **only** route in was the pause screen *inside a running game*: from a cold start
+*New Game* handed the screen straight to `Playing`. A player who never pressed `Esc` never
+learnt this game has a mission list (the user, 2026-08-23: *„es fehlt die lobby"* — it did not,
+the way to it did).
+
+What makes this worth writing down is that `src/menu/title.rs` **had already argued for it**:
+*"No Mission select. `Screen::Lobby` keeps its single route in … a second door would have needed
+a second answer to where its Back button goes."* The answer was one line (`Back` is *"hand the
+screen to the game"*, which is the same sentence from either route) — the reasoning was sound
+about the cost and never checked the benefit. **A screen with exactly one route in, where the
+route is a key nobody told the player about, is unreachable in practice**, and a doc comment
+explaining why is the thing that stops anybody re-examining it.
+
+### 2. 🔴 A per-frame `if phase == X && screen == Playing → open X` **deadlocks the game**
+
+The debrief opens itself: `menu` may read the phase and may not write it, so the plate has to
+follow `MissionPhase::Debrief`. Written as a condition in the `Update` chain — the same
+self-healing shape `menu::spawn_menu` uses — it hangs the session, and the failure is total and
+silent:
+
+- the player presses *To the lobby* or *Redeploy*; the screen leaves `Debrief`;
+- the phase is **still** `Debrief` — leaving is an `AbandonSortie`/`DeployRequest`, and
+  `mission::take_orders_from_the_menu` refuses to act while `Time<Virtual>` is paused, which it
+  is, because every screen that is not `Playing` pauses it;
+- so on the very next frame the condition sees `phase == Debrief` again and re-opens the plate;
+- `apply_screen` stops the clock again. Neither the pending order nor
+  `hub::walk_the_way_home` (a `FixedUpdate` system) can ever run again.
+
+Measured: `tests/menu.rs::f175_the_debrief_is_a_screen_and_it_waits_for_the_player` sat on
+*"the phase is Hub"* with the plate still up and the clock stopped.
+
+**The rule this generalises to:** a self-healing condition is safe only when the state it heals
+*toward* is not the state the player moves. `spawn_menu` heals the **plate** to the **screen**
+and the player moves the screen — fine. This healed the **screen** to the **phase** while the
+player was trying to move the screen — a fight the player cannot win. The fix is
+`OnEnter`/`OnExit`, which is what *"once, on the way in"* is spelled as.
+
+### 3. A screen that stops the clock is a timer that cannot expire — use it deliberately
+
+`missions.ron: hub.debrief_s` is now spent **only by a run that has no window**. With a window
+the debrief is `Screen::Debrief`, the clock stops, `FixedUpdate` does not run, and the number
+never counts down — so the player reads the report for as long as he likes and a button ends it.
+One number, two correct behaviours, and **no `is there a window` branch anywhere in `mission`**.
+It is also what makes the debrief scriptable at all: `--headless` has no menu, so
+`scripts/f175-loop.txt` can assert `phase == 6` in the 1.2 s the file names.
+
+### 4. The old field could not be repurposed, and `f070-hub.txt` is why
+
+`scripts/f070-hub.txt` pins the verdict→hub interval to the tick: it reads `phase == 3` at
+**T+1.65 s** and **T+2.45 s** and `phase == 5` at **T+4.93 s** (T = the verdict tick, one tick
+after the second cortex cut). So **any phase inserted between them must begin after 2.45 s and
+be over before 4.93 s** — a constraint the file states nowhere and that only shows up as a red
+assert in somebody else's script. `hub.debrief_s` was therefore **split**, not reused:
+`verdict_s: 3.0` (unchanged, so `f070-hub` cannot move) plus `debrief_s: 1.2`, summing to 4.2 s
+against a 4.93 s read — 44 ticks of margin, and the whole thing deterministic in ticks.
+
+⚠️ **Stale comment left behind, in a file this hand did not own:** `scripts/f070-hub.txt` lines
+255 and 260 still say *"`hub.debrief_s` is 3.0 s"* and *"the hub takes over 180 ticks later"*.
+Both asserts still hold; the numbers in the prose are now `verdict_s` 3.0 and **252** ticks.
+
+⚠️ **Two foreign one-liners were unavoidable and are named rather than hidden:**
+`src/data/mod.rs` (`HubLayout` gained `verdict_s` — rule 2 forbids the split living in Rust) and
+`src/hud/objective.rs` (one match arm; a new enum variant is a compile error until every
+exhaustive match names it). ⚠️ And `docs/architecture.md`'s `menu -> mission` line still says
+*"Read-only, **one predicate** (`menu::in_a_sortie`)"* — the debrief also reads `Mission`,
+`MissionClock`, `KillTally`, `Verdict` and `Sortie` over that same edge, read-only, the way
+`progress -> mission` already does. The line needs one sentence.
+
+Related: `F-175` · `F-070` · `FIND-092` · `scripts/f175-loop.txt` · `src/menu/debrief.rs` ·
+`src/mission/hub.rs::walk_the_way_home`
+
+
+---
+
+## FIND-157 — a parallel round put supply INSIDE the mission, and two of `Q-033`'s guard tests are now red (2026-08-24, cross-round)
+
+**Not a regression of the round that found it, and not a bug in the round that caused it — a
+collision between two rounds that both did the right thing on their own.**
+
+`docs/QUESTIONS.md` Q-033 is the user's answer from 2026-08-12: *„gas refillt nur im main gebäude
+an bestimmten stationen/objekten"*. Two tests in `tests/mission.rs` are that sentence:
+
+- `f072_a_station_is_a_hub_thing_and_does_not_follow_you_into_a_sortie`
+- `f033_a_rack_is_a_hub_thing_and_the_harness_does_not_refill_in_the_field`
+
+Both stand a player at a station's hub coordinates **inside a running mission** and assert the
+tank and the harness do not move. As of 2026-08-24 both are red:
+
+```
+f072 …: the tank refilled itself inside a mission, at the place a station stands in the hub
+        left: 166.66667      (expected 0)
+f033 …: the harness refilled itself inside a mission, at the place a rack stands in the hub
+        left: Blades { pairs_left: 0, sharpness: 0.033333335 }
+```
+
+**The cause is new and deliberate:** `src/world/supply.rs` (new, untracked) spawns one supply
+entity per `maps.ron: <current>.supply_stations` at `Startup`, i.e. in **every** phase including
+a sortie, together with `gear.ron: resupply.station_uses / station_refill_s / station_radius_m`.
+That is field resupply, and it is a design change to Q-033 — not an accident.
+
+**What has to happen, and it is not a test edit:** either the user's Q-033 answer has been
+superseded (then the two tests are the thing to change, with his sentence quoted and the new
+one beside it), or the map-placed stations must not be live outside the hub. **Whoever changes
+those two tests has to write down which of the two it is** — a red test that gets relaxed
+because it is in the way is exactly how a user's answer disappears from a codebase.
+
+Measured order, so nobody has to guess who moved: `cargo test --test mission` was **39 passed,
+0 failed** at 21:15 against the same file, and **37 passed, 2 failed** at 22:5x. The only edit
+to `src/mission/hub.rs` in between was `return_to_hub` → `walk_the_way_home` (`F-175`), which
+touches the phase timer and no station system; `refuel_at_stations` and `restock_at_stations`
+are byte-for-byte unchanged and still carry both `run_if(in_state(Hub))` and
+`DespawnOnExit(Hub)`.
+
+⚠️ **Also red for the same reason and from the same round, and also not `F-175`'s:**
+`tests/data.rs::t005_gas_priority_names_every_consumer_exactly_once` — `game.ron` now lists five
+gas consumers (`[Boost, Steer, ReelIn, Dodge, Flip]`) against a test that says four.
+
+Related: `Q-033` · `F-033` · `F-072` · `src/world/supply.rs` · `FIND-063` · `FIND-066`
+
+---
+
 ## FIND-158 — `Block` means "a cuboid of the city", and two guard tests said so within one run (2026-08-24)
 
 **Measured `[offlinebot]`, 2026-08-24.** `F-019`'s supply stations were given a
@@ -9732,3 +9901,132 @@ change that shows up three days later as "the rope feels different in the north 
 
 Related: `F-019` · `src/world/supply.rs` · `src/render/mod.rs::build_station_meshes` ·
 `tests/world.rs` · `docs/QUESTIONS.md` Q-052
+
+---
+
+## FIND-159 — the reel under `Drive` is a WINCH, and three verbs were leaking through the state they are not for
+
+**Stage:** 🟧 — every claim below is a measured number off one pinned binary, every fix has a
+test that goes red when the fix is taken out again in one line, and `scripts/game-full.txt`
+runs 24 of 24 with exit 0. **Not played by a human**, so ✅ is his.
+
+### 1. `Ctrl` was a dead key that still cost money, and it broke the flagship run
+
+`Drive` (shipped default since `FIND-153`) builds **no `DistanceJoint`** (`FIND-152`). The reel
+works on a joint's `limits.max`, so `player::rope::shorten_ropes` never saw the rope: `Ctrl` did
+**nothing at all** while `vector::gas` billed `gas_reel_per_s` for it (`Q-050`).
+
+Bisected with a one-line data control — same binary, same script, only `rope_force_model`:
+
+| `scripts/game-full.txt` | verdict |
+|---|---|
+| `Drive` (as pushed) | **4 of 24 asserts failed** — `Speed 0.000`, `Height 0.300` |
+| `Pendulum` | 24 asserts held |
+
+**The decision: `Ctrl` is the winch.** `player::locomotion::rope_winch` —
+`a = r̂ · max(0, reel_speed − v·r̂) / drive_ramp_s`, over the arms further out than `min_rope_m`.
+Closing speed along the rope and **nothing else**.
+
+**Why not the other two answers.** *Fold it into `W`*: `W`'s look gate is `cᵢ = max(0, l̂ · r̂ᵢ)`,
+which is exactly **zero** at the low point of a flight — anchor behind and above, eyes forward —
+and `F-005`'s own acceptance sentence is *„Spieler kann aus dem Tiefpunkt Hoehe gewinnen"*. The
+drive **cannot** deliver that row without making the player stare at his own anchor. *Retire
+it*: that is a verb of the Vector Gear deleted to avoid writing twenty lines. So the two verbs
+are one trade the player can feel — `W` is 70 m/s and costs you your eyes, `Ctrl` is 28 m/s and
+costs you nothing but gas.
+
+**Not one assert in `game-full` was touched, and the act still lands on the same roof:**
+
+| ACT 1 | at `game-reeled` | at `game-on-the-roof` |
+|---|---|---|
+| `Pendulum` (a length) | 28.741 m/s · 15.521 m | 0.000 m/s · **35.000 m** |
+| `Drive` (the winch) | **26.695 m/s · 13.394 m** | 0.000 m/s · **35.000 m** |
+
+The 2 m/s gap is the amplification a constraint gives a reel and a winch cannot
+(`L_prev/L_new`, `shared::rope::rope_reel_in`). ⚠️ **`assert speed > 25` now clears by 1.7 m/s
+instead of 3.7** — that margin is the thing to watch, and `vector.reel_speed_m_s` is the key if
+it ever goes red.
+
+⚠️ **The winch has to work while `MovementState::Grounded`**, which cost the one structural
+change in `air_control`: the term sits **outside** the `in_flight` gate. ACT 1 begins with a
+player standing still, and the pendulum's reel never had this problem because it acts on the
+rope and not on the body.
+⚠️ **Still ugly, measured and not explained away:** hold `Ctrl` through an anchor in open air and
+you shoot past it, `r̂` flips and the winch hauls you back. Bounded by `reel_speed_m_s`, and no
+worse than what the pendulum does at `min_rope_m` (`FIND-035`: 17 m/s in one tick) — but nobody
+designed it. Anchors sit on surfaces, which is why it is hard to reach. → `Q-050`.
+
+### 2. One press of `C` on the ground fired BOTH the slide and the dash
+
+`src/vector/gas.rs` asked for a charge and a direction and **never asked what the player was
+standing on**, while `player::locomotion::start_slides` two files away required `Grounded`.
+Measured on `ashgate`, running at 6 m/s, one press of `C`:
+
+```
+F-010: slide at tick 156 — 6.0 m/s carried
+gas 15000.000 -> 14955.000        (= vector.gas_dodge, 45, to the digit)  + one charge
+speed 6.000 -> 38.166 m/s         (the slide promises max(current, 12))
+```
+
+`game.ron` says in writing that the ground move is free — *"a slide is legs. Billing it would
+make the one move a player has left on an empty tank cost gas."* The 38.166 is 12 + 24: the
+slide writes its velocity in `Integrate` and `vector::boost::gas_boost` adds
+`dodge_impulse_m_s` on the same tick. **After: 15000.000 -> 15000.000 and 12.000 m/s
+horizontal.**
+
+### 3. The flip refused `Grounded` and accepted `Downed` and `OnWall`
+
+`airborne = state.is_none_or(|s| *s != Grounded)` says **yes** to a body that is *„out of the
+fight instead of dead"* and to `F-013`'s wall state. `player::locomotion::in_flight` names both
+as never-flight from the other side. Both verbs now ask one exhaustive predicate,
+`matches!(Airborne | Tethered)` — one binding, not two copies, because two copies are what let
+the dash fire on the ground for a day while the flip refused.
+⚠️ **The reported *„a running player loses ground contact on single ticks"* did NOT reproduce
+here.** Four probe runs on flat `ashgate` — standing, running at 6 m/s, skidding at 39 m/s and
+mid-jump, `A`·pause·`A` at four tap spacings inside `flip_double_tap_window_ticks` — never once
+billed `gas_flip`. So the `Downed`/`OnWall` hole is measured and closed; **the flicker is not
+measured and is not closed**, and a grace window would be the fix if it is ever seen. → `Q-050`.
+
+### 4. And the reel was billed for a rope already at the floor
+
+Both models refuse to move a rope at `vector.min_rope_m` — `shorten_ropes` clamps there,
+`rope_winch` drops the arm there — and `vector::gas` charged `gas_reel_per_s` through it anyway.
+The gate is the arm's own distance now, so one arm at the floor and one out at 40 m still pays.
+Same shape as `FIND-139`'s steer, one verb further along.
+
+### 🔴 The Rule-5 pass caught a test that could not fail, and that is the entry's real lesson
+
+`f010_one_press_of_the_dodge_button_on_the_ground_is_a_slide_and_is_not_billed` was **green with
+`&& in_the_air` deleted from `wants_dodge`**. The fixture pressed `C` with an empty stick, and
+`vector::boost::dodge_direction` answers `None` for that — so the dash was refused by a
+*different* clause and the test never reached the one it was written for. One line (`hold W`)
+and it goes red properly. **`FIND-103`'s shape a third time**, and the habit that caught it is
+the cheap one: break the fix before believing the test.
+
+The same pass found the twin of it in `tests/player.rs`:
+`f005_under_the_pendulum_ctrl_adds_no_acceleration_at_all` was green with the whole model fork
+deleted, because its fixture anchored on `a_real_body` — the graybox **ground**, whose centre is
+**1.70 m** from the hand, inside `min_rope_m`. It was asserting `ZERO` against a rope that was
+already at the floor. Both fixtures now go through
+`anchor_on_a_body_with_rope_left`, which asserts its own precondition.
+
+### What was re-run, and the two that are red for somebody else's reason
+
+`f030-cortex` 2 · `f034-hitstop` 2 · `q030-reach` 2 · `f006-drive` 9 · `f008-dash` 3 ·
+`f019-supply` 3 · `f175-loop` 19 · `game-full` **24** — all exit 0.
+`f018-budget` **5 of 13 red**, and the identical 5 lines are red on a binary built from `HEAD`
+with only these two source files reverted — **pre-existing, not this round's**.
+`f025-chain` **6 of 36 red against 7 before**: the winch turned `line 239: assert Height > 40`
+from `measured 1.500` green; the other six are the drive model's, from the round before.
+`--lib` 248 · `--test player` 55 · `--test vector_gas` 26 · `--test vector_rope` 20 ·
+`--test vector_boost` 28.
+
+⚠️ **`scripts/f019-supply.txt` was re-aimed and it is not one of this job's files.** Its ACT 2
+burns gas with three `C` dashes **while standing**, so the fix above took it from green to
+`measured 14958.327` against `assert gas < 14900`. One line — `warp 80 3 60` → `warp 80 200 60`,
+a 4.47 s fall against a 3.9 s act — and it is back to its own numbers, *3 asserts held, 362
+ticks*, with no wait, threshold or assert touched. Flagged rather than done quietly.
+
+Related: `Q-050` · `FIND-152` · `FIND-153` · `FIND-139` · `FIND-103` · `F-005` `F-008` `F-009`
+`F-010` · `src/player/locomotion.rs::rope_winch` · `src/vector/gas.rs` ·
+`scripts/game-full.txt`
