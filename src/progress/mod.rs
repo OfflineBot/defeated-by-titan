@@ -39,12 +39,17 @@
 //! are losing must not be able to pad a career. When that turns out to be the wrong call it is
 //! one `OnEnter` away, and the profile field it needs already exists.
 
+pub mod career;
+pub mod gear;
+
+pub use career::Career;
+
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use crate::data::GameData;
 use crate::mission::{KillTally, Mission, MissionClock, MissionPhase, Sortie};
-use crate::save::SortieOutcome;
+use crate::save::{Profile, SortieOutcome};
 use crate::shared::{PlayerId, Tick};
 
 pub struct ProgressPlugin;
@@ -54,7 +59,10 @@ impl Plugin for ProgressPlugin {
         // Two thin systems and one function: a Bevy system cannot take the verdict as an
         // argument, and duplicating the body is how the two halves drift apart.
         app.add_systems(OnEnter(MissionPhase::Won), record_a_win)
-            .add_systems(OnEnter(MissionPhase::Lost), record_a_loss);
+            .add_systems(OnEnter(MissionPhase::Lost), record_a_loss)
+            // `Update` and not `FixedUpdate`: a career is not simulation, nothing in the fixed
+            // step reads it, and it only ever recomputes when the profile behind it moved.
+            .add_systems(Update, refresh_careers);
     }
 }
 
@@ -127,4 +135,47 @@ fn record(won: bool, field: Field, mut out: MessageWriter<SortieOutcome>) {
         tally.total(),
         tally.target
     );
+}
+
+/// **`F-120`/`F-121`/`F-122` — what the profile MEANS**, recomputed onto the player whenever
+/// `save` has moved it.
+///
+/// `Changed<Profile>` and not every frame (rule 6): after the first frame the archetype this
+/// matches is empty until a sortie is booked. Change detection is what makes the ordering
+/// against `save::record_outcomes` a non-question — whichever of the two runs first, the career
+/// is right on the next run of this system at the latest, and a debrief screen stands for
+/// hundreds of frames.
+///
+/// **No `.single()`, and one [`Career`] per player** (rule 4). `save` stays the only writer of
+/// [`Profile`]; this domain writes only the derived thing, which nobody else touches.
+fn refresh_careers(
+    mut commands: Commands,
+    data: Res<GameData>,
+    mut players: Query<(Entity, &PlayerId, &Profile, Option<&mut Career>), Changed<Profile>>,
+) {
+    for (entity, player, profile, career) in &mut players {
+        let fresh = Career::of(profile, &data.progress);
+        match career {
+            Some(mut standing) => {
+                let updated = fresh.after(&standing);
+                if updated.last_sortie_xp > 0 {
+                    info!(
+                        "progress: player {} earned {} xp — {}{}",
+                        player.0,
+                        updated.last_sortie_xp,
+                        updated.one_line(),
+                        match updated.levelled_up_to {
+                            Some(level) => format!(" — LEVEL {level}"),
+                            None => String::new(),
+                        }
+                    );
+                }
+                *standing = updated;
+            }
+            None => {
+                info!("progress: player {} carries in {}", player.0, fresh.one_line());
+                commands.entity(entity).insert(fresh);
+            }
+        }
+    }
 }

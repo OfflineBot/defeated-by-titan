@@ -23,11 +23,12 @@
 //!
 //! A career nobody can spend is still worth having: it is what makes a sortie *count*.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::data::XpTuning;
 use crate::shared::PlayerId;
 
 /// One player's career. **Written by `save` and by nothing else** (`docs/architecture.md`,
@@ -62,6 +63,18 @@ pub struct Profile {
     /// an enum, for the same reason `TitanKindName` is a `String`: the tiers are RON keys and
     /// the file may grow a fourth one without a rebuild (rule 2).
     pub cleared: BTreeSet<String>,
+    /// `F-120` — lifetime experience. **The one number the whole progression spine hangs off**:
+    /// the level, the skill points, the gear budget and the rank are all derived from it and
+    /// none of them is stored, because two numbers that have to agree are one number that is
+    /// wrong by next week.
+    pub xp: u64,
+    /// `F-122` — how the gear budget has been spent, axis name -> points. A `BTreeMap` for the
+    /// same reason `cleared` is a `BTreeSet`: the file is compared byte for byte.
+    ///
+    /// It is **the allocation and not the result**: what those points do is
+    /// `progress::gear`, out of `progress.ron`, and it is recomputed on load. Storing a
+    /// derived stat would freeze yesterday's balance into every save file in existence.
+    pub gear: BTreeMap<String, u32>,
 }
 
 impl Profile {
@@ -70,7 +83,9 @@ impl Profile {
     /// It is deliberately total and boring — no branching on difficulty, no multiplier, no
     /// reward. The moment a number here depends on tuning, that number belongs in a RON file
     /// and this function takes it as an argument (rule 2).
-    pub fn record(&mut self, outcome: &SortieOutcome) {
+    pub fn record(&mut self, outcome: &SortieOutcome, xp: &XpTuning) -> u64 {
+        let earned = xp_earned(outcome, xp);
+        self.xp = self.xp.saturating_add(earned);
         self.sorties_flown += 1;
         if outcome.won {
             self.sorties_won += 1;
@@ -79,6 +94,7 @@ impl Profile {
         self.titans_felled += outcome.kills;
         self.best_kills_in_a_sortie = self.best_kills_in_a_sortie.max(outcome.kills);
         self.seconds_in_the_field += outcome.seconds.max(0.0);
+        earned
     }
 
     /// One line for the log, so that a headless run says out loud what it carried in.
@@ -92,6 +108,45 @@ impl Profile {
             self.seconds_in_the_field
         )
     }
+}
+
+/// `F-120` — **what one finished sortie is worth**, out of `progress.ron` and nowhere else.
+///
+/// Four facts, four rates, one tier multiplier. The shape is deliberately flat: no streak bonus,
+/// no first-win-of-the-day, no catch-up curve. Each of those is a design decision somebody has
+/// to make, and inventing one here would put it in Rust where nobody can tune it (rule 2).
+///
+/// **A win is a bonus on top of the floor, not a replacement for it.** A defeat still earns
+/// `per_sortie_flown` plus its kills plus its time — a bad night has to be worth something or
+/// the only rational play after the first death is to quit to the hub.
+pub fn xp_earned(outcome: &SortieOutcome, xp: &XpTuning) -> u64 {
+    let minutes = outcome.seconds.max(0.0) / 60.0;
+    let base = xp.per_sortie_flown
+        + if outcome.won { xp.per_sortie_won } else { 0.0 }
+        + xp.per_titan_felled * outcome.kills as f32
+        + xp.per_minute_in_the_field * minutes;
+    (base.max(0.0) * xp.multiplier_for(outcome.difficulty.as_deref())).max(0.0) as u64
+}
+
+/// `F-201` — **what a career written before the XP curve existed is worth.**
+///
+/// The migration arm for schema 1 (`src/save/file.rs`). A career that has flown four sorties must
+/// not come back as level 1 because this build learned to count: the sorties happened. The four
+/// numbers a schema-1 file carries are exactly the four facts [`xp_earned`] is paid for, so the
+/// old record is re-paid at the no-tier rate — the file does not remember which tiers they were,
+/// and inventing a tier for them would hand out experience nobody earned.
+pub fn xp_of_a_bare_career(
+    flown: u32,
+    won: u32,
+    felled: u32,
+    seconds: f32,
+    xp: &XpTuning,
+) -> u64 {
+    let base = flown as f32 * xp.per_sortie_flown
+        + won as f32 * xp.per_sortie_won
+        + felled as f32 * xp.per_titan_felled
+        + xp.per_minute_in_the_field * (seconds.max(0.0) / 60.0);
+    (base.max(0.0) * xp.without_a_difficulty).max(0.0) as u64
 }
 
 /// **This sortie is over, and this is what this player did in it** — `progress` asking, `save`
@@ -143,6 +198,21 @@ impl SortieOutcome {
 mod tests {
     use super::*;
 
+    /// A tuning literal and not `progress.ron`: these five tests are about the BOOKKEEPING —
+    /// that a loss still counts, that the best sortie is a maximum — and they must not go red
+    /// when somebody rebalances the curve. The curve's own tests live in `tests/progress.rs`
+    /// and read the real file.
+    fn xp_tuning() -> XpTuning {
+        XpTuning {
+            per_sortie_flown: 10.0,
+            per_sortie_won: 0.0,
+            per_titan_felled: 0.0,
+            per_minute_in_the_field: 0.0,
+            difficulty_multipliers: BTreeMap::from([("veteran".to_string(), 1.0)]),
+            without_a_difficulty: 1.0,
+        }
+    }
+
     fn outcome(won: bool, kills: u32, seconds: f32) -> SortieOutcome {
         SortieOutcome {
             player: PlayerId(1),
@@ -160,7 +230,7 @@ mod tests {
         // The one thing that makes a defeat worth anything: it happened, and the record says
         // so. A profile that only counted wins would make a bad night invisible.
         let mut p = Profile::default();
-        p.record(&outcome(false, 2, 30.0));
+        p.record(&outcome(false, 2, 30.0), &xp_tuning());
         assert_eq!(p.sorties_flown, 1);
         assert_eq!(p.sorties_won, 0);
         assert_eq!(p.titans_felled, 2);
@@ -170,7 +240,7 @@ mod tests {
     #[test]
     fn only_a_win_clears_a_difficulty() {
         let mut p = Profile::default();
-        p.record(&outcome(true, 3, 60.0));
+        p.record(&outcome(true, 3, 60.0), &xp_tuning());
         assert_eq!(p.cleared.iter().collect::<Vec<_>>(), vec!["skirmish/veteran"]);
     }
 
@@ -186,8 +256,8 @@ mod tests {
     #[test]
     fn the_best_sortie_is_a_maximum_and_never_the_last_one() {
         let mut p = Profile::default();
-        p.record(&outcome(true, 5, 10.0));
-        p.record(&outcome(false, 1, 10.0));
+        p.record(&outcome(true, 5, 10.0), &xp_tuning());
+        p.record(&outcome(false, 1, 10.0), &xp_tuning());
         assert_eq!(p.best_kills_in_a_sortie, 5, "a bad night does not erase the record");
         assert_eq!(p.titans_felled, 6);
         assert_eq!(p.seconds_in_the_field, 20.0);
@@ -198,7 +268,7 @@ mod tests {
         // `tick - started_at_tick` is a subtraction, and a subtraction that ever goes the
         // wrong way must not take time back off the record.
         let mut p = Profile::default();
-        p.record(&outcome(false, 0, -50.0));
+        p.record(&outcome(false, 0, -50.0), &xp_tuning());
         assert_eq!(p.seconds_in_the_field, 0.0);
     }
 }

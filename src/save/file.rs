@@ -46,7 +46,7 @@
 //! One file per [`PlayerId`](crate::shared::PlayerId) and not one table for everybody: two
 //! players' careers must not be able to corrupt each other, and a rename is atomic per file.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -54,13 +54,14 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::data::XpTuning;
 use crate::shared::PlayerId;
 
-use super::profile::Profile;
+use super::profile::{xp_of_a_bare_career, Profile};
 
 /// The version of the shape in [`Profile`]. **Bumped whenever a field is added, removed or
 /// renamed**, together with a new arm in [`migrate`].
-pub const SCHEMA: u32 = 1;
+pub const SCHEMA: u32 = 2;
 
 /// The fields of [`Profile`], written down where a human can see them.
 ///
@@ -68,13 +69,15 @@ pub const SCHEMA: u32 = 1;
 /// and compares the keys in the file against this list. Adding a field without deciding what an
 /// old file's missing value becomes is exactly how a save format eats an evening, and this list
 /// is what forces the decision.
-pub const PROFILE_FIELDS: [&str; 6] = [
+pub const PROFILE_FIELDS: [&str; 8] = [
     "sorties_flown",
     "sorties_won",
     "titans_felled",
     "best_kills_in_a_sortie",
     "seconds_in_the_field",
     "cleared",
+    "xp",
+    "gear",
 ];
 
 /// Where save games go — or [`None`], which means **this process does not touch the disk**.
@@ -214,6 +217,8 @@ struct ProfileOnDisk {
     best_kills_in_a_sortie: Option<u32>,
     seconds_in_the_field: Option<f32>,
     cleared: Option<BTreeSet<String>>,
+    xp: Option<u64>,
+    gear: Option<BTreeMap<String, u32>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -242,7 +247,7 @@ fn lenient() -> ron::Options {
 /// **Where the next migration goes.** Today there is one shipped schema, so the single arm is
 /// the field-filling itself; when `F-120` adds `xp` the arm for 1 is the place that says what
 /// an XP-less profile is worth, in one function, next to the number it changes.
-fn migrate(schema: u32, disk: ProfileOnDisk) -> (Profile, Vec<&'static str>) {
+fn migrate(schema: u32, disk: ProfileOnDisk, xp: &XpTuning) -> (Profile, Vec<&'static str>) {
     let fallback = Profile::default();
     let mut missing = Vec::new();
     let mut take = |present: bool, name: &'static str| {
@@ -256,6 +261,8 @@ fn migrate(schema: u32, disk: ProfileOnDisk) -> (Profile, Vec<&'static str>) {
     take(disk.best_kills_in_a_sortie.is_some(), "best_kills_in_a_sortie");
     take(disk.seconds_in_the_field.is_some(), "seconds_in_the_field");
     take(disk.cleared.is_some(), "cleared");
+    take(disk.xp.is_some(), "xp");
+    take(disk.gear.is_some(), "gear");
 
     // Schema 1 — the first shipped shape. A field the file does not carry is the field's own
     // zero, and that is a real answer: a career with no record of a sortie has not flown one.
@@ -274,8 +281,35 @@ fn migrate(schema: u32, disk: ProfileOnDisk) -> (Profile, Vec<&'static str>) {
             .seconds_in_the_field
             .unwrap_or(fallback.seconds_in_the_field),
         cleared: disk.cleared.unwrap_or(fallback.cleared),
+        xp: disk.xp.unwrap_or(fallback.xp),
+        gear: disk.gear.unwrap_or(fallback.gear),
     };
+    let profile = if schema < 2 { schema_1_to_2(profile, disk.xp.is_some(), xp) } else { profile };
     (profile, missing)
+}
+
+/// **Schema 1 -> 2: the career gets the experience it already earned.**
+///
+/// Schema 1 is every file written before `F-120`, and it has no `xp:` at all. Filling it with
+/// zero would be *correct* and would still be data loss in the way that matters: a player who
+/// flew forty sorties yesterday would open the game at level 1 today. So the old record is
+/// re-paid through [`xp_of_a_bare_career`] — the four numbers a schema-1 file carries are exactly
+/// the four facts a sortie is paid for.
+///
+/// `had_xp` is checked rather than `profile.xp == 0`: a genuine schema-1 file that somebody
+/// hand-edited an `xp:` into keeps its number, and a career that really is worth zero is not
+/// re-invented on every load.
+fn schema_1_to_2(mut profile: Profile, had_xp: bool, xp: &XpTuning) -> Profile {
+    if !had_xp {
+        profile.xp = xp_of_a_bare_career(
+            profile.sorties_flown,
+            profile.sorties_won,
+            profile.titans_felled,
+            profile.seconds_in_the_field,
+            xp,
+        );
+    }
+    profile
 }
 
 /// Renders a profile exactly as it goes on disk. **Public because the test asserts against the
@@ -292,7 +326,7 @@ pub fn render(profile: &Profile) -> String {
 
 /// Reads one player's profile. **Never fails** — every way the file can be wrong has an answer
 /// that keeps the file and lets the game start.
-pub fn read_profile(dir: &Path, player: PlayerId) -> Loaded {
+pub fn read_profile(dir: &Path, player: PlayerId, xp: &XpTuning) -> Loaded {
     let path = profile_path(dir, player);
     let text = match fs::read_to_string(&path) {
         Ok(t) => t,
@@ -326,7 +360,7 @@ pub fn read_profile(dir: &Path, player: PlayerId) -> Loaded {
         Ok(v) => v,
         Err(e) => return keep_the_broken_one(&path, &e.to_string()),
     };
-    let (profile, missing) = migrate(envelope.schema, body.profile);
+    let (profile, missing) = migrate(envelope.schema, body.profile, xp);
     let note = if envelope.schema == SCHEMA {
         LoadNote::Current
     } else {
@@ -380,6 +414,19 @@ pub fn write_profile(dir: &Path, player: PlayerId, profile: &Profile) -> io::Res
 mod tests {
     use super::*;
 
+    /// A literal, not `progress.ron`: these four tests are about the FILE — where it goes,
+    /// what happens to a broken one — and none of them is about what a sortie earns.
+    fn xp_tuning() -> XpTuning {
+        XpTuning {
+            per_sortie_flown: 1.0,
+            per_sortie_won: 1.0,
+            per_titan_felled: 1.0,
+            per_minute_in_the_field: 1.0,
+            difficulty_multipliers: BTreeMap::new(),
+            without_a_difficulty: 1.0,
+        }
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("dbt-save-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -407,7 +454,7 @@ mod tests {
     #[test]
     fn a_missing_file_is_a_first_sortie_and_not_an_error() {
         let dir = scratch("fresh");
-        let got = read_profile(&dir, PlayerId(1));
+        let got = read_profile(&dir, PlayerId(1), &xp_tuning());
         assert_eq!(got.note, LoadNote::Fresh);
         assert_eq!(got.profile, Profile::default());
         assert!(got.note.may_write());
@@ -420,7 +467,7 @@ mod tests {
         let original = "(schema: 99, profile: (sorties_flown: 7, moons_visited: 3))";
         fs::write(&path, original).unwrap();
 
-        let got = read_profile(&dir, PlayerId(1));
+        let got = read_profile(&dir, PlayerId(1), &xp_tuning());
         assert_eq!(got.note, LoadNote::FromTheFuture { schema: 99 });
         assert!(!got.note.may_write(), "an old build must not write over a newer file");
         // ⭐ The bytes, not the struct: the file is still exactly what it was.
@@ -433,7 +480,7 @@ mod tests {
         let path = profile_path(&dir, PlayerId(1));
         fs::write(&path, "this is not RON at all {{{").unwrap();
 
-        let got = read_profile(&dir, PlayerId(1));
+        let got = read_profile(&dir, PlayerId(1), &xp_tuning());
         let LoadNote::Broken { keep, .. } = &got.note else {
             panic!("expected Broken, got {:?}", got.note);
         };

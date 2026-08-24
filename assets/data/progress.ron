@@ -1,0 +1,131 @@
+// progress.ron — what a sortie earns, what a level is worth, and what a gear budget buys.
+// `F-120` (level and XP curve), `F-121` (gear rank), `F-122` (gear budget with trade-offs).
+//
+// ⚠️ **UNTUNED, every number.** None of these has been played against; they were chosen so the
+// first sortie is worth a level and the hundredth level is a long way off, and the gear block
+// was chosen so that the balance test in `tests/progress.rs` has something it can actually
+// fail. `docs/QUESTIONS.md` Q-051 is the open question about whether the curve should exist at
+// all before the Vector Gear gate is passed.
+//
+// ⚠️ **This is progression, and progression is the meta layer the design gates behind the
+// movement** (`docs/gameplay/pillars.md`, `docs/PLAN-GAME.md` §10). What is built here is
+// deliberately the *spine* — a number that grows and a rank derived from it — and not the
+// skill tree (`F-123`), the perks (`F-126`), the currencies (`F-140`) or the pity counters
+// (`F-128`/`F-142`). Nothing in this file spends a point on a gameplay number yet.
+(
+    // ---- F-120: what one finished sortie is worth ---------------------------------------
+    //
+    // Facts in, experience out. The facts come from `save::SortieOutcome` and they are the
+    // only four the game can actually produce today. A sortie that was *abandoned* produces
+    // no outcome at all and therefore earns nothing — walking out of a fight you are losing
+    // must not be able to pad a career (`src/progress/mod.rs`).
+    xp: (
+        // A defeat is still a sortie, and it still teaches you something. This is the floor.
+        per_sortie_flown: 40.0,
+        // On top of the floor, so a win is worth exactly four times a bare loss.
+        per_sortie_won: 120.0,
+        // The one number a player can push on directly. Eight kills out-earn the win itself.
+        per_titan_felled: 25.0,
+        // Seconds in the field, paid by the minute — small on purpose. Time must never be the
+        // cheapest way to level, or the optimal play is to stand on a roof for five minutes.
+        per_minute_in_the_field: 10.0,
+        // The tier multiplier, keyed by `missions.ron: <template>.difficulties`.
+        // `tests/progress.rs::f120_every_difficulty_in_missions_ron_has_an_xp_multiplier`
+        // falls over when a fourth tier is added here and not there.
+        difficulty_multipliers: {
+            "recruit": 1.0,
+            "veteran": 1.5,
+            "elite": 2.2,
+        },
+        // `--mission tutorial` and every other direct drop-in: no tier, no bonus, no penalty.
+        without_a_difficulty: 1.0,
+    ),
+
+    // ---- F-120: the curve --------------------------------------------------------------
+    //
+    // "Level 1 to 100 with a defined XP curve, adjustable without a code change" — so the
+    // curve is three numbers and not a table of a hundred rows. The step from level `n` to
+    // `n+1` costs `first_step_xp * step_growth^(n-1)`, and a level is the largest one whose
+    // accumulated steps fit inside the career's XP.
+    //
+    // At 1.045 the whole ladder to 100 is ~513 700 XP; the first level costs 300, which one
+    // won recruit skirmish with eight kills (~400 XP) already pays for. **A player must feel
+    // the first level in the first sortie** or the number is decoration.
+    levels: (
+        max_level: 100,
+        first_step_xp: 300.0,
+        step_growth: 1.045,
+        // `F-120`: "every level gives skill points". They are **granted and unspent** — the
+        // tree they go into is `F-123` and it is not built. Deriving them from the level
+        // instead of storing them is deliberate: two numbers that have to agree are one
+        // number that is wrong by next week (`src/save/profile.rs`).
+        skill_points_per_level: 1,
+        // The gear budget of `F-122`, and the thing `F-121`'s rank is read off.
+        // Level 1 = 6 points, level 100 = 204.
+        //
+        // ⚠️ 6 and not 4: below five points the four axes cannot be told apart at all, and
+        // the balance test measures a granularity artefact instead of the design (measured
+        // while writing it — at a budget of 4 the four builds span 11.5 %, at 5 they span
+        // 0.9 %).
+        gear_points_at_level_one: 6,
+        gear_points_per_level: 2,
+    ),
+
+    // ---- F-122: one budget, four axes, two trade-offs ------------------------------------
+    //
+    // The row is explicit about what this must **not** be: *"instead of 8 independent stat
+    // ladders, one shared point budget with conflicting goals: speed costs control, damage
+    // costs durability"*. So there are four axes and two couplings, and both couplings run in
+    // the direction the row names.
+    //
+    // The effect of `p` points on an axis is `p ^ diminishing_exponent`, minus the drag every
+    // axis that couples into it puts on it. **The exponent is the whole design**: at 1.0 the
+    // arithmetic is linear, the best build is always a single-axis dump, and
+    // `tests/progress.rs::f122_the_strongest_build_is_never_a_single_axis_dump` goes red.
+    gear: (
+        diminishing_exponent: 0.62,
+        // The axes, in the order a screen would show them. Nothing reads these values as
+        // gameplay numbers yet — `strength_weight` is what the balance test weighs a build
+        // with, and it is a **stand-in** for the real answer (fly the build and measure it),
+        // which cannot be had until the budget moves `game.ron` and `gear.ron`.
+        axes: {
+            "speed":     (strength_weight: 1.42),
+            "control":   (strength_weight: 0.90),
+            "power":     (strength_weight: 1.30),
+            "endurance": (strength_weight: 0.86),
+        },
+        // "Speed costs control, damage costs durability", as numbers. `drag` is how much of
+        // the spender's effect is taken off the axis it costs.
+        couplings: [
+            (spends: "speed", costs: "control",   drag: 0.55),
+            (spends: "power", costs: "endurance", drag: 0.50),
+        ],
+    ),
+
+    // ---- F-121: the rank, E to S --------------------------------------------------------
+    //
+    // Read off the gear budget the career has **earned**, not off what is currently spent.
+    // That is a decision and it is written down as `docs/QUESTIONS.md` Q-051: a player who has
+    // not yet redistributed his points is not less experienced, and a rank that depended on
+    // spending would gate content behind a loadout screen that does not exist (`F-125`).
+    //
+    // Ascending, and `tests/progress.rs` falls over if they ever stop being.
+    // At 6 + 2*(level-1) points: D at level 4, C at 11, B at 22, A at 43, S at 73.
+    ranks: [
+        (name: "E", min_gear_points: 0),
+        (name: "D", min_gear_points: 12),
+        (name: "C", min_gear_points: 26),
+        (name: "B", min_gear_points: 48),
+        (name: "A", min_gear_points: 90),
+        (name: "S", min_gear_points: 150),
+    ],
+
+    // What a rank is a gate **for**: `"<template>"` or `"<template>/<difficulty>"` -> the
+    // lowest rank that may fly it. The same key `save::SortieOutcome::cleared_key` produces.
+    //
+    // ⚠️ **EMPTY ON PURPOSE, and that is the honest version of `F-121`.** The calculation and
+    // the gate are built and tested; nothing in the game is locked away today, because taking
+    // playable content off a player to demonstrate a rank is the wrong trade while the Vector
+    // Gear gate is still open. One line here locks one door, the moment somebody wants it.
+    gates: {},
+)

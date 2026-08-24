@@ -1,0 +1,33 @@
+# f120-career — a career that survives quitting, and a level that is a consequence of it.
+#
+# The evidence for `F-120`/`F-121`/`F-122` is not a screenshot, it is **three separate
+# processes**: one that migrates a save written before the XP curve existed, one that flies a
+# sortie and books what it earned, and one that starts cold and reads the level back off the
+# disk. So the script itself is deliberately almost empty — what it has to do is *end a sortie*,
+# and everything worth reading is in the log and in `saves/player-1.ron`.
+#
+#   env DBT_SAVE_DIR=<scratch> ./target/debug/defeated_by_titan --headless \
+#       --mission tutorial --script scripts/f120-career.txt --ticks 2400
+#
+# and the exit code needs its own run — a pipeline's `$?` is the LAST command's (`CLAUDE.md`):
+#
+#   env DBT_SAVE_DIR=<scratch> ./target/debug/defeated_by_titan --headless \
+#       --mission tutorial --script scripts/f120-career.txt --ticks 2400 >/dev/null 2>&1; echo $?
+#
+# ⚠️ **No `assert phase ==` in here, on purpose.** The mission phases were being extended in the
+# same session this was written (a `Debrief` arrived between two runs), and a script that pins a
+# phase NUMBER goes red for somebody else's correct change. What this file needs is only that a
+# sortie reaches a verdict at all — `progress::record` fires on `Won` and on `Lost` alike, and
+# the log line `progress: player 1 earned N xp` is the thing being measured.
+#
+# The player does nothing and stands where he lands: the 0 s wave of `missions.ron` reaches him
+# and the sortie ends in a defeat at around tick 630. A defeat is the right case to measure —
+# `xp.per_sortie_flown` is the floor a bad night still pays, and a floor that is silently zero
+# is exactly the bug this run would hide.
+
+key F3 0.5        # the overlay carries the phase and the tick, in case a PNG is ever wanted
+look -90 -8
+
+wait 25           # 1500 ticks — far past the defeat, and overshooting a script's end is free
+
+assert tick > 1200

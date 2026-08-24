@@ -9,12 +9,12 @@
 //! The other half of the evidence is not in here and cannot be: a real process has to end and a
 //! second one has to see the first. That is the `--headless` round trip in the commit message.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 
 use bevy::prelude::*;
-use defeated_by_titan::data::GameData;
+use defeated_by_titan::data::{GameData, XpTuning};
 use defeated_by_titan::player::spawn_player;
 use defeated_by_titan::save::{
     profile_path, render, Profile, ProfileFile, SaveDir, SortieOutcome, PROFILE_FIELDS, SCHEMA,
@@ -41,7 +41,7 @@ fn app(dir: &PathBuf) -> App {
 /// What a career of exactly this shape looks like on disk. **The frozen bytes.**
 const A_CAREER_ON_DISK: &str = "\
 (
-    schema: 1,
+    schema: 2,
     profile: (
         sorties_flown: 4,
         sorties_won: 1,
@@ -51,6 +51,11 @@ const A_CAREER_ON_DISK: &str = "\
         cleared: [
             \"skirmish/veteran\",
         ],
+        xp: 1234,
+        gear: {
+            \"control\": 2,
+            \"speed\": 3,
+        },
     ),
 )
 ";
@@ -63,7 +68,15 @@ fn a_career() -> Profile {
         best_kills_in_a_sortie: 5,
         seconds_in_the_field: 612.5,
         cleared: BTreeSet::from(["skirmish/veteran".to_string()]),
+        xp: 1234,
+        gear: BTreeMap::from([("speed".to_string(), 3), ("control".to_string(), 2)]),
     }
+}
+
+/// The tuning the loader needs in order to answer "what is a career from before `F-120` worth".
+/// The **real** file, because that is what the game will migrate with.
+fn xp_tuning() -> XpTuning {
+    GameData::load(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/data")).progress.xp
 }
 
 /// ⭐ **The format itself, in bytes a human can read.**
@@ -93,7 +106,7 @@ fn f201_the_field_list_is_frozen_until_the_schema_number_moves() {
         "the profile's shape changed. Bump save::file::SCHEMA, add the migration arm, and \
          update PROFILE_FIELDS and A_CAREER_ON_DISK — an old file has to keep loading"
     );
-    assert_eq!(SCHEMA, 1, "SCHEMA moved: this test's literals move with it");
+    assert_eq!(SCHEMA, 2, "SCHEMA moved: this test's literals move with it");
 }
 
 /// ⭐ The write is **atomic** (`F-200`: no data loss). What a reader can ever see is the whole
@@ -125,15 +138,60 @@ fn f201_a_profile_from_an_older_shape_still_loads_and_names_what_was_missing() {
     )
     .unwrap();
 
-    let got = defeated_by_titan::save::file::read_profile(&dir, PlayerId(1));
+    let got = defeated_by_titan::save::file::read_profile(&dir, PlayerId(1), &xp_tuning());
     assert_eq!(got.profile.sorties_flown, 2, "what the file HAD is what came back");
     assert_eq!(got.profile.titans_felled, 6);
     assert_eq!(got.profile.sorties_won, 0, "what it had not is the empty career's value");
     assert_eq!(
         got.missing,
-        vec!["sorties_won", "best_kills_in_a_sortie", "seconds_in_the_field", "cleared"],
+        vec![
+            "sorties_won",
+            "best_kills_in_a_sortie",
+            "seconds_in_the_field",
+            "cleared",
+            "xp",
+            "gear"
+        ],
         "a default nobody can read in the log is the thing rule 2 was written against"
     );
+    assert_eq!(got.note, defeated_by_titan::save::LoadNote::Migrated { from: 1 });
+}
+
+/// ⭐ **`F-201`, and this is the arm `F-120` had to write.** A career from before the XP curve
+/// existed must not come back as level 1 — the sorties were flown. The migration pays the old
+/// record at the no-tier rate, out of `progress.ron`, and the assertion restates that rate
+/// independently instead of calling the function under test.
+#[test]
+fn f201_a_career_from_before_the_xp_curve_is_paid_for_what_it_already_did() {
+    let dir = scratch("nolevel");
+    // A schema-1 file, exactly the shape `save` wrote yesterday. **Bytes, not a struct.**
+    fs::write(
+        profile_path(&dir, PlayerId(1)),
+        "(schema: 1, profile: (sorties_flown: 4, sorties_won: 1, titans_felled: 9, \
+         best_kills_in_a_sortie: 5, seconds_in_the_field: 612.5, cleared: [\"skirmish/veteran\"]))",
+    )
+    .unwrap();
+
+    let x = xp_tuning();
+    let got = defeated_by_titan::save::file::read_profile(&dir, PlayerId(1), &x);
+    let by_hand = ((4.0 * x.per_sortie_flown
+        + 1.0 * x.per_sortie_won
+        + 9.0 * x.per_titan_felled
+        + x.per_minute_in_the_field * (612.5 / 60.0))
+        * x.without_a_difficulty) as u64;
+    assert_eq!(got.profile.xp, by_hand, "the career it already had is what it is worth");
+    assert!(by_hand > 0, "a migration that hands out zero is not a migration");
+    assert_eq!(got.missing, vec!["xp", "gear"], "and it names what it had to invent");
+
+    // A schema-2 file keeps its own number and is NOT recomputed — the arm runs once, ever.
+    let dir2 = scratch("schema2");
+    fs::write(
+        profile_path(&dir2, PlayerId(1)),
+        "(schema: 2, profile: (sorties_flown: 4, xp: 7, gear: {}))",
+    )
+    .unwrap();
+    let kept = defeated_by_titan::save::file::read_profile(&dir2, PlayerId(1), &x);
+    assert_eq!(kept.profile.xp, 7, "a build that understands xp must not overwrite it");
 }
 
 /// ⭐ `F-200`, the other direction: a file from a **newer** build is refused, not truncated.

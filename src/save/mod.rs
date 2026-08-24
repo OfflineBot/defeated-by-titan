@@ -50,8 +50,9 @@ pub mod profile;
 use bevy::prelude::*;
 
 pub use file::{profile_path, render, LoadNote, Loaded, SaveDir, PROFILE_FIELDS, SCHEMA};
-pub use profile::{Profile, SortieOutcome};
+pub use profile::{xp_earned, xp_of_a_bare_career, Profile, SortieOutcome};
 
+use crate::data::GameData;
 use crate::shared::PlayerId;
 
 /// Where a player's profile came from, and whether this build may write it back.
@@ -87,6 +88,7 @@ impl Plugin for SavePlugin {
 fn load_profiles(
     mut commands: Commands,
     dir: Res<SaveDir>,
+    data: Res<GameData>,
     fresh: Query<(Entity, &PlayerId), Without<Profile>>,
 ) {
     for (entity, player) in &fresh {
@@ -97,7 +99,7 @@ fn load_profiles(
             commands.entity(entity).insert((Profile::default(), ProfileFile { may_write: false }));
             continue;
         };
-        let loaded = file::read_profile(dir, *player);
+        let loaded = file::read_profile(dir, *player, &data.progress.xp);
         match &loaded.note {
             LoadNote::Fresh => info!(
                 "save: player {} has no profile yet — a first sortie ({})",
@@ -144,6 +146,7 @@ fn load_profiles(
 fn record_outcomes(
     mut outcomes: MessageReader<SortieOutcome>,
     dir: Res<SaveDir>,
+    data: Res<GameData>,
     mut players: Query<(&PlayerId, &mut Profile, &ProfileFile)>,
 ) {
     for outcome in outcomes.read() {
@@ -153,7 +156,7 @@ fn record_outcomes(
                 continue;
             }
             anybody = true;
-            profile.record(outcome);
+            let earned = profile.record(outcome, &data.progress.xp);
             let Some(dir) = dir.path() else { continue };
             if !on_disk.may_write {
                 warn!(
@@ -165,8 +168,9 @@ fn record_outcomes(
             }
             match file::write_profile(dir, *player, &profile) {
                 Ok(path) => info!(
-                    "save: player {} — {} → {}",
+                    "save: player {} — +{} xp, {} → {}",
                     player.0,
+                    earned,
                     profile.one_line(),
                     path.display()
                 ),
