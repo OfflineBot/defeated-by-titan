@@ -1389,7 +1389,7 @@ fn f175_a_flagless_launch_opens_the_title_screen_first() {
         text.iter().any(|t| t == defeated_by_titan::WINDOW_TITLE),
         "the title screen does not say the game's name: {text:?}"
     );
-    for entry in ["New Game", "Settings", "Quit"] {
+    for entry in ["Play", "Settings", "Quit"] {
         assert!(text.iter().any(|t| t == entry), "no {entry:?} on the title: {text:?}");
     }
 
@@ -1454,18 +1454,36 @@ fn f175_the_title_lets_no_frame_of_the_game_run() {
     assert_eq!(cursor(&app, window).grab_mode, CursorGrabMode::None, "the pointer was taken");
 }
 
-/// *New Game* is the moment the game starts: the plate goes, the pointer is taken, the clock
-/// runs — and the place it starts in is the hub that was standing there all along.
+/// *Play* opens the **mission list**, and the hub is one *Back* behind it.
+///
+/// ⚠️ **Rewritten on 2026-08-24.** It used to assert that *New Game* handed the pointer straight
+/// to the hub, which is exactly the routing hole `F-175` closed: the lobby existed, worked, and
+/// could not be reached by anybody who had not learnt that `Esc` was hiding it. What the old
+/// test guarded — the pointer, the clock, the plate — is guarded here on the door the lobby's
+/// *Back* row now opens, so nothing was given up in the move.
 #[test]
-fn f175_new_game_hands_the_pointer_over_to_the_hub() {
+fn f175_play_opens_the_mission_list_and_the_hub_is_behind_it() {
     use defeated_by_titan::shared::Tick;
 
     let (mut app, window) = app_at_the_front_door();
     press(&mut app, &TitleAction::NewGame);
     app.update();
 
+    assert_eq!(*app.world().resource::<Screen>(), Screen::Lobby);
+    assert_eq!(plates(&mut app), vec![Screen::Lobby], "the title plate stayed up under the lobby");
+    let c = cursor(&app, window);
+    assert_eq!(c.grab_mode, CursorGrabMode::None, "the lobby is clicked, so the pointer is free");
+    assert!(c.visible);
+    assert!(
+        app.world().resource::<Time<Virtual>>().is_paused(),
+        "the game ran underneath the mission list"
+    );
+
+    // And the hub is the second click, through the lobby's own way out.
+    press(&mut app, &LobbyAction::Back);
+    app.update();
     assert_eq!(*app.world().resource::<Screen>(), Screen::Playing);
-    assert!(plates(&mut app).is_empty(), "the title plate stayed up over the running game");
+    assert!(plates(&mut app).is_empty(), "a plate stayed up over the running game");
 
     let c = cursor(&app, window);
     assert_eq!(c.grab_mode, CursorGrabMode::Locked, "the game has to take the pointer");
@@ -1478,7 +1496,7 @@ fn f175_new_game_hands_the_pointer_over_to_the_hub() {
     assert_eq!(
         *app.world().resource::<State<MissionPhase>>().get(),
         MissionPhase::Hub,
-        "*New Game* has to leave you standing in the hub, not in a sortie"
+        "walking out of the mission list has to leave you standing in the hub, not in a sortie"
     );
 }
 
@@ -1559,6 +1577,11 @@ fn f175_the_title_offers_only_what_the_game_can_actually_do() {
     );
 
     let text = plate_text(&mut app);
+    assert!(
+        text.iter().any(|t| t == "Play"),
+        "the first row says what it does, and today it cannot say *New Game*: `save` loads the \
+         one profile there is by itself, so a fresh career is not a thing this row could start"
+    );
     for empty in ["Continue", "Load", "News", "Credits", "Multiplayer"] {
         assert!(
             !text.iter().any(|t| t.contains(empty)),
@@ -1934,5 +1957,218 @@ fn f016_the_settings_screen_leaves_the_bands_lane_empty() {
         "the lane is {:.1} px for a {END_H_PX:.0} px tick — it needs {:.0}",
         below - above,
         END_H_PX + 8.0
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F-175 — the whole loop: title → lobby → sortie → debrief → lobby (2026-08-24)
+// ---------------------------------------------------------------------------
+//
+// > *„es fehlt die lobby … erstelle die ganze gameloop mit lobby und main menu etc."*
+// > — the user, 2026-08-23.
+//
+// Two holes, and one test each:
+//
+// 1. **The lobby was built and unreachable.** `Screen::Lobby` works, and the only route into it
+//    was the pause screen *inside a running game*. From a cold start *New Game* dropped the
+//    player into the hub and the mission list existed only for somebody who already knew that
+//    `Esc` was hiding it.
+// 2. **The loop had no end.** `Won` and `Lost` only logged a line; three seconds later the hub
+//    took over. Nothing was ever shown to the player about the sortie he had just flown, and
+//    there was no way back to the lobby except `Esc` again.
+
+use defeated_by_titan::menu::debrief::DebriefAction;
+use defeated_by_titan::shared::{HitZone, PlayerId, TitanHit, TitanId};
+
+/// A windowed run standing in the hub, ticking 100 ms a frame so a sortie can be flown inside a
+/// test without waiting for a wall clock.
+fn a_windowed_hub() -> (App, Entity) {
+    let (mut app, window) = windowed(Cli { headless: true, hub: true, ..default() });
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        std::time::Duration::from_millis(100),
+    ));
+    (app, window)
+}
+
+/// Frames of 100 ms until `seconds` of them have gone by. **Frames and not ticks**: a screen
+/// stops `Time<Virtual>` and therefore the ticks, which is exactly what a debrief the player is
+/// still reading has to do.
+fn run_for(app: &mut App, seconds: f32) {
+    for _ in 0..((seconds * 10.0).round() as u32) {
+        app.update();
+    }
+}
+
+/// Stands every player on the hub's first deployment pad — the door `missions.ron` calls *"the
+/// one you find without looking for it"*. No `.single()`: every player is one of many.
+fn onto_the_first_pad(app: &mut App) {
+    let pad = {
+        let missions = &app.world().resource::<GameData>().missions;
+        Vec3::from(missions.hub.deployments.first().expect("a deployment pad").center_m)
+    };
+    let mut q = app.world_mut().query_filtered::<Entity, With<PlayerId>>();
+    let players: Vec<Entity> = q.iter(app.world()).collect();
+    assert!(!players.is_empty(), "no player to put on a pad");
+    for p in players {
+        app.world_mut().entity_mut(p).insert(Transform::from_translation(pad));
+    }
+}
+
+/// The running sortie's kill target, out of the mission entity — never a literal here.
+fn kill_target(app: &mut App) -> u32 {
+    let mut q = app.world_mut().query::<&defeated_by_titan::mission::KillTally>();
+    q.iter(app.world()).next().expect("no mission is running").target
+}
+
+/// Wins the running sortie with the same `TitanHit` messages a blade writes.
+fn win_it(app: &mut App) {
+    let player = {
+        let mut q = app.world_mut().query::<&PlayerId>();
+        *q.iter(app.world()).next().expect("no player in the world")
+    };
+    let target = kill_target(app);
+    for i in 0..target {
+        app.world_mut().write_message(TitanHit {
+            titan: TitanId(700 + i),
+            by: player,
+            zone: HitZone::Cortex,
+            speed_m_s: 30.0,
+        });
+        app.update();
+    }
+}
+
+/// ★ **The routing hole.** The lobby exists, works, and could not be reached from a cold start.
+#[test]
+fn f175_the_front_door_leads_to_the_mission_list() {
+    let start = Cli::from_args(["--headless".to_string()]);
+    assert!(start.title, "a run that names no door has to open on the title screen");
+
+    let (mut app, _window) = windowed(start);
+    assert_eq!(*app.world().resource::<Screen>(), Screen::Title);
+    press(&mut app, &TitleAction::NewGame);
+    assert_eq!(
+        *app.world().resource::<Screen>(),
+        Screen::Lobby,
+        "the first row of the title screen has to open the mission list — until today it \
+         dropped the player into the hub and the lobby was reachable only from the pause \
+         menu of a game that was already running"
+    );
+}
+
+/// ★★ **The loop has an end, and it is a screen the player reads.**
+///
+/// Not a log line: `Won` and `Lost` only ever called `announce`, and three seconds later the
+/// hub took over. What a sortie did was never on screen at all.
+#[test]
+fn f175_the_debrief_is_a_screen_and_it_waits_for_the_player() {
+    let (mut app, _window) = a_windowed_hub();
+    onto_the_first_pad(&mut app);
+    run_for(&mut app, 0.5);
+    assert_eq!(
+        *app.world().resource::<State<MissionPhase>>().get(),
+        MissionPhase::Active,
+        "the pad did not deploy — the rest of this test would measure nothing"
+    );
+    let target = kill_target(&mut app);
+    win_it(&mut app);
+    run_for(&mut app, 0.3);
+    assert_eq!(*app.world().resource::<State<MissionPhase>>().get(), MissionPhase::Won);
+
+    // Well past every hold in `missions.ron: hub`. The debrief is a screen, so the clock stops
+    // under it and it cannot be waited out.
+    run_for(&mut app, 6.0);
+    assert_ne!(
+        *app.world().resource::<Screen>(),
+        Screen::Playing,
+        "six seconds after the verdict the game is simply running again — the player was \
+         never shown what his sortie did, and a loop that cannot report is not a loop"
+    );
+    let text = plate_text(&mut app).join(" | ");
+    println!("debrief plate: {text}");
+    assert!(
+        text.contains(&format!("{target} / {target}")),
+        "the debrief has to say the kills against the target: {text:?}"
+    );
+    assert!(text.contains("WON"), "the debrief has to say how it ended: {text:?}");
+    assert!(
+        text.contains("Ashgate Skirmish"),
+        "and which sortie it was reporting on: {text:?}"
+    );
+    assert_eq!(
+        *app.world().resource::<State<MissionPhase>>().get(),
+        MissionPhase::Debrief,
+        "the screen is up and the phase moved on underneath it — then it is not the debrief, \
+         it is a picture of one"
+    );
+
+    // ★★ **And the loop closes.** The way out of the report is the mission list, and the
+    // mission list starts the next sortie — which is the whole ring in one run:
+    // hub → sortie → verdict → debrief → lobby → sortie.
+    press(&mut app, &DebriefAction::Lobby);
+    app.update();
+    assert_eq!(
+        *app.world().resource::<Screen>(),
+        Screen::Lobby,
+        "the debrief has no way back to the mission list"
+    );
+
+    press(&mut app, &LobbyAction::Deploy);
+    run_for(&mut app, 1.0);
+    assert!(
+        app.world().resource::<State<MissionPhase>>().get().is_running(),
+        "the lobby did not start a second sortie after a debrief — the phase is {:?}",
+        app.world().resource::<State<MissionPhase>>().get()
+    );
+    let mut q = app.world_mut().query::<&defeated_by_titan::mission::KillTally>();
+    assert_eq!(
+        q.iter(app.world()).count(),
+        1,
+        "the second sortie is counting kills on two tallies — the finished mission was never \
+         cleared away, which is what routing a deploy through the hub is for"
+    );
+}
+
+/// ★ **The second door out of the report, and the one that can quietly ruin the next sortie.**
+///
+/// *Redeploy* means *the same one again* — the same template **and the same difficulty**, out of
+/// `mission::Sortie` and not out of `LobbyChoice`, which may hold something the player last
+/// touched three sorties ago. And it has to go **through the hub**: deploying straight out of a
+/// finished sortie leaves the old mission entity standing, and then two `KillTally`s count the
+/// next run's kills (`mission::take_orders_from_the_menu`).
+#[test]
+fn f175_redeploy_flies_the_same_sortie_again_and_through_the_hub() {
+    let (mut app, _window) = a_windowed_hub();
+    onto_the_first_pad(&mut app);
+    run_for(&mut app, 0.5);
+    let flown = app.world().resource::<Sortie>().0.clone().expect("the pad set an order");
+    win_it(&mut app);
+    run_for(&mut app, 6.0);
+    assert_eq!(
+        *app.world().resource::<Screen>(),
+        Screen::Debrief,
+        "the debrief is not up — the rest of this test would press a button that is not there"
+    );
+
+    press(&mut app, &DebriefAction::Redeploy);
+    run_for(&mut app, 1.5);
+
+    let again = app.world().resource::<Sortie>().0.clone().expect("Redeploy set no order");
+    assert_eq!(again.template, flown.template, "Redeploy flew a different mission");
+    assert_eq!(
+        again.difficulty, flown.difficulty,
+        "Redeploy flew the same mission at a different level — *again* has to mean again"
+    );
+    assert!(
+        app.world().resource::<State<MissionPhase>>().get().is_running(),
+        "Redeploy never started anything — the phase is {:?}",
+        app.world().resource::<State<MissionPhase>>().get()
+    );
+    let mut q = app.world_mut().query::<&defeated_by_titan::mission::KillTally>();
+    assert_eq!(
+        q.iter(app.world()).count(),
+        1,
+        "two kill counters are running — the finished mission was never cleared, so Redeploy \
+         went over the top of the hub instead of through it"
     );
 }

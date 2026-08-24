@@ -29,7 +29,7 @@ use super::{plate, PauseAction, Screen};
 use crate::shared::AbandonSortie;
 
 /// Builds the plate. Called by `menu::spawn_menu`, which owns the "is one already there"
-/// question for all three screens.
+/// question for all five screens.
 ///
 /// `in_a_sortie` decides one button and one label, and it is passed in rather than read here so
 /// that this function stays a pure builder — the phase is read in exactly one place

@@ -1,9 +1,9 @@
-//! **One plate, three screens.** The bundles every menu in this domain is built out of.
+//! **One plate, five screens.** The bundles every menu in this domain is built out of.
 //!
 //! The pause screen invented this look on 2026-08-12 — a dark backdrop, a column of 240 × 44
 //! buttons, one title — and the settings screen and the lobby use *these* functions rather
 //! than a second version of the same twenty lines. That is the whole point of the file: a
-//! second UI idiom in a game with three screens is how a game ends up with three fonts.
+//! second UI idiom in a game with five screens is how a game ends up with three fonts.
 //!
 //! **No color of its own.** `docs/conventions.md` §3 reserves amber and cyan for things in the
 //! *world* — objectives, gas, anchor points — and a menu that borrows them teaches the eye a
@@ -150,7 +150,7 @@ pub fn row() -> impl Bundle {
 }
 
 /// A button plate `width_px` wide. Spawn the action component **with** it and the label under
-/// it — see any of the three screens for the shape.
+/// it — see any of the five screens for the shape.
 pub fn button(width_px: f32, chosen: bool) -> impl Bundle {
     (
         PauseElement,

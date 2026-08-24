@@ -32,9 +32,23 @@
         // point `player::spawn_local_player` uses, so the two cannot drift apart visibly.
         spawn_m: (0.0, 2.0, 0.0),
 
-        // How long WON/LOST stays up before the hub takes you back. Long enough to read the
-        // word, short enough that nobody waits for it.
-        debrief_s: 3.0,
+        // ---- The two holds on the way home ---------------------------------------------
+        //
+        //     Won | Lost  ──verdict_s──►  Debrief  ──debrief_s──►  Hub
+        //
+        // `verdict_s` is the word over the field the sortie was decided on: long enough to
+        // read, short enough that nobody waits for it. **3.0 s, unchanged since 2026-08-12** —
+        // `scripts/f070-hub.txt` reads `phase == 3` at 1.65 s and 2.45 s after the verdict and
+        // would go red for a reason that is not in the game if this number shrank.
+        //
+        // `debrief_s` is the **report**, and only a run with no window ever spends it: the
+        // debrief comes up as `menu::Screen::Debrief`, a screen stops `Time<Virtual>`, and a
+        // stopped clock runs no ticks — so a player reads it for as long as he likes and clicks
+        // out of it. 1.2 s is what a `--headless` script waits instead, and the sum of the two
+        // (4.2 s = 252 ticks) is what `f070-hub.txt` still sees comfortably inside its 4.93 s
+        // read of `phase == 5`.
+        verdict_s: 3.0,
+        debrief_s: 1.2,
 
         // ---- The doors -----------------------------------------------------------------
         //
@@ -153,6 +167,37 @@
             //
             // Nothing else. No hidden multiplier on titan health, no scaling in Rust — a
             // level nobody can read out of this file is a level nobody can tune.
+            //
+            // ---- What `F-080 Schwierigkeitsgrade` still wants, measured 2026-08-24 ---------
+            //
+            // F-080 asks for *„Fuenf Stufen mit skalierenden Titanenzahlen, HP,
+            // Typenverteilung und Belohnungen. Gating ueber Ausruestungsrang"*. Three of the
+            // six halves are standing here already and the other three are **not file work**:
+            //
+            //   ✔ as config, not code   this block, and `mission::run::resolve` is the one fork
+            //   ✔ titan counts scale    2 bodies at recruit, 10 at elite
+            //   ✔ type distribution     1 kind at recruit, 6 of the 7 spawnable at elite
+            //   ⬜ FIVE levels           there are three. Adding two is one edit here — and it
+            //                           goes red in `tests/data.rs::t005_the_missions_keep_the
+            //                           _order_the_file_wrote_them_in`, which pins the keys to
+            //                           exactly ["recruit","veteran","elite"]. One line in a
+            //                           test file, but not this hand's to change.
+            //   ⬜ scaling HP            there is NO FIELD for it. `data::DifficultyLevel` is
+            //                           name + duration + kill_target + waves; titan health
+            //                           lives per kind in `titan.ron` and no level can touch
+            //                           it. This one needs `src/data/mod.rs`, not a number.
+            //   ⬜ rewards               `progress`/`save`: `save::SortieOutcome` carries facts
+            //                           (kills, seconds, a verdict) and deliberately no reward
+            //                           — what a kill is worth is `F-120`'s RON.
+            //   ⬜ gating by gear rank   `save::Profile::cleared` already records
+            //                           "<template>/<difficulty>" for every WON sortie and
+            //                           nothing reads it. The pads and the lobby offer every
+            //                           level to everybody.
+            //
+            // ⚠️ And the acceptance — *„Sprung zwischen Stufen ist spuerbar"* — is a
+            // MEASUREMENT, not a file: nobody has flown recruit and elite back to back and
+            // written down a difference. Until somebody has, F-080 cannot go past 🟨 however
+            // many levels are listed below.
             difficulties: {
                 // Two kills, seven minutes, and **nothing at all for the first minute**:
                 // time to fly out, find the ring and pick a target before anything is

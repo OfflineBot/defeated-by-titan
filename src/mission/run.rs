@@ -25,6 +25,8 @@ use bevy::prelude::*;
 use crate::data::{MissionTemplate, Wave};
 use crate::shared::{PlayerId, TitanId};
 
+use super::phase::MissionPhase;
+
 /// The three numbers **one** sortie flies, after template and difficulty have been put
 /// together — and the one place that decides which of the two wins.
 ///
@@ -88,6 +90,30 @@ pub struct Mission {
     pub template: String,
     /// The display name out of the file (`"First Ride"`).
     pub name: String,
+}
+
+/// **What the sortie was decided as**, on the mission entity itself.
+///
+/// The verdict is a phase — `Won` or `Lost` — and that was enough for as long as the verdict
+/// *was* the end of the run. It is not any more: [`MissionPhase::Debrief`] comes after both of
+/// them, and a screen that is up during the debrief can read the phase all it likes and will
+/// only ever be told `DEBRIEF`. So the answer is written down where the rest of the sortie's
+/// numbers already live, next to the clock and the counter, by the one system that speaks it
+/// (`mission::announce`).
+///
+/// **The word is not this component's.** [`Verdict::label`] hands back
+/// [`MissionPhase::label`]'s, so the debrief plate and the HUD's big line cannot come to say
+/// two different things — the same rule `hud::objective` states for itself.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Verdict {
+    pub won: bool,
+}
+
+impl Verdict {
+    /// `WON` or `LOST`, out of the phase enum and never out of a string here.
+    pub fn label(self) -> &'static str {
+        if self.won { MissionPhase::Won.label() } else { MissionPhase::Lost.label() }
+    }
 }
 
 /// The mission clock. **In ticks, and only in ticks.**

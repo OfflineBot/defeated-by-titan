@@ -116,7 +116,11 @@ pub fn objective_text(phase: MissionPhase, tally: Option<&KillTally>) -> Option<
         // an objective, and the mission entity is despawned on the way in anyway — so this arm
         // is the belt to that braces.
         MissionPhase::Briefing | MissionPhase::Deploying | MissionPhase::Hub => None,
-        MissionPhase::Won | MissionPhase::Lost => unreachable!("handled by is_decided above"),
+        // `Debrief` reaches `is_decided` above and never gets here — it is a verdict that has
+        // been spoken and the mission entity is still standing under it (`F-175`, 2026-08-24).
+        MissionPhase::Won | MissionPhase::Lost | MissionPhase::Debrief => {
+            unreachable!("handled by is_decided above")
+        }
     }
 }
 

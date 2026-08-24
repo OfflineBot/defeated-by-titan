@@ -12,17 +12,22 @@
 //!
 //! | file | what |
 //! |---|---|
-//! | [`phase`] | the six phases, and why a `Resource` is right here and not a breach of rule 4 |
+//! | [`phase`] | the seven phases, and why a `Resource` is right here and not a breach of rule 4 |
 //! | [`run`] | the clock in ticks, the per-player counter, the wave list, template ⊕ difficulty |
 //! | [`hub`] | **the place you play out of** (2026-08-12): deployment pads, refuel stations, the way back |
+//!
+//! Since 2026-08-24 the way back has a station on it: `Won`/`Lost` → [`MissionPhase::Debrief`]
+//! → `Hub`. **A loop that cannot report is not a loop** — until then the verdict was a log line
+//! and three seconds later the hub took over (`F-175`).
 //!
 //! ```text
 //! Startup
 //!    │
 //!    ├─ --hub ──► Hub ──(a player stands on a deployment pad)──┐
 //!    │             ▲                                           │
-//!    │             │  hub.debrief_s after the verdict          │
-//!    │             │  (only for a sortie that came from here)  ▼
+//!    │             │  hub.verdict_s, then a Debrief, then      │
+//!    │             │  hub.debrief_s or one click — and only    │
+//!    │             │  for a sortie that came from here         ▼
 //!    ├─ --mission <name> ────────────────► Deploying ──► Active ──┬─ kill_target ──► Won
 //!    │                                     (entity,      (waves,  │
 //!    │                                      clock,        kills)  └─ deadline, or every
@@ -80,7 +85,7 @@ use crate::shared::{
 
 pub use hub::{BladeRack, DeploymentPoint, RefuelStation, ReturnToHub, Sortie, SortieOrder};
 pub use phase::MissionPhase;
-pub use run::{resolve, KillTally, Mission, MissionClock, SortieNumbers, WaveSchedule};
+pub use run::{resolve, KillTally, Mission, MissionClock, SortieNumbers, Verdict, WaveSchedule};
 
 pub struct MissionPlugin;
 
@@ -112,6 +117,10 @@ impl Plugin for MissionPlugin {
             .add_systems(OnEnter(MissionPhase::Active), open_the_field)
             .add_systems(OnEnter(MissionPhase::Won), announce)
             .add_systems(OnEnter(MissionPhase::Lost), announce)
+            // The report. `OnEnter` and not a system in the phase: it is said **once**, and it
+            // is the only thing a run with no window can leave behind about the debrief — the
+            // plate itself needs a screen, and a `--headless` run has none.
+            .add_systems(OnEnter(MissionPhase::Debrief), report)
             // The hub is furnished on entry and cleared on exit — the clearing is
             // `DespawnOnExit(MissionPhase::Hub)` on every entity spawned there, so there is no
             // second system that has to remember to run.
@@ -135,7 +144,7 @@ impl Plugin for MissionPlugin {
         )
         .add_systems(
             FixedUpdate,
-            hub::return_to_hub
+            hub::walk_the_way_home
                 .in_set(SimulationSystems::PostStep)
                 .run_if(a_verdict_has_fallen),
         )
@@ -332,11 +341,13 @@ struct PendingOrder {
     deploy: Option<DeployRequest>,
 }
 
-/// Whether the sortie has been decided — the condition [`hub::return_to_hub`] hangs on.
+/// Whether the sortie has been decided — the condition [`hub::walk_the_way_home`] hangs on.
 ///
 /// A named function and not `in_state(Won).or(in_state(Lost))`: the predicate is
 /// `MissionPhase::is_decided`, it is written down once next to the enum, and a third phase that
-/// counts as a verdict one day changes one line instead of two call sites.
+/// counts as a verdict one day changes one line instead of two call sites. **It did**, on
+/// 2026-08-24: `Debrief` joined the two, and this predicate needed no edit at all — which is
+/// the whole reason it is a function.
 fn a_verdict_has_fallen(phase: Res<State<MissionPhase>>) -> bool {
     phase.get().is_decided()
 }
@@ -409,14 +420,25 @@ fn open_the_field(mut commands: Commands, sortie: Res<Sortie>, data: Res<GameDat
     commands.spawn((schedule, DespawnOnExit(MissionPhase::Active)));
 }
 
-/// One line in the log when the verdict falls. It is what a `--script` run leaves behind for a
-/// human to line the screenshot up against.
+/// One line in the log when the verdict falls, **and the verdict written onto the mission**.
+///
+/// The line is what a `--script` run leaves behind for a human to line the screenshot up
+/// against. The [`Verdict`] is what survives the phase: `Won` and `Lost` are two states the
+/// session leaves again after `missions.ron: hub.verdict_s`, and the debrief that comes next
+/// would have nothing to read off `State<MissionPhase>` but the word `DEBRIEF`.
+///
+/// **One writer, and it is this system.** It runs on `OnEnter` of both verdicts and it is the
+/// only place either word is decided, so the plate, the log and the HUD cannot come to say
+/// three things.
 fn announce(
+    mut commands: Commands,
     phase: Res<State<MissionPhase>>,
     tick: Res<Tick>,
-    missions: Query<(&MissionClock, &KillTally)>,
+    missions: Query<(Entity, &MissionClock, &KillTally)>,
 ) {
-    for (clock, tally) in &missions {
+    let won = *phase.get() == MissionPhase::Won;
+    for (entity, clock, tally) in &missions {
+        commands.entity(entity).insert(Verdict { won });
         info!(
             "MISSION {} at tick {} (decided at {:?}) — {}/{} kills",
             phase.get().label(),
@@ -424,6 +446,36 @@ fn announce(
             clock.decided_at_tick,
             tally.total(),
             tally.target
+        );
+    }
+}
+
+/// The **debrief**, said out loud once.
+///
+/// `menu::debrief` draws the same four facts on a plate, and a run with a window is the only
+/// one that sees it. This line is the other half — the one a `--headless` or `--script` run can
+/// leave behind, next to `assert phase == 6`, so the loop's last station is evidence and not a
+/// claim (`scripts/f175-loop.txt`).
+///
+/// Everything in it comes off the mission entity, which is still standing: `hub::open_hub`
+/// despawns it on the way into the hub and not a tick earlier, precisely so the report has
+/// something to read.
+fn report(
+    tick: Res<Tick>,
+    data: Res<GameData>,
+    missions: Query<(&Mission, &MissionClock, &KillTally, Option<&Verdict>)>,
+) {
+    let hz = data.game.simulation_hz;
+    for (mission, clock, tally, verdict) in &missions {
+        let flown = clock.decided_at_tick.unwrap_or(tick.0).saturating_sub(clock.started_at_tick);
+        info!(
+            "DEBRIEF {} — {} — {}/{} kills in {:.1} s of {:.1} s",
+            verdict.map_or("?", |v| v.label()),
+            mission.name,
+            tally.total(),
+            tally.target,
+            flown as f64 / hz,
+            clock.duration_ticks as f64 / hz,
         );
     }
 }

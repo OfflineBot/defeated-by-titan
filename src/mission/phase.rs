@@ -1,9 +1,10 @@
-//! The six phases of a session — `F-070`, and the hub loop of 2026-08-12.
+//! The seven phases of a session — `F-070`, and the hub loop of 2026-08-12.
 //!
 //! ```text
 //! Hub ──(a player stands on a deployment pad)──► Deploying ──► Active ──┬─► Won ──┐
 //!  ▲                                                                    └─► Lost ─┤
-//!  └────────────────── after `missions.ron: hub.debrief_s` ─────────────────────── ┘
+//!  │                                                     hub.verdict_s later      ▼
+//!  └───────────────── hub.debrief_s later, or one click ───────────────────── Debrief
 //! ```
 //!
 //! `Briefing` is still there and still the default: it is the phase of a run that has **no**
@@ -73,6 +74,20 @@ pub enum MissionPhase {
     /// in a hub with live trigger volumes in it — that is `--hub`'s job, and `Briefing`
     /// remains the honest reading of "nobody asked for anything".
     Hub,
+    /// **The report.** The verdict has been read, the mission entity is still standing with its
+    /// clock and its counter on it, and the player is being told what the sortie did before the
+    /// hub takes him back (`F-175`, 2026-08-24).
+    ///
+    /// ⚠️ **Only a sortie that came out of the hub gets one.** `--mission <name>` carries no
+    /// [`ReturnToHub`](super::ReturnToHub), so it stays on `Won`/`Lost` for good — three scripts
+    /// and two tests read the verdict long after it fell.
+    ///
+    /// ⚠️ **How long it lasts is not a number in a run that has a window.** `menu` opens
+    /// `Screen::Debrief` on entering this phase, a screen stops `Time<Virtual>`, and a stopped
+    /// clock runs no ticks — so `missions.ron: hub.debrief_s` is only ever spent by a run with
+    /// no window at all (`--headless`, `--script`), which is also the only kind of run that can
+    /// assert `phase == 6`.
+    Debrief,
 }
 
 impl MissionPhase {
@@ -95,6 +110,9 @@ impl MissionPhase {
             // `scripts/f071-won.txt` says `== 2`. A variant that took a number would turn
             // both of them into green runs measuring the opposite of what they claim.
             MissionPhase::Hub => 5,
+            // Appended on the same rule, 2026-08-24. `scripts/f175-loop.txt` says
+            // `assert phase == 6` and `scripts/f070-hub.txt` still says `== 5` for the hub.
+            MissionPhase::Debrief => 6,
         }
     }
 
@@ -107,19 +125,29 @@ impl MissionPhase {
             MissionPhase::Won => "WON",
             MissionPhase::Lost => "LOST",
             MissionPhase::Hub => "HUB",
+            MissionPhase::Debrief => "DEBRIEF",
         }
     }
 
-    /// Whether a verdict has been spoken.
+    /// Whether a verdict has been spoken **and the sortie is still standing** — the mission
+    /// entity, its clock and its counter all still exist.
     ///
     /// ⚠️ **This is no longer terminal.** Until 2026-08-12 `Won` and `Lost` were the end of the
     /// run; a sortie deployed out of the hub now leaves them again after
-    /// `missions.ron: hub.debrief_s` (`mission::hub::return_to_hub`). A sortie started with
+    /// `missions.ron: hub.verdict_s` (`mission::hub::walk_the_way_home`). A sortie started with
     /// `--mission <name>` still stays where it lands — it came from nowhere, so there is
     /// nowhere to go back to, and three scripts and two tests measure the verdict long after
     /// it fell.
+    ///
+    /// ⚠️ **[`MissionPhase::Debrief`] is one of them, and that is the point of the predicate.**
+    /// Two callers ask this question and both mean *"is there a finished sortie in the world
+    /// that has to be left through the hub before another one starts"* —
+    /// `mission::take_orders_from_the_menu`, which would otherwise deploy a second mission on
+    /// top of the first one and count kills on two `KillTally`s, and `menu::in_a_sortie`, which
+    /// decides whether the pause screen offers a way out. During the debrief the answer to both
+    /// is yes.
     pub fn is_decided(self) -> bool {
-        matches!(self, MissionPhase::Won | MissionPhase::Lost)
+        matches!(self, MissionPhase::Won | MissionPhase::Lost | MissionPhase::Debrief)
     }
 
     /// Whether this is a phase in which a sortie is **running** — the mission entity exists and
@@ -144,6 +172,7 @@ mod tests {
             MissionPhase::Won,
             MissionPhase::Lost,
             MissionPhase::Hub,
+            MissionPhase::Debrief,
         ];
         let mut codes: Vec<u8> = all.iter().map(|p| p.code()).collect();
         codes.sort_unstable();
@@ -155,16 +184,24 @@ mod tests {
         // because `scripts/f070-lost.txt` and `scripts/f071-won.txt` are files this test
         // cannot see.
         assert_eq!(MissionPhase::Hub.code(), 5, "the hub takes the next free number, not a used one");
+        // And the debrief took the next one after that, 2026-08-24. `scripts/f175-loop.txt`
+        // is the file this test cannot see.
+        assert_eq!(MissionPhase::Debrief.code(), 6, "the debrief takes the next free number");
     }
 
     #[test]
-    fn only_won_and_lost_are_a_verdict() {
+    fn a_verdict_lasts_until_the_hub_takes_the_sortie_away() {
         assert!(MissionPhase::Won.is_decided());
         assert!(MissionPhase::Lost.is_decided());
+        // ⭐ The debrief is part of it. The mission entity is still standing there with its
+        // counter on it, and a deploy that arrived now has to be routed through the hub or the
+        // next sortie counts kills on two tallies.
+        assert!(MissionPhase::Debrief.is_decided());
         assert!(!MissionPhase::Active.is_decided());
         assert!(!MissionPhase::Briefing.is_decided());
         assert!(!MissionPhase::Deploying.is_decided());
-        // The hub is not a verdict — it is where you are when there is none.
+        // The hub is not a verdict — it is where you are when there is none, and it is the one
+        // phase in which the finished mission has already been despawned.
         assert!(!MissionPhase::Hub.is_decided());
     }
 
@@ -178,6 +215,7 @@ mod tests {
         assert!(!MissionPhase::Briefing.is_running());
         assert!(!MissionPhase::Won.is_running());
         assert!(!MissionPhase::Lost.is_running());
+        assert!(!MissionPhase::Debrief.is_running());
     }
 
     #[test]

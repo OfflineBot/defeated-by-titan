@@ -9,7 +9,9 @@
 //! ```text
 //!   Hub ──(a player stands on a pad)──► Deploying ──► Active ──┬─► Won ──┐
 //!    ▲                                                         └─► Lost ─┤
-//!    └────────── hub.debrief_s later, and only for a sortie that came from here ──────┘
+//!    │                                       hub.verdict_s later         ▼
+//!    └──── hub.debrief_s later, or one click, and only for a sortie ── Debrief
+//!          that came from here
 //! ```
 //!
 //! ## Three things, and the reason each one is a **place** and not a menu
@@ -412,26 +414,55 @@ pub fn restock_at_stations(
     }
 }
 
-/// **The way back.** `hub.debrief_s` after the verdict, a sortie that came out of the hub
-/// returns to it.
+/// **The way home, and it has two stops.** A sortie that came out of the hub goes
+/// `Won`/`Lost` → [`MissionPhase::Debrief`] → `Hub`, and both legs are counted off the one
+/// tick the verdict was decided on.
+///
+/// ```text
+///   Won | Lost  ──hub.verdict_s──►  Debrief  ──hub.debrief_s──►  Hub
+/// ```
 ///
 /// It reads [`MissionClock::decided_at_tick`] rather than starting a timer of its own: that
 /// tick is already written, by the system that spoke the verdict, and a second clock counting
-/// the same thing is a second answer to "when did this end".
-pub fn return_to_hub(
+/// the same thing is a second answer to "when did this end". Both legs measure from it, so the
+/// debrief cannot drift by the tick the transition itself costs.
+///
+/// ⚠️ **In a run with a window the second leg is never spent.** `menu` opens
+/// `Screen::Debrief` when this phase is entered, every screen that is not `Playing` stops
+/// `Time<Virtual>`, and `FixedUpdate` — where this system lives — does not run on a stopped
+/// clock. So the player reads the report for as long as he wants and the button he presses is
+/// what ends it (`shared::AbandonSortie`, through `take_orders_from_the_menu`). The number is
+/// what a `--headless` or `--script` run waits instead: those have no window, therefore no
+/// menu, therefore nothing that could hold the phase open.
+///
+/// **One system and not two**, because the two legs are one question — *how far along the way
+/// home is this sortie* — and splitting it would mean two readers of `decided_at_tick` that can
+/// disagree about which leg is running.
+pub fn walk_the_way_home(
     tick: Res<Tick>,
     data: Res<GameData>,
+    phase: Res<State<MissionPhase>>,
     missions: Query<&MissionClock, With<ReturnToHub>>,
     mut next: ResMut<NextState<MissionPhase>>,
 ) {
-    let debrief = to_ticks(data.missions.hub.debrief_s, data.game.simulation_hz);
+    let hub = &data.missions.hub;
+    let verdict = to_ticks(hub.verdict_s, data.game.simulation_hz);
+    let debrief = to_ticks(hub.debrief_s, data.game.simulation_hz);
     for clock in &missions {
         let Some(decided) = clock.decided_at_tick else {
             continue;
         };
-        if tick.0 >= decided.saturating_add(debrief) {
-            info!("debrief over at tick {} — back to the hub", tick.0);
-            next.set(MissionPhase::Hub);
+        let since = tick.0.saturating_sub(decided);
+        match *phase.get() {
+            MissionPhase::Debrief if since >= verdict.saturating_add(debrief) => {
+                info!("debrief over at tick {} — back to the hub", tick.0);
+                next.set(MissionPhase::Hub);
+            }
+            MissionPhase::Won | MissionPhase::Lost if since >= verdict => {
+                info!("the verdict has stood {since} ticks — the debrief");
+                next.set(MissionPhase::Debrief);
+            }
+            _ => {}
         }
     }
 }

@@ -1,0 +1,166 @@
+# f175-loop — THE WHOLE GAME LOOP IN ONE RUN, and it comes back to where it started.
+#
+#   the verdict:  ./target/debug/defeated_by_titan --headless --hub --script scripts/f175-loop.txt --ticks 1800
+#   the exit:     ./target/debug/defeated_by_titan --headless --hub --script scripts/f175-loop.txt --ticks 1800 >/dev/null 2>&1; echo $?
+#
+# ⚠️ The exit code needs its OWN run: a pipeline's `$?` is the LAST command's (`CLAUDE.md`).
+#
+# ---------------------------------------------------------------------------------------
+# WHAT THIS FILE CLAIMS — the ring, and every station of it is an `assert`
+#
+#   1. a cold `--hub` start stands in the HUB                        (`assert phase == 5`)
+#   2. walking onto a pad DEPLOYS that pad's sortie                  (`assert phase == 2`)
+#   3. the sortie can be WON                                         (`assert phase == 3`)
+#   4. ⭐ the verdict becomes a DEBRIEF                              (`assert phase == 6`)
+#   5. ⭐ and the mission's numbers are still readable inside it     (`assert kills >= 2`)
+#   6. the debrief hands the session back to the HUB                 (`assert phase == 5`)
+#   7. ⭐ and the whole thing STARTS OVER                            (`assert phase == 2`)
+#
+# **4, 5 and 7 are the new ones.** Until 2026-08-24 the loop was `hub → sortie → verdict → hub`
+# and the verdict was a log line: nothing was ever shown to the player about what his sortie had
+# done, and there was no way back to the mission list except pressing `Esc` inside the game.
+# `scripts/f070-hub.txt` walks the older half of this ring in far more detail (the building, the
+# supply, the blade wear) and is untouched by this file — what is measured here is the **shape
+# of the loop**, not the furniture in it.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT THIS FILE CANNOT CLAIM, and it is half of `F-175`
+#
+# ⚠️ **The title screen and the lobby are not in this run, and they cannot be.** `--headless`
+# builds no window (`src/lib.rs`), `menu` is gated on `With<PrimaryWindow>`, and `--script`
+# deliberately walks past the title anyway (`src/shared/cli.rs`) — so a headless run has no menu
+# at all and there is no script verb that could press a button on one. The two legs
+# `Title → Play → Lobby` and `Debrief → To the lobby → Deploy` are held by
+# `tests/menu.rs::f175_play_opens_the_mission_list_and_the_hub_is_behind_it` and
+# `::f175_the_debrief_is_a_screen_and_it_waits_for_the_player`, which spawn a window **entity**
+# by hand — the only way anything in that domain is checkable on this machine, and it is said
+# here rather than papered over.
+#
+# What this run does hold is the half a test cannot: the **phases**, in a real game, in order,
+# with a real fall-cut deciding the sortie.
+#
+# ---------------------------------------------------------------------------------------
+# THE TWO HOLDS, and why the waits are the numbers they are
+#
+# `missions.ron: hub` splits the way home in two since 2026-08-24:
+#
+#     Won ──verdict_s 3.0 s──► Debrief ──debrief_s 1.2 s──► Hub
+#
+# The second one is only ever spent by a run with **no window**: with one, `menu` opens
+# `Screen::Debrief`, a screen stops `Time<Virtual>`, and a stopped clock runs no `FixedUpdate` —
+# so the player reads the report until he clicks. This run is that run without a window, which
+# is why it can measure the phase at all.
+#
+# The verdict falls one tick after the second cortex cut (measured 2026-08-12, `f070-hub.txt`).
+# Counting from there: the reads below land at **1.65 s** (WON), **3.65 s** (DEBRIEF, inside
+# 3.0..4.2) and **5.15 s** (HUB, past 4.2). Every one of them has at least half a second of
+# margin on both sides, and the numbers are ticks, not a wall clock — `mission::run::to_ticks`.
+#
+# The phase numbers are `mission::MissionPhase::code`, appended and never inserted:
+#   0 Briefing · 1 Deploying · 2 Active · 3 Won · 4 Lost · 5 Hub · **6 Debrief**
+#
+# =========================================================================================
+# ACT 1 — the cold start, and it is a place
+# =========================================================================================
+wait 1.5
+assert phase == 5     # ⭐ 1. the HUB
+assert titans == 0    # a hub is not a fight
+mark f175-in-the-hub
+
+# =========================================================================================
+# ACT 2 — the door. A trigger volume you walk into, not a click.
+# =========================================================================================
+#
+# `recruit` stands straight ahead of the spawn point, 16 m out on +Z, and its circle is 3.0 m —
+# so it fires on entry at z = 13. The same walk `f070-hub.txt` ACT 4 makes.
+warp 0 2 0
+wait 1.0
+look 180 0
+key W 3.4
+wait 4.0
+
+assert phase == 2     # ⭐ 2. ACTIVE — the pad started its sortie
+assert kills == 0     # and nothing has been counted yet
+assert titans == 0    # recruit's first wave is at 60 s: the field is still empty
+mark f175-deployed
+
+# =========================================================================================
+# ACT 3 — the sortie, won with two cortex cuts out of a fall
+# =========================================================================================
+#
+# The arrangement is `scripts/f030-cortex.txt`'s and `f070-hub.txt` ACT 5's, to the number:
+# `gear.ron: blades.min_speed_m_s` is 8.0 and a running player does 6.0, so the speed has to
+# come from gravity — 11.2 m of fall is 21 m/s. x = 15.75 puts the 1.6 m blade 0.15 m into a
+# cortex sphere centred on x = 17.5.
+#
+# ⚠️ The 0.90 between the warp and the slash IS the fall and is not adjustable. A line added
+# inside this block moves the cut, the husk lives, and nothing in the log says "you missed".
+spawn titan husk 17.5 0 0
+warp 15.75 18.5 0.8
+look 0 0
+wait 0.90
+slash right 0.40
+wait 0.18
+assert titans == 1    # the blade is through him and the body is still dissolving
+wait 1.20
+assert titans == 0    # death_s 1.0: the body is gone a second after the nape was cut
+assert kills == 1     # and the MISSION counted it
+mark f175-first-kill
+
+spawn titan husk 17.5 0 0
+warp 15.75 18.5 0.8
+look 0 0
+wait 0.90
+slash right 0.40
+wait 1.45
+
+assert kills >= 2     # the recruit target out of missions.ron is reached
+assert titans == 0
+wait 0.2
+assert phase == 3     # ⭐ 3. WON, and the verdict stands for verdict_s
+mark f175-won
+
+# =========================================================================================
+# ACT 4 — ⭐ THE DEBRIEF. The station the loop did not have.
+# =========================================================================================
+#
+# 3.65 s after the verdict: past `verdict_s` (3.0) and well inside `debrief_s` (1.2). In a run
+# with a window this is where the plate stands and the clock stops; here it is a phase with a
+# number, which is the only form of it a machine with no graphics session can see.
+#
+# `assert kills` is the load-bearing half of this act: the mission entity is **still standing**
+# — `hub::open_hub` despawns it on the way into the hub and not a tick earlier — which is what
+# lets the report read a counter instead of remembering one. A debrief that had to keep its own
+# copy of the numbers would be a second answer to "what did this sortie do".
+wait 2.0
+assert phase == 6     # ⭐ 4. DEBRIEF
+assert kills >= 2     # ⭐ 5. and the sortie's own numbers are still there to report
+assert titans == 0
+mark f175-debrief
+
+# =========================================================================================
+# ACT 5 — and home
+# =========================================================================================
+wait 1.5
+assert phase == 5     # ⭐ 6. back in the HUB
+assert height < 3     # standing at the hub's spawn point, not 14 m up over a husk
+assert titans == 0
+mark f175-home
+
+# =========================================================================================
+# ACT 6 — ⭐ the reason it is a LOOP: the same walk deploys him again
+# =========================================================================================
+#
+# The hub put him back on `missions.ron: hub.spawn_m` (0, 2, 0), so one `look 180 0` and one
+# held W is enough a second time — the identical two lines as ACT 2, deliberately, because
+# "the loop repeats" means the same input does the same thing.
+look 180 0
+key W 3.4
+wait 4.0
+
+assert phase == 2     # ⭐ 7. ACTIVE again. The ring is closed.
+assert kills == 0     # ⚠️ and on a FRESH counter: the finished mission was cleared away by
+                      # `hub::open_hub`, so the second sortie starts at zero. A leftover
+                      # `KillTally` would read 2 here and the next sortie would be won on the
+                      # kills of the last one.
+mark f175-round-two

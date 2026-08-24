@@ -851,14 +851,20 @@ fn f072_a_won_sortie_lands_back_in_the_hub_at_the_spawn_point() {
     ticks(&mut app, 3);
     assert_eq!(phase(&app), MissionPhase::Won, "{target} cortex kills did not win it");
 
-    // The verdict stays up for `hub.debrief_s` and not one tick less: a WON that is gone before
-    // it can be read is a WON nobody saw.
+    // The verdict stays up for `hub.verdict_s` and not one tick less: a WON that is gone before
+    // it can be read is a WON nobody saw. Then the debrief, then the hub — and this run has no
+    // window, so nothing holds the debrief open and both numbers are really spent.
     let hub = hub_layout(&app);
-    let debrief = (hub.debrief_s as f64 * data(&app).game.simulation_hz).round() as u64;
-    ticks(&mut app, debrief / 2);
-    assert_eq!(phase(&app), MissionPhase::Won, "the debrief was cut short");
+    let hz = data(&app).game.simulation_hz;
+    let verdict = (hub.verdict_s as f64 * hz).round() as u64;
+    let debrief = (hub.debrief_s as f64 * hz).round() as u64;
+    ticks(&mut app, verdict / 2);
+    assert_eq!(phase(&app), MissionPhase::Won, "the verdict was cut short");
 
-    ticks(&mut app, debrief / 2 + 5);
+    ticks(&mut app, verdict / 2 + 2);
+    assert_eq!(phase(&app), MissionPhase::Debrief, "the verdict never became a debrief");
+
+    ticks(&mut app, debrief + 5);
     assert_eq!(phase(&app), MissionPhase::Hub, "the sortie never came back to the hub");
 
     // And the hub is a hub again: furniture back, no mission entity left over, and the player
@@ -900,8 +906,10 @@ fn f072_a_lost_sortie_comes_back_too() {
     ticks(&mut app, 3);
     assert_eq!(phase(&app), MissionPhase::Lost, "a squad that is down has not lost");
 
-    let debrief = (hub_layout(&app).debrief_s as f64 * data(&app).game.simulation_hz).round() as u64;
-    ticks(&mut app, debrief + 5);
+    let hub = hub_layout(&app);
+    let hz = data(&app).game.simulation_hz;
+    let way_home = ((hub.verdict_s + hub.debrief_s) as f64 * hz).round() as u64;
+    ticks(&mut app, way_home + 5);
     assert_eq!(phase(&app), MissionPhase::Hub, "a lost sortie is a dead end");
 }
 
@@ -924,8 +932,10 @@ fn f072_a_sortie_that_came_from_nowhere_stays_on_its_verdict() {
     let mut q = app.world_mut().query::<&ReturnToHub>();
     assert_eq!(q.iter(app.world()).count(), 0, "a drop-in mission was marked to return");
 
-    let debrief = (hub_layout(&app).debrief_s as f64 * data(&app).game.simulation_hz).round() as u64;
-    ticks(&mut app, debrief * 4);
+    let hub = hub_layout(&app);
+    let hz = data(&app).game.simulation_hz;
+    let way_home = ((hub.verdict_s + hub.debrief_s) as f64 * hz).round() as u64;
+    ticks(&mut app, way_home * 2);
     assert_eq!(
         phase(&app),
         MissionPhase::Won,
@@ -2144,4 +2154,52 @@ fn f059_only_the_weaver_rolls_and_the_file_is_what_says_so() {
         );
     }
     println!("F-059 rollers in titan.ron: {rollers:?}");
+}
+
+// ---------------------------------------------------------------------------
+// F-175 — the way home has a station on it (2026-08-24)
+// ---------------------------------------------------------------------------
+
+/// ★ **The node the loop was missing.** `Won` → hub was two states and a timer; nothing in
+/// between ever said what the sortie had done, and there was no phase for a screen to hang on.
+///
+/// The sequence is asserted in `MissionPhase::code` numbers on purpose: those are the numbers
+/// `scripts/` writes down (`assert phase == 6`), and a phase that is only a Rust variant is a
+/// phase no headless run can see.
+#[test]
+fn f175_a_won_sortie_passes_through_a_debrief_on_its_way_home() {
+    let mut app = in_the_hub();
+    let pad = pad_center(&app, "recruit");
+    place_players(&mut app, pad);
+    ticks(&mut app, 10);
+    assert_eq!(phase(&app), MissionPhase::Active, "the pad did not deploy");
+
+    let player = a_player(&mut app);
+    let target = tally(&mut app).target;
+    for i in 0..target {
+        hit(&mut app, TitanId(300 + i as u32), player, HitZone::Cortex);
+    }
+    ticks(&mut app, 3);
+    assert_eq!(phase(&app), MissionPhase::Won, "{target} cortex kills did not win it");
+
+    // Long enough for every hold on the way home, whatever the file says they are.
+    let hz = data(&app).game.simulation_hz;
+    ticks(&mut app, (hz * 8.0).round() as u64);
+
+    // The phases in the order they were entered, without the repeats.
+    let mut walked: Vec<u8> = Vec::new();
+    for sample in log(&app) {
+        let code = sample.phase.code();
+        if walked.last() != Some(&code) {
+            walked.push(code);
+        }
+    }
+    println!("the way home: {walked:?}");
+    assert_eq!(
+        walked,
+        vec![5, 1, 2, 3, 6, 5],
+        "hub(5) → deploying(1) → active(2) → won(3) → DEBRIEF(6) → hub(5) is the loop, and \
+         the debrief is the step that is missing: the verdict fell and the hub took over \
+         without anybody being told anything"
+    );
 }

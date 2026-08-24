@@ -3,13 +3,19 @@
 //! > *„zudem fehlen settings. menu (also bei escape) und eine main lobby in der man die mission
 //! > starten kann"* — the user, 2026-08-13 (`docs/NEXT.md` §1D, reqs 6–8).
 //!
-//! Four screens since then, and one key that walks between them:
+//! Five screens since then, and one key that walks between them:
 //!
 //! ```text
-//!   Title ──New Game──► Playing ──Esc──► Paused ──Settings──► Settings ──Back/Esc──┐
-//!     ▲   └─Settings─► Settings ─┐  ▲       │  │                                   │
-//!     └────────Back/Esc──────────┘  └Esc/Resume┘  └─Mission select─► Lobby ─Deploy─┴─► Playing
+//!   Title ──Play──► Lobby ──Deploy──► Playing ──Esc──► Paused ──Settings──► Settings
+//!     │              │  ▲                │                │                    │
+//!     └─Settings─────┘  │             (a sortie ends)     └─Mission select─────┤
+//!                       │                │                                     │
+//!                       └─Esc/To the lobby──── Debrief ◄──hub.verdict_s────────┘
 //! ```
+//!
+//! **The loop closes at the debrief**, and that is what was missing until 2026-08-24: the
+//! verdict was a log line, the hub took over three seconds later, and the mission list could
+//! only be reached from inside a running game (`title.rs`, `debrief.rs`).
 //!
 //! ## The title screen is the door, and it is the **first** thing a launch shows
 //!
@@ -31,7 +37,7 @@
 //! **The release was built before the capture.** A locked pointer with no release key is a
 //! game you have to `pkill` — and on a machine where nobody has ever seen this game in a
 //! window, that failure would have been found by somebody else, later, without a terminal
-//! open. `tests/menu.rs` holds that guarantee across all four screens — including the
+//! open. `tests/menu.rs` holds that guarantee across all five screens — including the
 //! title, which is the one case where the pointer was **never taken in the first place**.
 //!
 //! ## What decides: the window entity, not the flag
@@ -57,6 +63,7 @@
 //! and leave again — and the walk-in pads keep working with no knowledge of it
 //! (`scripts/f070-hub.txt`, 35 asserts, untouched).
 
+pub mod debrief;
 pub mod lobby;
 pub mod pause;
 pub mod plate;
@@ -67,7 +74,7 @@ use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use crate::data::GameData;
-use crate::mission::MissionPhase;
+use crate::mission::{KillTally, Mission, MissionClock, MissionPhase, Verdict};
 use crate::shared::PlayerSettings;
 
 pub struct MenuPlugin;
@@ -89,6 +96,20 @@ impl Plugin for MenuPlugin {
             // launch landed, and this line is that evidence
             // (`tests/menu.rs` holds the in-process half).
             .add_systems(Startup, announce_the_first_screen)
+            // **The one screen nobody asks for.** It comes up with the phase and it goes away
+            // with it — `OnEnter`/`OnExit` and not a per-frame condition, because a condition
+            // re-opens the plate the frame after the player left it and deadlocks the session
+            // (`debrief::open_the_debrief`). Behind the window gate like everything else here:
+            // a `--headless` run has no menu, and `missions.ron: hub.debrief_s` is what it
+            // waits instead.
+            .add_systems(
+                OnEnter(MissionPhase::Debrief),
+                debrief::open_the_debrief.run_if(there_is_a_window),
+            )
+            .add_systems(
+                OnExit(MissionPhase::Debrief),
+                debrief::close_the_debrief_screen.run_if(there_is_a_window),
+            )
             .add_systems(
                 Update,
                 (
@@ -104,7 +125,10 @@ impl Plugin for MenuPlugin {
                         pause::pause_buttons,
                         settings::settings_buttons,
                         lobby::lobby_buttons,
+                        debrief::debrief_buttons,
                     ),
+                    // And it ends the sortie on the way out, whichever door was used.
+                    debrief::close_the_debrief,
                     // After the buttons and before anything looks at the screen: the way back
                     // out of the options is recorded from where they were opened, and both
                     // openers get it without knowing about it.
@@ -163,6 +187,11 @@ fn toggle_screen(
         Screen::Paused => Screen::Playing,
         Screen::Settings => back.0,
         Screen::Lobby => Screen::Playing,
+        // **The one screen `Esc` may not simply dismiss.** Behind the debrief stands a finished
+        // sortie and no game to go back to, so "back" is forward: the mission list, which is
+        // where the loop starts over. `menu::debrief::close_the_debrief` is what ends the
+        // sortie, and it does not care which of the three doors was used.
+        Screen::Debrief => Screen::Lobby,
     };
     // Compared before it is written: `Screen` is change-detected and the HUD rebuilds its
     // visibility on `resource_changed::<Screen>` (`hud::hide_while_a_menu_is_up`). An `Esc` on
@@ -218,7 +247,8 @@ fn announce_the_first_screen(screen: Res<Screen>) {
 /// compositor **every frame** for a value that never changed (§6 rule 6).
 ///
 /// **Every screen that is not [`Screen::Playing`] frees the pointer**, and that is one line
-/// rather than a list — a fourth screen added tomorrow cannot forget to hand the mouse back.
+/// rather than a list — a fifth screen added tomorrow cannot forget to hand the mouse back.
+/// It was, on 2026-08-24 ([`Screen::Debrief`]), and this function needed no edit at all.
 fn apply_screen(
     screen: Res<Screen>,
     mut cursors: Query<&mut CursorOptions, With<PrimaryWindow>>,
@@ -319,6 +349,7 @@ fn spawn_menu(
     host: Res<crate::net::Host>,
     start: Res<crate::shared::Cli>,
     phase: Res<State<MissionPhase>>,
+    sortie: Query<(&Mission, &MissionClock, &KillTally, Option<&Verdict>)>,
     roots: Query<&MenuRoot>,
 ) {
     if roots.iter().any(|root| root.0 == *screen) {
@@ -332,6 +363,11 @@ fn spawn_menu(
         Screen::Lobby => {
             lobby::spawn_lobby_screen(&mut commands, &data, &choice, &roster, &host, &start)
         }
+        // The finished sortie is still standing — `mission::hub::open_hub` despawns it on the
+        // way into the hub and not a tick earlier, precisely so this plate has something to
+        // read. Read-only, over the `menu -> mission` edge that already exists for
+        // `in_a_sortie` (`docs/architecture.md`).
+        Screen::Debrief => debrief::spawn_debrief_screen(&mut commands, &data, sortie.iter().next()),
     }
 }
 
@@ -345,7 +381,7 @@ pub fn in_a_sortie(phase: &State<MissionPhase>) -> bool {
     phase.is_running() || phase.is_decided()
 }
 
-/// Playing, or looking at one of the three screens.
+/// Playing, or looking at one of the four screens.
 ///
 /// A `Resource` and not a component: this is the state of *this session's screen*, not of a
 /// player. §6 rule 3 forbids putting **player** state in a resource — and it forbids it for a
@@ -375,7 +411,18 @@ pub enum Screen {
     Settings,
     /// **The main lobby** — pick a mission, pick a difficulty, deploy. The screen the walk-in
     /// deployment pads never had, and it starts the same sortie they do.
+    ///
+    /// Since 2026-08-24 it is also where the **title screen** leads: it was built, it worked,
+    /// and the only route into it was the pause menu of a game that was already running
+    /// (`title.rs`).
     Lobby,
+    /// **The debrief** — what the sortie just did, and the way back to the lobby.
+    ///
+    /// It is the one screen nobody opens: it comes up with
+    /// [`MissionPhase::Debrief`](crate::mission::MissionPhase::Debrief) and holds that phase
+    /// open for as long as it is up, because a stopped `Time<Virtual>` runs no `FixedUpdate`
+    /// and the timer that would end it lives there. See [`debrief`].
+    Debrief,
 }
 
 /// **Where a run begins, decided once, out of the command line.**
