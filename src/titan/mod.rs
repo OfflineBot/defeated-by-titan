@@ -123,6 +123,7 @@
 //! anything but the cortex. `Alerted` and `Stagger` are missing from `TitanState` on purpose.
 
 pub mod brain;
+pub mod perception;
 pub mod pose;
 pub mod rig;
 
@@ -134,6 +135,7 @@ use crate::mission::MissionPhase;
 use crate::shared::{IdCounter, SimulationSystems, SpawnTitan, TitanId};
 
 use brain::{Guard, TitanClock, TitanGait, TitanTarget, TitanTiming, TitanTuning};
+use perception::{Awareness, CrowdSlot, Lod, Senses};
 use pose::PoseAngles;
 use rig::TitanRig;
 
@@ -160,7 +162,18 @@ impl Plugin for TitanPlugin {
                 (
                     brain::receive_hits,
                     rig::the_ropes_let_go_of_a_corpse,
+                    // `F-051`/`F-054`: the eye, the ear and the tier come BEFORE the state
+                    // machine, and they are the one writer of `TitanTarget`, `Awareness` and
+                    // `Lod`. `brain::advance` reads all three and skips itself entirely on a
+                    // tick `perceive` did not declare due — so the two can never disagree
+                    // about whether this was a thinking tick.
+                    perception::perceive,
                     brain::advance,
+                    // `F-055`: the ring is handed out AFTER the state edge, because a titan
+                    // who just entered `Death` must not hold a slot the five living ones are
+                    // dividing between them. `brain::walk` reads it in `Integrate`, one set
+                    // later, so the slot a body walks on is the slot of this same tick.
+                    perception::claim_slots,
                     brain::answer_the_call,
                     brain::guard_the_cortex,
                     pose::apply_pose,
@@ -296,6 +309,13 @@ pub fn spawn_titan(
         TitanTiming::of(kind, data.game.simulation_hz),
         TitanTuning::of(kind, data.game.simulation_hz),
         Guard::of(kind, data.game.simulation_hz),
+        // `F-051`, `F-055`, `F-054` — the eye and the ear out of the file, the awareness that
+        // starts at nothing, the slot nobody has claimed yet and the tier that begins at
+        // "every tick" so a titan's first tick is a thinking one.
+        Senses::of(kind),
+        Awareness::default(),
+        CrowdSlot::default(),
+        Lod::default(),
         TitanClock::default(),
         TitanTarget::default(),
         TitanGait::default(),

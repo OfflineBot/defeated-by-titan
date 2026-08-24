@@ -268,7 +268,7 @@ fn pad_slab(radius_m: f32) -> Vec3 {
 /// Loud and grey when the key is missing, never a guessed color: a pad painted in a color
 /// nobody chose is a pad that breaks the one rule that lets a player at full speed tell what
 /// matters (`docs/conventions.md` §3).
-fn signal(data: &GameData, key: &str) -> [f32; 3] {
+pub(super) fn signal(data: &GameData, key: &str) -> [f32; 3] {
     match data.maps.signals.get(key) {
         Some((r, g, b)) => [*r, *g, *b],
         None => {

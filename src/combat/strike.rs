@@ -73,6 +73,8 @@ use bevy::prelude::*;
 use crate::data::{GameData, TitanKind};
 use crate::shared::{Health, Invulnerable, PlayerId, SimulationSystems, Tick, TitanId, TitanState};
 
+use super::combo::Combo;
+
 /// What one titan's blow costs and how far it carries. **Resolved once**, at the first tick the
 /// titan is seen, out of `titan.ron` and `scale.ron`.
 ///
@@ -240,7 +242,15 @@ pub fn land(
     // query entirely** — and a player nothing can hit is not the failure mode you want out of a
     // missing component. `None` therefore means "takes it", which is what every fixture in
     // `tests/combat.rs` did before `F-009`/`F-010` existed and still does.
-    mut players: Query<(&PlayerId, &Transform, &mut Health, Option<&Invulnerable>), Without<TitanId>>,
+    // `Option<&mut Combo>` — `F-041`: *"ein Multiplikator, der bei **Treffer** oder Landung
+    // zurueckgesetzt wird"*. The "Treffer" of that sentence is a titan connecting with **you**,
+    // and this is the only place in the game that happens, so the reset belongs here and not in
+    // `super::combo`. `Option`, for the same reason `Invulnerable` above it is one: a fixture
+    // player that `combat::combo::grant` has not reached yet must not fall out of the query.
+    mut players: Query<
+        (&PlayerId, &Transform, &mut Health, Option<&Invulnerable>, Option<&mut Combo>),
+        Without<TitanId>,
+    >,
 ) {
     for (entity, state, at, tuning, spent) in &titans {
         if *state != TitanState::Strike {
@@ -257,7 +267,7 @@ pub fn land(
         if tuning.damage <= 0.0 {
             continue;
         }
-        for (id, player_at, mut health, iframes) in &mut players {
+        for (id, player_at, mut health, iframes, combo) in &mut players {
             if !tuning.reaches(at.translation, at.forward(), player_at.translation) {
                 continue;
             }
@@ -280,9 +290,27 @@ pub fn land(
                 continue;
             }
             let left = health.damage(tuning.damage);
+            // **And the chain is gone.** `F-041` — being hit ends it, exactly as landing does.
+            // Reported with the blow rather than silently, because a player who cannot see why
+            // his multiplier went away learns nothing from losing it.
+            let broke = match combo {
+                Some(mut combo) if combo.is_running() => {
+                    let had = combo.hits;
+                    *combo = Combo::NONE;
+                    Some(had)
+                }
+                _ => None,
+            };
             info!(
-                "strike: player {} takes {:.1} — {:.1}/{:.1} left",
-                id.0, tuning.damage, left, health.max
+                "strike: player {} takes {:.1} — {:.1}/{:.1} left{}",
+                id.0,
+                tuning.damage,
+                left,
+                health.max,
+                match broke {
+                    Some(hits) => format!(" (combo of {hits} broken)"),
+                    None => String::new(),
+                }
             );
         }
     }
@@ -296,7 +324,14 @@ pub fn land(
 pub fn register(app: &mut App) {
     app.add_systems(
         FixedUpdate,
-        (resolve_tuning, land).chain().in_set(SimulationSystems::PostStep),
+        (resolve_tuning, land)
+            .chain()
+            .in_set(SimulationSystems::PostStep)
+            // Both this and `combo::decay` hold `&mut Combo` in the same set. Two systems of
+            // one domain that touch the same field must be ordered, or which of the two wins
+            // is whatever the scheduler picked on this machine — and over a wire that is a
+            // divergence nobody reproduces (`docs/multiplayer.md` rule 6).
+            .before(super::combo::decay),
     );
 }
 

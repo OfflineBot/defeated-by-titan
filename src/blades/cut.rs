@@ -67,8 +67,8 @@ use bevy::prelude::*;
 
 use crate::data::{BladeTuning, GameData};
 use crate::shared::{
-    Blades, HitStop, HitZone, HitZoneOf, Intent, PlayerId, Side, Tick, TitanHit, TitanId,
-    TitanKindName, Velocity,
+    Blades, HitStop, HitZone, HitZoneOf, Intent, MovementState, PlayerId, Side, Tick, TitanHit,
+    TitanId, TitanKindName, Velocity,
     LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
 };
 
@@ -344,6 +344,12 @@ pub fn cut(
         &Intent,
         &Transform,
         &Velocity,
+        // **`F-044`'s only input**, and it is one word: is he standing on something? A cut
+        // under `gear.ron: blades.min_speed_m_s` is a scratch in the air and a *ground attack*
+        // on the ground. `player::seat_players` gives every player a `MovementState` at spawn
+        // (`src/player/mod.rs`), so this is `&` and not `Option<&>` — the same argument
+        // `&Blades` below carries.
+        &MovementState,
         &BladeTiming,
         &mut Swings,
         &mut SweptFrom,
@@ -364,6 +370,7 @@ pub fn cut(
         intent,
         transform,
         velocity,
+        movement,
         timing,
         mut swings,
         mut from,
@@ -477,7 +484,7 @@ pub fn cut(
             // `|v|`. A player flying past parallel to a running titan closes on nothing, and
             // `damage_per_m_s` on his 30 m/s would be a lie about what happened.
             let closing_m_s = closing_speed(velocity.0, titan_velocity.0, delta);
-            if closing_m_s < blades.min_speed_m_s {
+            if closing_m_s < blades.min_speed_m_s && !ground_attack(*movement, zone) {
                 // A scratch. Deliberately **no message at all** and not a message with a
                 // small number: `titan::brain::receive_hits` kills on `Cortex` by rule and
                 // does not consult the speed, so a slow touch would be a free kill
@@ -546,6 +553,29 @@ pub fn cut(
             }
         }
     }
+}
+
+/// `F-044` — **is this sub-`min_speed_m_s` touch a ground attack, or a scratch?**
+///
+/// The row: *"Grundlegender Bodenangriff fuer Situationen ohne Gas, deutlich schwaecher als
+/// Luftangriff"*, acceptance *"Bodenangriff existiert, ist aber niemals die effizientere
+/// Wahl"*. Two conditions and both are load-bearing:
+///
+/// 1. **He is standing on something.** A slow touch in mid-air stays exactly what it was — a
+///    scratch that writes no message at all. `game.ron: player.run_speed_m_s` is 6.0 against a
+///    `min_speed_m_s` of 8.0, so before this line a player on his feet could not touch a titan
+///    at all, at any speed he can produce with his legs.
+/// 2. 🔴 **It can never be the cortex.** `titan::brain::receive_hits` kills on `Cortex` **by
+///    rule** and never consults the speed (`src/shared/message.rs:21`), so a ground attack that
+///    could report a nape would be a free kill from standing — the exact hole the speed floor
+///    was put there to close. `combat::damage::zone_factor` also books `0.0` for the cortex, so
+///    a nape reported from the ground would be worth nothing *and* lethal, which is the worst
+///    of both. Guarded here, at the producer, and not in the reader.
+///
+/// What it is **worth** is `gear.ron: damage.ground_damage` and lives in `combat::damage` —
+/// this domain writes the message, the other one prices it.
+pub fn ground_attack(movement: MovementState, zone: HitZone) -> bool {
+    movement == MovementState::Grounded && zone != HitZone::Cortex
 }
 
 /// `max(0, (v_player − v_titan) · d̂)`, projected on the direction the blade swept.

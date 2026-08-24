@@ -66,6 +66,8 @@ use crate::shared::{
     HitStop, HitZone, PlayerId, StateClock, Tick, TitanHit, TitanId, TitanState, Velocity,
 };
 
+use super::perception::{ring_offset, Awareness, CrowdSlot, Lod};
+
 use super::rig::{TitanBody, TitanPart};
 
 /// How long each state lasts, **in ticks**, resolved once at spawn.
@@ -165,7 +167,6 @@ pub struct TitanTuning {
     pub accel_m_s2: f32,
     pub turn_rad_per_s: f32,
     pub attack_range_m: f32,
-    pub aggro_radius_m: f32,
     // ---- `titan.ron: <kind>.behaviour` — what makes this kind not the husk ---------------
     /// `F-057`, in **radians**: how far off the straight line the walk swings, to each side.
     pub swerve_rad: f32,
@@ -196,7 +197,6 @@ impl TitanTuning {
             // (`docs/conventions.md`).
             turn_rad_per_s: kind.turn_deg_per_s.to_radians(),
             attack_range_m: kind.attack_range_m,
-            aggro_radius_m: kind.aggro_radius_m,
             swerve_rad: b.swerve_deg.to_radians(),
             swerve_period_ticks: ticks(b.swerve_period_s, simulation_hz) as u64,
             lunge_m_s: b.lunge_m_s,
@@ -382,14 +382,14 @@ pub(super) fn receive_hits(
 #[allow(clippy::type_complexity)]
 pub(super) fn advance(
     data: Res<GameData>,
-    players: Query<(&PlayerId, &Transform), Without<TitanBody>>,
     mut bodies: Query<
         (
-            &Transform,
             &mut TitanState,
             &mut StateClock,
             &mut TitanClock,
-            &mut TitanTarget,
+            &TitanTarget,
+            &Awareness,
+            &Lod,
             &TitanTiming,
             &TitanTuning,
             &mut Guard,
@@ -398,31 +398,42 @@ pub(super) fn advance(
     >,
 ) {
     let _ = &data; // the numbers are baked; the resource stays so a reload is one line
-    for (transform, mut state, mut clock, mut cooldown, mut target, timing, tuning, mut guard) in
+    for (mut state, mut clock, mut cooldown, target, awareness, lod, timing, tuning, mut guard) in
         &mut bodies
     {
-        clock.ticks_in_state = clock.ticks_in_state.saturating_add(1);
-        cooldown.cooldown_left = cooldown.cooldown_left.saturating_sub(1);
+        // **`F-054`.** Not this titan's tick — and `perception::perceive`, the one writer of
+        // [`Lod`], has already said so this frame. Every accumulator below is stepped by
+        // `lod.steps` and not by 1, so a far titan's wind-up still lasts `windup_s` of
+        // wall-clock; it is only DECIDED on a coarser grid.
+        if !lod.due {
+            continue;
+        }
+        let steps = lod.steps.max(1);
+        clock.ticks_in_state = clock.ticks_in_state.saturating_add(steps);
+        cooldown.cooldown_left = cooldown.cooldown_left.saturating_sub(steps);
         // The warden's window closing again. One accumulator, one writer, like every other one
         // in this file — and it counts down even in `Death`, where it is simply irrelevant.
-        guard.open_left = guard.open_left.saturating_sub(1);
-        cooldown.alerted_left = cooldown.alerted_left.saturating_sub(1);
+        guard.open_left = guard.open_left.saturating_sub(steps);
+        cooldown.alerted_left = cooldown.alerted_left.saturating_sub(steps);
 
         // Dead bodies do not think. The dissolve reads the same accumulator.
         if *state == TitanState::Death {
             continue;
         }
 
-        *target = nearest_player(&players, transform.translation);
+        // **`F-051`.** What used to stand here was `distance_m <= aggro_radius_m`, a circle
+        // with no facing in it. The eye and the ear are `perception::perceive`'s now, and what
+        // reaches the state machine is the one bit they agree on.
+        let aware = awareness.detected || cooldown.alerted_left > 0;
 
         let next = decide(
             *state,
             &clock,
             cooldown.cooldown_left,
-            cooldown.alerted_left > 0,
+            aware,
             timing,
             tuning,
-            &target,
+            target,
         );
         if next != *state {
             // Every attack starts the cooldown, not every recovery: `attack_cooldown_s` is the
@@ -448,15 +459,20 @@ pub fn decide(
     state: TitanState,
     clock: &StateClock,
     cooldown_left: u32,
-    alerted: bool,
+    aware: bool,
     timing: &TitanTiming,
     tuning: &TitanTuning,
     target: &TitanTarget,
 ) -> TitanState {
     let seen = target.player.is_some();
-    // A titan that answered a bellower's call comes on regardless of its own eyes. It is the
-    // ONE thing that widens `aggro_radius_m`, and it is temporary: `call_hold_s` ticks.
-    let in_range = seen && (alerted || target.distance_m <= tuning.aggro_radius_m);
+    // **`F-051` reaches the state machine here, and as one bit.** `aware` is
+    // `perception::Awareness::detected` — the eye's cone or the ear's circle, latched with
+    // hysteresis — OR a bellower's call, which is the one thing that overrides a titan's own
+    // senses and is temporary: `call_hold_s` ticks.
+    //
+    // Until 2026-08-25 this line read `target.distance_m <= tuning.aggro_radius_m`: a circle
+    // with no facing in it, which is why the design's whole stealth layer had nowhere to live.
+    let in_range = seen && aware;
     match state {
         TitanState::Idle => {
             // **The ambusher has no `Pursue`** (`F-061`). He is not a slow titan, he is a
@@ -535,31 +551,6 @@ pub fn decide(
     }
 }
 
-/// The nearest player on the ground plane. **Never `.single()`** — there are twenty of them
-/// one day, and a titan that only ever sees player 1 is a single-player game you notice too
-/// late (`docs/multiplayer.md` rule 3). Ties break on the lower `PlayerId`, so the answer does
-/// not depend on iteration order.
-fn nearest_player(
-    players: &Query<(&PlayerId, &Transform), Without<TitanBody>>,
-    from: Vec3,
-) -> TitanTarget {
-    let mut best = TitanTarget::default();
-    for (id, transform) in players {
-        let to = transform.translation - from;
-        let distance_m = Vec3::new(to.x, 0.0, to.z).length();
-        let closer = match best.player {
-            None => true,
-            Some(current) => {
-                distance_m < best.distance_m || (distance_m == best.distance_m && *id < current)
-            }
-        };
-        if closer {
-            best = TitanTarget { player: Some(*id), pos: transform.translation, distance_m };
-        }
-    }
-    best
-}
-
 /// **Where this titan is walking, which is not always where the player is standing.**
 ///
 /// Returns the ground vector from `from` to the point the body wants to face. For the husk that
@@ -584,6 +575,8 @@ pub fn aim(
     state: TitanState,
     target: &TitanTarget,
     tuning: &TitanTuning,
+    slot: &CrowdSlot,
+    crowd: &crate::data::TitanCrowd,
     from: Vec3,
     tick: u64,
 ) -> Vec3 {
@@ -592,6 +585,12 @@ pub fn aim(
     if to.length_squared() <= f32::EPSILON || state != TitanState::Pursue {
         return to;
     }
+
+    // **`F-055`, and it is applied before the two per-kind offsets on purpose.** The ring is
+    // where the group agreed this body should stand; `flank_offset_m` and `swerve_rad` are
+    // what this KIND does on the way there. A chorus in slot 3 flanks off his own bearing,
+    // which is what keeps a pair of them a pair inside a crowd of six.
+    to += ring_offset(crowd, slot, to, target.distance_m, tuning.attack_range_m);
 
     if tuning.flank_offset_m > 0.0 {
         // **Full offset down to twice his own reach, then gone by the time he is inside it.**
@@ -740,6 +739,8 @@ pub(super) fn walk(
             &TitanState,
             &TitanTarget,
             &TitanTuning,
+            &Awareness,
+            &CrowdSlot,
             Option<&HitStop>,
             &mut TitanGait,
             &mut Transform,
@@ -752,9 +753,21 @@ pub(super) fn walk(
     // The step comes out of the file, never off a clock: `Time::delta_secs()` in here would
     // make the titan's path depend on the frame rate, and with it the `--offscreen` sha256.
     let dt = (1.0 / data.game.simulation_hz) as f32;
+    let crowd = &data.titans.crowd;
 
-    for (id, state, target, tuning, stop, mut gait, mut transform, mut linear, mut velocity) in
-        &mut bodies
+    for (
+        id,
+        state,
+        target,
+        tuning,
+        awareness,
+        slot,
+        stop,
+        mut gait,
+        mut transform,
+        mut linear,
+        mut velocity,
+    ) in &mut bodies
     {
         if stop.is_some_and(HitStop::is_frozen) {
             // **The impact frame, on the body that was hit.** `gait.speed_m_s` is deliberately
@@ -790,8 +803,14 @@ pub(super) fn walk(
         // would swing his 60° cone at empty street. He turns on the spot inside
         // `aggro_radius_m` (25 m) and takes no step: `gait.speed_m_s` stays 0 through all of
         // it, which is what `tests/mission.rs::f061_…` measures.
+        // **`F-051`**: what used to stand here was `distance_m <= aggro_radius_m`, so a lurker
+        // turned to watch anything inside a circle, including a man standing dead behind him
+        // in silence. He watches what he has actually NOTICED now — which for an ambusher is
+        // usually the ear, and that is the right instrument for the job: `hearing_radius_m` 75
+        // against `aggro_radius_m` 25 is the whole of what makes him a lurker rather than a
+        // slow husk.
         let crouched_and_watching =
-            tuning.ambush && *state == TitanState::Idle && target.distance_m <= tuning.aggro_radius_m;
+            tuning.ambush && *state == TitanState::Idle && awareness.detected;
         let turning = seen
             && (matches!(*state, TitanState::Pursue | TitanState::Windup) || crouched_and_watching);
         let pursuing =
@@ -842,7 +861,7 @@ pub(super) fn walk(
         }
 
         // ---- turn -------------------------------------------------------------------
-        let to = aim(id, *state, target, tuning, transform.translation, tick.0);
+        let to = aim(id, *state, target, tuning, slot, crowd, transform.translation, tick.0);
         if to.length_squared() > f32::EPSILON {
             // Bevy's forward is −Z, so the yaw that looks at `to` is `atan2(−x, −z)`.
             let wanted = f32::atan2(-to.x, -to.z);
@@ -934,7 +953,6 @@ mod tests {
             accel_m_s2: 3.0,
             turn_rad_per_s: 50f32.to_radians(),
             attack_range_m: 6.0,
-            aggro_radius_m: 45.0,
             swerve_rad: 0.0,
             swerve_period_ticks: 0,
             lunge_m_s: 0.0,
@@ -966,7 +984,7 @@ mod tests {
         // telegraph, or the wind-up is a decoration nobody has to respect.
         let clock = StateClock::default();
         assert_eq!(
-            decide(TitanState::Pursue, &clock, 0, false, &timing(), &tuning(), &at(1.0)),
+            decide(TitanState::Pursue, &clock, 0, true, &timing(), &tuning(), &at(1.0)),
             TitanState::Windup
         );
     }
@@ -975,7 +993,7 @@ mod tests {
     fn a_cooldown_holds_the_titan_in_pursue_even_inside_reach() {
         let clock = StateClock::default();
         assert_eq!(
-            decide(TitanState::Pursue, &clock, 7, false, &timing(), &tuning(), &at(1.0)),
+            decide(TitanState::Pursue, &clock, 7, true, &timing(), &tuning(), &at(1.0)),
             TitanState::Pursue
         );
     }
@@ -988,6 +1006,9 @@ mod tests {
             decide(TitanState::Pursue, &clock, 0, false, &timing(), &tuning(), &nobody),
             TitanState::Idle
         );
+        // The other half of the same rule, and since `F-051` it means something sharper than
+        // it used to: not "he is outside a 45 m circle" but **"he has not noticed him"**. The
+        // distance in the target is now irrelevant to this edge — see the test below.
         assert_eq!(
             decide(TitanState::Idle, &clock, 0, false, &timing(), &tuning(), &at(99.0)),
             TitanState::Idle
@@ -1008,7 +1029,7 @@ mod tests {
         ] {
             let clock = StateClock { ticks_in_state, state_ticks: duration_ticks(state, &t) };
             assert_eq!(
-                decide(state, &clock, 0, false, &t, &u, &at(1.0)),
+                decide(state, &clock, 0, true, &t, &u, &at(1.0)),
                 wanted,
                 "{state:?} @ {ticks_in_state}"
             );
@@ -1019,7 +1040,7 @@ mod tests {
     fn death_is_a_one_way_street() {
         let clock = StateClock { ticks_in_state: 9999, state_ticks: 60 };
         assert_eq!(
-            decide(TitanState::Death, &clock, 0, false, &timing(), &tuning(), &at(1.0)),
+            decide(TitanState::Death, &clock, 0, true, &timing(), &tuning(), &at(1.0)),
             TitanState::Death
         );
     }
@@ -1052,15 +1073,42 @@ mod tests {
             let last_inside = StateClock { ticks_in_state: total - 1, state_ticks: total };
             let first_after = StateClock { ticks_in_state: total, state_ticks: total };
             assert_eq!(
-                decide(state, &last_inside, 0, false, &t, &u, &at(1.0)),
+                decide(state, &last_inside, 0, true, &t, &u, &at(1.0)),
                 state,
                 "{state:?} ended one tick before its own `state_ticks`"
             );
             assert_ne!(
-                decide(state, &first_after, 0, false, &t, &u, &at(1.0)),
+                decide(state, &first_after, 0, true, &t, &u, &at(1.0)),
                 state,
                 "{state:?} ran past the `state_ticks` the overlay prints under it"
             );
         }
+    }
+
+    /// ★ **`F-051` at the state machine, in two lines.**
+    ///
+    /// The same titan, the same target, the same one metre of distance — and the only thing
+    /// that decides whether he comes is whether he has noticed. Until 2026-08-25 this function
+    /// read the distance itself (`distance_m <= aggro_radius_m`) and a titan with his back
+    /// turned came anyway; delete the `aware` gate from [`decide`] and the first assert below
+    /// goes red.
+    #[test]
+    fn f051_a_titan_that_has_not_noticed_you_does_not_come_however_close_you_are() {
+        let clock = StateClock::default();
+        assert_eq!(
+            decide(TitanState::Idle, &clock, 0, false, &timing(), &tuning(), &at(1.0)),
+            TitanState::Idle,
+            "one metre away and unnoticed"
+        );
+        assert_eq!(
+            decide(TitanState::Idle, &clock, 0, true, &timing(), &tuning(), &at(1.0)),
+            TitanState::Windup,
+            "one metre away and noticed"
+        );
+        // And the far end: noticed at 99 m is a walk, not a stand.
+        assert_eq!(
+            decide(TitanState::Idle, &clock, 0, true, &timing(), &tuning(), &at(99.0)),
+            TitanState::Pursue
+        );
     }
 }

@@ -1066,6 +1066,49 @@ pub struct Gear {
     pub blades: BladeTuning,
     pub resupply: ResupplyTuning,
     pub feel: FeelTuning,
+    /// `F-031` + `F-041` + `F-044` — **what a landed hit is worth**, 2026-08-25.
+    ///
+    /// The blade's own numbers stay in [`BladeTuning`] (`damage_per_m_s`, `min_speed_m_s`);
+    /// what stands here is everything that turns one `TitanHit` into a number of wound
+    /// points: the per-zone factors, the flat ground attack, the collapse, and the combo.
+    pub damage: DamageTuning,
+}
+
+/// `F-031` — **the damage formula's file half.**
+///
+/// `damage = blades.damage_per_m_s x closing_m_s x zone factor x combo multiplier`, and every
+/// factor in that line except the closing speed lives in a file. `blades.damage_per_m_s` had
+/// **no reader anywhere in `src/`** until [`crate::combat::damage`] landed — the same shape
+/// `docs/FINDINGS.md` FIND-075 records for `wear_per_hit`, and `titan.ron: <kind>.health` was
+/// the second half of the same hole: `titan::rig` inserted a `Health` nothing ever wrote.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DamageTuning {
+    /// The chest and everything the cast could not resolve to a limb.
+    pub zone_torso_factor: f32,
+    pub zone_head_factor: f32,
+    pub zone_eye_factor: f32,
+    /// Arms and legs share one factor: `F-032` gives them separate zones, not separate worth.
+    pub zone_limb_factor: f32,
+    /// `F-044` — **the flat worth of a ground attack**, in wound points, with no speed term
+    /// at all. Below `damage_per_m_s * min_speed_m_s` by construction, and
+    /// `tests/combat.rs::f044_a_ground_attack_is_never_the_better_choice` is what says so.
+    pub ground_damage: f32,
+    /// `F-031` — how long a titan whose wound pool has just been emptied spends on the floor,
+    /// in seconds. Ticks in the code.
+    pub collapse_s: f32,
+    /// `F-031` — **the whole no-stun-lock claim.** A titan who has just been floored cannot be
+    /// floored again inside this window, however hard he is cut. A refractory period and not an
+    /// inequality between numbers: the arithmetic version depends on `damage_per_m_s`,
+    /// `combo_max`, the zone factor and every kind's `health` at once, and it is already false
+    /// for the scuttler at the shipped values (`gear.ron` carries the measurement).
+    pub collapse_refractory_s: f32,
+    /// `F-041` — what one further airborne hit adds to the multiplier. The first hit of a
+    /// chain is always `1.0`; the `n`-th is `1 + combo_step * (n - 1)`, capped.
+    pub combo_step: f32,
+    pub combo_max: f32,
+    /// How long a chain survives without a further hit, in seconds. Ticks in the code.
+    pub combo_window_s: f32,
 }
 
 /// `F-034` hit stop and camera kick. **⚠️ UNTUNED — `F-034` had no numbers at all anywhere in
@@ -1173,6 +1216,102 @@ pub struct ResupplyTuning {
 #[serde(deny_unknown_fields)]
 pub struct Titans {
     pub kinds: BTreeMap<String, TitanKind>,
+    /// `F-051` — **how a titan notices you at all**, and it is game-wide on purpose: how fast
+    /// attention builds and how loud a player is are feel numbers, while how far a kind sees
+    /// and hears is that kind's identity and stands per row (`sight_half_angle_deg`,
+    /// `hearing_radius_m`).
+    pub perception: TitanPerception,
+    /// `F-055` — the ring of standing places a group of titans divides between them.
+    pub crowd: TitanCrowd,
+    /// `F-054` — how often a titan's brain runs, by distance.
+    pub lod: TitanLod,
+}
+
+/// `F-051` — **the perception model**, the half of it that is not a kind's own.
+///
+/// Two channels, and they are not the same shape:
+///
+/// * **the eye** is a cone — `aggro_radius_m` long, `sight_half_angle_deg` wide — and it is
+///   *instant*. A titan that has you in front of him at 30 m has seen you, and pretending
+///   otherwise would only make him look broken.
+/// * **the ear** is a circle and it *accumulates*. What it hears is the player's own noise
+///   radius, which is a function of how he is moving: standing still is [`Self::quiet_m`],
+///   and hanging on a rope with the gas open is that plus his speed, times
+///   [`Self::rope_factor`].
+///
+/// **That asymmetry is the whole feature.** The acceptance sentence of `F-051` is *"a player
+/// who acts quietly is discovered later than one who boosts"*, and it can only be true for a
+/// titan who is **not** looking at you — so the number that decides it has to be the ear's.
+///
+/// ⚠️ **UNTUNED.** Nobody has played any of these seven numbers.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TitanPerception {
+    /// The noise radius, in meters, of a player who is doing **nothing**. Not zero: a man in
+    /// a harness standing in a street is not silent, and a zero here would make a motionless
+    /// player literally undetectable by ear at any range, which is a stealth game nobody
+    /// asked for.
+    pub quiet_m: f32,
+    /// Meters of extra noise radius per m/s of ground speed. **This is the gas**: every m/s
+    /// the vector gear buys is bought with a jet, and the jet is what the bellower is
+    /// listening for.
+    pub noise_per_speed_m: f32,
+    /// What hanging on a rope multiplies the noise radius by
+    /// ([`MovementState::Tethered`](crate::shared::MovementState::Tethered)). Above 1.0: a
+    /// tethered player is under power, a falling one is only fast.
+    pub rope_factor: f32,
+    /// Hard ceiling on the noise radius, so a 90 m/s dive does not wake the whole map.
+    pub max_noise_m: f32,
+    /// How fast a heard player turns into a target, in units of awareness per second, at a
+    /// stimulus of 1.0 (a noise source standing on top of the titan). Awareness runs 0..1 and
+    /// 1.0 is "detected", so 1.5 means a maximal noise needs two thirds of a second.
+    pub hearing_gain_per_s: f32,
+    /// How fast awareness drains when there is neither sight nor sound.
+    pub forget_per_s: f32,
+    /// The **hysteresis floor**: a titan that has detected you stays detected until awareness
+    /// falls back to this. Without it a player who steps out of the cone for one tick resets
+    /// the whole chase, and the titan flickers between `Pursue` and `Idle`.
+    pub lose_level: f32,
+}
+
+/// `F-055` — **the ring**. Six titans on one player stand in six places, not one.
+///
+/// A slot is not a formation the AI negotiates; it is a **rank**. `titan::perception::
+/// claim_slots` sorts the titans that share a target by [`TitanId`](crate::shared::TitanId)
+/// and hands out `0..n`, which is deterministic on every machine (`docs/multiplayer.md`
+/// rule 4) and costs no arbitration message.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TitanCrowd {
+    /// How many bearings the ring is divided into. Above this many titans the slots repeat.
+    pub slots: u32,
+    /// How far off the player his attackers aim their approach, in meters, at full strength.
+    /// It **fades to nothing** the same way `behaviour.flank_offset_m` does — full beyond
+    /// twice a kind's own `attack_range_m`, zero at the range itself — or a ring of titans
+    /// would orbit forever and never reach the man in the middle.
+    pub ring_radius_m: f32,
+}
+
+/// `F-054` — **how often a titan thinks**, by how far away he is from the nearest player.
+///
+/// ⚠️ **The near tier is every tick (60 Hz) and not the feature row's 20 Hz.** The row was
+/// written against a server that ticks slower than this one does; here the wind-up of `F-053`
+/// is *measured evidence* at 36 ticks of 60 Hz, and a near tier that only looked every third
+/// tick would move the state edges the picture was taken against. 20 Hz is therefore the
+/// **mid** tier, exactly as written, and near means "full rate".
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TitanLod {
+    /// Inside this distance the brain runs every tick.
+    pub near_m: f32,
+    /// Between [`Self::near_m`] and this, the brain runs at [`Self::mid_hz`].
+    pub mid_m: f32,
+    /// Beyond [`Self::mid_m`] the brain runs at [`Self::far_hz`]. There is no fourth tier that
+    /// stops thinking altogether: a titan who never re-checks is a titan who never notices the
+    /// player who walked up to him, and "position interpolation only" is what `brain::walk`
+    /// already is — it runs every tick for everybody and carries the gait the brain last set.
+    pub mid_hz: f32,
+    pub far_hz: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1277,9 +1416,43 @@ pub struct TitanKind {
     /// ⚠️ **UNTUNED**, and differentiated by mass on purpose: the scuttler is 4.2 m and gets
     /// thrown off his line, the bellower is 21 m and barely notices. Nothing here is measured.
     pub stagger_s: f32,
-    /// How close the target has to be before `Idle → Pursue` fires. Stands in for the whole
-    /// perception model `F-051`, which is not built.
+    /// **How far this kind's eye reaches**, in meters — the *length* of the sight cone of
+    /// `F-051`.
+    ///
+    /// Until 2026-08-25 this was a 360° circle and the whole of the perception model: a titan
+    /// with his back to you acquired you at exactly the distance one facing you did, and the
+    /// design's stealth layer — *"a player who acts quietly is discovered later than one who
+    /// boosts"* — had nowhere to live. The number itself did not move on any kind; what
+    /// changed is that it is now one side of a cone whose other side is
+    /// [`Self::sight_half_angle_deg`], and that a player outside the cone has to be **heard**
+    /// instead ([`Self::hearing_radius_m`]).
     pub aggro_radius_m: f32,
+    /// **Half the width of the sight cone**, in degrees off the titan's own forward vector, on
+    /// the ground plane — the same shape as [`Self::strike_half_angle_deg`] and
+    /// [`Self::cortex_half_angle_deg`], and deliberately so: a titan's eye, his blow and his
+    /// nape are three cones on one body, and a player who has learned to read one has learned
+    /// the shape of the other two.
+    ///
+    /// Sight is **instant** inside it: the accumulation of `F-051` is the ear's, never the
+    /// eye's. A titan looking straight at a man 30 m away who "has not noticed him yet" is not
+    /// a stealth mechanic, it is a bug the player will report.
+    ///
+    /// ⚠️ **UNTUNED.** Range `[20, 170]`, guarded by
+    /// `tests/titan.rs::f051_every_kind_carries_a_sight_cone_and_an_ear_in_range` — at 180 the
+    /// cone is a circle again and the feature is deleted, below 20 a titan walks past a player
+    /// standing in front of him.
+    pub sight_half_angle_deg: f32,
+    /// **How far this kind's ear reaches**, in meters, at most — the ear is a circle and it
+    /// has no angle.
+    ///
+    /// It is a *ceiling*, not a trigger: what the ear actually hears is the smaller of this
+    /// and the player's own noise radius (`titans.perception`), so a quiet player at 30 m is
+    /// inaudible to a kind with a 160 m ear. **That is the bellower's whole design** — he is
+    /// the kind that reacts to the sound of gas (`docs/gameplay/enemies.md`, `F-062`), and
+    /// until this field existed he called on sight like everyone else.
+    ///
+    /// ⚠️ **UNTUNED.** Range `[5, 300]`, guarded with the cone above.
+    pub hearing_radius_m: f32,
     /// How long `Death` lasts: the body scales to zero over this time. The collider is
     /// dropped on tick one regardless, so a corpse is never a wall.
     pub death_s: f32,
@@ -1947,6 +2120,82 @@ pub struct MissionTemplate {
     /// **Ordered, and that is load-bearing**: this list *is* the lobby's difficulty row, and
     /// the file runs easiest → hardest. See [`OrderedMap`].
     pub difficulties: OrderedMap<String, Difficulty>,
+    /// ⭐ **What this mission IS** — the mode, as data (`F-072`, `F-073`, `F-185`, 2026-08-25).
+    ///
+    /// Until today there was exactly one way to decide a sortie: kill [`Self::kill_target`]
+    /// titans before [`Self::target_duration_s`] runs out. That was not a design decision, it
+    /// was the only branch anybody had written — `mission::decide` reads a tally and a clock and
+    /// nothing else.
+    ///
+    /// **On the template and deliberately not on the [`Difficulty`].** A mode is what the
+    /// mission *is*; a difficulty is how hard that same mission is. A level that could turn a
+    /// breach into a cull would make "which mission am I flying" a question with two answers,
+    /// and the lobby shows the two rows side by side. The three numbers a level does own
+    /// (deadline, kill target, waves) are enough to build a ladder out of any mode — for a
+    /// [`Objective::Breach`] the deadline **is** the difficulty, because holding longer is
+    /// harder.
+    pub objective: Objective,
+}
+
+/// **How a sortie is decided.** One variant per mode, and the numbers each mode needs.
+///
+/// ⚠️ **The clock does not mean the same thing in every variant, and that is the point.** In
+/// [`Objective::Cull`] running out of time is how you *lose*; in [`Objective::Breach`] it is how
+/// you *win*. `mission::objective::verdict` is the one function that knows which, and
+/// `src/mission/objective.rs` holds its unit tests — an inversion there is the whole feature
+/// silently backwards, so it is a pure function with a red test and not an `if` inside a system.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum Objective {
+    /// **Kill them.** [`MissionTemplate::kill_target`] cortex cuts before the deadline; the
+    /// deadline loses it. The only mode that existed before 2026-08-25, and the one every
+    /// script and every test in the repository was written against.
+    ///
+    /// It carries no numbers of its own on purpose: the count is `kill_target`, which `hud`,
+    /// `menu::lobby` and `progress` already read off the template, and a second place to write
+    /// it would be a second answer.
+    Cull,
+    /// **Hold the gate** (`F-072`). Survive to the deadline and you have won; let
+    /// `breaches_allowed` titans reach the gate and you have lost.
+    ///
+    /// ⚠️ Titans in this game walk at the nearest **player**, not at a place
+    /// (`titan::brain::nearest_player`) — so the gate is defended by standing between it and
+    /// them, which is what a defence mission is. It is written down here because a reader who
+    /// expects pathing to a goal will look for it and not find it.
+    Breach {
+        /// Where the gate stands, in meters.
+        gate_m: (f32, f32, f32),
+        /// How close a titan has to get for it to count as through.
+        reach_m: f32,
+        /// How many may get through before the sortie is lost. **Each titan counts once.**
+        breaches_allowed: u32,
+    },
+    /// **Fly the rings** (`F-185`). Pass through every ring, in the order they are listed,
+    /// before the deadline. No titans required — this is the mode that teaches the drive.
+    Parcours {
+        /// The gates, **in order**. A parcours you can fly backwards teaches nothing.
+        rings: Vec<Ring>,
+    },
+    /// **Walk the cart home** (`F-073`). The cart rolls along its waypoints only while a player
+    /// is inside `escort_radius_m` of it; it wins when it reaches the last one.
+    Escort {
+        /// The path, in order. The cart starts on the first and arrives on the last.
+        waypoints: Vec<(f32, f32, f32)>,
+        /// How fast it rolls while somebody is escorting it.
+        speed_m_s: f32,
+        /// How close a player has to be for it to move at all.
+        escort_radius_m: f32,
+        /// How big the cart is drawn, in meters.
+        size_m: (f32, f32, f32),
+    },
+}
+
+/// One ring of an [`Objective::Parcours`]. **A place and a size, nothing else.**
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ring {
+    pub center_m: (f32, f32, f32),
+    pub radius_m: f32,
 }
 
 /// One difficulty level of one mission. **A set of numbers, never an `if`** (§4).

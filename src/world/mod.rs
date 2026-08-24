@@ -35,6 +35,7 @@
 //! What gets spawned is **data**, not meshes: `render` turns it into triangles without
 //! knowing this domain (`shared::Block`).
 
+pub mod anchor;
 pub mod index;
 pub mod map;
 pub mod supply;
@@ -58,7 +59,16 @@ impl Plugin for WorldPlugin {
         // The observer instead of `RemovedComponents` — reasoning in `world::index`.
         app.add_observer(index::on_body_removed);
 
+        // `F-021` — the field is inserted by `build_map` out of the plan, so it exists
+        // before anything can ask for it. Without this the resource would be missing until
+        // `Startup` ran and every reader would need an `Option<Res<..>>`.
+        app.init_resource::<anchor::AnchorField>();
+
         app.add_systems(Startup, (map::build_map, supply::build_stations))
+            // `F-021` — the named `hook.*` points arrive whenever their model finishes
+            // loading, which is not `Startup`. `Changed<ModelAnchors>`-gated, so it costs
+            // one empty query per frame once the district is dressed.
+            .add_systems(Update, anchor::adopt_model_anchors)
             .add_systems(
                 FixedUpdate,
                 (

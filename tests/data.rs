@@ -1624,7 +1624,10 @@ fn t005_the_missions_keep_the_order_the_file_wrote_them_in() {
     let templates: Vec<&str> = d.missions.templates.keys().map(String::as_str).collect();
     assert_eq!(
         templates,
-        ["tutorial", "skirmish"],
+        // The three modes were appended on 2026-08-25 (`F-072`, `F-073`, `F-185`) and the two
+        // that were here kept their places: the lobby's mission row **is** this list, left to
+        // right, and the tutorial has to stay the first thing a new player sees.
+        ["tutorial", "skirmish", "breach", "parcours", "escort"],
         "missions.ron lists the tutorial first and the lobby has to offer it first"
     );
 
