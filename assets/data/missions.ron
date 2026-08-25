@@ -75,12 +75,22 @@
             //     a circle anywhere on that line deploys the wrong sortie mid-script.
             //   * not on `z = 0, x = 0..-47` — `scripts/f019-hq.txt` and `f070-hub.txt` ACT 1
             //     walk that line into the garrison hall for the supply.
-            // At |x| = 18, |z| = 8 they are 18 m off the first line and 8 m off the second, and
-            // 19.7 m from the origin — inside `maps.ron: layout.clear_radius_m` (24 m), so no
-            // generated building is standing on one.
-            (mission: "breach",   difficulty: "recruit", center_m: (-18.0, 0.0,  8.0), radius_m: 3.0),
+            //   * 🔴 **and not inside the garrison hall**, which is the one this list got wrong.
+            //     `FIND-162`, 2026-08-25: the first version put breach at `(-18, 0, 8)` and
+            //     parcours at `(-18, 0, -8)`, and **both were behind the hall's east wall** —
+            //     `maps.ron: ashgate` places it by hand at `x = -47..-15, |z| <= 13`. A player
+            //     could not walk to two of the six doors, and **nothing said so**: the pads were
+            //     fine, the approach was a wall, and the failure was silent. The check that was
+            //     run — "inside `clear_radius_m`, so no GENERATED building stands here" — is
+            //     true and irrelevant: the hall is **placed**, not generated. **A clear radius
+            //     answers the generator, never the level designer.**
+            //
+            // So: `x = -10` is 5 m **east** of the hall's wall and 10 m off the `x = 0` walk;
+            // `|z| = 8` is 8 m off the `z = 0` walk and 5 m clear of the hall's `|z| <= 13`
+            // corner. 12.8 m from the origin, well inside the 24 m clear radius.
+            (mission: "breach",   difficulty: "recruit", center_m: (-10.0, 0.0,  8.0), radius_m: 3.0),
             (mission: "escort",   difficulty: "recruit", center_m: ( 18.0, 0.0,  8.0), radius_m: 3.0),
-            (mission: "parcours", difficulty: "recruit", center_m: (-18.0, 0.0, -8.0), radius_m: 3.0),
+            (mission: "parcours", difficulty: "recruit", center_m: (-10.0, 0.0, -8.0), radius_m: 3.0),
         ],
 
         // ---- The supply — INSIDE the main building --------------------------------------
@@ -300,6 +310,11 @@
         // `src/mission/objective.rs::verdict` is a pure function with its own red test — one
         // character apart in a match arm is a defence nobody can ever finish.
         //
+        // **The run that walks it:** `scripts/f072-breach.txt` — 14 asserts, hub door to
+        // debrief, and it holds the pair that proves the number: three at the gate and the
+        // sortie stands, four and it falls. The WIN is the deadline (300 s of wall clock in a
+        // headless run) and lives in `tests/mission.rs` instead.
+        //
         // ⚠️ **A titan walks at the nearest PLAYER, never at a place** — there is no goal
         // pathing in this game (`titan::brain::nearest_player`) and this round did not add
         // any, because `titan` is another domain. So the gate is defended by **standing
@@ -399,7 +414,8 @@
         //
         // ⚠️ UNTUNED, and nobody has flown it with a window open. What is measured is that the
         // rings register in order and that the sortie is won by the last one
-        // (`scripts/f185-parcours.txt`, `tests/mission.rs`).
+        // (`scripts/f185-parcours.txt` — 11 asserts, and it takes ring 5 FIRST to show that an
+        // out-of-order ring counts for nothing; `tests/mission.rs`).
         "parcours": (
             name: "Rookery Run",
             map: "ashgate",
@@ -437,6 +453,11 @@
         //
         // 150 m of path at 1.2 m/s is 125 s of perfect escorting inside a 330 s clock — so the
         // budget is roughly two thirds fighting and one third walking. ⚠️ UNTUNED.
+        //
+        // **The run that walks it:** `scripts/f073-escort.txt` — 12 asserts, 9 515 ticks, about
+        // three minutes of wall clock. It rides the cart home from the hub door and cuts a
+        // twenty-second gap into the middle of the escort, so the sortie is still running at a
+        // moment an unconditional cart would have been home for twenty seconds.
         //
         // ⚠️ **The cart has no collider and titans cannot hurt it.** It is a `Block` that
         // follows a line; it will pass through a wall, and a titan standing on the path does

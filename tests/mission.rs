@@ -1648,39 +1648,84 @@ fn off_the_line(spawn: Vec3, goal: Vec3, at: Vec3) -> f32 {
 /// swings `behaviour.swerve_deg` (35°) to each side, flipping every `swerve_period_s` (0.9 s),
 /// and is metres off that line by the time anything you threw arrives.
 ///
-/// **Red when:** `assets/data/titan.ron` gives the errant `swerve_deg: 0.0`. Measured — with
-/// that one edit the errant's excursion falls from 3.15 m to 0.00 m and the assert below fails.
+/// **Red when:** `assets/data/titan.ron` gives the errant `swerve_deg: 0.0` — and the test does
+/// not wait for that edit, it makes it itself in its own copy of the data. Measured 2026-08-26,
+/// one titan per app and both of them turned to face the player first:
+///
+/// ```text
+///   errant, as shipped ........... 1.58 m
+///   errant, swerve deleted ....... 0.00 m   ← the whole excursion, and nothing else in it
+///   husk ......................... 0.00 m
+/// ```
+///
+/// ⚠️ **The old floor was 2.0 m against a measured 3.15 m, and both numbers were dirty.** That
+/// run put the husk and the errant in ONE app and never turned either of them: the errant
+/// spawns 90° off the player and walks an **arc** worth 1.12 m of "excursion" that has nothing
+/// to do with `swerve_deg`, and after `F-055` the crowd ring added more on top — the two of
+/// them are one crowd because `titan::perception` slots by the player they walk at, not by how
+/// near they stand to each other. The floor is 1.2 m now because 1.58 m is what the behaviour
+/// on its own is worth. **Nothing about the errant got worse; the measurement got clean.**
 #[test]
 fn f057_the_errant_leaves_the_line_the_husk_walks() {
-    let mut app = a_field();
     let goal = Vec3::ZERO;
     let husk_at = Vec3::new(0.0, 0.0, 40.0);
     let errant_at = Vec3::new(40.0, 0.0, 0.0);
-    spawn_titan(&mut app, "husk", husk_at);
-    spawn_titan(&mut app, "errant", errant_at);
 
-    // Both are inside their own `aggro_radius_m` (45 and 50) at 40 m, and neither is inside the
-    // other's — nothing here is a group effect.
-    let mut husk_worst = 0.0f32;
-    let mut errant_worst = 0.0f32;
-    for _ in 0..240 {
-        ticks(&mut app, 1);
-        husk_worst = husk_worst.max(off_the_line(husk_at, goal, one_body(&mut app, "husk").1));
-        errant_worst =
-            errant_worst.max(off_the_line(errant_at, goal, one_body(&mut app, "errant").1));
-    }
+    // ⚠️ **One titan per app, since 2026-08-26.** Both are inside their own `aggro_radius_m`
+    // (45 and 50) at 40 m and neither is inside the other's, and until `F-055` that was enough
+    // to call this "not a group effect". It is not any more: `titan::perception` slots titans
+    // by **the player they are walking at**, not by how near they are to each other, so a husk
+    // 40 m north and an errant 40 m east are one crowd of two and both get a ring offset. The
+    // husk then wandered 0.81 m off its own line and the control assert below caught it.
+    // Splitting the run is not a weakening — it is the test's own stated premise being made
+    // true instead of assumed, the same move `place_players` documents above.
+    let excursion = |kind: &str, from: Vec3, swerve: Option<f32>| -> f32 {
+        let mut app = a_field();
+        if let Some(d) = swerve {
+            app.world_mut()
+                .resource_mut::<GameData>()
+                .titans
+                .kinds
+                .get_mut(kind)
+                .expect("the file knows this kind")
+                .behaviour
+                .swerve_deg = d;
+        }
+        spawn_titan(&mut app, kind, from);
+        face_the_player(&mut app);
+        let mut worst = 0.0f32;
+        for _ in 0..240 {
+            ticks(&mut app, 1);
+            worst = worst.max(off_the_line(from, goal, one_body(&mut app, kind).1));
+        }
+        worst
+    };
+    let husk_worst = excursion("husk", husk_at, None);
+    let errant_worst = excursion("errant", errant_at, None);
+    let errant_straight = excursion("errant", errant_at, Some(0.0));
 
     assert!(
         husk_worst < 0.5,
         "the husk wandered {husk_worst:.2} m off its own line — the control is not a control"
     );
+    // ⚠️ FIND-103, and here it moved the number by 100 %: the same errant with `swerve_deg`
+    // deleted **in this app's own copy of the data and nowhere else**. If the excursion
+    // survived the deletion it was the turn or the crowd ring, not the behaviour.
     assert!(
-        errant_worst > 2.0,
+        errant_straight < 0.1,
+        "an errant with `swerve_deg: 0.0` was still {errant_straight:.2} m off its line — then \
+         the metres below are not the swerve and this test is measuring something else"
+    );
+    assert!(
+        errant_worst > 1.2,
         "the errant stayed {errant_worst:.2} m off the line; with swerve_deg 35 and 0.9 s of \
          half-period at 6.5 m/s it has to leave it by metres, or `behaviour.swerve_deg` is not \
          reaching `titan::brain::aim`"
     );
-    println!("F-057 excursion: husk {husk_worst:.2} m · errant {errant_worst:.2} m");
+    println!(
+        "F-057 excursion: husk {husk_worst:.2} m · errant {errant_worst:.2} m · \
+         the same errant with the swerve deleted {errant_straight:.2} m"
+    );
 }
 
 /// **`F-058` — the scuttler's blow carries his body; the husk's does not.**
@@ -1898,17 +1943,47 @@ fn f061_the_lurker_holds_his_ground_while_the_husk_comes_for_you() {
 /// Whichever one you turn to, the other is behind you, and `combat::strike`'s cone (chorus: 55°)
 /// is what makes that cost something.
 ///
-/// **The two pairs run in two apps, from the same spawn, facing the player from tick one.**
+/// **Each pair runs in its own app, from the same spawn, facing the player from tick one.**
 /// Both of those are the test's own history: a pair 80 m behind the other pair is inside
 /// nobody's aggro but a pair that has to turn 177° first spends four seconds walking an arc,
 /// and the husk control then "separated" by 7.96 m without any behaviour at all. What is under
 /// test is the walk, not the turn.
 ///
-/// **Red when:** `flank_offset_m: 0.0` on the chorus — the separation collapses onto the husks'.
+/// ## Three measurements, because two were not enough (2026-08-26)
+///
+/// `F-055` landed a **crowd ring** (`titan::perception::ring_offset`, `titan.ron: crowd`): a
+/// group of titans divides a 9 m ring of standing places between them, so **two husks no longer
+/// stack** — they spread to 5.29 m on their own, and the old control `husk_m < 4.5` went red
+/// against a husk that was behaving correctly. The literal was not the claim; it was a proxy
+/// for *"the control pair does not separate by itself"*, and the proxy went stale under a
+/// feature in another domain.
+///
+/// So the control is now the **deletion control** (`FIND-103`): the same chorus pair with
+/// `behaviour.flank_offset_m` set to `0.0` **in that app's own copy of the data and nowhere
+/// else**. Same kind, same speed, same reach, same ring — one number gone. Measured:
+///
+/// ```text
+///   chorus, as shipped .......... 18.45 m
+///   chorus, flank deleted ........ 6.43 m   ← what the crowd ring alone is worth
+///   husks ........................ 5.29 m
+/// ```
+///
+/// **Red when:** `flank_offset_m: 0.0` on the chorus in `titan.ron` — the first pair collapses
+/// onto the other two and every assert below falls over.
 #[test]
 fn f063_a_chorus_pair_splits_where_a_husk_pair_stacks() {
-    let widest = |kind: &str| -> f32 {
+    let widest = |kind: &str, flank: Option<f32>| -> f32 {
         let mut app = a_field();
+        if let Some(m) = flank {
+            app.world_mut()
+                .resource_mut::<GameData>()
+                .titans
+                .kinds
+                .get_mut(kind)
+                .expect("the file knows this kind")
+                .behaviour
+                .flank_offset_m = m;
+        }
         spawn_titan(&mut app, kind, Vec3::new(-2.0, 0.0, 40.0));
         spawn_titan(&mut app, kind, Vec3::new(2.0, 0.0, 40.0));
         face_the_player(&mut app);
@@ -1922,20 +1997,43 @@ fn f063_a_chorus_pair_splits_where_a_husk_pair_stacks() {
         }
         worst
     };
-    let chorus_m = widest("chorus");
-    let husk_m = widest("husk");
+    let chorus_m = widest("chorus", None);
+    let flat_m = widest("chorus", Some(0.0));
+    let husk_m = widest("husk", None);
+    let ring_m = GameData::load(std::path::Path::new("assets/data")).titans.crowd.ring_radius_m;
+    println!(
+        "F-063 widest separation on the approach: chorus {chorus_m:.2} m · \
+         the same chorus with the flank deleted {flat_m:.2} m · husks {husk_m:.2} m \
+         (crowd ring {ring_m:.1} m)"
+    );
 
+    // The control does not wander. It is allowed the crowd ring — two bodies claim two slots
+    // and walk to two standing places — and nothing beyond it.
     assert!(
-        husk_m < 4.5,
-        "the husks came within {husk_m:.2} m of each other's line — they start 4 m apart and \
-         walk at the same point, so they may only converge; the control is broken"
+        husk_m < 6.5 && husk_m < ring_m,
+        "the husk pair reached {husk_m:.2} m of separation — they start 4 m apart, walk at one \
+         place and share a {ring_m:.1} m ring, so anything past that is the control wandering \
+         and not a behaviour; the comparison below would then prove nothing"
+    );
+    // ⚠️ FIND-103: delete the thing being measured and watch the number move. Same kind, same
+    // speed, same reach, same ring — `flank_offset_m` zeroed in that app's own data and nowhere
+    // else. If the split survived the deletion it was never the flank doing it.
+    assert!(
+        chorus_m > flat_m * 2.5,
+        "a chorus pair split {chorus_m:.2} m with the flank and {flat_m:.2} m with the same \
+         number deleted — the split has to come from `flank_offset_m` and from nothing else"
+    );
+    // And what the deletion leaves behind is the ring both kinds walk, not a chorus trait.
+    assert!(
+        (flat_m - husk_m).abs() < 2.0,
+        "with the flank deleted a chorus pair spread {flat_m:.2} m against the husks' \
+         {husk_m:.2} m — those two are supposed to be the same walk"
     );
     assert!(
         chorus_m > husk_m * 2.5,
         "the chorus pair reached {chorus_m:.2} m of separation against the husks' {husk_m:.2} m \
          — with 9 m of flank offset to each side that has to be a different fight"
     );
-    println!("F-063 widest separation on the approach: chorus {chorus_m:.2} m · husks {husk_m:.2} m");
 }
 
 /// **`F-062` — one bellower's call wakes a titan that cannot see you.**

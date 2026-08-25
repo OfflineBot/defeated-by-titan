@@ -1,0 +1,540 @@
+# f073-escort — THE CART GOES HOME, and it stops for the twenty seconds nobody is with it.
+#
+#   the verdict:  ./target/debug/defeated_by_titan --headless --hub --script scripts/f073-escort.txt --ticks 10500
+#   the exit:     ./target/debug/defeated_by_titan --headless --hub --script scripts/f073-escort.txt --ticks 10500 >/dev/null 2>&1; echo $?
+#
+# ⚠️ The exit code needs its OWN run: a pipeline's `$?` is the LAST command's (`CLAUDE.md`).
+# ⚠️ **This run costs about three minutes of wall clock.** A headless tick is a real 1/60 s
+# (measured: `f175-loop.txt` does 1153 ticks in 19 s), and an escort is 150 m at 1.2 m/s. There
+# is no way to make it cheaper without lying about the mode: the ride IS the mission.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT THIS FILE CLAIMS
+#
+#   1. the escort door is a door you can WALK to                               (`phase == 2`)
+#   2. ⭐ **the mode is finishable in the actual game** — the cart reaches the last waypoint
+#      and the sortie is WON, with a real player really staying next to it     (`phase == 3`)
+#   3. ⭐ **and it only moves while he is there.** The ride is scheduled for 125.0 s of
+#      escorting; a twenty-second gap is cut into the middle of it, and at 133.3 s of elapsed
+#      time — by when an unconditional cart would be 10 m PAST its last waypoint — the sortie
+#      is still running                                                        (`phase == 2`)
+#   4. and it walks the same way home as every other mode              (`phase == 6`, then `5`)
+#
+# **3 is the one that cannot be faked.** Claim 2 on its own is passed by a cart on a timer, and
+# a cart on a timer is not an escort mission — it is a cutscene you are allowed to watch. The
+# assert at 130.2 s is what a timer fails.
+#
+# ---------------------------------------------------------------------------------------
+# HOW THE PLAYER FOLLOWS, and why he is twelve metres up
+#
+# `warp` teleports and zeroes the velocity (`player::apply_warps`), so the follow is a warp to
+# the cart's computed position every **0.7 s** — the cart's place at any moment is arithmetic:
+# `missions.ron: escort.objective` gives four waypoints, 1.2 m/s and a 12 m escort radius, and
+# the cart is only ever where 1.2 m/s × the escorted seconds puts it.
+#
+# The **12 m of altitude** is not decoration and it is not cheating either:
+#
+#   * at the warp he is 11.0 m from the cart — inside `escort_radius_m` (12.0), so it rolls;
+#   * `game.ron: gravity_m_s2` is −20, so 0.7 s of fall is 4.9 m and he never gets below
+#     **y = 7.1** — and `titan.ron: husk.attack_range_m` is **6.0**.
+#
+# So the one husk `escort.difficulties.recruit` sends at 40 s can chase him the whole way and
+# never reach him. Without that the run measures the walking speed of a husk instead of the
+# mode: three hits of 34 damage against `game.ron: player.health` 100 is `mission::decide`'s
+# second loss path, and the cart would never be the thing that decided this sortie.
+#
+# ⚠️ **And this is exactly why claim 2 is weaker than it looks.** A player who actually plays
+# this mode is on the ground with the titans, and nobody has flown it that way. What is proven
+# here is that the CART works, not that the fight around it is any good. UNTUNED.
+#
+# ⚠️ The cart has no collider: it walks through the buildings on its own path, and so does the
+# player who follows it (`missions.ron` says so above the template). That hole is F-073's, not
+# this run's.
+#
+# The phase numbers are `mission::MissionPhase::code`, appended and never inserted:
+#   0 Briefing · 1 Deploying · 2 Active · 3 Won · 4 Lost · 5 Hub · 6 Debrief
+#
+# =========================================================================================
+# ACT 1 — the hub, and the one door of the new rank you can actually walk to
+# =========================================================================================
+#
+# `forward = (-sin yaw, 0, -cos yaw)` (`player::locomotion`), so the escort pad at (18, 0, 8)
+# is 19.7 m away on bearing **246°** — the mirror of the breach pad's 114°. That one is behind
+# the depot hall's east wall and `scripts/f072-breach.txt` holds the repro; this one is out in
+# the open, and the walk below is the proof that the second rank of doors is not only reachable
+# by teleport (`docs/FINDINGS.md` FIND-162).
+#
+# ⚠️ `key` only STARTS a hold — the `wait` under it is what spends the seconds.
+wait 1.5
+assert phase == 5
+assert titans == 0
+warp 0 2 0
+wait 1.0
+look 246 0
+key W 4.6
+wait 5.0
+
+assert phase == 2
+assert kills == 0
+mark f073-deployed
+
+# =========================================================================================
+# ACT 2 — the first 59.5 s of escorting: 71.4 m of the 150
+# =========================================================================================
+warp 0.0 12.0 20.0
+wait 0.7
+warp 0.0 12.0 19.2
+wait 0.7
+warp 0.0 12.0 18.3
+wait 0.7
+warp 0.0 12.0 17.5
+wait 0.7
+warp 0.0 12.0 16.6
+wait 0.7
+warp 0.0 12.0 15.8
+wait 0.7
+warp 0.0 12.0 15.0
+wait 0.7
+warp 0.0 12.0 14.1
+wait 0.7
+warp 0.0 12.0 13.3
+wait 0.7
+warp 0.0 12.0 12.4
+wait 0.7
+warp 0.0 12.0 11.6
+wait 0.7
+warp 0.0 12.0 10.8
+wait 0.7
+warp 0.0 12.0 9.9
+wait 0.7
+warp 0.0 12.0 9.1
+wait 0.7
+warp 0.0 12.0 8.2
+wait 0.7
+warp 0.0 12.0 7.4
+wait 0.7
+warp 0.0 12.0 6.6
+wait 0.7
+warp 0.0 12.0 5.7
+wait 0.7
+warp 0.0 12.0 4.9
+wait 0.7
+warp 0.0 12.0 4.0
+wait 0.7
+warp 0.0 12.0 3.2
+wait 0.7
+warp 0.0 12.0 2.4
+wait 0.7
+warp 0.0 12.0 1.5
+wait 0.7
+warp 0.0 12.0 0.7
+wait 0.7
+warp 0.0 12.0 -0.2
+wait 0.7
+warp 0.0 12.0 -1.0
+wait 0.7
+warp 0.0 12.0 -1.8
+wait 0.7
+warp 0.0 12.0 -2.7
+wait 0.7
+warp 0.0 12.0 -3.5
+wait 0.7
+warp 0.0 12.0 -4.4
+wait 0.7
+warp 0.0 12.0 -5.2
+wait 0.7
+warp 0.0 12.0 -6.0
+wait 0.7
+warp 0.0 12.0 -6.9
+wait 0.7
+warp 0.0 12.0 -7.7
+wait 0.7
+warp 0.0 12.0 -8.6
+wait 0.7
+warp 0.0 12.0 -9.4
+wait 0.7
+warp 0.0 12.0 -10.2
+wait 0.7
+warp 0.0 12.0 -11.1
+wait 0.7
+warp 0.0 12.0 -11.9
+wait 0.7
+warp 0.0 12.0 -12.8
+wait 0.7
+warp 0.0 12.0 -13.6
+wait 0.7
+warp 0.0 12.0 -14.4
+wait 0.7
+warp 0.0 12.0 -15.3
+wait 0.7
+warp 0.0 12.0 -16.1
+wait 0.7
+warp 0.0 12.0 -17.0
+wait 0.7
+warp 0.0 12.0 -17.8
+wait 0.7
+warp 0.0 12.0 -18.6
+wait 0.7
+warp 0.0 12.0 -19.5
+wait 0.7
+warp 0.0 12.0 -20.3
+wait 0.7
+warp 0.0 12.0 -21.2
+wait 0.7
+warp 0.0 12.0 -22.0
+wait 0.7
+warp 0.0 12.0 -22.8
+wait 0.7
+warp 0.0 12.0 -23.7
+wait 0.7
+warp 0.0 12.0 -24.5
+wait 0.7
+warp 0.0 12.0 -25.4
+wait 0.7
+warp 0.0 12.0 -26.2
+wait 0.7
+warp 0.0 12.0 -27.0
+wait 0.7
+warp 0.0 12.0 -27.9
+wait 0.7
+warp 0.0 12.0 -28.7
+wait 0.7
+warp 0.0 12.0 -29.6
+wait 0.7
+warp -0.3 12.0 -30.2
+wait 0.7
+warp -1.0 12.0 -30.7
+wait 0.7
+warp -1.7 12.0 -31.2
+wait 0.7
+warp -2.3 12.0 -31.8
+wait 0.7
+warp -3.0 12.0 -32.3
+wait 0.7
+warp -3.7 12.0 -32.8
+wait 0.7
+warp -4.4 12.0 -33.3
+wait 0.7
+warp -5.0 12.0 -33.8
+wait 0.7
+warp -5.7 12.0 -34.3
+wait 0.7
+warp -6.4 12.0 -34.8
+wait 0.7
+warp -7.0 12.0 -35.3
+wait 0.7
+warp -7.7 12.0 -35.8
+wait 0.7
+warp -8.4 12.0 -36.3
+wait 0.7
+warp -9.1 12.0 -36.8
+wait 0.7
+warp -9.7 12.0 -37.3
+wait 0.7
+warp -10.4 12.0 -37.8
+wait 0.7
+warp -11.1 12.0 -38.3
+wait 0.7
+warp -11.7 12.0 -38.8
+wait 0.7
+warp -12.4 12.0 -39.3
+wait 0.7
+warp -13.1 12.0 -39.8
+wait 0.7
+warp -13.8 12.0 -40.3
+wait 0.7
+warp -14.4 12.0 -40.8
+wait 0.7
+warp -15.1 12.0 -41.3
+wait 0.7
+warp -15.8 12.0 -41.8
+wait 0.7
+warp -16.4 12.0 -42.3
+wait 0.7
+assert phase == 2
+mark f073-first-leg
+
+# =========================================================================================
+# ACT 3 — ⭐ TWENTY SECONDS OF ABANDONMENT. He is 30 m off the cart's flank.
+# =========================================================================================
+#
+# Same altitude, same interval, 30 m to the east — outside `escort_radius_m` and outside a
+# husk's reach. The cart stands exactly where act 2 left it, and every one of these 20.3 s is a
+# second the arithmetic at the end of act 4 is missing.
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+warp 12.9 12.0 -42.8
+wait 0.7
+assert phase == 2
+mark f073-abandoned
+
+# =========================================================================================
+# ACT 4 — back on it, up to 131.9 m — and ⭐ THE ASSERT THAT A TIMER FAILS
+# =========================================================================================
+warp -17.1 12.0 -42.8
+wait 0.7
+warp -17.8 12.0 -43.3
+wait 0.7
+warp -18.5 12.0 -43.8
+wait 0.7
+warp -19.1 12.0 -44.4
+wait 0.7
+warp -19.8 12.0 -44.9
+wait 0.7
+warp -20.5 12.0 -45.4
+wait 0.7
+warp -21.2 12.0 -45.9
+wait 0.7
+warp -21.8 12.0 -46.4
+wait 0.7
+warp -22.5 12.0 -46.9
+wait 0.7
+warp -23.2 12.0 -47.4
+wait 0.7
+warp -23.8 12.0 -47.9
+wait 0.7
+warp -24.5 12.0 -48.4
+wait 0.7
+warp -25.2 12.0 -48.9
+wait 0.7
+warp -25.9 12.0 -49.4
+wait 0.7
+warp -26.5 12.0 -49.9
+wait 0.7
+warp -27.2 12.0 -50.4
+wait 0.7
+warp -27.9 12.0 -50.9
+wait 0.7
+warp -28.5 12.0 -51.4
+wait 0.7
+warp -29.2 12.0 -51.9
+wait 0.7
+warp -29.9 12.0 -52.4
+wait 0.7
+warp -30.6 12.0 -52.9
+wait 0.7
+warp -31.2 12.0 -53.4
+wait 0.7
+warp -31.9 12.0 -53.9
+wait 0.7
+warp -32.6 12.0 -54.4
+wait 0.7
+warp -33.2 12.0 -54.9
+wait 0.7
+warp -33.9 12.0 -55.4
+wait 0.7
+warp -34.6 12.0 -55.9
+wait 0.7
+warp -35.3 12.0 -56.4
+wait 0.7
+warp -35.9 12.0 -57.0
+wait 0.7
+warp -36.6 12.0 -57.5
+wait 0.7
+warp -37.3 12.0 -58.0
+wait 0.7
+warp -38.0 12.0 -58.5
+wait 0.7
+warp -38.6 12.0 -59.0
+wait 0.7
+warp -39.3 12.0 -59.5
+wait 0.7
+warp -40.0 12.0 -60.0
+wait 0.7
+warp -40.8 12.0 -60.0
+wait 0.7
+warp -41.6 12.0 -60.0
+wait 0.7
+warp -42.5 12.0 -60.0
+wait 0.7
+warp -43.3 12.0 -60.0
+wait 0.7
+warp -44.2 12.0 -60.0
+wait 0.7
+warp -45.0 12.0 -60.0
+wait 0.7
+warp -45.8 12.0 -60.0
+wait 0.7
+warp -46.7 12.0 -60.0
+wait 0.7
+warp -47.5 12.0 -60.0
+wait 0.7
+warp -48.4 12.0 -60.0
+wait 0.7
+warp -49.2 12.0 -60.0
+wait 0.7
+warp -50.0 12.0 -60.0
+wait 0.7
+warp -50.9 12.0 -60.0
+wait 0.7
+warp -51.7 12.0 -60.0
+wait 0.7
+warp -52.6 12.0 -60.0
+wait 0.7
+warp -53.4 12.0 -60.0
+wait 0.7
+warp -54.2 12.0 -60.0
+wait 0.7
+warp -55.1 12.0 -60.0
+wait 0.7
+warp -55.9 12.0 -60.0
+wait 0.7
+warp -56.8 12.0 -60.0
+wait 0.7
+warp -57.6 12.0 -60.0
+wait 0.7
+warp -58.4 12.0 -60.0
+wait 0.7
+warp -59.3 12.0 -60.0
+wait 0.7
+warp -60.1 12.0 -60.0
+wait 0.7
+warp -61.0 12.0 -60.0
+wait 0.7
+warp -61.8 12.0 -60.0
+wait 0.7
+warp -62.6 12.0 -60.0
+wait 0.7
+warp -63.5 12.0 -60.0
+wait 0.7
+warp -64.3 12.0 -60.0
+wait 0.7
+warp -65.2 12.0 -60.0
+wait 0.7
+warp -66.0 12.0 -60.0
+wait 0.7
+warp -66.8 12.0 -60.0
+wait 0.7
+warp -67.7 12.0 -60.0
+wait 0.7
+warp -68.5 12.0 -60.0
+wait 0.7
+warp -69.4 12.0 -60.0
+wait 0.7
+warp -70.2 12.0 -60.0
+wait 0.7
+warp -71.0 12.0 -60.0
+wait 0.7
+# **133.3 s** have passed since the cart first moved (130.2 s of `wait` plus one tick for each
+# of the 186 commands). A cart that rolled on its own would have run 160 m of a 150 m path and
+# been home twenty seconds ago; this one has had **112.5 s** of company and stands at 135.0 m.
+# **Still running.**
+assert phase == 2
+mark f073-eighteen-metres-short
+
+# =========================================================================================
+# ACT 5 — the last 18 m, and the last waypoint
+# =========================================================================================
+warp -71.9 12.0 -60.0
+wait 0.7
+warp -72.7 12.0 -60.0
+wait 0.7
+warp -73.6 12.0 -60.0
+wait 0.7
+warp -74.4 12.0 -60.0
+wait 0.7
+warp -75.2 12.0 -60.0
+wait 0.7
+warp -76.1 12.0 -60.0
+wait 0.7
+warp -76.9 12.0 -60.0
+wait 0.7
+warp -77.8 12.0 -60.0
+wait 0.7
+warp -78.6 12.0 -60.0
+wait 0.7
+warp -79.4 12.0 -60.0
+wait 0.7
+warp -80.3 12.0 -60.0
+wait 0.7
+warp -81.1 12.0 -60.0
+wait 0.7
+warp -82.0 12.0 -60.0
+wait 0.7
+warp -82.8 12.0 -60.0
+wait 0.7
+warp -83.6 12.0 -60.0
+wait 0.7
+warp -84.5 12.0 -60.0
+wait 0.7
+warp -85.3 12.0 -60.0
+wait 0.7
+warp -86.2 12.0 -60.0
+wait 0.7
+warp -87.0 12.0 -60.0
+wait 0.7
+# **126.1 s of escorting against a 125.0 s path**, and the last 1.1 s of it are the margin.
+# ⚠️ The arithmetic has a term that is easy to miss and it is worth 3 s over a run this long:
+# **every script command costs one tick of its own** — the 176 warps inside the escorted
+# stretch are 2.9 s of rolling that no `wait` accounts for. Measured 2026-08-26: the first cut
+# of this file put the read 3.8 s after the verdict and caught a DEBRIEF instead of a WON.
+wait 0.5
+assert phase == 3     # ⭐ WON — by a cart, with no kill target and 290 s left on the clock
+assert kills == 0
+mark f073-home-with-the-cart
+
+# =========================================================================================
+# ACT 6 — and out through the same debrief as everything else
+# =========================================================================================
+wait 2.0
+assert phase == 6
+mark f073-debrief
+
+wait 1.5
+assert phase == 5
+assert titans == 0
+mark f073-back-in-the-hub

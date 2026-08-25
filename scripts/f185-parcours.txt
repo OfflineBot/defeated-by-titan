@@ -1,0 +1,108 @@
+# f185-parcours — FIVE RINGS, IN ORDER, and the fifth one flown first counts for nothing.
+#
+#   the verdict:  ./target/debug/defeated_by_titan --headless --hub --script scripts/f185-parcours.txt --ticks 1500
+#   the exit:     ./target/debug/defeated_by_titan --headless --hub --script scripts/f185-parcours.txt --ticks 1500 >/dev/null 2>&1; echo $?
+#
+# ⚠️ The exit code needs its OWN run: a pipeline's `$?` is the LAST command's (`CLAUDE.md`).
+#
+# ---------------------------------------------------------------------------------------
+# WHAT THIS FILE CLAIMS
+#
+#   1. `parcours` has its own hub door, and it deploys a sortie with no titans in it
+#   2. ⭐ **a ring flown out of order counts for nothing** — ring 5 is taken FIRST, and after
+#      rings 1–4 the sortie is still running                                   (`phase == 2`)
+#   3. ⭐ **and the last one, in its place, wins it** — with zero kills        (`phase == 3`)
+#   4. and it walks the same way home as every other mode          (`phase == 6`, then `5`)
+#
+# **2 is the whole claim.** A course whose rings can be taken in any order is a scavenger hunt,
+# and every "he touched all five" test passes on both. The tick between claim 2 and claim 3 is
+# the only place the difference lives.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT THIS FILE DOES NOT CLAIM, and it is the reason F-185 exists at all
+#
+# ⚠️ **Nobody FLIES this course here.** The rings are taken by `warp`, which is a teleport, and
+# a teleport proves the objective and nothing about the movement. `F-185` was written because
+# **nothing in this game teaches its verbs** — the rope drives (`FIND-149`: hold to go, `A`/`D`
+# to steer, `Ctrl` winches, double-tap to flip, `C` to dash), and a player is told none of it.
+# A course you can only pass by hooking a building outside the 24 m clear circle and driving
+# across the middle is the cheapest thing that would teach that, and the rings stand where they
+# stand for exactly that reason (`missions.ron`, above the template).
+#
+# Until somebody flies it with a window open, `F-185` is the OBJECTIVE built and the TEACHING
+# unbuilt. That is 🟨 and it is said here rather than counted as a tutorial.
+#
+# The phase numbers are `mission::MissionPhase::code`, appended and never inserted:
+#   0 Briefing · 1 Deploying · 2 Active · 3 Won · 4 Lost · 5 Hub · 6 Debrief
+#
+# =========================================================================================
+# ACT 1 — the door, ⚠️ which is behind the same wall the breach door is behind
+# =========================================================================================
+#
+# ✅ The parcours pad stood at (-18, 0, -8), behind the depot hall's east wall — `FIND-162`.
+# It moved to **(-10, 0, -8)** on 2026-08-25: `x = -10` is 5 m east of the wall `maps.ron`
+# places by hand at `x = -47..-15`. So this act walks now, like a player would.
+#
+# `(-10, 0, -8)` is **12.81 m** from the spawn on a bearing of **51.3°**
+# (`forward = (-sin yaw, 0, -cos yaw)`), which is **2.13 s** at `run_speed_m_s` 6.0. The 3.2 s
+# held below are 19.2 m of intent against a 12.8 m walk, so the pad's 3 m circle sits well
+# inside the hold. `scripts/f072-breach.txt` walks the mirrored door the same way.
+wait 1.5
+assert phase == 5
+look 51.3 0
+key W 3.2
+wait 4.2
+
+assert phase == 2
+assert titans == 0    # ⭐ `waves: []` — the one mission in this game that is not a fight
+assert kills == 0
+mark f185-deployed
+
+# =========================================================================================
+# ACT 2 — ⭐ the LAST ring, first. `missions.ron: parcours.objective.rings[4]`, r = 7.0
+# =========================================================================================
+warp 0 40 0
+wait 0.5
+assert phase == 2
+mark f185-fifth-ring-out-of-turn
+
+# =========================================================================================
+# ACT 3 — and now rings 1 to 4, in the order the file lists them
+# =========================================================================================
+warp 0 14 18
+wait 0.4
+warp 18 22 0
+wait 0.4
+warp 0 30 -18
+wait 0.4
+warp -18 22 0
+wait 0.4
+
+# ⭐ Four of five. If the ring in act 2 had been credited this would be five, and the sortie
+# would have been decided a second ago. It was not.
+assert phase == 2
+mark f185-four-of-five
+
+# =========================================================================================
+# ACT 4 — the fifth ring, in its place this time
+# =========================================================================================
+warp 0 40 0
+wait 0.5
+assert phase == 3     # ⭐ WON, by flying, with `kill_target: 0` and 290 s left on the clock
+assert kills == 0
+mark f185-course-flown
+
+# =========================================================================================
+# ACT 5 — home
+# =========================================================================================
+# ⚠️ 3.2 and not 2.0: the `assert phase == 3` above lands only 0.5 s after the verdict, and
+# `missions.ron: hub.verdict_s` holds the word over the field for 3.0 s. Measured — a `wait 2.0`
+# here read a 3 and the line under it read a 6, one station behind all the way home.
+wait 3.2
+assert phase == 6
+mark f185-debrief
+
+wait 1.5
+assert phase == 5
+assert height < 3
+mark f185-home

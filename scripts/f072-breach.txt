@@ -1,0 +1,146 @@
+# f072-breach — THE DEFENCE, played from the hub door to the debrief, and LOST AT THE GATE.
+#
+#   the verdict:  ./target/debug/defeated_by_titan --headless --hub --script scripts/f072-breach.txt --ticks 1400
+#   the exit:     ./target/debug/defeated_by_titan --headless --hub --script scripts/f072-breach.txt --ticks 1400 >/dev/null 2>&1; echo $?
+#
+# ⚠️ The exit code needs its OWN run: a pipeline's `$?` is the LAST command's (`CLAUDE.md`).
+#
+# ---------------------------------------------------------------------------------------
+# WHAT THIS FILE CLAIMS
+#
+#   1. the second rank of hub doors is real — `breach` has its own pad          (`phase == 2`)
+#      ⚠️ and you cannot WALK to it: the hall is in the way (FIND-162)               (`phase == 5`)
+#   2. a sortie can be decided by something that is NOT a kill and NOT a clock  (`kills == 0`)
+#   3. ⭐ **three at the gate is inside the allowance and the sortie holds**    (`phase == 2`)
+#   4. ⭐ **the fourth one loses it** — `breaches_allowed: 3`, in the game      (`phase == 4`)
+#   5. and a lost breach walks the same way home as a won cull        (`phase == 6`, then `5`)
+#
+# **3 and 4 are the pair.** Either one alone is worthless: a mission that is lost the moment a
+# titan touches the gate would pass claim 4, and a mission whose gate does nothing at all would
+# pass claim 3. The number in `missions.ron` is only proven by the tick between them.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT THIS FILE CANNOT CLAIM, and it is the OTHER half of `F-072`
+#
+# ⚠️ **The win is not in this run.** A breach is won by surviving to `target_duration_s`, which
+# is **300 s** at `recruit` — and a headless run advances at roughly one tick per 1/60 s of wall
+# clock (measured 2026-08-26: `f175-loop.txt` does 1153 ticks in 19 s), so the win would cost
+# five minutes of machine time per run and ten for the pair with the exit code. It is held
+# instead by `tests/mission.rs::f072_the_deadline_wins_a_breach_and_the_same_sortie_as_a_cull_loses_it`
+# and by the unit test `mission::objective::tests::the_clock_loses_a_cull_and_wins_a_breach`,
+# which is where the inverted clock — the one character that would make this mode unfinishable —
+# actually lives.
+#
+# ⚠️ **Nobody defends anything here.** The player is parked 90 m up the field so that no titan
+# aggros him and nothing but the gate can decide this sortie; the four husks are placed **in**
+# the gate by hand. What is measured is the *rule*, not a fight. And the reason a fight cannot
+# be scripted yet is written in `missions.ron` above the template: a titan walks at the nearest
+# PLAYER, never at a place, so a breach is defended by standing in the way and not by holding a
+# line. That hole is real and it is untuned.
+#
+# ---------------------------------------------------------------------------------------
+# THE NUMBERS, and where each of them comes from
+#
+#   `missions.ron: hub.deployments`   breach pad at (-18, 0, 8), radius 3.0
+#   `missions.ron: breach.objective`  gate (0, 0, -14), reach 7.0 m, breaches_allowed 3
+#   `missions.ron: hub.verdict_s`     3.0 s of verdict, then `debrief_s` 1.2 s of report
+#   `titan.ron: husk.aggro_radius_m`  45 — the player at z = 90 is 104 m from the gate
+#
+# The phase numbers are `mission::MissionPhase::code`, appended and never inserted:
+#   0 Briefing · 1 Deploying · 2 Active · 3 Won · 4 Lost · 5 Hub · 6 Debrief
+#
+# =========================================================================================
+# ACT 1 — the hub
+# =========================================================================================
+wait 1.5
+assert phase == 5
+assert titans == 0
+mark f072-in-the-hub
+
+# =========================================================================================
+# ACT 2 — the breach door, and ⚠️ THE WALL IN FRONT OF IT
+# =========================================================================================
+#
+# `look` is the game's yaw and `forward = (-sin yaw, 0, -cos yaw)` (`player::locomotion`):
+# 180 is +Z, 90 is −X. The pad at (-18, 0, 8) lies 19.7 m from the hub spawn point on a
+# bearing of **114°**, and `game.ron: player.run_speed_m_s` is 6.0 — so the 4.6 s held below
+# are 27.6 m of intent against a 19.7 m walk, with the pad's 3 m circle in the middle of it.
+#
+# ⚠️ `key` only STARTS a hold. The `wait` under it is what spends the seconds, and a `wait`
+# shorter than the hold stops the walk early (measured 2026-08-26 — a `wait 2.0` under a
+# `key W 4.6` left him 8 m short and looked exactly like the failure below).
+#
+# **And he still does not arrive.** The assert under the walk is `phase == 5`: he is STILL IN
+# THE HUB. The breach and parcours pads stand on the far side of the depot hall's east wall
+# (`docs/FINDINGS.md` FIND-162) — the identical walk mirrored to the escort pad at (+18, 0, 8)
+# deploys on bearing 246°, and a `warp` onto this one deploys too, so the pad is not broken:
+# **it is behind a building.** That assert is a repro, not a decoration; it goes red the day
+# the doors are moved out of the hall, and that day this act becomes a walk again.
+#
+# ✅ **THAT DAY WAS 2026-08-25, and this act is a walk again.** The pad moved `(-18, 0, 8)` ->
+# `(-10, 0, 8)`: `x = -10` is 5 m EAST of the hall's wall, which `maps.ron` places by hand at
+# `x = -47..-15`. The repro did exactly what it was left for — it inverted the moment the bug
+# was fixed, and the claim inverted with it. It asserted **"he does not arrive"**; it now
+# asserts **"he arrives"**, which is the same sentence about the same walk with the wall gone.
+#
+# The new geometry, computed not guessed: `(-10, 0, 8)` is **12.81 m** from the spawn on a
+# bearing of **128.7°** (`forward = (-sin yaw, 0, -cos yaw)`), and at `run_speed_m_s` 6.0 that
+# is **2.13 s**. The 3.2 s held below are 19.2 m of intent against a 12.8 m walk, so the pad's
+# 3 m circle is comfortably inside the hold — the same margin the old line had.
+warp 0 2 0
+wait 1.0
+look 128.7 0
+key W 3.2
+wait 4.2
+assert phase == 2     # ✅ he walks onto the pad now. FIND-162 is closed.
+mark f072-walked-onto-the-pad
+
+# And once more the way a player cannot, so the two routes are still known to agree:
+# `deploy_on_contact` is a distance check and does not care how you got there.
+warp -10 2 8
+wait 1.5
+
+assert phase == 2
+assert kills == 0
+assert titans == 0
+mark f072-deployed
+
+# =========================================================================================
+# ACT 3 — ⭐ THE GATE. Three is allowed; four is not.
+# =========================================================================================
+#
+# Out of everyone's eyes first, so that the only thing left that can decide this sortie is the
+# gate: 104 m from it, against a husk's 45 m of aggro.
+warp 0 2 90
+wait 0.5
+
+# Three husks standing inside the 7 m circle. `GateWatch::note` is a set — one titan is one
+# breach forever, so the count does not depend on how long they stand there.
+spawn titan husk 0 0 -14
+spawn titan husk 3 0 -14
+spawn titan husk -3 0 -14
+wait 1.0
+assert titans == 3
+assert phase == 2     # ⭐ 3. three through, `breaches_allowed: 3` — the sortie HOLDS
+mark f072-three-at-the-gate
+
+spawn titan husk 0 0 -11
+wait 1.0
+assert phase == 4     # ⭐ 4. the fourth is one too many — LOST
+assert titans == 0    # ⚠️ not four: a decided sortie takes its field with it, and the four
+                      #    husks are despawned on the way out of `Active`. Measured — this
+                      #    line read `titans == 4` first and the run said 0.000.
+assert kills == 0     # and not one titan was cut: no cull could ever end this way
+mark f072-gate-fell
+
+# =========================================================================================
+# ACT 4 — the way home, which a lost breach shares with every other mode
+# =========================================================================================
+wait 3.0
+assert phase == 6     # past verdict_s (3.0), inside debrief_s (1.2)
+mark f072-debrief
+
+wait 1.5
+assert phase == 5
+assert height < 3     # back on the hub's spawn point, not 90 m up the field
+mark f072-home
