@@ -1,0 +1,52 @@
+# F-044 — NAHKAMPF AM BODEN: the swing a player on his feet can finally land.
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/f044-ground.txt --ticks 400
+#   # and the exit code needs its OWN run, a pipeline's $? is the LAST command's:
+#   ./target/debug/defeated_by_titan --headless --script scripts/f044-ground.txt --ticks 400 >/dev/null 2>&1; echo $?
+#
+# ## What this run is read off
+#
+# `game.ron: player.run_speed_m_s` is 6.0 and `gear.ron: blades.min_speed_m_s` is 8.0, so until
+# 2026-08-25 a player standing on the ground could **not touch a titan at any speed his legs
+# can produce** — `blades::cut` refused the hit before it ever wrote a message. That is the hole
+# the row was opened for: *"Grundlegender Bodenangriff fuer Situationen ohne Gas."*
+#
+# The two lines to grep for:
+#
+#   tick N: cut titan 1 <zone> at 0.0x m/s      <- under min_speed_m_s, and it landed anyway
+#   tick N: titan 1 took 5.0 in the <zone> ...  <- gear.ron: damage.ground_damage, flat
+#
+# **5.0 and not a speed term.** The cheapest cut a FLYING player can book is
+# `damage_per_m_s x min_speed_m_s` = 1.4 x 8.0 = 11.2, so the ground attack is worth under half
+# of the worst thing the air can do — the row's *"niemals die effizientere Wahl"*, answered in
+# `gear.ron` and not in a balance pass.
+#
+# ⚠️ The husk aggros the moment the player stands next to him (`aggro_radius_m` 45) and hits for
+# 34 of the player's 100. This run is deliberately short: three seconds is one wind-up, so the
+# assert below still measures a player who is standing rather than one who is down.
+#
+# ## The geometry
+#
+# The stand-off of `scripts/f030-cortex.txt`, at knee height instead of at the nape: the husk's
+# body capsule has a radius of 1.25 m and the player's 0.35, so 1.75 m off his axis is 0.15 m of
+# air. `reach_m` 2.00 carries the right blade from x = 15.75 to 17.75, across the axis at 17.5.
+# `look 0 0` and no camera move anywhere in the file — `blades::cut::blade_segment` builds the
+# blade out of `intent.look_dir()`, so at yaw 0 the right blade lies on +X and at yaw -90 it
+# points at nothing (`docs/FINDINGS.md` FIND-112).
+wait 1.5
+spawn titan husk 17.5 0 0
+look 0 0
+key F3 0.05
+warp 15.75 0.6 0.8
+wait 1.00
+assert health > 0
+mark on-his-feet
+slash right 0.40
+wait 0.80
+mark ground-attack
+# A ground attack is never a kill: `blades::cut::ground_attack` refuses the cortex outright,
+# and `combat::damage::zone_factor` books 0.0 for it on top. Both would have to fail for this
+# line to fall.
+assert titans == 1
+wait 1.00
+assert titans == 1

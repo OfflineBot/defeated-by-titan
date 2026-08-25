@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::prelude::*;
 
-use crate::data::{MissionTemplate, Wave};
+use crate::data::{MissionTemplate, Objective, Wave};
 use crate::shared::{PlayerId, TitanId};
 
 use super::phase::MissionPhase;
@@ -42,6 +42,13 @@ pub struct SortieNumbers<'a> {
     pub target_duration_s: f32,
     pub kill_target: u32,
     pub waves: &'a [Wave],
+    /// ⭐ **The mode, and it is the template's in both branches.**
+    ///
+    /// A difficulty owns three numbers — deadline, kill target, waves — and deliberately not
+    /// this one (`data::MissionTemplate::objective`). A level that could turn a breach into a
+    /// cull would make "which mission am I flying" a question with two answers, and the lobby
+    /// shows the mission row and the difficulty row side by side.
+    pub objective: &'a Objective,
 }
 
 /// Template ⊕ difficulty. `None` means the level is not in the file — and the caller says so
@@ -56,6 +63,7 @@ pub fn resolve<'a>(
             target_duration_s: template.target_duration_s,
             kill_target: template.kill_target,
             waves: &template.waves,
+            objective: &template.objective,
         });
     };
     let level = template.difficulties.get(key)?;
@@ -64,6 +72,8 @@ pub fn resolve<'a>(
         target_duration_s: level.target_duration_s,
         kill_target: level.kill_target,
         waves: &level.waves,
+        // The template's, never the level's — see `SortieNumbers::objective`.
+        objective: &template.objective,
     })
 }
 
@@ -309,6 +319,7 @@ mod tests {
             target_duration_s: 330.0,
             kill_target: 3,
             waves: vec![Wave { at_s: 0.0, kind: "husk".into(), count: 2 }],
+            objective: Objective::Cull,
             difficulties: [(
                 "elite".to_string(),
                 Difficulty {
@@ -351,6 +362,20 @@ mod tests {
         assert_eq!(n.waves.len(), 2, "the level's waves, not the template's one");
         assert_eq!(n.waves[1].kind, "scuttler", "and its kinds — an elite sortie is worse, not longer");
         assert_eq!(n.name, "Skirmish · Elite");
+        assert_eq!(n.objective, &Objective::Cull, "and the MODE is still the template's");
+    }
+
+    #[test]
+    fn a_difficulty_cannot_change_the_mode() {
+        // ⭐ The fourth number a level does **not** own. `data::Difficulty` has no `objective`
+        // field at all, so this is a guard against somebody adding one and wiring it here: a
+        // breach whose elite level is a cull is two missions under one name.
+        let mut t = two_shapes();
+        t.objective = Objective::Breach { gate_m: (0.0, 0.0, -14.0), reach_m: 7.0, breaches_allowed: 3 };
+        let level = resolve(&t, Some("elite")).expect("`elite` stands in the file");
+        let direct = resolve(&t, None).expect("no difficulty is a legal sortie");
+        assert_eq!(level.objective, direct.objective, "the level flew a different mode");
+        assert!(matches!(level.objective, Objective::Breach { .. }));
     }
 
     #[test]

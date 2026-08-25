@@ -1037,7 +1037,14 @@ fn f072_every_door_names_a_mission_and_a_difficulty_the_file_knows() {
             panic!("hub pad names difficulty {:?} of {:?}, which is not in the file", pad.difficulty, pad.mission)
         });
         assert!(pad.radius_m > 0.0, "a pad of radius {} cannot be walked into", pad.radius_m);
-        assert!(level.kill_target > 0, "{:?} is won before it starts", pad.difficulty);
+        // ⚠️ **Only a cull has a kill target**, since the modes landed on 2026-08-25. A breach
+        // is decided by its gate and a parcours by its rings, and both carry `kill_target: 0`
+        // on purpose — `KillTally::reached` refuses a target of zero, so a mode that ignores
+        // kills cannot be won by them. The old blanket `> 0` would have made every mode
+        // illegal at a door, which is a test enforcing the absence of the feature.
+        if template.objective == defeated_by_titan::data::Objective::Cull {
+            assert!(level.kill_target > 0, "{:?} is won before it starts", pad.difficulty);
+        }
         assert!(
             (300.0..=420.0).contains(&level.target_duration_s),
             "{:?}: {} s — the bible wants a 5–7 min arc out of every level, not only out of the template",
@@ -2202,4 +2209,303 @@ fn f175_a_won_sortie_passes_through_a_debrief_on_its_way_home() {
          the debrief is the step that is missing: the verdict fell and the hub took over \
          without anybody being told anything"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The three modes — `F-072` breach, `F-073` escort, `F-185` parcours (2026-08-25)
+// ---------------------------------------------------------------------------
+//
+// Until this day `mission::decide` read a tally and a clock, and every template in
+// `missions.ron` was the same mission with different numbers in it. The mode is now data
+// (`data::Objective`) and the judgement is one pure function (`mission::objective::verdict`,
+// whose unit tests are in that file and run under `--lib`).
+//
+// **What these tests are for is the wiring**, which a unit test cannot see: that the mode gets
+// off the file onto the mission entity, that the three systems run in the right set, and above
+// all that the clock is read the way the mode says. Each of them carries its own control — the
+// habit next to rule 5: *delete the thing you think you are measuring and check the number
+// moves.*
+
+use defeated_by_titan::data::Objective;
+use defeated_by_titan::mission::{Cart, Course, GateWatch, Haul};
+
+/// A started app flying `template` with its deadline cut to `seconds`, changed **before
+/// `Startup` reads the file** — the same move `f070_the_deadline_follows_the_file_and_not_a_
+/// literal` makes. A mode whose criterion *is* the clock cannot be measured at the file's 300 s.
+fn started_short(template: &str, seconds: f32) -> App {
+    let mut app = built(Some(template));
+    app.world_mut()
+        .resource_mut::<GameData>()
+        .missions
+        .templates
+        .get_mut(template)
+        .unwrap_or_else(|| panic!("missions.ron has no {template:?} template"))
+        .target_duration_s = seconds;
+    for _ in 0..4 {
+        app.update();
+        if !app.world().resource::<Log>().0.is_empty() {
+            return app;
+        }
+    }
+    panic!("four frames and not one simulation tick — the fixed step is not running");
+}
+
+fn gate_watch(app: &mut App) -> GateWatch {
+    let mut q = app.world_mut().query::<&GateWatch>();
+    q.iter(app.world()).next().expect("the breach has no gate on its mission entity").clone()
+}
+
+fn course_of(app: &mut App) -> Course {
+    let mut q = app.world_mut().query::<&Course>();
+    q.iter(app.world()).next().expect("the parcours has no course on its mission entity").clone()
+}
+
+fn haul_of(app: &mut App) -> Haul {
+    let mut q = app.world_mut().query::<&Haul>();
+    q.iter(app.world()).next().expect("the escort has no haul on its mission entity").clone()
+}
+
+fn cart_pos(app: &mut App) -> Vec3 {
+    let mut q = app.world_mut().query_filtered::<&Transform, With<Cart>>();
+    q.iter(app.world()).next().expect("no cart in the world").translation
+}
+
+/// The gate out of the file — never a literal here.
+fn gate_of(app: &App, template: &str) -> (Vec3, f32, u32) {
+    match &data(app).missions.templates[template].objective {
+        Objective::Breach { gate_m, reach_m, breaches_allowed } => {
+            (Vec3::from(*gate_m), *reach_m, *breaches_allowed)
+        }
+        other => panic!("{template:?} is not a breach: {other:?}"),
+    }
+}
+
+/// The rings out of the file, in the order the file lists them.
+fn rings_of(app: &App, template: &str) -> Vec<(Vec3, f32)> {
+    match &data(app).missions.templates[template].objective {
+        Objective::Parcours { rings } => {
+            rings.iter().map(|r| (Vec3::from(r.center_m), r.radius_m)).collect()
+        }
+        other => panic!("{template:?} is not a parcours: {other:?}"),
+    }
+}
+
+/// ⭐⭐ **`F-072`: the clock that loses every other mission is what WINS a breach.**
+///
+/// One character apart in a match arm, and getting it wrong is a defence mission nobody can
+/// ever finish — while "the mission eventually ends" stays green either way. So the test is an
+/// **A/B on one field**: the identical template, the identical deadline, the identical run, and
+/// the only difference is `objective: Breach` against `objective: Cull`. If the verdict did not
+/// come out of the mode, both halves would say the same word and this goes red.
+#[test]
+fn f072_the_deadline_wins_a_breach_and_the_same_sortie_as_a_cull_loses_it() {
+    let seconds = 10.0;
+    let deadline = 600;
+
+    // ---- A: the breach, exactly as the file writes it -----------------------------------
+    let mut breach = started_short("breach", seconds);
+    park_players_out_of_aggro(&mut breach);
+    ticks(&mut breach, deadline + 4);
+    assert_eq!(
+        clock(&mut breach).decided_at_tick,
+        Some(deadline),
+        "the breach was not decided on the deadline tick"
+    );
+    assert_eq!(
+        phase(&breach),
+        MissionPhase::Won,
+        "a breach held to the deadline is a breach that was HELD"
+    );
+    assert_eq!(tally(&mut breach).total(), 0, "nobody cut anything — the clock won this");
+    assert_eq!(gate_watch(&mut breach).count(), 0, "nobody reached the gate either");
+
+    // ---- B: the control. The same template with one field flipped. -----------------------
+    let mut cull = built(Some("breach"));
+    {
+        let mut d = cull.world_mut().resource_mut::<GameData>();
+        let template = d.missions.templates.get_mut("breach").expect("the breach template");
+        template.target_duration_s = seconds;
+        template.objective = Objective::Cull;
+    }
+    for _ in 0..4 {
+        cull.update();
+        if !cull.world().resource::<Log>().0.is_empty() {
+            break;
+        }
+    }
+    park_players_out_of_aggro(&mut cull);
+    ticks(&mut cull, deadline + 4);
+    assert_eq!(clock(&mut cull).decided_at_tick, Some(deadline), "same tick, other verdict");
+    assert_eq!(
+        phase(&cull),
+        MissionPhase::Lost,
+        "the control run has to LOSE on the tick the breach won on — if it does not, the \
+         verdict is not coming out of the mode and the assertion above proves nothing"
+    );
+}
+
+/// ⭐ **`F-072`: the gate falls on one titan more than the file allows, and not on one fewer.**
+///
+/// The control is the first half: `breaches_allowed` titans standing in the gate leave the
+/// sortie running. Without it, "four titans lose it" would also pass on a system that lost the
+/// sortie for the first one, or for none at all.
+#[test]
+fn f072_the_gate_falls_on_one_titan_more_than_the_file_allows() {
+    let mut app = started(Some("breach"));
+    let (gate, reach_m, allowed) = gate_of(&app, "breach");
+    assert!(allowed > 0, "a breach that falls on the first titan cannot show the difference");
+    // Nothing else may decide this: no kill target in a breach, and the deadline is 300 s away.
+    park_players_out_of_aggro(&mut app);
+
+    // Spread inside the circle rather than stacked on one point, or avian pushes them apart
+    // into an answer nobody wrote.
+    for i in 0..allowed {
+        spawn_titan(&mut app, "husk", gate + Vec3::X * (i as f32 * 1.5 - 1.5));
+    }
+    ticks(&mut app, 10);
+    assert_eq!(gate_watch(&mut app).count(), allowed, "the gate did not see the ones inside it");
+    assert_eq!(
+        phase(&app),
+        MissionPhase::Active,
+        "{allowed} of {allowed} allowed ended the sortie — then the number in the file means \
+         nothing"
+    );
+
+    // And the same titans standing there for another two seconds are still one breach each.
+    ticks(&mut app, 120);
+    assert_eq!(
+        gate_watch(&mut app).count(),
+        allowed,
+        "a titan standing in the gate was counted twice — a set, not a counter"
+    );
+    assert_eq!(phase(&app), MissionPhase::Active);
+
+    spawn_titan(&mut app, "husk", gate + Vec3::Z * (reach_m * 0.5));
+    ticks(&mut app, 10);
+    assert_eq!(gate_watch(&mut app).count(), allowed + 1);
+    assert_eq!(phase(&app), MissionPhase::Lost, "one more than allowed is the fall");
+    assert!(
+        clock(&mut app).decided_at_tick.expect("decided") < 300 * 60,
+        "it was lost long before the deadline — that is the point of the mode"
+    );
+}
+
+/// ⭐⭐ **`F-185`: the parcours is won by flying its rings, IN ORDER.**
+///
+/// The first half is the control and it is the whole feature: standing in the **last** ring
+/// first counts for nothing. A course you can clear by touching any ring is a scavenger hunt,
+/// and `F-185` exists because nothing else in this game teaches the drive.
+#[test]
+fn f185_a_parcours_is_won_by_flying_every_ring_in_the_order_the_file_lists_them() {
+    let mut app = started(Some("parcours"));
+    let rings = rings_of(&app, "parcours");
+    assert!(rings.len() >= 3, "a course of {} rings cannot show an order", rings.len());
+    assert_eq!(course_of(&mut app).gates.len(), rings.len(), "the file did not reach the world");
+
+    // ---- the control: the last ring, first. Nothing may happen. --------------------------
+    let (last, _) = rings[rings.len() - 1];
+    place_players(&mut app, last);
+    ticks(&mut app, 6);
+    assert_eq!(
+        course_of(&mut app).passed(),
+        0,
+        "a ring flown out of order counted — then the course is not a course"
+    );
+    assert_eq!(phase(&app), MissionPhase::Active);
+
+    // ---- and now in order ----------------------------------------------------------------
+    for (index, (at, _)) in rings.iter().enumerate() {
+        place_players(&mut app, *at);
+        ticks(&mut app, 6);
+        assert_eq!(
+            course_of(&mut app).passed(),
+            index + 1,
+            "ring {index} did not register at {at:?}"
+        );
+    }
+    ticks(&mut app, 4);
+    assert!(course_of(&mut app).done());
+    assert_eq!(phase(&app), MissionPhase::Won, "every ring flown and the sortie is not won");
+    assert_eq!(tally(&mut app).total(), 0, "and not one titan was cut — the movement won it");
+}
+
+/// ⭐⭐ **`F-073`: the cart moves only while somebody is next to it.**
+///
+/// That sentence *is* the mode. A cart that rolls on its own is a timer with a model on it, and
+/// the test that would not see the difference is "the cart eventually arrives". So the first
+/// half of this run has the player parked 100 m away and demands **zero** movement.
+#[test]
+fn f073_the_cart_rolls_only_while_a_player_is_escorting_it() {
+    let mut app = started(Some("escort"));
+    let start = haul_of(&mut app).at();
+    let speed_m_s = haul_of(&mut app).speed_m_s;
+    let hz = data(&app).game.simulation_hz as f32;
+    assert!(speed_m_s > 0.0, "a cart that cannot move cannot show that it stands still");
+    assert!(
+        (cart_pos(&mut app) - start).length() < 1e-3,
+        "the cart's picture does not start where its path does"
+    );
+
+    // ---- the control: nobody within `escort_radius_m` ------------------------------------
+    let parked = park_players_out_of_aggro(&mut app);
+    assert!(parked > haul_of(&mut app).escort_radius_m, "the 'control' is inside the radius");
+    ticks(&mut app, 120);
+    assert!(
+        (haul_of(&mut app).at() - start).length() < 1e-3,
+        "the cart rolled {:.2} m with nobody escorting it",
+        (haul_of(&mut app).at() - start).length()
+    );
+
+    // ---- and now escorted ----------------------------------------------------------------
+    let seconds = 2.0;
+    place_players(&mut app, start);
+    ticks(&mut app, (seconds * hz) as u64);
+    let rolled = (haul_of(&mut app).at() - start).length();
+    let expected = speed_m_s * seconds;
+    assert!(
+        (rolled - expected).abs() < 0.2,
+        "escorted for {seconds} s at {speed_m_s} m/s the cart moved {rolled:.2} m, not {expected:.2} m"
+    );
+    assert!(
+        (cart_pos(&mut app) - haul_of(&mut app).at()).length() < 1e-3,
+        "the cart's picture and the mission's answer disagree about where it is"
+    );
+}
+
+/// **`F-073`: the last waypoint is the win.**
+///
+/// The path is 150 m and the file rolls it at 1.2 m/s, which is 125 s of perfect escorting —
+/// so the speed is raised before `Startup` reads it, exactly as the deadline is in
+/// [`started_short`]. What is under test is the arrival, not the patience.
+#[test]
+fn f073_the_cart_on_its_last_waypoint_wins_the_sortie() {
+    let mut app = built(Some("escort"));
+    {
+        let mut d = app.world_mut().resource_mut::<GameData>();
+        let template = d.missions.templates.get_mut("escort").expect("the escort template");
+        match &mut template.objective {
+            Objective::Escort { speed_m_s, .. } => *speed_m_s = 60.0,
+            other => panic!("the escort template is not an escort: {other:?}"),
+        }
+    }
+    for _ in 0..4 {
+        app.update();
+        if !app.world().resource::<Log>().0.is_empty() {
+            break;
+        }
+    }
+
+    // Walk beside it. 400 ticks is 6.7 s and the path is 150 m at 60 m/s — a cart that stopped
+    // on a waypoint instead of carrying the remainder over would run out of them.
+    for _ in 0..400 {
+        let at = haul_of(&mut app).at();
+        place_players(&mut app, at);
+        app.update();
+        if phase(&app) != MissionPhase::Active {
+            break;
+        }
+    }
+    assert!(haul_of(&mut app).arrived(), "the cart never got home");
+    assert_eq!(phase(&app), MissionPhase::Won);
+    assert_eq!(tally(&mut app).total(), 0, "and it was not won by kills");
 }

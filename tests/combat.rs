@@ -55,6 +55,8 @@ use defeated_by_titan::shared::{
     HitZoneOf, LocalPlayer, MovementState, PlayerId, ReleaseReason, Side, SpawnTitan, Tick,
     TitanHit, TitanId, TitanState, Velocity, LAYER_PLAYER, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
 };
+use defeated_by_titan::combat::combo::Combo;
+use defeated_by_titan::combat::damage::{damage_of, ticks_of, CollapseGuard};
 use defeated_by_titan::titan::rig::TitanPart;
 
 // ---------------------------------------------------------------------------
@@ -2588,4 +2590,521 @@ fn f009_an_expired_window_is_not_a_window() {
         "a window that ended at tick 5 still stopped {} of 3 blows over 400 ticks",
         3 - w.drops.len()
     );
+}
+
+// ---------------------------------------------------------------------------
+// F-031 · F-041 · F-044 — the damage formula, the combo and the ground attack
+//
+// 🔴 **Why most of these drive `TitanHit` directly instead of flying a pass.**
+// `combat` reads the message and knows nothing about how a blade is swung — that is the domain
+// split `src/blades/mod.rs` argues out, and it is also what makes the claim testable at all:
+// a pass books between one and five zones depending on where the limb boxes fall, so "one cut
+// at 30 m/s" is not a thing a flight can hold still. The two tests that DO fly
+// (`f031_a_body_cut_drains_a_pool_that_nothing_ever_wrote`, `f044_*`) are the ones whose claim
+// is about the producer, and they are the control on the rest: without them this block would
+// measure a function against itself, which is `docs/FINDINGS.md` FIND-103 exactly.
+// ---------------------------------------------------------------------------
+
+fn titan_id(app: &App, who: Entity) -> TitanId {
+    *app.world().get::<TitanId>(who).expect("a titan carries a TitanId")
+}
+
+fn local_id(app: &mut App) -> PlayerId {
+    let p = player(app);
+    *app.world().get::<PlayerId>(p).expect("the local player carries a PlayerId")
+}
+
+/// The wound pool of a titan. Panics rather than returning `None`: `titan::rig` gives every
+/// body a `Health`, and a body without one is a rig bug, not a measurement.
+fn pool(app: &App, who: Entity) -> f32 {
+    health(app, who).expect("titan::rig hangs Health::full(titan.ron: <kind>.health) on every body")
+}
+
+/// Writes one [`TitanHit`] straight onto the bus — the exact message `blades::cut` writes.
+fn send_hit(app: &mut App, titan: TitanId, by: PlayerId, zone: HitZone, speed_m_s: f32) {
+    app.world_mut().write_message(TitanHit { titan, by, zone, speed_m_s });
+}
+
+fn combo(app: &mut App) -> Combo {
+    let p = player(app);
+    app.world().get::<Combo>(p).copied().unwrap_or(Combo::NONE)
+}
+
+/// Puts the player in the air with a velocity, so that `combat::combo` counts his hits.
+fn airborne(app: &mut App) {
+    let p = player(app);
+    app.world_mut().entity_mut(p).insert(MovementState::Airborne);
+}
+
+/// ★ **`F-031` — a body cut drains a pool that nothing in this game had ever written.**
+///
+/// `titan::rig` has hung `Health::full(titan.ron: <kind>.health)` on every body since the rig
+/// existed, and until 2026-08-25 **no line in `src/` ever touched that component** — the other
+/// half of the same hole `gear.ron: blades.damage_per_m_s` sat in (`docs/FINDINGS.md` FIND-075
+/// is the same shape for `wear_per_hit`). This is the flight that proves the join: a real cut,
+/// out of a real swing, moves a real pool.
+///
+/// **Red when:** `combat::damage::apply` is taken out of `CombatPlugin`, or its `TitanHit`
+/// reader stops matching `hit.titan` — the pool is `max` in both cases.
+#[test]
+fn f031_a_body_cut_drains_a_pool_that_nothing_ever_wrote() {
+    let mut app = app();
+    let d = data(&app);
+    let husk_r = d.titan("husk").expect("husk").cortex_radius_m;
+    let (root, cortex) = a_standing_husk(&mut app);
+    let full = pool(&app, root);
+    assert!(full > 0.0, "titan.ron: husk.health is not a positive number");
+
+    // The same chest pass `f032_a_body_cut_staggers_the_titan_and_never_kills_him` flies: 2.4 m
+    // below the nape, inside the torso box and far outside a 0.55 m cortex sphere.
+    fly_past(&mut app, cortex, husk_r, 30.0, cortex.y - 2.4, 2, 0);
+    ticks(&mut app, 40);
+
+    let zones: Vec<HitZone> = hits(&app).into_iter().map(|(_, h)| h.zone).collect();
+    assert!(!zones.is_empty(), "the pass cut nothing at all — this test measures nothing");
+    assert!(
+        !zones.contains(&HitZone::Cortex),
+        "a pass 2.4 m below the nape reported {zones:?} — that is not a BODY cut any more"
+    );
+    let left = pool(&app, root);
+    assert!(
+        left < full,
+        "the husk took {zones:?} and his wound pool is still {left}/{full}. That is the state \
+         this whole feature was opened for: a component with a number in it that nothing writes"
+    );
+    println!("F-031 pass: zones {zones:?}, pool {full} -> {left}");
+}
+
+/// **The control, and it is what makes the test above worth anything** (`FIND-103`).
+///
+/// The same husk, the same speed, the same tick budget, the pass moved out of `reach_m`. No
+/// cut, no drain — so the number above came out of the blade and not out of the app starting.
+#[test]
+fn f031_a_pass_out_of_reach_drains_nothing() {
+    let mut app = app();
+    let d = data(&app);
+    let husk_r = d.titan("husk").expect("husk").cortex_radius_m;
+    let (root, cortex) = a_standing_husk(&mut app);
+    let full = pool(&app, root);
+
+    // 6 m to the side: `reach_m` is 2.0 and the body capsule is 1.25, so the blade ends 2.75 m
+    // short of the hide.
+    fly_past(&mut app, cortex + Vec3::new(6.0, 0.0, 0.0), husk_r, 30.0, cortex.y - 2.4, 2, 0);
+    ticks(&mut app, 40);
+
+    assert!(hits(&app).is_empty(), "a pass 6 m wide of the husk still cut him: {:?}", hits(&app));
+    assert_eq!(
+        pool(&app, root),
+        full,
+        "the pool moved without a cut — whatever drains it, it is not the blade"
+    );
+}
+
+/// ★ **`F-031`'s acceptance, in the running game:** *"Ein Schnitt bei doppelter Geschwindigkeit
+/// erzeugt mindestens 60 Prozent mehr Schaden."*
+///
+/// Two identical messages, one at `v` and one at `2v`, against two identical husks. Identical
+/// in everything the formula can see — same zone, same multiplier, same kind — so the only free
+/// variable is the speed the acceptance sentence names.
+///
+/// **Red when:** the speed term is dropped out of `damage_of`, or `damage_per_m_s` stops being
+/// read; both make the two numbers equal.
+#[test]
+fn f031_a_cut_at_double_the_speed_takes_at_least_sixty_percent_more() {
+    let mut app = app();
+    let by = local_id(&mut app);
+    let slow_body = spawn_husk(&mut app, Vec3::new(0.0, 0.0, -150.0));
+    let fast_body = spawn_husk(&mut app, Vec3::new(40.0, 0.0, -150.0));
+    let (slow_id, fast_id) = (titan_id(&app, slow_body), titan_id(&app, fast_body));
+    let full = pool(&app, slow_body);
+
+    send_hit(&mut app, slow_id, by, HitZone::Torso, 15.0);
+    send_hit(&mut app, fast_id, by, HitZone::Torso, 30.0);
+    ticks(&mut app, 3);
+
+    let slow = full - pool(&app, slow_body);
+    let fast = full - pool(&app, fast_body);
+    assert!(slow > 0.0, "a 15 m/s chest cut took nothing at all");
+    assert!(
+        fast >= slow * 1.6,
+        "F-031: {slow:.1} at 15 m/s against {fast:.1} at 30 m/s is only {:.0} % more. The row \
+         asks for 60, and a formula with no speed term in it reports 0",
+        (fast / slow - 1.0) * 100.0
+    );
+    println!("F-031 acceptance: 15 m/s -> {slow:.1}, 30 m/s -> {fast:.1}");
+}
+
+/// 🔴 ★ **The cortex books no wound damage, ever.**
+///
+/// *A titan dies only from a fast cut into the cortex* — and the moment the lethal zone also
+/// carries a damage factor, a tuning pass can move the thing the whole game is built on without
+/// anybody noticing. `combat::damage::zone_factor` answers `0.0` for it and this is the guard.
+///
+/// **Red when:** `HitZone::Cortex` is given any factor at all in `zone_factor`.
+#[test]
+fn f031_the_cortex_books_no_wound_damage_at_all() {
+    let mut app = app();
+    let by = local_id(&mut app);
+    let body = spawn_husk(&mut app, Vec3::new(0.0, 0.0, -150.0));
+    let id = titan_id(&app, body);
+    let full = pool(&app, body);
+
+    send_hit(&mut app, id, by, HitZone::Cortex, 75.0);
+    ticks(&mut app, 2);
+
+    assert_eq!(
+        pool(&app, body),
+        full,
+        "a cortex hit at 75 m/s took wound damage. The nape is decided by rule in \
+         titan::brain::receive_hits; a formula that can also reach it is a second way to kill"
+    );
+    // And the rule itself still fired, so this is not measuring a message that went nowhere.
+    assert_eq!(
+        app.world().get::<TitanState>(body),
+        Some(&TitanState::Death),
+        "the cortex hit did not kill either — this test is measuring nothing at all"
+    );
+}
+
+/// ★ **`F-031` — emptying the pool puts the titan on the floor and never kills him.**
+///
+/// `docs/gameplay/enemies.md`: *"every other hit zone is preparation, not damage"*. This is
+/// what "preparation" was made into — a window in which the nape stands still.
+///
+/// **Red when:** the collapse branch is removed (no long freeze), or when it is allowed to kill
+/// (the `TitanState::Death` assertion), or when the pool is not refilled (a titan permanently
+/// at zero is a state nobody else in the repository knows how to read).
+#[test]
+fn f031_an_emptied_pool_floors_the_titan_and_never_kills_him() {
+    let mut app = app();
+    let d = data(&app);
+    let by = local_id(&mut app);
+    let body = spawn_husk(&mut app, Vec3::new(0.0, 0.0, -150.0));
+    let id = titan_id(&app, body);
+    let full = pool(&app, body);
+    let floor = ticks_of(d.gear.damage.collapse_s, d.game.simulation_hz);
+    let stagger = ticks_of(d.titan("husk").expect("husk").stagger_s, d.game.simulation_hz);
+    assert!(
+        floor > stagger,
+        "gear.ron: damage.collapse_s is {floor} ticks against a husk's own stagger of \
+         {stagger} — a collapse that is no longer than the stagger it comes with is not a \
+         collapse, it is a longer stagger nobody notices"
+    );
+
+    // One message that is worth the whole pool. Deliberately ONE and not a burst: a burst
+    // would also be measuring `hitstop::begin`'s `.max()` and the two would be indivisible.
+    let speed = full / (d.gear.blades.damage_per_m_s * d.gear.damage.zone_torso_factor) + 1.0;
+    send_hit(&mut app, id, by, HitZone::Torso, speed);
+    ticks(&mut app, 2);
+
+    let held = app.world().get::<HitStop>(body).map(|s| s.ticks_left).unwrap_or(0);
+    assert!(
+        held + 2 >= floor,
+        "the husk was floored for {held} ticks and gear.ron: damage.collapse_s asks for {floor}. \
+         Before this feature a body cut bought {stagger} — the kind's own stagger"
+    );
+    assert!(
+        app.world().get::<CollapseGuard>(body).is_some(),
+        "no refractory guard after a collapse — he can be put straight back on the floor"
+    );
+    assert_eq!(
+        pool(&app, body),
+        full,
+        "the wound pool was left at zero. It has to steam shut on the collapse, or every \
+         further cut collapses him again and the refractory guard is the only thing between \
+         the player and a stun lock"
+    );
+
+    ticks(&mut app, 400);
+    assert_ne!(
+        app.world().get::<TitanState>(body),
+        Some(&TitanState::Death),
+        "emptying the wound pool killed the husk — only the Cortex may do that"
+    );
+    println!("F-031 collapse: pool {full}, one hit at {speed:.1} m/s, {held} ticks on the floor");
+}
+
+/// 🔴 ★ **`F-031` — a titan cannot be kept on the floor.**
+///
+/// The reason `gear.ron: damage.collapse_refractory_s` exists at all. The arithmetic version of
+/// this guarantee — *"collapse_s is shorter than the time it takes to empty the pool again"* —
+/// is already **false** for the scuttler at the shipped numbers (60 points of pool against
+/// 1.4 x 30 x 2.0 = 84 for one capped chest cut), so the claim is made by a refractory
+/// component instead and this is what measures it.
+///
+/// The flood below is far worse than anything a player can produce: one pool-emptying hit
+/// **every tick** for four refractory windows.
+///
+/// **Red when:** `CollapseGuard` is not inserted, or `advance_guards` removes it early, or the
+/// collapse branch stops checking it.
+#[test]
+fn f031_a_titan_cannot_be_kept_on_the_floor() {
+    let mut app = app();
+    let d = data(&app);
+    let by = local_id(&mut app);
+    let body = spawn_husk(&mut app, Vec3::new(0.0, 0.0, -150.0));
+    let id = titan_id(&app, body);
+    let full = pool(&app, body);
+    let refractory = ticks_of(d.gear.damage.collapse_refractory_s, d.game.simulation_hz);
+    let speed = full / (d.gear.blades.damage_per_m_s * d.gear.damage.zone_torso_factor) + 1.0;
+
+    let window = refractory * 4;
+    let mut collapses = 0;
+    let mut guarded_before = false;
+    for _ in 0..window {
+        send_hit(&mut app, id, by, HitZone::Torso, speed);
+        app.update();
+        let guarded = app.world().get::<CollapseGuard>(body).is_some();
+        if guarded && !guarded_before {
+            collapses += 1;
+        }
+        guarded_before = guarded;
+    }
+    let ceiling = window / refractory + 1;
+    assert!(
+        collapses <= ceiling,
+        "{collapses} collapses in {window} ticks against a refractory window of {refractory} — \
+         at most {ceiling} are possible if the guard works. A pool-emptying hit was written on \
+         every one of those ticks, so this is the stun lock, measured"
+    );
+    assert!(collapses >= 1, "not one collapse in {window} ticks of pool-emptying hits");
+    println!("F-031 lock guard: {collapses} collapses in {window} ticks (ceiling {ceiling})");
+}
+
+/// ★ **`F-041` — consecutive hits without ground contact raise a multiplier.**
+///
+/// The row, verbatim: *"Aufeinanderfolgende Treffer ohne Bodenkontakt erhoehen einen
+/// Multiplikator, der bei Treffer oder Landung zurueckgesetzt wird."* This is the first half;
+/// the landing is the second half of the same test.
+///
+/// **Red when:** `combo::bank` is removed, the `is_airborne` gate is inverted, or `combo::decay`
+/// stops clearing the chain on the ground.
+#[test]
+fn f041_hits_in_the_air_raise_the_multiplier_and_a_landing_ends_it() {
+    let mut app = app();
+    let d = data(&app);
+    let by = local_id(&mut app);
+    let body = spawn_husk(&mut app, Vec3::new(0.0, 0.0, -150.0));
+    let id = titan_id(&app, body);
+    let step = d.gear.damage.combo_step;
+
+    airborne(&mut app);
+    send_hit(&mut app, id, by, HitZone::Torso, 20.0);
+    ticks(&mut app, 1);
+    assert_eq!(combo(&mut app).hits, 1);
+    assert_eq!(
+        combo(&mut app).multiplier,
+        1.0,
+        "the FIRST hit of a chain paid a bonus — a chain of one is not a combo"
+    );
+
+    airborne(&mut app);
+    send_hit(&mut app, id, by, HitZone::Torso, 20.0);
+    ticks(&mut app, 1);
+    let after_two = combo(&mut app);
+    assert_eq!(after_two.hits, 2);
+    assert!(
+        (after_two.multiplier - (1.0 + step)).abs() < 1e-5,
+        "two hits gave x{:.3}, gear.ron: damage.combo_step {step} asks for x{:.3}",
+        after_two.multiplier,
+        1.0 + step
+    );
+
+    // ★ The landing. One tick of `Grounded` is enough — `combo::decay` does not ask whether a
+    // chain was running, it asks whether the player is on the ground.
+    let p = player(&mut app);
+    app.world_mut().entity_mut(p).insert(MovementState::Grounded);
+    ticks(&mut app, 1);
+    assert_eq!(
+        combo(&mut app),
+        Combo::NONE,
+        "the chain survived a landing — 'ohne Bodenkontakt' is the whole rule"
+    );
+}
+
+/// ★ **`F-041` — the chain lapses on its own.** `gear.ron: damage.combo_window_s`.
+///
+/// Without this a player who cut one titan and then flew for a minute would still be carrying
+/// a multiplier, and the row's *"bricht korrekt ab"* would mean only "on the ground".
+#[test]
+fn f041_a_chain_lapses_after_the_window_without_a_hit() {
+    let mut app = app();
+    let d = data(&app);
+    let by = local_id(&mut app);
+    let body = spawn_husk(&mut app, Vec3::new(0.0, 0.0, -150.0));
+    let id = titan_id(&app, body);
+    let window = ticks_of(d.gear.damage.combo_window_s, d.game.simulation_hz);
+    assert!(window > 4, "gear.ron: damage.combo_window_s is {window} ticks — nothing to measure");
+
+    airborne(&mut app);
+    send_hit(&mut app, id, by, HitZone::Torso, 20.0);
+    ticks(&mut app, 1);
+    assert!(combo(&mut app).is_running());
+
+    // Half the window: still there. Whoever deletes the countdown passes the line below and
+    // falls over the one after it, which is the point of measuring both.
+    for _ in 0..window / 2 {
+        airborne(&mut app);
+        app.update();
+    }
+    assert!(combo(&mut app).is_running(), "the chain lapsed inside half its own window");
+
+    for _ in 0..window {
+        airborne(&mut app);
+        app.update();
+    }
+    assert_eq!(combo(&mut app), Combo::NONE, "the chain outlived {window} ticks of silence");
+}
+
+/// ★ **`F-041` — a titan that connects breaks the chain.** The *"bei Treffer"* of the row, and
+/// it is the titan's hit on you, not yours on him.
+///
+/// **Red when:** the reset is taken out of `combat::strike::land`.
+#[test]
+fn f041_a_titan_that_connects_breaks_the_chain() {
+    let mut app = app();
+    let by = local_id(&mut app);
+    let husk_at = Vec3::new(0.0, 0.0, -10.0);
+    let body = spawn_husk(&mut app, husk_at);
+    let id = titan_id(&app, body);
+    place(&mut app, in_his_face(husk_at, 5.0), Vec3::ZERO);
+
+    airborne(&mut app);
+    send_hit(&mut app, id, by, HitZone::Torso, 20.0);
+    ticks(&mut app, 1);
+    airborne(&mut app);
+    send_hit(&mut app, id, by, HitZone::Torso, 20.0);
+    ticks(&mut app, 1);
+    assert!(combo(&mut app).multiplier > 1.0, "the chain never got going");
+
+    // The husk needs ~90 ticks to wind up and strike. `airborne` every tick, so that the ONLY
+    // thing that can break the chain in this window is the blow itself.
+    let p = player(&mut app);
+    let start = health(&app, p).expect("the player carries a Health");
+    let mut broken_at = None;
+    for _ in 0..400 {
+        app.world_mut().entity_mut(p).insert(MovementState::Airborne);
+        app.update();
+        if health(&app, p).unwrap_or(start) < start {
+            broken_at = Some(combo(&mut app));
+            break;
+        }
+    }
+    let after = broken_at.expect("the husk never landed a blow in 400 ticks — nothing measured");
+    assert_eq!(
+        after,
+        Combo::NONE,
+        "the husk connected and the chain survived it: {after:?}. The row says the multiplier \
+         is reset 'bei Treffer'"
+    );
+}
+
+/// ★ **`F-044` — a ground attack exists where a scratch used to be refused.**
+///
+/// `game.ron: player.run_speed_m_s` is 6.0 against a `gear.ron: blades.min_speed_m_s` of 8.0,
+/// so before this a player on his feet could not touch a titan **at any speed his legs can
+/// produce**. The row: *"Grundlegender Bodenangriff fuer Situationen ohne Gas."*
+///
+/// **Red when:** `blades::cut::ground_attack` is removed — the touch is refused again and no
+/// message is written at all.
+#[test]
+fn f044_a_ground_attack_lands_where_a_scratch_used_to_be_refused() {
+    let mut app = app();
+    let d = data(&app);
+    let floor = d.gear.blades.min_speed_m_s;
+    let husk_at = Vec3::new(0.0, 0.0, -10.0);
+    let body = spawn_husk(&mut app, husk_at);
+    let full = pool(&app, body);
+
+    // Standing still, 1.75 m off the husk's axis — the stand-off `scripts/f030-cortex.txt`
+    // flies, at chest height instead of at the nape. `place` pins him with no velocity; the
+    // `MovementState` is what the feature reads, and it is set here rather than waited for
+    // because a settle would also be measuring `player::locomotion`.
+    place(&mut app, Vec3::new(husk_at.x - 1.75, 1.0, husk_at.z), Vec3::ZERO);
+    let p = player(&mut app);
+    app.world_mut().entity_mut(p).insert(MovementState::Grounded);
+    hold_slash(&mut app);
+    for _ in 0..120 {
+        app.world_mut().entity_mut(p).insert(MovementState::Grounded);
+        app.update();
+    }
+
+    let landed = hits(&app);
+    assert!(
+        !landed.is_empty(),
+        "a standing player swung at a husk 1.75 m away for two seconds and cut nothing"
+    );
+    for (_, hit) in &landed {
+        assert!(
+            hit.speed_m_s < floor,
+            "a standing player produced {:.2} m/s, over min_speed_m_s {floor} — this test is \
+             measuring an airborne cut",
+            hit.speed_m_s
+        );
+        assert_ne!(
+            hit.zone,
+            HitZone::Cortex,
+            "a ground attack reported the CORTEX. titan::brain::receive_hits kills on that by \
+             rule and never looks at the speed, so this is a free kill from standing"
+        );
+    }
+    assert!(pool(&app, body) < full, "the ground attack was worth nothing at all");
+    println!(
+        "F-044: {} ground hits, pool {full} -> {}, zones {:?}",
+        landed.len(),
+        pool(&app, body),
+        landed.iter().map(|(_, h)| h.zone).collect::<Vec<_>>()
+    );
+}
+
+/// **The control for `F-044`, and it is the whole reason the feature is not just "delete the
+/// speed floor"** (`FIND-103`): the identical touch **in the air** still writes nothing.
+#[test]
+fn f044_the_same_slow_touch_in_the_air_is_still_a_scratch() {
+    let mut app = app();
+    let husk_at = Vec3::new(0.0, 0.0, -10.0);
+    let body = spawn_husk(&mut app, husk_at);
+    let full = pool(&app, body);
+
+    place(&mut app, Vec3::new(husk_at.x - 1.75, 1.0, husk_at.z), Vec3::ZERO);
+    let p = player(&mut app);
+    hold_slash(&mut app);
+    for _ in 0..120 {
+        app.world_mut().entity_mut(p).insert(MovementState::Airborne);
+        app.update();
+    }
+
+    assert!(
+        hits(&app).is_empty(),
+        "a slow touch in mid-air wrote {:?} — the speed floor is gone, not conditioned",
+        hits(&app)
+    );
+    assert_eq!(pool(&app, body), full, "the husk lost pool to a mid-air scratch");
+}
+
+/// **`F-044`'s acceptance, as a comparison and not a number:** *"Bodenangriff existiert, ist
+/// aber niemals die effizientere Wahl."*
+///
+/// The cheapest cut a flying player can book is one at exactly `min_speed_m_s`; the ground
+/// attack has to stay under it, and it does so by construction because it has no speed term at
+/// all. Against the shipped file: 5.0 against 11.2.
+#[test]
+fn f044_a_ground_attack_is_never_the_better_choice() {
+    let app = app();
+    let d = data(&app);
+    let floor = d.gear.blades.min_speed_m_s;
+    let ground = damage_of(&d.gear, HitZone::Torso, floor - 0.01, 1.0);
+    let cheapest_airborne = damage_of(&d.gear, HitZone::Torso, floor, 1.0);
+    assert!(ground > 0.0, "F-044: the ground attack is worth nothing — the row says it exists");
+    assert!(
+        ground < cheapest_airborne,
+        "F-044: a ground attack books {ground:.1} against {cheapest_airborne:.1} for the \
+         slowest cut a flying player can make. The row says it may never be the better choice"
+    );
+    // And the combo cannot rescue it either: a grounded player has no chain at all.
+    assert!(
+        !defeated_by_titan::combat::combo::is_airborne(MovementState::Grounded),
+        "a grounded player can carry a combo — then the ground attack CAN be the better choice"
+    );
+    println!("F-044: ground {ground:.1} vs cheapest airborne {cheapest_airborne:.1}");
 }

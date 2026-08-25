@@ -38,8 +38,11 @@ use defeated_by_titan::data::GameData;
 use defeated_by_titan::debug::DebugOverlay;
 use defeated_by_titan::mission::MissionPhase;
 use defeated_by_titan::shared::{
-    Cli, HitZone, HitZoneOf, ModelAnchors, PlayerId, SpawnTitan, StateClock, TitanHit, TitanId,
-    TitanKindName, TitanState, CORTEX_ANCHOR,
+    Cli, HitZone, HitZoneOf, ModelAnchors, MovementState, PlayerId, SimulationSystems, SpawnTitan,
+    StateClock, TitanHit, TitanId, TitanKindName, TitanState, Velocity, CORTEX_ANCHOR,
+};
+use defeated_by_titan::titan::perception::{
+    hears, loudness_m, period_ticks, sees, Awareness, CrowdSlot, Lod, Senses,
 };
 use defeated_by_titan::titan::rig::{PartExtent, TitanPart};
 use defeated_by_titan::titan::{spawnable, SpawnRefused};
@@ -2664,4 +2667,447 @@ fn f032_the_limb_zones_are_data_and_the_body_still_carries_two_colliders() {
         assert!(zones.contains(&wanted), "no {wanted:?} box on the rig: {zones:?}");
     }
     println!("F-032 the husk: colliders {colliders:?}, hit zones {zones:?}");
+}
+
+// ---------------------------------------------------------------------------
+// F-051 — the perception model: a cone, an ear, and the noise a player makes
+// ---------------------------------------------------------------------------
+
+/// **The instrument.** Holds one player at a fixed place and tells the world he is moving at
+/// `speed_m_s` in `movement`.
+///
+/// It runs in [`SimulationSystems::Intent`], which is **before** `Drive` and therefore before
+/// `titan::perception::perceive` — and `Velocity` is the player's own domain's in `Integrate`,
+/// which is after. So the value the titan's ear reads this tick is the value written here, and
+/// the player's own systems get it back untouched on the next one.
+///
+/// **Why the position is pinned too.** A player really moving at 20 m/s covers 333 m in the
+/// 1000 ticks this measurement takes, and then the number that came out would be about the
+/// approach and not about the ear. Pinning both is what makes the two runs differ in **exactly
+/// one** thing: whether the gas is on.
+#[derive(Resource, Clone, Copy)]
+struct PinnedPlayer {
+    at: Vec3,
+    speed_m_s: f32,
+    movement: MovementState,
+}
+
+fn pin_player(
+    pinned: Res<PinnedPlayer>,
+    mut players: Query<(&mut Transform, &mut Velocity, &mut MovementState), With<PlayerId>>,
+) {
+    for (mut transform, mut velocity, mut movement) in &mut players {
+        transform.translation = pinned.at;
+        // Along +X, which is sideways to every titan in these tests: a speed that pointed at
+        // the titan would be an approach, and the ear reads the magnitude anyway.
+        velocity.0 = Vec3::new(pinned.speed_m_s, 0.0, 0.0);
+        *movement = pinned.movement;
+    }
+}
+
+/// An app with the instrument above installed.
+fn app_with_pinned_player(at: Vec3, speed_m_s: f32, movement: MovementState) -> App {
+    let mut app = app();
+    app.insert_resource(PinnedPlayer { at, speed_m_s, movement });
+    app.add_systems(FixedUpdate, pin_player.in_set(SimulationSystems::Intent));
+    app
+}
+
+fn awareness_of(app: &mut App, root: Entity) -> Awareness {
+    *app.world().get::<Awareness>(root).expect("every titan carries an Awareness")
+}
+
+/// Runs until this titan has noticed somebody, and hands back the tick it happened on.
+/// `None` means he never did.
+fn ticks_until_detected(app: &mut App, root: Entity, limit: u64) -> Option<u64> {
+    for t in 0..limit {
+        app.update();
+        if awareness_of(app, root).detected {
+            return Some(t + 1);
+        }
+    }
+    None
+}
+
+/// ★ **`F-051`'s acceptance sentence, and it is measured rather than argued.**
+///
+/// *"Ein leise agierender Spieler wird spaeter entdeckt als ein boostender."* Three runs that
+/// differ in **one** thing — the same lurker, the same 40 m, the same player, held in the same
+/// spot by the same instrument:
+///
+/// | the player | noise radius | what the lurker's 75 m ear does |
+/// |---|---|---|
+/// | 20 m/s **on the rope** | `(8 + 24) × 1.6` = 51.2 m | hears him, and after `n` ticks comes |
+/// | 20 m/s **falling** | `8 + 24` = 32.0 m | **nothing** — 32 m of noise does not reach 40 m |
+/// | standing still | 8.0 m | nothing |
+///
+/// The number of ticks is **predicted out of `titan.ron`** and then measured, so a gain typed
+/// into `titan/` instead of read from the file fails here. And the second row is the control
+/// the habit next to rule 5 asks for: *delete the thing you think you are measuring and check
+/// the number moves.* Same speed, same distance, gas off — and the detection disappears
+/// entirely instead of merely getting later.
+///
+/// He is behind the lurker on purpose (`+Z`, and a titan spawns facing `−Z`): the eye is
+/// instant and would answer the question before the ear ever got to.
+#[test]
+fn f051_a_player_under_gas_is_heard_where_the_same_speed_falling_is_not() {
+    let at = Vec3::new(0.0, 2.0, 40.0);
+    let speed_m_s = 20.0;
+
+    // ---- the prediction, out of the file ------------------------------------------------
+    let d = data(&app());
+    let feel = d.titans.perception;
+    let lurker = d.titan("lurker").expect("titan.ron has a lurker");
+    let ear_m = lurker.hearing_radius_m;
+    let hz = d.game.simulation_hz as f32;
+    let noise_roped = (feel.quiet_m + speed_m_s * feel.noise_per_speed_m) * feel.rope_factor;
+    let noise_free = feel.quiet_m + speed_m_s * feel.noise_per_speed_m;
+    let reach = noise_roped.min(ear_m);
+    let strength = (reach - at.z) / reach;
+    let predicted = (1.0 / (feel.hearing_gain_per_s * strength) * hz).ceil() as u64;
+    assert!(
+        noise_free < at.z && noise_roped > at.z,
+        "this measurement is only a measurement while the gas is what crosses the 40 m: \
+         roped {noise_roped} m, free {noise_free} m"
+    );
+
+    // ---- 1. on the rope -----------------------------------------------------------------
+    let mut app = app_with_pinned_player(at, speed_m_s, MovementState::Tethered);
+    spawn(&mut app, "lurker", Vec3::ZERO);
+    let root = the_titan(&mut app);
+    let roped = ticks_until_detected(&mut app, root, 900);
+    let roped = roped.expect("a lurker with a 75 m ear never heard a man boosting at 40 m");
+    assert!(
+        roped.abs_diff(predicted) <= 3,
+        "heard him on tick {roped}, the file predicts {predicted} (noise {noise_roped:.1} m, \
+         reach {reach:.1} m, strength {strength:.4}, gain {} /s)",
+        feel.hearing_gain_per_s
+    );
+    let heard = awareness_of(&mut app, root);
+    assert!(!heard.saw, "the lurker is supposed to have his back to him, not see him");
+    assert!((heard.noise_m - noise_roped).abs() < 1e-3, "{} vs {noise_roped}", heard.noise_m);
+
+    // ---- 2. the control: the same speed, gas off ----------------------------------------
+    let mut quiet = app_with_pinned_player(at, speed_m_s, MovementState::Airborne);
+    spawn(&mut quiet, "lurker", Vec3::ZERO);
+    let root = the_titan(&mut quiet);
+    let free = ticks_until_detected(&mut quiet, root, 900);
+    assert_eq!(
+        free, None,
+        "the same 20 m/s WITHOUT the gas carries {noise_free:.1} m of noise and must not reach \
+         40 m — this is the control run, and a detection here means the ear is reading \
+         something other than the noise radius"
+    );
+
+    // ---- 3. the floor: standing still ---------------------------------------------------
+    let mut still = app_with_pinned_player(at, 0.0, MovementState::Grounded);
+    spawn(&mut still, "lurker", Vec3::ZERO);
+    let root = the_titan(&mut still);
+    assert_eq!(ticks_until_detected(&mut still, root, 300), None, "a motionless player at 40 m");
+
+    println!(
+        "F-051 lurker, 40 m, 20 m/s: roped noise {noise_roped:.1} m -> heard on tick {roped} \
+         (predicted {predicted}); free noise {noise_free:.1} m -> never; standing 8.0 m -> never"
+    );
+}
+
+/// ★ **The cone, end to end, in one world.** The eye is instant and the blind spot is real.
+///
+/// A husk stands at the origin facing `−Z` (a titan's spawn facing). The player stands 15 m
+/// **behind** him and does nothing: no sight, and 8 m of noise does not carry 15 m. Then the
+/// same player is put 15 m **in front** of him without a single number changing, and the husk
+/// is in `Pursue` inside two ticks.
+///
+/// **What it goes red on.** Until 2026-08-25 `titan::brain::decide` read
+/// `distance_m <= aggro_radius_m`, a circle of 45 m with no facing in it — under that rule the
+/// first half of this test is `Pursue` too, and the whole of `F-051` is undetectable from
+/// outside. Set `sight_half_angle_deg` to 180 in `titan.ron` and the first half goes red again.
+#[test]
+fn f051_a_husk_is_blind_behind_and_instant_in_front() {
+    let behind = Vec3::new(0.0, 2.0, 15.0);
+    let in_front = Vec3::new(0.0, 2.0, -15.0);
+
+    let mut app = app_with_pinned_player(behind, 0.0, MovementState::Grounded);
+    spawn(&mut app, "husk", Vec3::ZERO);
+    let root = the_titan(&mut app);
+    ticks(&mut app, 120);
+
+    let blind = awareness_of(&mut app, root);
+    let state = *app.world().get::<TitanState>(root).expect("a titan has a state");
+    assert!(!blind.saw, "the husk saw a man standing dead behind him");
+    assert_eq!(blind.heard, 0.0, "he heard a motionless man at 15 m");
+    assert!(!blind.detected, "awareness {} after 120 ticks in the blind spot", blind.level);
+    assert_eq!(state, TitanState::Idle, "he is chasing something he has not noticed");
+
+    app.world_mut().resource_mut::<PinnedPlayer>().at = in_front;
+    ticks(&mut app, 2);
+
+    let seen = awareness_of(&mut app, root);
+    let state = *app.world().get::<TitanState>(root).expect("a titan has a state");
+    assert!(seen.saw && seen.detected, "the same man 15 m in front: saw {}, detected {}", seen.saw, seen.detected);
+    assert_eq!(seen.level, 1.0, "sight is instant, never an accumulation");
+    assert_eq!(state, TitanState::Pursue, "he sees him and stands still");
+    println!("F-051 husk: 15 m behind -> Idle, level {:.2}; 15 m in front -> Pursue in 2 ticks", blind.level);
+}
+
+/// The two per-kind numbers, in range, on every row. The same guard shape as
+/// `tests/combat.rs::every_kind_carries_a_strike_half_angle_in_range`.
+///
+/// 180 makes the cone a circle again and deletes the feature; below 20 a titan walks past a
+/// man standing in front of him.
+#[test]
+fn f051_every_kind_carries_a_sight_cone_and_an_ear_in_range() {
+    let d = data(&app());
+    let mut rows = Vec::new();
+    for (name, kind) in &d.titans.kinds {
+        assert!(
+            (20.0..=170.0).contains(&kind.sight_half_angle_deg),
+            "{name}: sight_half_angle_deg {} is outside [20, 170] — at 180 the cone is a circle \
+             and F-051 is gone",
+            kind.sight_half_angle_deg
+        );
+        assert!(
+            (5.0..=300.0).contains(&kind.hearing_radius_m),
+            "{name}: hearing_radius_m {} is outside [5, 300]",
+            kind.hearing_radius_m
+        );
+        rows.push(format!(
+            "{name} {}/{}",
+            kind.sight_half_angle_deg, kind.hearing_radius_m
+        ));
+    }
+    // The bellower is the kind the design hangs the stealth layer off — his ear has to be the
+    // widest in the file or `docs/gameplay/enemies.md` is describing somebody else.
+    let widest = d
+        .titans
+        .kinds
+        .iter()
+        .max_by(|a, b| a.1.hearing_radius_m.total_cmp(&b.1.hearing_radius_m))
+        .map(|(name, _)| name.clone())
+        .unwrap();
+    assert_eq!(widest, "bellower", "the widest ear in titan.ron belongs to {widest}");
+    println!("F-051 cones/ears: {}", rows.join(" · "));
+}
+
+/// The three pure functions, against numbers computed here and not with the domain's own
+/// helper — the same rule [`expected_ticks`] follows.
+#[test]
+fn f051_the_noise_the_cone_and_the_ear_are_arithmetic() {
+    let d = data(&app());
+    let feel = d.titans.perception;
+    let husk = d.titan("husk").expect("titan.ron has a husk");
+    let senses = Senses::of(husk);
+
+    assert_eq!(loudness_m(&feel, 0.0, false), feel.quiet_m);
+    let fast = feel.quiet_m + 30.0 * feel.noise_per_speed_m;
+    assert!((loudness_m(&feel, 30.0, false) - fast).abs() < 1e-3);
+    assert!((loudness_m(&feel, 30.0, true) - fast * feel.rope_factor).abs() < 1e-3);
+    assert_eq!(loudness_m(&feel, 10_000.0, true), feel.max_noise_m, "the ceiling is one");
+
+    // The cone, off Bevy's forward (−Z).
+    assert!(sees(&senses, Vec3::NEG_Z, Vec3::new(0.0, 0.0, -20.0)));
+    assert!(!sees(&senses, Vec3::NEG_Z, Vec3::new(0.0, 0.0, 20.0)), "dead astern");
+    assert!(
+        !sees(&senses, Vec3::NEG_Z, Vec3::new(0.0, 0.0, -(husk.aggro_radius_m + 1.0))),
+        "in the cone, past the range"
+    );
+    // Height does not blind him: every cone in this game is measured on the ground plane.
+    assert!(sees(&senses, Vec3::NEG_Z, Vec3::new(0.0, 60.0, -20.0)));
+
+    // The ear takes the SMALLER of the two radii.
+    assert_eq!(hears(&senses, feel.quiet_m, 20.0), 0.0);
+    let close = hears(&senses, 300.0, husk.hearing_radius_m / 2.0);
+    assert!((close - 0.5).abs() < 1e-3, "a huge noise at half the kind's own ear: {close}");
+    println!(
+        "F-051 husk: cone {} deg x {} m, ear {} m",
+        husk.sight_half_angle_deg, husk.aggro_radius_m, husk.hearing_radius_m
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F-055 — the ring: six titans, six places
+// ---------------------------------------------------------------------------
+
+/// The smallest gap between any two living titans, on the ground plane.
+fn tightest_pair_m(app: &mut App) -> f32 {
+    let roots = titan_roots(app);
+    let at: Vec<Vec3> = roots
+        .iter()
+        .filter_map(|e| app.world().get::<Transform>(*e).map(|t| t.translation))
+        .collect();
+    let mut tightest = f32::INFINITY;
+    for i in 0..at.len() {
+        for j in (i + 1)..at.len() {
+            let d = at[i] - at[j];
+            tightest = tightest.min(Vec3::new(d.x, 0.0, d.z).length());
+        }
+    }
+    tightest
+}
+
+/// ★ **`F-055`'s acceptance, with its own control run inside it.**
+///
+/// *"Bei 6 Titanen auf einen Spieler stehen keine zwei in derselben Position."* Six husks are
+/// put on one line 40 m from a player who does not move, and walked for 900 ticks. Then the
+/// **same** six are walked again with `crowd.ring_radius_m` set to zero in `GameData` — which
+/// is the habit next to rule 5 in one line: *delete the thing you think you are measuring and
+/// check the number moves.*
+///
+/// Without the ring six titans converge on one point and the tightest pair is under a metre.
+/// With it they arrive on six bearings and the tightest pair is metres apart. It goes red when
+/// the slot stops reaching `brain::aim`, when two titans are handed the same index, and when
+/// the fade swallows the offset before anybody has arrived.
+#[test]
+fn f055_six_titans_on_one_player_stand_in_six_places() {
+    fn run(ring_radius_m: Option<f32>) -> (f32, Vec<u32>) {
+        let mut app = app_with_pinned_player(Vec3::new(0.0, 2.0, 0.0), 0.0, MovementState::Grounded);
+        if let Some(r) = ring_radius_m {
+            app.world_mut().resource_mut::<GameData>().titans.crowd.ring_radius_m = r;
+        }
+        // On a line 40 m out, 2 m apart, on **+Z** — so the spawn facing (Bevy's forward, −Z)
+        // already points at the player, exactly as `f050_…` sets its husk up. That is not
+        // convenience: since `F-051` a titan acquires nobody he has not perceived, and a
+        // motionless player on the ground carries `perception.quiet_m` = 8 m of noise, which
+        // no ear in the file reaches at 40 m. Spawned facing away they would stand where they
+        // were put for all 900 ticks and the ring would be measured against a field of statues.
+        // 40 m is inside the husk's `aggro_radius_m` of 45 and far outside his 6 m reach: they
+        // are still walked in, and the spread is the walk's, not the spawn's.
+        for i in 0..6 {
+            spawn(&mut app, "husk", Vec3::new(i as f32 * 2.0 - 5.0, 0.0, 40.0));
+        }
+        ticks(&mut app, 900);
+        let roots = titan_roots(&mut app);
+        let slots: Vec<u32> = roots
+            .iter()
+            .filter_map(|e| app.world().get::<CrowdSlot>(*e).map(|s| s.index))
+            .collect();
+        let bearings: Vec<String> = roots
+            .iter()
+            .filter_map(|e| app.world().get::<Transform>(*e).map(|t| t.translation))
+            .map(|p| {
+                format!("{:.0}deg@{:.1}m", f32::atan2(p.x, p.z).to_degrees(), Vec3::new(p.x, 0.0, p.z).length())
+            })
+            .collect();
+        let label = match ring_radius_m {
+            None => "as shipped".to_string(),
+            Some(r) => format!("ring_radius_m forced to {r}"),
+        };
+        println!("  F-055 {label}: {bearings:?}");
+        (tightest_pair_m(&mut app), slots)
+    }
+
+    let (with_ring, slots) = run(None);
+    let (stacked, _) = run(Some(0.0));
+
+    let mut sorted = slots.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), 6, "six titans were handed the slots {slots:?}");
+
+    assert!(
+        with_ring > stacked * 2.0 && with_ring > 4.0,
+        "the ring bought {with_ring:.2} m between the tightest pair; without it they stand \
+         {stacked:.2} m apart. A ring that does not spread them is decoration"
+    );
+    println!(
+        "F-055 six husks after 900 ticks: tightest pair {with_ring:.2} m with the ring, \
+         {stacked:.2} m without it, slots {slots:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F-054 — the level of detail
+// ---------------------------------------------------------------------------
+
+/// ★ **`F-054`: a far titan thinks less often, and the wind-up still lasts as long.**
+///
+/// Two halves, and the second is the one that matters. The row asks for *"near titans tick at
+/// 20 Hz, distant ones at 5 Hz"* and the cheap way to get that number is to skip ticks and let
+/// the state clock skip with them — which silently shortens every `windup_s` in the game. The
+/// accumulators are stepped by [`Lod::steps`] instead, so the grid gets coarser and the
+/// **duration does not move**.
+///
+/// The control is the same shape as `F-055`'s: `lod.near_m` is pushed past the far titan and
+/// the count goes straight back to one run per tick.
+#[test]
+fn f054_a_far_titan_thinks_less_often_and_winds_up_for_just_as_long() {
+    let d = data(&app());
+    let hz = d.game.simulation_hz;
+    let table = d.titans.lod;
+    let near = period_ticks(&table, 10.0, hz);
+    let mid = period_ticks(&table, (table.near_m + table.mid_m) / 2.0, hz);
+    let far = period_ticks(&table, table.mid_m + 100.0, hz);
+    assert_eq!(near, 1, "the near tier is full rate — see the type's doc");
+    assert!(far > mid && mid > near, "the tiers do not separate: {near} {mid} {far}");
+
+    // ---- 1. the count -------------------------------------------------------------------
+    fn thinking_ticks(at: Vec3, over: u64, near_m: Option<f32>) -> u64 {
+        let mut app = app_with_pinned_player(Vec3::new(0.0, 2.0, 0.0), 0.0, MovementState::Grounded);
+        if let Some(m) = near_m {
+            app.world_mut().resource_mut::<GameData>().titans.lod.near_m = m;
+        }
+        spawn(&mut app, "husk", at);
+        let root = the_titan(&mut app);
+        let mut runs = 0;
+        for _ in 0..over {
+            app.update();
+            if app.world().get::<Lod>(root).is_some_and(|l| l.due) {
+                runs += 1;
+            }
+        }
+        runs
+    }
+
+    let close = thinking_ticks(Vec3::new(0.0, 0.0, -20.0), 240, None);
+    let distant = thinking_ticks(Vec3::new(0.0, 0.0, -400.0), 240, None);
+    let control = thinking_ticks(Vec3::new(0.0, 0.0, -400.0), 240, Some(10_000.0));
+    assert_eq!(close, 240, "a titan 20 m away has to think on every one of 240 ticks");
+    assert!(
+        distant < 240 / (far as u64) + 2 && distant > 240 / (far as u64) - 2,
+        "a titan at 400 m thought {distant} times in 240 ticks; the far tier is 1 in {far}"
+    );
+    assert_eq!(
+        control, 240,
+        "with `near_m` pushed past him the same titan at the same 400 m must think every tick \
+         — this is the control, and a number that does not move means the tier was never read"
+    );
+
+    // ---- 2. the duration, which is what the skipping is allowed to cost --------------
+    // `near_m` is pulled in to 5 m so that a husk 20 m away — well inside his own 45 m cone —
+    // sits in the MID tier while he attacks. Without this the only titans on a coarse grid are
+    // ones too far away to have a wind-up at all, and the half of `F-054` that can be wrong
+    // would never be exercised.
+    // **+Z, so that "inside his own cone" is true and not just written.** The counting half
+    // above is indifferent to facing — `Lod` is chosen from the distance alone — but this half
+    // needs him to actually attack, and since `F-051` that needs him to have noticed. A husk
+    // spawned on −Z has the player dead astern of his 110° cone and cannot hear 8 m of noise
+    // at 20 m, so he would stand still for all 1400 ticks.
+    let mut app = app_with_pinned_player(Vec3::new(0.0, 2.0, 0.0), 0.0, MovementState::Grounded);
+    app.world_mut().resource_mut::<GameData>().titans.lod.near_m = 5.0;
+    spawn(&mut app, "husk", Vec3::new(0.0, 0.0, 20.0));
+    let root = the_titan(&mut app);
+    let mut windup_ticks = 0;
+    let mut seen_windup = false;
+    for _ in 0..1400 {
+        app.update();
+        let state = *app.world().get::<TitanState>(root).expect("a titan has a state");
+        if state == TitanState::Windup {
+            seen_windup = true;
+            windup_ticks += 1;
+        } else if seen_windup {
+            break;
+        }
+    }
+    let wanted = expected_ticks(d.titan("husk").unwrap().windup_s, hz);
+    assert!(seen_windup, "the husk never wound up in 1400 ticks");
+    assert!(
+        (windup_ticks as i64 - wanted as i64).abs() <= mid as i64,
+        "a husk in the mid tier wound up for {windup_ticks} ticks; `windup_s` is {wanted} ticks \
+         and the tier's own grid is {mid}. A wind-up that shortens with distance is the bug \
+         this half exists for"
+    );
+    println!(
+        "F-054 240 ticks: 20 m -> {close} brain runs, 400 m -> {distant} (1 in {far}), control \
+         {control}. Mid-tier wind-up {windup_ticks} ticks against {wanted}"
+    );
 }

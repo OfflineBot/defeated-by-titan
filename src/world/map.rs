@@ -347,9 +347,13 @@ impl BlockPlan {
     }
 
     /// The **only** place where a planned cuboid turns into an entity.
-    fn spawn(&self, commands: &mut Commands) {
+    fn spawn(&self, commands: &mut Commands, index: u32) {
         let mut e = commands.spawn((
             Name::new(self.name.clone()),
+            // Which row of the plan this is — `F-021`'s bridge from an entity back into
+            // `AnchorField::blocks`, and the only way the named `hook.*` points a model
+            // brings can find the block they belong to (`world::anchor::adopt_model_anchors`).
+            super::anchor::AnchorBlock(index),
             // What `render` sees: full edge.
             Block { size: self.size_m, color: self.color },
             // What the spatial index sees: half edge.
@@ -410,9 +414,19 @@ pub fn build_map(mut commands: Commands, data: Res<GameData>) {
 
     let plan = plan_blocks(&data, map);
     let anchorable = plan.iter().filter(|r| r.anchorable).count();
-    for block in &plan {
-        block.spawn(&mut commands);
+    for (i, block) in plan.iter().enumerate() {
+        block.spawn(&mut commands, i as u32);
     }
+
+    // `F-021`/`F-022` — the discrete anchor points, out of the SAME plan the city was built
+    // from. Not a second pass over the entities: an entity does not exist yet at this point
+    // (the spawns above are queued commands), and a point list derived from a different
+    // source than the buildings is a point list that can describe a house nobody built.
+    let started = std::time::Instant::now();
+    let field = super::anchor::AnchorField::from_plan(&plan, map.size_m);
+    let micros = started.elapsed().as_micros();
+    super::anchor::log_field(&field, &map.name, micros);
+    commands.insert_resource(field);
     info!(
         "map {:?}: {} blocks built ({} placed, {} generated), {anchorable} of them anchorable",
         map.name,

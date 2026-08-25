@@ -72,6 +72,7 @@
 //! That is why `F-071` cannot go above 🟨 (`docs/PLAN-GAME.md` §8).
 
 pub mod hub;
+pub mod objective;
 pub mod phase;
 pub mod run;
 
@@ -84,6 +85,10 @@ use crate::shared::{
 };
 
 pub use hub::{BladeRack, DeploymentPoint, RefuelStation, ReturnToHub, Sortie, SortieOrder};
+pub use objective::{
+    verdict, Achieved, Cart, Course, CourseGate, GateWatch, Haul, MissionGoal, ObjectiveProgress,
+    RingMarker,
+};
 pub use phase::MissionPhase;
 pub use run::{resolve, KillTally, Mission, MissionClock, SortieNumbers, Verdict, WaveSchedule};
 
@@ -147,6 +152,23 @@ impl Plugin for MissionPlugin {
             hub::walk_the_way_home
                 .in_set(SimulationSystems::PostStep)
                 .run_if(a_verdict_has_fallen),
+        )
+        // ---- the three modes of 2026-08-25 ---------------------------------------------
+        //
+        // `PostStep` and `Active` only, exactly like the hub's triggers and for the same
+        // reason: every one of them reads a position, and the position that counts is the one
+        // **this** tick's integration produced.
+        //
+        // ⚠️ **`.before(count_kills)` is load-bearing and it is not tidiness.** `decide` is
+        // chained after `count_kills`, so ordering these three before it puts them before the
+        // judgement as well — inside one set the order is otherwise not fixed, and a gate that
+        // is noticed one tick after the verdict is a defence lost after it had been held.
+        .add_systems(
+            FixedUpdate,
+            (objective::watch_the_gate, objective::fly_the_course, objective::roll_the_cart)
+                .in_set(SimulationSystems::PostStep)
+                .before(count_kills)
+                .run_if(in_state(MissionPhase::Active)),
         )
         // `Deploying → Active` needs one system, because the hub sets `Deploying` from inside
         // the running game and a `NextState` set in `OnEnter` is applied a frame later anyway.
@@ -378,8 +400,25 @@ fn deploy(mut commands: Commands, sortie: Res<Sortie>, data: Res<GameData>, tick
             Mission { template: order.template.clone(), name: numbers.name.clone() },
             clock,
             KillTally::with_target(numbers.kill_target),
+            // ⭐ The mode, and the state that mode counts in. Both on the mission entity and
+            // nowhere else: there is one sortie, so there is one answer to "how far along is
+            // it" (`objective`). `decide` **requires** the goal — a mission without one would
+            // be a sortie nothing can ever end, and it goes red in the first `f070` test.
+            MissionGoal(numbers.objective.clone()),
         ))
         .id();
+    match objective::progress_of(numbers.objective) {
+        ObjectiveProgress::Cull => {}
+        ObjectiveProgress::Breach(watch) => {
+            commands.entity(mission).insert(watch);
+        }
+        ObjectiveProgress::Parcours(course) => {
+            commands.entity(mission).insert(course);
+        }
+        ObjectiveProgress::Escort(haul) => {
+            commands.entity(mission).insert(haul);
+        }
+    }
     if order.from_hub {
         // The way back, carried by the sortie itself and not by a global flag: `--mission
         // <name>` came from nowhere and stays on its verdict.
@@ -418,6 +457,12 @@ fn open_the_field(mut commands: Commands, sortie: Res<Sortie>, data: Res<GameDat
         ring_m
     );
     commands.spawn((schedule, DespawnOnExit(MissionPhase::Active)));
+
+    // The mode's props — the gate of a breach, the rings of a parcours, the cart of an escort.
+    // Here and not in `deploy`, because they are `DespawnOnExit(MissionPhase::Active)` and a
+    // thing spawned in `Deploying` with that marker is despawned again on the way *into*
+    // `Active` (`bevy_state`'s scoping runs on every transition, not only on the one you meant).
+    objective::furnish(&mut commands, numbers.objective, hub::signal(&data, "amber"));
 }
 
 /// One line in the log when the verdict falls, **and the verdict written onto the mission**.
@@ -549,19 +594,30 @@ fn count_kills(mut hits: MessageReader<TitanHit>, mut tallies: Query<&mut KillTa
 fn decide(
     tick: Res<Tick>,
     mut next: ResMut<NextState<MissionPhase>>,
-    mut missions: Query<(&mut MissionClock, &KillTally)>,
+    mut missions: Query<(
+        &mut MissionClock,
+        &KillTally,
+        &MissionGoal,
+        Option<&GateWatch>,
+        Option<&Course>,
+        Option<&Haul>,
+    )>,
     players: Query<&Health, With<PlayerId>>,
 ) {
-    for (mut clock, tally) in &mut missions {
+    let everybody_down = !players.is_empty() && players.iter().all(|h| h.current <= 0.0);
+    for (mut clock, tally, goal, gate, course, haul) in &mut missions {
         if clock.decided_at_tick.is_some() {
             continue;
         }
-        let everybody_down = !players.is_empty() && players.iter().all(|h| h.current <= 0.0);
-        let verdict = if tally.reached() {
-            MissionPhase::Won
-        } else if clock.expired(tick.0) || everybody_down {
-            MissionPhase::Lost
-        } else {
+        let achieved = Achieved {
+            kills_reached: tally.reached(),
+            gate_fallen: gate.is_some_and(GateWatch::fallen),
+            course_done: course.is_some_and(Course::done),
+            cart_home: haul.is_some_and(Haul::arrived),
+            expired: clock.expired(tick.0),
+            everybody_down,
+        };
+        let Some(verdict) = objective::verdict(&goal.0, achieved) else {
             continue;
         };
         clock.decided_at_tick = Some(tick.0);

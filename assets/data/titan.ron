@@ -112,6 +112,24 @@
 // ⚠️ `behaviour` is NEW (2026-08-19, F-057..F-063) and it is the first thing in this file that
 // is not a number: it is what makes a kind a kind. Read `docs/gameplay/enemies.md` before
 // touching a row — the identities are designed, not invented here.
+// ⚠️ `sight_half_angle_deg` and `hearing_radius_m` are NEW (2026-08-25, F-051) and both are
+// UNTUNED. Half the arc the EYE covers, off the titan's own forward vector on the ground
+// plane — the third cone on the same body, next to `strike_half_angle_deg` (the blow) and
+// `cortex_half_angle_deg` (the nape) — and the radius of the EAR, which has no angle.
+// The values are WIDE (90..120) and that is the design, not laziness: what the feature buys
+// is a REAR BLIND SPOT, and the rear is where the nape is. A husk at 110 is blind in the
+// 70 degrees behind him; a warden at 95 in 85 degrees. The spread runs opposite to the ear:
+//   bellower  90 / 160   21 m of body, small eyes, and the ear the whole design hangs off
+//   warden    95 /  30   slow and narrow — his blind spot pairs with his covered nape
+//   lurker   100 /  75   he waits and listens; his ears beat his eyes
+//   husk     110 /  35   the baseline
+//   weaver   110 /  45
+//   chorus   110 /  40
+//   errant   115 /  40
+//   scuttler 120 /  55   twitchy, wide, and the first to hear a boost
+// Ranges [20, 170] and [5, 300], guarded by
+// tests/titan.rs::f051_every_kind_carries_a_sight_cone_and_an_ear_in_range. At 180 the cone
+// is a circle again and F-051 is deleted.
 (
     kinds: {
         // Basis: learning the approach angle. The standard titan on which the player
@@ -124,7 +142,9 @@
                      attack_range_m: 6.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 1.5,
                      cortex_half_angle_deg: 115.0,
                      stagger_s: 0.22,
-                     aggro_radius_m: 45.0, death_s: 1.0, health: 100.0, damage: 34.0,
+                     aggro_radius_m: 45.0,
+                     sight_half_angle_deg: 110.0, hearing_radius_m: 35.0,
+                     death_s: 1.0, health: 100.0, damage: 34.0,
                      model: "titan_husk",
                      // **The teaching piece, and it stays one.** Eight zeros and an open nape:
                      // whatever the player learns on a husk is the approach angle and nothing
@@ -145,7 +165,9 @@
                      attack_range_m: 6.0, strike_half_angle_deg: 50.0, attack_cooldown_s: 1.2,
                      cortex_half_angle_deg: 120.0,
                      stagger_s: 0.20,
-                     aggro_radius_m: 50.0, death_s: 1.0, health: 100.0, damage: 30.0,
+                     aggro_radius_m: 50.0,
+                     sight_half_angle_deg: 115.0, hearing_radius_m: 40.0,
+                     death_s: 1.0, health: 100.0, damage: 30.0,
                      model: "titan_husk",
                      // 35 degrees to each side, flipping every 0.9 s. He still closes —
                      // cos 35 deg = 0.82 of 6.5 m/s is 5.3 m/s straight at you — but he is
@@ -171,7 +193,9 @@
                      attack_range_m: 2.5, strike_half_angle_deg: 40.0, attack_cooldown_s: 0.9,
                      cortex_half_angle_deg: 130.0,
                      stagger_s: 0.26,
-                     aggro_radius_m: 60.0, death_s: 0.8, health: 60.0, damage: 18.0,
+                     aggro_radius_m: 60.0,
+                     sight_half_angle_deg: 120.0, hearing_radius_m: 55.0,
+                     death_s: 0.8, health: 60.0, damage: 18.0,
                      model: "titan_husk",
                      // The leap: 14 m/s carried through a 0.2 s `Strike` is 2.8 m of ground
                      // covered while the blow is already in the air, on top of an
@@ -195,7 +219,9 @@
                      attack_range_m: 2.5, strike_half_angle_deg: 45.0, attack_cooldown_s: 1.1,
                      cortex_half_angle_deg: 125.0,
                      stagger_s: 0.24,
-                     aggro_radius_m: 50.0, death_s: 0.8, health: 70.0, damage: 22.0,
+                     aggro_radius_m: 50.0,
+                     sight_half_angle_deg: 110.0, hearing_radius_m: 45.0,
+                     death_s: 0.8, health: 70.0, damage: 22.0,
                      model: "titan_husk",
                      // **The nape is shut except inside his own attack.** Not a roll with
                      // i-frames — a roll needs a `TitanState` arm and `shared/state.rs` is not
@@ -228,7 +254,9 @@
                      attack_range_m: 8.0, strike_half_angle_deg: 75.0, attack_cooldown_s: 2.0,
                      cortex_half_angle_deg: 110.0,
                      stagger_s: 0.14,
-                     aggro_radius_m: 40.0, death_s: 1.4, health: 220.0, damage: 55.0,
+                     aggro_radius_m: 40.0,
+                     sight_half_angle_deg: 95.0, hearing_radius_m: 30.0,
+                     death_s: 1.4, health: 220.0, damage: 55.0,
                      model: "titan_large",
                      // **The hand is on the nape until you cut it off the nape.** Any body
                      // cut opens him for 3.0 s — and the same cut already staggers him for
@@ -252,7 +280,9 @@
                      attack_range_m: 8.0, strike_half_angle_deg: 60.0, attack_cooldown_s: 1.8,
                      cortex_half_angle_deg: 110.0,
                      stagger_s: 0.16,
-                     aggro_radius_m: 25.0, death_s: 1.4, health: 200.0, damage: 48.0,
+                     aggro_radius_m: 25.0,
+                     sight_half_angle_deg: 100.0, hearing_radius_m: 75.0,
+                     death_s: 1.4, health: 200.0, damage: 48.0,
                      model: "titan_large",
                      // **He never takes a step.** `ambush` cuts `Idle -> Pursue` out of his
                      // state machine entirely: he stands until you are inside his 8 m reach,
@@ -275,7 +305,9 @@
                      attack_range_m: 12.0, strike_half_angle_deg: 85.0, attack_cooldown_s: 2.5,
                      cortex_half_angle_deg: 110.0,
                      stagger_s: 0.10,
-                     aggro_radius_m: 70.0, death_s: 1.6, health: 320.0, damage: 70.0,
+                     aggro_radius_m: 70.0,
+                     sight_half_angle_deg: 90.0, hearing_radius_m: 160.0,
+                     death_s: 1.6, health: 320.0, damage: 70.0,
                      model: "titan_large",
                      // 90 m of call — every idle titan inside it starts walking the moment the
                      // bellower acquires you. ⚠️ **The ear is missing.** The design has him
@@ -298,7 +330,9 @@
                      attack_range_m: 6.0, strike_half_angle_deg: 55.0, attack_cooldown_s: 1.4,
                      cortex_half_angle_deg: 115.0,
                      stagger_s: 0.20,
-                     aggro_radius_m: 45.0, death_s: 1.0, health: 100.0, damage: 30.0,
+                     aggro_radius_m: 45.0,
+                     sight_half_angle_deg: 110.0, hearing_radius_m: 40.0,
+                     death_s: 1.0, health: 100.0, damage: 30.0,
                      model: "titan_husk",
                      // 9 m of flank offset, with the sign taken off the titan's own id — so
                      // chorus #1 aims 9 m to your left and chorus #2 aims 9 m to your right,
@@ -313,4 +347,86 @@
         // The class `boss` (28 m) is deliberately unused: its first representative is a
         // raid opponent, and raids stand behind the Vector Gear gate (docs/ROADMAP.md).
     },
+
+    // -----------------------------------------------------------------------------------
+    // F-051 — the perception model. NEW 2026-08-25, and until today it did not exist:
+    // `aggro_radius_m` was a 360 degree circle and a titan with his back to you acquired you
+    // at exactly the distance one facing you did. The design's stealth layer hangs off this
+    // block (docs/gameplay/enemies.md, the bellower "reacts to the sound of gas").
+    //
+    // Two channels, deliberately of different shape:
+    //   the EYE  is a cone (aggro_radius_m long, sight_half_angle_deg wide) and INSTANT.
+    //   the EAR  is a circle (hearing_radius_m) and it ACCUMULATES.
+    // The acceptance sentence of F-051 — "a player who acts quietly is discovered later than
+    // one who boosts" — can only ever be true for a titan who is NOT looking at you, so the
+    // number that decides it is the ear's. A titan staring at a man 30 m in front of him who
+    // "has not noticed yet" is not stealth, it is a bug report.
+    //
+    // The player's own loudness is a NOISE RADIUS in meters:
+    //     noise_m = min(max_noise_m, (quiet_m + speed_m_s * noise_per_speed_m) * f)
+    //     f = rope_factor while MovementState::Tethered, else 1.0
+    // and what the ear hears is min(noise_m, hearing_radius_m) — a ceiling on the kind's side,
+    // a source on the player's. Worked through with the numbers below:
+    //   standing still            8.0 m of noise   — inaudible to every kind past 8 m
+    //   running, 6 m/s           15.2 m
+    //   falling, 30 m/s          44.0 m
+    //   on the rope, 30 m/s      70.4 m            — the same speed, under power
+    //   on the rope, 55 m/s     110.0 m
+    // ⚠️ UNTUNED. Seven guesses; nobody has played any of them.
+    perception: (
+        quiet_m: 8.0,
+        noise_per_speed_m: 1.2,
+        rope_factor: 1.6,
+        max_noise_m: 120.0,
+        hearing_gain_per_s: 1.5,
+        forget_per_s: 0.25,
+        lose_level: 0.3,
+    ),
+
+    // -----------------------------------------------------------------------------------
+    // F-055 — the ring. NEW 2026-08-25. Six titans on one player used to walk the same line
+    // to the same point and arrive as one silhouette; the chorus's `flank_offset_m` was the
+    // only thing in the game that pushed two bodies apart, and it only ever worked on a pair.
+    // A slot is a RANK, not a negotiation: titan::perception::claim_slots sorts the titans
+    // that share a target by TitanId and hands out 0..n, which is the same on every machine
+    // (docs/multiplayer.md rule 4) and costs no message.
+    // ⚠️ CORRECTED 2026-08-26, and the first version of it was decoration. It faded to nothing
+    // at attack_range_m — copied from flank_offset_m, which needs a fade because a flank is
+    // PERPENDICULAR to the approach and a constant one leaves a titan orbiting forever. The
+    // ring's offset is a rotated copy of the line and keeps an inward component of
+    // distance_m - radius*cos(bearing) at every bearing, so while the radius stays under the
+    // reach it can never stall an approach and never needed the fade. What the fade did do was
+    // switch the ring off exactly at attack_range_m — which is where a pursuing titan STOPS AND
+    // STANDS. Six husks fanned out over 112 degrees on the way in and re-converged to 1.49 m
+    // between the tightest pair. Measured, tests/titan.rs::f055_….
+    // A slot is now a PLACE and not a deflection: the group's bearings are absolute (anchored
+    // on the lowest-id member's own line), the radius is min(ring_radius_m, 0.9*attack_range_m)
+    // so that standing in your slot means standing in your own reach, and a titan of a crowd
+    // HOLDS HIS ATTACK until he is inside arrive_m of it. That last line is the feature row's
+    // "umkreisen statt stapeln": without it he plants at the first point of the reach circle he
+    // touches, which for six titans off one line is the same point six times.
+    // ⚠️ UNTUNED.
+    crowd: (
+        slots: 6,
+        ring_radius_m: 9.0,
+        arrive_m: 1.0,
+    ),
+
+    // -----------------------------------------------------------------------------------
+    // F-054 — how often a brain runs. NEW 2026-08-25.
+    // ⚠️ The near tier is EVERY TICK (60 Hz) and not the feature row's 20 Hz. The row was
+    // written against a slower server; here the wind-up of F-053 is measured evidence at
+    // 36 ticks of 60 Hz, and a near tier that only looked every third tick would move the
+    // state edges that picture was taken against. 20 Hz is the MID tier, exactly as written.
+    // There is no fourth "does not think at all" tier: brain::walk already runs every tick
+    // for everybody and carries the gait the brain last set, which IS the row's "position
+    // interpolation only".
+    // With simulation_hz 60: near = 1 tick, mid = 3 ticks, far = 12 ticks.
+    // ⚠️ UNTUNED.
+    lod: (
+        near_m: 80.0,
+        mid_m: 250.0,
+        mid_hz: 20.0,
+        far_hz: 5.0,
+    ),
 )

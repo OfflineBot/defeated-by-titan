@@ -147,6 +147,102 @@
         // not read as a scratch — and leaves the whole run-up-and-poke range below it.
         strong_hit_m_s: 18.0,
     ),
+    // -----------------------------------------------------------------------------------
+    // F-031 — WHAT A LANDED HIT IS WORTH, plus F-041's multiplier and F-044's ground attack.
+    // -----------------------------------------------------------------------------------
+    // The formula, in one line, and every factor in it except the closing speed is a file
+    // value:
+    //
+    //     damage = blades.damage_per_m_s x closing_m_s x zone factor x combo multiplier
+    //
+    // **`blades.damage_per_m_s` above had no reader anywhere in `src/` until 2026-08-25** —
+    // the same shape `docs/FINDINGS.md` FIND-075 records for `wear_per_hit` — and
+    // `titan.ron: <kind>.health` was the other half of the same hole: `titan::rig` inserted a
+    // `Health` that nothing in the game ever wrote to. `src/combat/damage.rs` is the reader.
+    //
+    // 🔴 **This pool is not a life bar and emptying it is not a kill.** The bible is not
+    // negotiable on that: a titan dies **only** from a fast cut into the cortex. What the pool
+    // buys is `docs/gameplay/enemies.md`'s own sentence — *"every other hit zone is
+    // preparation, not damage"* — made into something a player can actually spend: cut a titan
+    // enough and he **goes down**, and the nape is then a target that is standing still.
+    //
+    // ⚠️ UNTUNED, all nine.
+    damage: (
+        // The reference. Everything the cast could not resolve to a limb is a chest cut, and a
+        // chest cut is what `damage_per_m_s` was written against.
+        zone_torso_factor: 1.0,
+        // ⚠️ **Neither of these two zones has a producer today.** `blades::cut::sweep` answers
+        // `Cortex`, `Torso` and the four limbs; `HitZone::Head` and `HitZone::Eye` exist in
+        // `shared::message` and nothing has ever written one. The numbers stand here so that
+        // the day a head box lands the factor is a file change and not a Rust change — and so
+        // that nobody reads their absence as "a head hit is a torso hit".
+        zone_head_factor: 1.6,
+        zone_eye_factor: 2.2,
+        // Arms and legs share one factor. `F-032` gave them separate **zones**, which is what
+        // decides that a leg cut is reported as a leg cut; it did not give them separate
+        // worth, and one rate for all four is the right default until somebody measures
+        // otherwise. Below the torso because a limb is thinner than a chest — the same
+        // direction, and the same argument, as `wear_torso_factor` above.
+        zone_limb_factor: 0.9,
+
+        // F-044 — THE GROUND ATTACK, flat, with no speed term at all.
+        //
+        // The row's acceptance is a **comparison**, not a number: *„Bodenangriff existiert, ist
+        // aber niemals die effizientere Wahl."* The cheapest cut a flying player can book is
+        // `damage_per_m_s x min_speed_m_s` = 1.4 x 8.0 = **11.2**, and that is the number this
+        // one has to stay under. 5.0 is under half of it, so twenty swings empty a husk's pool
+        // where three passes do — and each of those twenty is a second and a half spent
+        // standing inside a husk's reach, where he takes 34 of your 100 per strike.
+        //
+        // It is not zero, and that is the point of the row: it is what you have left when the
+        // tank is dry. `tests/combat.rs::f044_a_ground_attack_is_never_the_better_choice` is
+        // what falls over if this number ever climbs past the airborne floor.
+        ground_damage: 5.0,
+
+        // F-031 — THE COLLAPSE: what emptying the pool actually buys.
+        //
+        // 0.9 s is read off the blade's own cadence: `swing_s + cooldown_s` = 0.65 s, so a
+        // titan on the floor for 0.9 s is a titan you can come back round to and cut **once**,
+        // deliberately. Shorter and it is a longer stagger nobody notices; much longer and the
+        // fight stops being a fight.
+        collapse_s: 0.9,
+        // 🔴 **And this is the number that makes a lock impossible by construction.** A titan
+        // who has just been floored cannot be floored again inside this window, however hard
+        // he is cut — his pool refills the moment he goes down, and further cuts drain it
+        // again without putting him back on the ground.
+        //
+        // Why it is a refractory period and not an arithmetic guard: the alternative is to
+        // prove that `collapse_s` is shorter than the time it takes to empty the pool again,
+        // and that proof depends on `damage_per_m_s`, on `combo_max`, on the zone factor and
+        // on every kind's `health` at once. Measured against the shipped file it is **false**
+        // for the scuttler: 60 points of pool against 1.4 x 30 x 2.0 = 84 for a single capped
+        // chest cut, i.e. one hit per collapse against a 0.325 s two-blade cadence. A rule
+        // that survives only at today's numbers is not a rule.
+        //
+        // 4.0 s puts the worst case at 0.9 s down out of every 4.0 — 22 %. That is a window,
+        // not a stun lock. `tests/combat.rs::f031_a_titan_cannot_be_kept_on_the_floor` is what
+        // goes red if the two numbers ever cross.
+        collapse_refractory_s: 4.0,
+
+        // F-041 — THE COMBO.
+        //
+        // *„Aufeinanderfolgende Treffer ohne Bodenkontakt erhoehen einen Multiplikator, der bei
+        // Treffer oder Landung zurueckgesetzt wird."* The first hit of a chain is always 1.0;
+        // the n-th is `1 + combo_step * (n - 1)`, capped at `combo_max`.
+        //
+        // 0.15 and 2.0 means **eight** hits to the cap. That is deliberately more than one
+        // pass: a chain has to be a route through several titans, not a single swing that
+        // happens to book a torso and an arm in the same tick. Doubling at the top and not
+        // trebling, because the multiplier feeds the collapse and a x3 chest cut floors every
+        // kind in `titan.ron` except the bellower in one hit.
+        combo_step: 0.15,
+        combo_max: 2.0,
+        // 2.0 s is three blade cadences (0.65 s each). Long enough that the flight between two
+        // titans keeps the chain, short enough that a chain cannot survive a landing you got
+        // away with — and the landing kills it outright anyway.
+        combo_window_s: 2.0,
+    ),
+
     // What a resupply point of the main building gives back, per second of standing at it.
     // **Where** the points are is `missions.ron: hub`, what they DO is here (§4).
     //

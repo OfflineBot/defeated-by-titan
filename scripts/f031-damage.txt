@@ -1,0 +1,74 @@
+# F-031 — GESCHWINDIGKEITSABHAENGIGE SCHADENSFORMEL: three body passes floor a husk, and the
+# fourth pass takes his nape.
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/f031-damage.txt --ticks 700
+#   ./target/debug/defeated_by_titan --headless --script scripts/f031-damage.txt --ticks 700 >/dev/null 2>&1; echo $?
+#
+# ## What had to exist before this run could say anything
+#
+# `gear.ron: blades.damage_per_m_s = 1.4` had **no reader anywhere in `src/`** until 2026-08-25,
+# and `titan::rig`'s `Health::full(titan.ron: husk.health = 100)` had **no writer**. A number on
+# one side, a pool on the other, and nothing in between — the same shape `docs/FINDINGS.md`
+# FIND-075 records for `wear_per_hit`.
+#
+# The lines to grep for:
+#
+#   tick N: titan 1 took 28.9 in the Torso at 20.67 m/s (x1.00) — pool 71/100
+#   tick N: titan 1 COLLAPSED — 54 ticks on the floor, 240 of refractory
+#
+# **28.9 is `1.4 x 20.67`**, and 20.67 m/s is the fall this script uses for the same reason
+# `scripts/f030-cortex.txt` does: the Vector Gear reaches 30 m/s and more, but hooking and
+# boosting cannot be aimed from a script through a 1.10 m sphere. Gravity can — at -20 m/s a
+# fall of 11.2 m is 21 m/s, reproducible to the tick.
+#
+# ## Why the passes start 3 m lower than `f030-cortex.txt`
+#
+# That file starts at y = 18.5 and its blade meets the **nape** at 8.9 m. Three metres lower is
+# the chest: above `leg_m` 4.80 and well under a 0.55 m cortex sphere that `thickness_m` 0.20
+# cannot bridge. So these are BODY cuts by construction, and the last act — back at 18.5 — is
+# the control that says the same geometry still kills when it is aimed at the nape.
+#
+# 🔴 **Emptying the pool is not a kill and this run is what shows it.** `assert titans == 1`
+# stands after every body pass; the husk is only ever gone after the pass that reaches his
+# cortex. If a damage formula ever becomes a second way to kill, those asserts are what fall.
+#
+# ⚠️ The husk aggros and strikes for 34 of the player's 100 (`titan.ron: husk.damage`), so the
+# player may well be down by the last act. That costs nothing here: `warp` works on a downed
+# player and the blade still swings.
+wait 1.5
+spawn titan husk 17.5 0 0
+look 0 0
+key F3 0.05
+
+# --- pass 1: the chest, at 20.67 m/s -------------------------------------------------
+warp 15.75 15.5 0.8
+wait 0.90
+slash right 0.40
+wait 0.30
+mark body-pass-1
+assert titans == 1
+
+# --- pass 2 --------------------------------------------------------------------------
+warp 15.75 15.5 0.8
+wait 0.90
+slash right 0.40
+wait 0.30
+mark body-pass-2
+assert titans == 1
+
+# --- pass 3: the pool should be empty around here, and he goes on the floor -----------
+warp 15.75 15.5 0.8
+wait 0.90
+slash right 0.40
+wait 0.30
+mark body-pass-3
+assert titans == 1
+
+# --- pass 4: same geometry, aimed at the NAPE. The cortex is the only thing that kills.
+warp 15.75 18.5 0.8
+wait 0.90
+slash right 0.40
+wait 0.20
+mark cortex-cut
+wait 1.20
+assert titans == 0

@@ -61,6 +61,26 @@
             (mission: "skirmish", difficulty: "recruit", center_m: ( 0.0, 0.0, 16.0), radius_m: 3.0),
             (mission: "skirmish", difficulty: "veteran", center_m: (-9.0, 0.0, 16.0), radius_m: 3.0),
             (mission: "skirmish", difficulty: "elite",   center_m: ( 9.0, 0.0, 16.0), radius_m: 3.0),
+
+            // ---- The three modes of 2026-08-25 ------------------------------------------
+            //
+            // A second rank of doors, off to the sides, one per **mode** — the row above is one
+            // mission at three levels, this one is three missions. They open at `recruit`
+            // because a door is for finding, not for proving something; the harder levels of
+            // each are in the lobby.
+            //
+            // ⚠️ **Where they may NOT stand**, and both are measured, not guessed:
+            //   * not on `x = 0, z = 0..20`  — `scripts/f175-loop.txt` and `f070-hub.txt` hold
+            //     `W` from the spawn point for 3.4 s to reach the `recruit` pad at z = 16, and
+            //     a circle anywhere on that line deploys the wrong sortie mid-script.
+            //   * not on `z = 0, x = 0..-47` — `scripts/f019-hq.txt` and `f070-hub.txt` ACT 1
+            //     walk that line into the garrison hall for the supply.
+            // At |x| = 18, |z| = 8 they are 18 m off the first line and 8 m off the second, and
+            // 19.7 m from the origin — inside `maps.ron: layout.clear_radius_m` (24 m), so no
+            // generated building is standing on one.
+            (mission: "breach",   difficulty: "recruit", center_m: (-18.0, 0.0,  8.0), radius_m: 3.0),
+            (mission: "escort",   difficulty: "recruit", center_m: ( 18.0, 0.0,  8.0), radius_m: 3.0),
+            (mission: "parcours", difficulty: "recruit", center_m: (-18.0, 0.0, -8.0), radius_m: 3.0),
         ],
 
         // ---- The supply — INSIDE the main building --------------------------------------
@@ -137,6 +157,9 @@
                 (at_s:  90.0, kind: "husk",     count: 2),
                 (at_s: 210.0, kind: "scuttler", count: 1),
             ],
+            // The mode it always was — said out loud since 2026-08-25, because it is now one of
+            // four and not the only shape a mission can have (`data::Objective`).
+            objective: Cull,
             difficulties: {},
         ),
 
@@ -158,6 +181,9 @@
                 (at_s: 120.0, kind: "weaver",   count: 1),
                 (at_s: 240.0, kind: "chorus",   count: 2),
             ],
+
+            // Kill them. The mission this game had before there were modes.
+            objective: Cull,
 
             // ---- What a difficulty changes, and it is exactly three things -------------
             //
@@ -257,6 +283,217 @@
                         (at_s: 150.0, kind: "warden",   count: 1),
                         (at_s: 150.0, kind: "lurker",   count: 1),
                         (at_s: 230.0, kind: "chorus",   count: 2),
+                    ],
+                ),
+            },
+        ),
+
+        // ===================================================================================
+        // ★ **BREACH — the defence** (`F-072`, 2026-08-25)
+        // ===================================================================================
+        //
+        // *„Titanen greifen einen Punkt an, Spieler verteidigen"* (`docs/features.ron` F-072).
+        //
+        // The mode inverts the clock: **surviving to the deadline is the win**, and letting
+        // more than `breaches_allowed` titans reach the gate is the loss. Everything else in
+        // this game loses on the deadline, which is exactly why
+        // `src/mission/objective.rs::verdict` is a pure function with its own red test — one
+        // character apart in a match arm is a defence nobody can ever finish.
+        //
+        // ⚠️ **A titan walks at the nearest PLAYER, never at a place** — there is no goal
+        // pathing in this game (`titan::brain::nearest_player`) and this round did not add
+        // any, because `titan` is another domain. So the gate is defended by **standing
+        // between them and it**, and a player who runs 200 m away takes the wave with him and
+        // is never breached. That hole is real, it is UNTUNED, and it is written down here
+        // rather than papered over. The fix, when it comes, is a goal in `titan.ron`, not a
+        // number here.
+        "breach": (
+            name: "Ashgate Breach",
+            map: "ashgate",
+
+            // The direct-entry shape (`--mission breach`). A pad flies a difficulty instead.
+            target_duration_s: 300.0,
+            // ⚠️ **Zero, and it is not a hole in the file.** There is no kill target in a
+            // breach: `Objective::Breach` never reads `KillTally`, and `KillTally::reached`
+            // refuses a target of zero on purpose so that a mode which ignores kills cannot be
+            // won by them. The HUD's objective line still draws `0/0` here — `hud` does not
+            // know about modes yet, and that is reported, not hidden.
+            kill_target: 0,
+            waves: [
+                (at_s:   0.0, kind: "husk",     count: 2),
+                (at_s:  60.0, kind: "husk",     count: 2),
+                (at_s: 140.0, kind: "errant",   count: 2),
+                (at_s: 220.0, kind: "scuttler", count: 2),
+            ],
+
+            // The gate stands 14 m behind the spawn point, inside `maps.ron:
+            // layout.clear_radius_m` (24 m) so no generated building is standing in it, and its
+            // circle (7 m) does not touch the deployment pads at |z| = 8.
+            objective: Breach(gate_m: (0.0, 0.0, -14.0), reach_m: 7.0, breaches_allowed: 3),
+
+            // ⚠️ **The ladder runs the other way here.** A longer hold is a harder hold, so
+            // `recruit` is the SHORTEST sortie of the three and `elite` the longest — the
+            // opposite of a cull, where a longer clock is mercy. `breaches_allowed` is on the
+            // template and therefore the same at every level: `data::Difficulty` owns three
+            // numbers and a mode's own numbers are not among them.
+            difficulties: {
+                "recruit": (
+                    name: "Recruit",
+                    target_duration_s: 300.0,
+                    kill_target: 0,
+                    waves: [
+                        (at_s:  20.0, kind: "husk", count: 2),
+                        (at_s: 120.0, kind: "husk", count: 2),
+                        (at_s: 220.0, kind: "husk", count: 2),
+                    ],
+                ),
+                "veteran": (
+                    name: "Veteran",
+                    target_duration_s: 360.0,
+                    kill_target: 0,
+                    waves: [
+                        (at_s:  20.0, kind: "husk",     count: 2),
+                        (at_s: 110.0, kind: "errant",   count: 2),
+                        (at_s: 200.0, kind: "scuttler", count: 2),
+                        (at_s: 290.0, kind: "husk",     count: 3),
+                    ],
+                ),
+                "elite": (
+                    name: "Elite",
+                    target_duration_s: 420.0,
+                    kill_target: 0,
+                    waves: [
+                        (at_s:  20.0, kind: "husk",     count: 3),
+                        (at_s: 100.0, kind: "errant",   count: 2),
+                        (at_s: 180.0, kind: "scuttler", count: 2),
+                        (at_s: 260.0, kind: "chorus",   count: 2),
+                        (at_s: 340.0, kind: "weaver",   count: 1),
+                        (at_s: 340.0, kind: "warden",   count: 1),
+                    ],
+                ),
+            },
+        ),
+
+        // ===================================================================================
+        // ★ **PARCOURS — the only thing in this game that teaches the drive** (`F-185`)
+        // ===================================================================================
+        //
+        // *„Bewegungsparcours"* (`docs/features.ron` F-185). Fly every ring, **in the order
+        // they are listed**, before the clock. No titans at all: the movement is the mission.
+        //
+        // This is the most important of the three modes landed on 2026-08-25 and it is not
+        // close. `docs/gameplay/pillars.md` gates every meta system behind the Vector Gear
+        // feeling right, `FIND-149` turned the rope into a drive (hold to go, `A`/`D` to steer,
+        // `Ctrl` to winch) — and **nothing in the game says any of that to a player.** A course
+        // is the cheapest thing that does: you cannot fly it by walking.
+        //
+        // ---- Why the rings stand where they stand -------------------------------------
+        //
+        // All five are inside `maps.ron: layout.clear_radius_m` (24 m) in the horizontal, which
+        // is the circle the city generator keeps free — so **no ring can be inside a building**,
+        // which is the one way a course becomes unflyable. That has a second consequence and it
+        // is the design: there is nothing to hook **inside** the circle, so every ring has to be
+        // reached by anchoring a building **outside** it and driving across the middle. The
+        // course climbs 14 → 22 → 30 → 22 → 40 m, so the last ring cannot be reached by walking
+        // under it either.
+        //
+        // ⚠️ UNTUNED, and nobody has flown it with a window open. What is measured is that the
+        // rings register in order and that the sortie is won by the last one
+        // (`scripts/f185-parcours.txt`, `tests/mission.rs`).
+        "parcours": (
+            name: "Rookery Run",
+            map: "ashgate",
+            target_duration_s: 300.0,
+            // No kills. See the note in `breach` above — zero is the honest value, not a hole.
+            kill_target: 0,
+            // **Empty on purpose.** A movement course with titans in it is a fight, and the
+            // whole point of F-185 is the one mission that is not.
+            waves: [],
+            objective: Parcours(rings: [
+                (center_m: (  0.0, 14.0,  18.0), radius_m: 6.0),
+                (center_m: ( 18.0, 22.0,   0.0), radius_m: 6.0),
+                (center_m: (  0.0, 30.0, -18.0), radius_m: 6.0),
+                (center_m: (-18.0, 22.0,   0.0), radius_m: 6.0),
+                (center_m: (  0.0, 40.0,   0.0), radius_m: 7.0),
+            ]),
+            // A time attack: the same five rings, less air. The `t005` guard in `tests/data.rs`
+            // holds every level to a 5–7 min arc, so 300 s is the floor and not a choice.
+            difficulties: {
+                "recruit": (name: "Recruit", target_duration_s: 420.0, kill_target: 0, waves: []),
+                "veteran": (name: "Veteran", target_duration_s: 360.0, kill_target: 0, waves: []),
+                "elite":   (name: "Elite",   target_duration_s: 300.0, kill_target: 0, waves: []),
+            },
+        ),
+
+        // ===================================================================================
+        // ★ **ESCORT — the cart only moves while you are next to it** (`F-073`)
+        // ===================================================================================
+        //
+        // *„Begleitschutz"* (`docs/features.ron` F-073). The cart rolls along its waypoints
+        // **only** while a player is inside `escort_radius_m` of it, and the sortie is won when
+        // it reaches the last one. That is the whole tension: the titans that spawn want you
+        // somewhere else, and every second you spend chasing one is a second the cart is
+        // standing still.
+        //
+        // 150 m of path at 1.2 m/s is 125 s of perfect escorting inside a 330 s clock — so the
+        // budget is roughly two thirds fighting and one third walking. ⚠️ UNTUNED.
+        //
+        // ⚠️ **The cart has no collider and titans cannot hurt it.** It is a `Block` that
+        // follows a line; it will pass through a wall, and a titan standing on the path does
+        // not stop it. `titan::brain` attacks players and nothing else, and that is another
+        // domain. So this is the *movement* half of F-073 with a red test under it, not the
+        // whole feature — the report says so.
+        "escort": (
+            name: "The Long Cart",
+            map: "ashgate",
+            target_duration_s: 330.0,
+            kill_target: 0,
+            waves: [
+                (at_s:  20.0, kind: "husk",     count: 2),
+                (at_s: 110.0, kind: "errant",   count: 1),
+                (at_s: 200.0, kind: "scuttler", count: 1),
+            ],
+            objective: Escort(
+                // y = 1.0 so the 2 m block sits on the ground instead of half inside it.
+                waypoints: [
+                    (  0.0, 1.0,  20.0),
+                    (  0.0, 1.0, -30.0),
+                    (-40.0, 1.0, -60.0),
+                    (-90.0, 1.0, -60.0),
+                ],
+                speed_m_s: 1.2,
+                escort_radius_m: 12.0,
+                size_m: (3.0, 2.0, 4.0),
+            ),
+            difficulties: {
+                "recruit": (
+                    name: "Recruit",
+                    target_duration_s: 420.0,
+                    kill_target: 0,
+                    waves: [
+                        (at_s:  40.0, kind: "husk", count: 1),
+                        (at_s: 180.0, kind: "husk", count: 2),
+                    ],
+                ),
+                "veteran": (
+                    name: "Veteran",
+                    target_duration_s: 360.0,
+                    kill_target: 0,
+                    waves: [
+                        (at_s:  30.0, kind: "husk",     count: 2),
+                        (at_s: 140.0, kind: "errant",   count: 1),
+                        (at_s: 250.0, kind: "scuttler", count: 1),
+                    ],
+                ),
+                "elite": (
+                    name: "Elite",
+                    target_duration_s: 300.0,
+                    kill_target: 0,
+                    waves: [
+                        (at_s:  20.0, kind: "husk",     count: 2),
+                        (at_s:  20.0, kind: "lurker",   count: 1),
+                        (at_s: 120.0, kind: "errant",   count: 2),
+                        (at_s: 220.0, kind: "chorus",   count: 2),
                     ],
                 ),
             },
