@@ -60,7 +60,8 @@
 //! | what | how |
 //! |---|---|
 //! | the formula, the cortex zero, the collapse, the lock guard | `tests/combat.rs`, `cargo test --test combat` |
-//! | a husk floored by three chest cuts, and a ground attack that is worth 5 | `scripts/f031-damage.txt` |
+//! | a husk floored by three chest cuts, and only the Cortex killing him | `scripts/f031-damage.txt` |
+//! | a player on his feet cutting a titan he could not touch before | `scripts/f044-ground.txt` |
 
 use bevy::prelude::*;
 
@@ -306,7 +307,7 @@ mod tests {
         assert_eq!(
             damage_of(&gear(), HitZone::Cortex, 75.0, 4.0),
             0.0,
-            "the cortex booked wound damage — a titan dies from the nape by rule, and a \
+            "the cortex booked wound damage — a titan dies from the Cortex by rule, and a \
              formula that can reach that decision is a second way to kill"
         );
     }

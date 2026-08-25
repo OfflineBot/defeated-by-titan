@@ -13,10 +13,13 @@
 #
 # The lines to grep for:
 #
-#   tick N: titan 1 took 28.9 in the Torso at 20.67 m/s (x1.00) — pool 71/100
-#   tick N: titan 1 COLLAPSED — 54 ticks on the floor, 240 of refractory
+#   tick 155: titan 1 took 26.0 in the ArmLeft at 20.7 m/s (x1.00) — pool 74/100
+#   tick 237: titan 1 COLLAPSED — 54 ticks on the floor, 240 of refractory
+#   tick 379: cut titan 2 Cortex at 20.67 m/s
 #
-# **28.9 is `1.4 x 20.67`**, and 20.67 m/s is the fall this script uses for the same reason
+# **26.0 is `1.4 x 20.67 x 0.9`** — `damage_per_m_s` x the closing speed x `zone_limb_factor`,
+# because at this height the right blade meets the husk's arm before his chest. 20.67 m/s is the
+# fall this script uses for the same reason
 # `scripts/f030-cortex.txt` does: the Vector Gear reaches 30 m/s and more, but hooking and
 # boosting cannot be aimed from a script through a 1.10 m sphere. Gravity can — at -20 m/s a
 # fall of 11.2 m is 21 m/s, reproducible to the tick.
@@ -64,11 +67,36 @@ wait 0.30
 mark body-pass-3
 assert titans == 1
 
-# --- pass 4: same geometry, aimed at the NAPE. The cortex is the only thing that kills.
-warp 15.75 18.5 0.8
+# --- pass 4: the same geometry, aimed at the NAPE, on a husk that has NOT been fought yet.
+#
+# 🔴 **It has to be a fresh husk, and that is measured and not tidiness.** The first version of
+# this act warped back to the husk above and cut at x = 15.75 / y = 18.5 — `scripts/f030-cortex.txt`
+# to the centimetre — and booked `Torso` at 20.67 m/s, never a nape. The control that settles it
+# was one run: `f030-cortex.txt`'s own act with a bare `wait 4.0` inserted before the warp, same
+# spawn, same warp, same slash. Fresh: `cut titan 1 Cortex at 20.67 m/s`, dead. After four
+# seconds of aggro: `cut titan 1 Torso at 20.67 m/s`, alive. Nothing else differed.
+#
+# **The husk turned to face the player, and `titan.ron: husk.cortex_half_angle_deg` refuses a
+# cortex cut from the front by rule** (`Q-030`/`Q-031`, `src/blades/cut.rs:214`). So the nape is
+# not a fixed point in space after the fight has started — it is behind a titan who is looking at
+# you, and any script that aims at it six seconds in is aiming at a chest.
+#
+# 60 m up the −Z axis, which is outside `titan.ron: husk.aggro_radius_m` (45) from where the
+# player stands, so this one is asleep until the warp — the same 0.9 s of lead the fresh pass in
+# `f030-cortex.txt` gets, and not a second more.
+spawn titan husk 17.5 0 -60
+# `titan::spawn_titans` runs in `PostStep`, so the body stands at the end of the NEXT tick — an
+# assert on the same line as the spawn reads 1 and says nothing about the spawn.
+wait 0.10
+assert titans == 2
+warp 15.75 18.5 -59.2
 wait 0.90
 slash right 0.40
-wait 0.20
+wait 0.08
 mark cortex-cut
+wait 0.10
+# The one that carries the whole claim: three body passes emptied a pool TWICE over and the husk
+# they were flown at is still standing. Only the nape is a kill.
+assert titans == 2
 wait 1.20
-assert titans == 0
+assert titans == 1

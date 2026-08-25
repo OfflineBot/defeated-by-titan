@@ -186,6 +186,72 @@ fn place(app: &mut App, at_m: Vec3, velocity_m_s: Vec3) {
     }
 }
 
+/// The player's [`MovementState`] **as the game wrote it**, not as a test wished it.
+fn movement(app: &mut App) -> MovementState {
+    let p = player(app);
+    *app.world().get::<MovementState>(p).expect("every player carries a MovementState")
+}
+
+/// **Puts the player genuinely in the air** at `at_m`, and checks the game agrees.
+///
+/// 🔴 **Why this is not `insert(MovementState::Airborne)`, which is what three tests here did
+/// until 2026-08-26 and what left them red.** `player::integrator::readback` is the *sole*
+/// writer of that component and it runs in [`SimulationSystems::Integrate`] — which sits
+/// **between the two sets that read it**: `combat::combo::bank` in `Spatial` and
+/// `combat::combo::decay`, `combat::strike::land` and `blades::cut` in `PostStep`. So a state
+/// inserted from a test is honoured by the first reader and **overwritten before the second**.
+/// `f041_hits_in_the_air_raise_the_multiplier_and_a_landing_ends_it` measured exactly that: the
+/// two `bank` assertions passed off the inserted `Airborne` and the landing never happened,
+/// because `readback` had already put the real state back.
+///
+/// That is `docs/FINDINGS.md` FIND-103 with the halves swapped — a test that tells the code the
+/// answer instead of asking the game for it. **The state has to be produced and then read
+/// back**, which is what this and [`stand`] do.
+///
+/// Gravity off, so that "in the air" stays true for as long as the test needs it. `at_m` has to
+/// clear the ground by more than the player capsule's half height (0.9 m,
+/// `game.ron: player.height_m`) or he rests on it and the assert below says so.
+fn hover(app: &mut App, at_m: Vec3) {
+    place(app, at_m, Vec3::ZERO);
+    // Two ticks: `readback` writes the state during `Integrate` of the next one.
+    ticks(app, 2);
+    assert_eq!(
+        movement(app),
+        MovementState::Airborne,
+        "the player was put at {at_m} and the game does not call that airborne — a test that \
+         cannot produce the state it is about measures nothing"
+    );
+}
+
+/// **Puts the player genuinely on his feet** at `at_m` and returns how many ticks the drop took.
+///
+/// The other half of [`hover`]'s argument: a landing is not a component you can write, it is a
+/// contact `player::integrator::readback` finds. Gravity back on, and then the ground does it.
+///
+/// Panics rather than returning, if he never arrives — a test whose player is still falling is
+/// measuring the air.
+fn stand(app: &mut App, at_m: Vec3) -> u32 {
+    let p = player(app);
+    let world = app.world_mut();
+    world.entity_mut(p).insert((
+        Transform::from_translation(at_m),
+        // 1.0 is avian's own default — `place` is what took it away, so this gives it back
+        // rather than inventing a value.
+        GravityScale(1.0),
+        LinearVelocity(Vec3::ZERO),
+    ));
+    if let Some(mut from) = world.get_mut::<SweptFrom>(p) {
+        from.0 = at_m;
+    }
+    for n in 0..240 {
+        app.update();
+        if movement(app) == MovementState::Grounded {
+            return n + 1;
+        }
+    }
+    panic!("the player never reached the ground from {at_m} in 240 ticks — nothing was measured");
+}
+
 // ---------------------------------------------------------------------------
 // P5 — the helpers: a real husk, a pinned player, health per tick
 // ---------------------------------------------------------------------------
@@ -1497,7 +1563,16 @@ fn p5_the_mission_is_lost_when_every_player_is_down() {
     let husk_at = Vec3::new(0.0, 0.0, -10.0);
     spawn_husk(&mut app, husk_at);
     place(&mut app, in_his_face(husk_at, 5.0), Vec3::ZERO);
-    let w = watch(&mut app, 400);
+    // ⚠️ **1200 and not 400, and the reason is not this test.** This is the only test in the
+    // file that runs [`mission_app`], so it is the only one where the player is the target of a
+    // *crowd*: the tutorial queues four titans on a 24 m ring on top of the husk spawned above.
+    // `titan::perception::claim_slots` gained a `titan.ron: crowd.arrive_m` gate on 2026-08-26
+    // — *"a titan of a crowd HOLDS HIS ATTACK until he is inside `arrive_m` of his slot"* — and
+    // a titan that starts inside his own reach now walks to a ring slot first. Measured with a
+    // throwaway probe on the same fixture: the three blows moved from 449 / 539 / 629 to
+    // **718 / 808 / 898**, `Downed` from 630 to **899**. Nothing was starved and no assert below
+    // changed; the run needs 4.5 s more of clock. `docs/FINDINGS.md` FIND-166.
+    let w = watch(&mut app, 1200);
 
     let downed = w.downed_at.expect("the player never went down — there is no loss to check");
     let phase = *app.world().resource::<State<MissionPhase>>().get();
@@ -2630,11 +2705,6 @@ fn combo(app: &mut App) -> Combo {
     app.world().get::<Combo>(p).copied().unwrap_or(Combo::NONE)
 }
 
-/// Puts the player in the air with a velocity, so that `combat::combo` counts his hits.
-fn airborne(app: &mut App) {
-    let p = player(app);
-    app.world_mut().entity_mut(p).insert(MovementState::Airborne);
-}
 
 /// ★ **`F-031` — a body cut drains a pool that nothing in this game had ever written.**
 ///
@@ -2887,8 +2957,10 @@ fn f041_hits_in_the_air_raise_the_multiplier_and_a_landing_ends_it() {
     let body = spawn_husk(&mut app, Vec3::new(0.0, 0.0, -150.0));
     let id = titan_id(&app, body);
     let step = d.gear.damage.combo_step;
+    let window = ticks_of(d.gear.damage.combo_window_s, d.game.simulation_hz);
 
-    airborne(&mut app);
+    // 60 m up and no gravity: airborne because he IS, not because a test said so ([`hover`]).
+    hover(&mut app, Vec3::new(0.0, 60.0, 0.0));
     send_hit(&mut app, id, by, HitZone::Torso, 20.0);
     ticks(&mut app, 1);
     assert_eq!(combo(&mut app).hits, 1);
@@ -2898,7 +2970,6 @@ fn f041_hits_in_the_air_raise_the_multiplier_and_a_landing_ends_it() {
         "the FIRST hit of a chain paid a bonus — a chain of one is not a combo"
     );
 
-    airborne(&mut app);
     send_hit(&mut app, id, by, HitZone::Torso, 20.0);
     ticks(&mut app, 1);
     let after_two = combo(&mut app);
@@ -2910,16 +2981,23 @@ fn f041_hits_in_the_air_raise_the_multiplier_and_a_landing_ends_it() {
         1.0 + step
     );
 
-    // ★ The landing. One tick of `Grounded` is enough — `combo::decay` does not ask whether a
-    // chain was running, it asks whether the player is on the ground.
-    let p = player(&mut app);
-    app.world_mut().entity_mut(p).insert(MovementState::Grounded);
-    ticks(&mut app, 1);
+    // ★ **The landing, and it is a real one.** Gravity back on, 0.3 m of drop, and
+    // `player::integrator::readback` reports `Grounded` on the tick the contact appears —
+    // the same tick `combo::decay` reads it in `PostStep`.
+    let fell = stand(&mut app, Vec3::new(0.0, 1.2, 0.0));
+    // 🔴 The control against the sibling claim: a chain that had simply run out of window would
+    // look identical from here. It cannot have — the drop is a fraction of the window.
+    assert!(
+        fell * 4 < window,
+        "the drop took {fell} ticks of a {window}-tick window, so this is measuring the timeout \
+         and not the landing"
+    );
     assert_eq!(
         combo(&mut app),
         Combo::NONE,
         "the chain survived a landing — 'ohne Bodenkontakt' is the whole rule"
     );
+    println!("F-041: two hits -> x{:.2}, landed after {fell} ticks -> {:?}", after_two.multiplier, combo(&mut app));
 }
 
 /// ★ **`F-041` — the chain lapses on its own.** `gear.ron: damage.combo_window_s`.
@@ -2936,7 +3014,7 @@ fn f041_a_chain_lapses_after_the_window_without_a_hit() {
     let window = ticks_of(d.gear.damage.combo_window_s, d.game.simulation_hz);
     assert!(window > 4, "gear.ron: damage.combo_window_s is {window} ticks — nothing to measure");
 
-    airborne(&mut app);
+    hover(&mut app, Vec3::new(0.0, 60.0, 0.0));
     send_hit(&mut app, id, by, HitZone::Torso, 20.0);
     ticks(&mut app, 1);
     assert!(combo(&mut app).is_running());
@@ -2944,15 +3022,22 @@ fn f041_a_chain_lapses_after_the_window_without_a_hit() {
     // Half the window: still there. Whoever deletes the countdown passes the line below and
     // falls over the one after it, which is the point of measuring both.
     for _ in 0..window / 2 {
-        airborne(&mut app);
         app.update();
     }
+    // 🔴 The control, and it is the whole reason this test was red: if he is on the ground the
+    // chain is gone for a reason that has nothing to do with the window, and the assert below
+    // would be reading `combo::decay`'s landing branch while claiming to read its clock.
+    assert_eq!(
+        movement(&mut app),
+        MovementState::Airborne,
+        "the player came down mid-measurement — this run is about the window, not the landing"
+    );
     assert!(combo(&mut app).is_running(), "the chain lapsed inside half its own window");
 
     for _ in 0..window {
-        airborne(&mut app);
         app.update();
     }
+    assert_eq!(movement(&mut app), MovementState::Airborne, "the player came down");
     assert_eq!(combo(&mut app), Combo::NONE, "the chain outlived {window} ticks of silence");
 }
 
@@ -2967,29 +3052,44 @@ fn f041_a_titan_that_connects_breaks_the_chain() {
     let husk_at = Vec3::new(0.0, 0.0, -10.0);
     let body = spawn_husk(&mut app, husk_at);
     let id = titan_id(&app, body);
-    place(&mut app, in_his_face(husk_at, 5.0), Vec3::ZERO);
+    // In his face and clear of the ground: 2.0 m of altitude puts the capsule's feet 1.1 m up,
+    // and `to.y` 2.0 is far inside `StrikeTuning::top_m`, so he is airborne AND reachable.
+    hover(&mut app, Vec3::new(husk_at.x, 2.0, husk_at.z - 5.0));
 
-    airborne(&mut app);
     send_hit(&mut app, id, by, HitZone::Torso, 20.0);
     ticks(&mut app, 1);
-    airborne(&mut app);
     send_hit(&mut app, id, by, HitZone::Torso, 20.0);
     ticks(&mut app, 1);
     assert!(combo(&mut app).multiplier > 1.0, "the chain never got going");
 
-    // The husk needs ~90 ticks to wind up and strike. `airborne` every tick, so that the ONLY
-    // thing that can break the chain in this window is the blow itself.
+    // The husk needs ~90 ticks to wind up and strike.
     let p = player(&mut app);
     let start = health(&app, p).expect("the player carries a Health");
     let mut broken_at = None;
+    // 🔴 **The control against the window** (`gear.ron: damage.combo_window_s` = 120 ticks
+    // against a wind-up of ~90). A chain that had lapsed on its own two ticks before the blow
+    // would leave `Combo::NONE` behind exactly like the blow does, and this test would pass
+    // with `combat::strike::land`'s reset deleted. So the chain is read on **every** tick and
+    // the state immediately before the blow is what the assert is allowed to rest on.
+    let mut before = combo(&mut app);
     for _ in 0..400 {
-        app.world_mut().entity_mut(p).insert(MovementState::Airborne);
+        assert!(
+            before.is_running(),
+            "the chain lapsed on its own before the husk ever connected — this run would have \
+             measured `combo::decay`'s clock and called it `strike::land`'s reset"
+        );
         app.update();
         if health(&app, p).unwrap_or(start) < start {
             broken_at = Some(combo(&mut app));
             break;
         }
+        before = combo(&mut app);
     }
+    assert_eq!(
+        movement(&mut app),
+        MovementState::Airborne,
+        "the player landed during the wind-up — then the landing broke the chain, not the blow"
+    );
     let after = broken_at.expect("the husk never landed a blow in 400 ticks — nothing measured");
     assert_eq!(
         after,
@@ -3020,19 +3120,24 @@ fn f044_a_ground_attack_lands_where_a_scratch_used_to_be_refused() {
     // flies, at chest height instead of at the nape. `place` pins him with no velocity; the
     // `MovementState` is what the feature reads, and it is set here rather than waited for
     // because a settle would also be measuring `player::locomotion`.
-    place(&mut app, Vec3::new(husk_at.x - 1.75, 1.0, husk_at.z), Vec3::ZERO);
-    let p = player(&mut app);
-    app.world_mut().entity_mut(p).insert(MovementState::Grounded);
+    // 🔴 **He has to actually be standing.** `blades::cut` reads `MovementState` in `PostStep`
+    // and `player::integrator::readback` writes it in `Integrate` of the same tick, so an
+    // inserted `Grounded` is gone before the cut ever sees it — which is why this test was red.
+    // [`stand`] drops him the last 0.3 m and waits for the game to report the contact.
+    let fell = stand(&mut app, Vec3::new(husk_at.x - 1.75, 1.2, husk_at.z));
     hold_slash(&mut app);
-    for _ in 0..120 {
-        app.world_mut().entity_mut(p).insert(MovementState::Grounded);
-        app.update();
-    }
+    ticks(&mut app, 120);
 
     let landed = hits(&app);
+    assert_eq!(
+        movement(&mut app),
+        MovementState::Grounded,
+        "the player left his feet during the swing — then this is not a ground attack"
+    );
     assert!(
         !landed.is_empty(),
-        "a standing player swung at a husk 1.75 m away for two seconds and cut nothing"
+        "a standing player settled in {fell} ticks, swung at a husk 1.75 m away for two seconds \
+         and cut nothing"
     );
     for (_, hit) in &landed {
         assert!(
@@ -3066,13 +3171,13 @@ fn f044_the_same_slow_touch_in_the_air_is_still_a_scratch() {
     let body = spawn_husk(&mut app, husk_at);
     let full = pool(&app, body);
 
-    place(&mut app, Vec3::new(husk_at.x - 1.75, 1.0, husk_at.z), Vec3::ZERO);
-    let p = player(&mut app);
+    // The same spot and the same swing as the test above — [`hover`] instead of [`stand`] is
+    // the ONLY difference between the two runs, which is what makes this a control and not a
+    // second test.
+    hover(&mut app, Vec3::new(husk_at.x - 1.75, 1.2, husk_at.z));
     hold_slash(&mut app);
-    for _ in 0..120 {
-        app.world_mut().entity_mut(p).insert(MovementState::Airborne);
-        app.update();
-    }
+    ticks(&mut app, 120);
+    assert_eq!(movement(&mut app), MovementState::Airborne, "he found the ground after all");
 
     assert!(
         hits(&app).is_empty(),
@@ -3108,3 +3213,4 @@ fn f044_a_ground_attack_is_never_the_better_choice() {
     );
     println!("F-044: ground {ground:.1} vs cheapest airborne {cheapest_airborne:.1}");
 }
+
