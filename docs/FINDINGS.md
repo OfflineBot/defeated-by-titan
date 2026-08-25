@@ -1663,7 +1663,7 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 
 ## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
 
-**NEXT FREE ID: FIND-160.** Claim it by bumping this line in the same `cat >>` that
+**NEXT FREE ID: FIND-172.** Claim it by bumping this line in the same `cat >>` that
 appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
 file separately and both read the same maximum. One line beats a 108 kB grep.
  — and append with `>>`, never with an edit tool
@@ -10030,3 +10030,474 @@ ticks*, with no wait, threshold or assert touched. Flagged rather than done quie
 Related: `Q-050` · `FIND-152` · `FIND-153` · `FIND-139` · `FIND-103` · `F-005` `F-008` `F-009`
 `F-010` · `src/player/locomotion.rs::rope_winch` · `src/vector/gas.rs` ·
 `scripts/game-full.txt`
+
+---
+
+## FIND-160 — a per-block point cap that fills bottom-up decapitates every ladder it truncates
+
+**2026-08-26 · `src/world/anchor.rs` · measured, red test captured both ways**
+
+`F-022`'s facade ladder puts a rung every `COURSE_RISE_M` = 15 m up anything taller than 30 m.
+It was written as **one loop that walks rung by rung from the ground and stops when
+`MAX_POINTS_PER_BLOCK` (48) runs out** — and per rung it forced at least one point on each of
+the four faces (`n.max(1)`), so a rung cost 6 points on Ashgate's gate towers
+(`maps.ron`, `(±24, 60, -120)`, 20 × 120 × 55 m: two long faces at 2 points, two short faces at
+1). Four corners plus ten roof-edge points leaves 34, and 34 / 6 = **5.67 rungs**.
+
+So the tower's ladder stopped at 90 m. The rungs the budget dropped were **105 m and the top of
+90 m — the top of the climb, twenty metres in front of the only gate in the map.** And because
+the wall course's own roof-edge points near the gate sit at x = ±29.125, which is *inside* those
+same 20 m-wide towers, `AnchorField::from_plan`'s buried-point filter correctly removes them
+too: **within 60 m of the gate the district offered no anchor at all between y = 90 and y = 120.**
+
+`tests/world.rs::f022_the_wall_stacks_into_a_ladder_of_rungs_every_fifteen_metres` named it
+exactly: *"the wall course whose top is at y = 105 carries no anchor point within 60 m of the
+gate"*. Nothing else was red — 45, 60, 75, 90 and 120 all had a rung.
+
+**The fix is an ordering, not a bigger cap.** The ladder now runs in two passes:
+
+* **Pass A** places one point at the centre of each of the four faces of *every* rung, before
+  any fill. That is 4 per rung, not 6, and it is what `ladder_reserve` (subtracted from the
+  roof edges' budget before they are placed) pays for.
+* **Pass B** adds the `COURSE_SPACING_M` extras along long faces out of whatever is left. This
+  half *is* allowed to run out, and when it does it **thins** the ladder instead of cutting its
+  top off.
+
+`MAX_POINTS_PER_BLOCK` is unchanged at 48.
+
+**Rule 5, both directions.** Red first, captured verbatim above. Then the fix. Then the control:
+folding pass A back into pass B and restoring `n.max(1)` — *two lines* — reproduces the original
+failure at **exactly y = 105**, same message, same block.
+
+🔴 **And the first two controls I ran were the wrong ones, which is the transferable half.**
+Deleting pass A alone left the test **green**, and so did dropping `MAX_POINTS_PER_BLOCK` to 32.
+Both looked like proof that pass A does nothing. They are not: with `n.max(1)` gone, pass B on
+its own happens to cost 4 per rung on *this* block (the 19 m short faces floor to `n = 0`), so
+the ladder fits by accident of the tower's width. Only the two-line control moves the number.
+**`FIND-103`'s shape again — a control that deletes half of a two-part change measures the other
+half.** Delete the whole thing you think you are measuring, not the part you are proud of.
+
+**Where it stands after:** Ashgate = **8084 generated points over 2871 blocks in 4.26 ms at
+`Startup`**, `validate()` clean — buried 0, clustered 0, bad-normal 0, holes 7. Then
+`adopt_model_anchors` adds **1520 authored `hook.*` points** as the district finishes dressing
+(**9604 total**). That is the pack's 439 named points (`FIND-116`), instantiated across the
+dressed blocks, **consumed by the game for the first time** — they had been read and dropped
+since 2026-08-18.
+
+**Still open:** nothing outside `src/world/` reads `AnchorField` yet
+(`grep -rn 'AnchorField' src/ | grep -v '^src/world/'` is empty). `F-023`'s `candidates`,
+`F-026`'s markers and `F-027`'s cap are implemented and tested as functions with **no caller**.
+The field is 🟨 until something aims with it.
+
+**Cost, and why there is no clean per-frame number.** The field is built once at `Startup` and
+`adopt_model_anchors` is `Changed<ModelAnchors>`-gated, so the per-tick cost should be an empty
+query. Measured anyway, same binary, one env var (`DBT_NO_ANCHORS`) as the only difference,
+`--offscreen`, `DBT_FRAMETIME=1`, `f003-ashgate.txt`, interleaved on/off/on/off/on/off:
+on = 7.617 / 4.671 / 5.044, off = 4.290 / 5.723 / 4.517 ms/frame. **The arms overlap and the
+within-arm spread (3.3 ms) is six times the between-arm difference (0.5 ms) — below the noise
+floor with three other agents compiling.** The number that is real is the 4.26 ms at `Startup`.
+
+---
+
+## FIND-161 — `scripts/f003-ashgate.txt` is 7 of 40 red, and it is NOT `game.ron`
+
+**2026-08-26 · foreign territory (`src/vector/`, `src/player/`) · measured, with a control**
+
+`docs/FINDINGS.md` last records the district's own evidence script as **"40 asserts held, exit
+0, 2871 blocks"**. Today, on the current tree:
+
+```
+script run finished: 7 of 40 asserts failed        # exit 1
+  line 101: assert Height > 32.5 — measured 13.182
+  line 104: assert Speed  < 31.7 — measured 42.334
+  line 109: assert Height > 57   — measured  1.500
+  line 135: assert Height > 58   — measured 52.928
+  line 161: assert Height > 110  — measured 105.107
+  line 234: assert Height > 5.5  — measured  3.392
+  line 238: assert Speed  < 8    — measured 22.000
+```
+
+All seven are **flight** asserts. They cannot come from this round's anchor work: `AnchorField`
+has no reader outside `src/world/` at all, so it moves nothing the player integrates against.
+
+**The control, and it came back negative.** `d7cc829` (`F-005`: Ctrl is a winch) changed
+`src/vector/gas.rs`, `src/player/locomotion.rs` and `assets/data/game.ron`, and its evidence
+line names **`game-full.txt` only — `f003-ashgate.txt` was never re-run.** So the obvious
+hypothesis was the data half. Run in a copied asset tree (`$SCRATCH/ctrl`, same binary, nothing
+in the repo touched) with `git show d7cc829^:assets/data/game.ron` swapped in:
+
+> **the same 7 asserts fail, with the same measured values to three decimals.**
+
+So `game.ron` is not it. The cause is in the **Rust** half of that commit or older, and the next
+step is a bisect of `src/player/locomotion.rs` / `src/vector/gas.rs`, not of a RON file.
+
+**Why this matters more than seven asserts:** `f003-ashgate.txt` is what the map's 🟧 rests on.
+While it is red, every statement about Ashgate's aerial lanes — the gallery joint, the crown
+corbels, the 60 m lane spacing — is a claim without evidence, and `docs/STATUS.md` does not
+say so.
+
+---
+
+## FIND-162 — two of the three new mode doors stand behind the depot hall's east wall
+
+**2026-08-26 · mission · measured, three runs · the pads work; the walk to them does not**
+
+`missions.ron: hub.deployments` grew a second rank on 2026-08-25, one pad per **mode**:
+
+```
+    breach     (-18, 0,  8)   parcours   (-18, 0, -8)   escort   (+18, 0, 8)
+```
+
+All three are inside `maps.ron: layout.clear_radius_m` (24 m), so no generated building can
+stand in them — and that check is what made the placement look finished. **It is not the
+generator that is in the way, it is the HQ.** `f070-hub.txt` has said since 2026-08-13 that the
+hub spawn point stands *15 m in front of the depot hall's gate* and that walking west from it
+runs 45 m of floor into a wall; the two pads at `x = -18` are **3 m past that gate line and off
+its axis**, i.e. inside the hall with a wall between them and the player.
+
+### The measurement, and it is a control pair
+
+`forward = (-sin yaw, 0, -cos yaw)` (`player::locomotion`), `game.ron: player.run_speed_m_s` is
+6.0, and both pads lie 19.7 m from the hub spawn point:
+
+| run | bearing | held | result |
+|---|---|---|---|
+| walk at the **breach** pad | 114° | `key W 4.6` + `wait 5.6` (27.6 m of intent) | `phase == 5` — **still in the hub** |
+| the same walk mirrored at the **escort** pad | 246° | identical | `deployment: "escort" at "recruit" — a player is 3.0 m from the pad` |
+| `warp -18 2 8` onto the breach pad | — | — | `deployment: "breach" at "recruit" — a player is 2.0 m from the pad` |
+
+So: the yaw arithmetic is right, the pad is not broken, and the trigger does not care how you
+arrive. **What is broken is that a player cannot walk to two of the six doors in his own hub.**
+
+### Why this is worth an entry and not a tuning note
+
+A deployment pad is the game's only mission select — *„the game has mouse-look and no cursor
+while playing, so a click is not available"* (`mission::hub`). A door you cannot reach on foot
+is not a door, and the failure is **silent**: you walk at it, nothing happens, and there is no
+message. Two of the three modes that landed yesterday are behind it.
+
+⚠️ **And a `--hub` script cannot see this.** Nothing in the run errors; the phase simply stays
+5. That is why `scripts/f072-breach.txt` ACT 2 keeps the failed walk with `assert phase == 5`
+under it — **the repro is held green on purpose** and goes red the day the pads move, which is
+the only way a script can hold a bug open.
+
+### The fix is one line of RON, and it is NOT mine to pick
+
+Move the second rank out of the hall — e.g. mirror it to `+x` beside the escort pad, or push it
+south of the gate axis — or cut a way in. Which one is level design, and `assets/data/*.ron`
+belongs to the main head. `scripts/f072-breach.txt` and `scripts/f185-parcours.txt` reach their
+pads by `warp` until then, and both say so in their headers.
+
+---
+
+## FIND-163 — every script command costs a tick of its own, and over a long run that is seconds
+
+**2026-08-26 · debug · measured on a 9 500-tick run · cost one 3-minute run to find**
+
+`scripts/f073-escort.txt` follows a cart for 125 s by warping to its computed position every
+0.7 s. The schedule was built as `sum(wait)` — and the cart arrived **3.3 s early**, which put
+the `assert phase == 3` 3.8 s after the verdict and read a `6` (Debrief) instead of a `3`.
+
+The missing term: **`debug::script` spends one tick per command**, not only on `wait`. 176
+warps inside the escorted stretch are `176 / 60 = 2.9 s` of extra simulated time — the whole
+discrepancy, to a tenth.
+
+```text
+    escorted_s  =  Σ wait_s  +  (number of commands) / 60
+```
+
+Irrelevant in a 20-command script and worth **three seconds** in a 500-line one. It matters
+wherever a script's arithmetic has to land inside a window: `missions.ron: hub.verdict_s` is
+3.0 s wide, and 3.3 s of drift walks straight past it into the next phase. Anything that
+schedules by wall clock over hundreds of commands — a follow, a patrol, a long approach — has
+to carry the term.
+
+
+---
+
+## FIND-164 — a test cannot *write* `MovementState`, and three red tests are what that cost
+
+**2026-08-26 · `tests/combat.rs` · combat · measured**
+
+Three `F-041`/`F-044` tests were red, and all three for one reason: they produced the player's
+airborne/grounded state with `world.entity_mut(p).insert(MovementState::Grounded)`.
+
+`player::integrator::readback` is the **sole writer** of that component (it says so in its own
+doc) and it runs in `SimulationSystems::Integrate` — which sits **between the two sets that read
+the component**:
+
+| set | reader |
+|---|---|
+| `Spatial` | `combat::combo::bank` |
+| **`Integrate`** | **`player::integrator::readback` — writes it** |
+| `PostStep` | `combat::combo::decay`, `combat::strike::land`, `blades::cut` (the `F-044` gate) |
+
+So an inserted state is **honoured by the first reader and gone before the second**. That is why
+the failures looked contradictory: `f041_hits_in_the_air_…` passed both of its `bank` assertions
+off the inserted `Airborne` (`hits: 1`, then `hits: 2`, `x1.15`) and then failed the landing with
+`Combo { hits: 2, multiplier: 1.15, ticks_left: 118 }` — `decay` had never seen the `Grounded`
+the test wrote one line earlier. `f044_a_ground_attack_lands_…` cut nothing at all for the same
+reason: `blades::cut` reads the state in `PostStep`.
+
+**It is `FIND-103` with the halves swapped** — a test that *tells* the code the answer instead of
+asking the game for it. The state has to be **produced and then read back**, which is what the two
+new helpers do: `hover()` teleports with gravity off and **asserts** the game calls it airborne;
+`stand()` gives gravity back, drops him the last 0.3 m and **waits for the game to report the
+contact**, returning the tick count (22 ticks, measured). Both panic rather than continue if the
+game disagrees.
+
+**The rule, and it generalises past this component:** *if a field has one writer and that writer
+runs inside the tick, a test may not set it — it may only cause it and then read it back.* The
+same shape applies to `Velocity`, `Transform` and `RopeLength`, which `SimulationSystems::Integrate`
+also owns.
+
+**Red again by:** `combo::decay`'s landing branch → `if false && !is_airborne(..)`; the countdown
+→ commented out; `blades::cut::ground_attack` → `false && ..`. All three go red with their own
+message; verified 2026-08-26.
+
+---
+
+## FIND-165 — the nape is not a place, and a script that aims at it after four seconds aims at a chest
+
+**2026-08-26 · `scripts/f031-damage.txt` · combat/blades · measured, with a control**
+
+`scripts/f031-damage.txt` flew three body passes at a husk and then took his nape with
+`scripts/f030-cortex.txt`'s geometry to the centimetre — `warp 15.75 18.5 0.8` against a husk at
+`17.5 0 0`. It booked `cut titan 1 Torso at 20.67 m/s`, never a cortex, and `assert titans == 0`
+failed.
+
+**The control that settles it was one run:** `f030-cortex.txt`'s own act with a bare `wait 4.0`
+inserted before the warp. Same spawn, same warp, same slash, same everything else.
+
+| run | cut | husk |
+|---|---|---|
+| fresh husk | `cut titan 1 Cortex at 20.67 m/s` | dead |
+| **+ `wait 4.0` of aggro** | `cut titan 1 Torso at 20.67 m/s` | alive |
+
+The husk **turned to face the player**, and `titan.ron: <kind>.cortex_half_angle_deg` refuses a
+cortex cut from the front by rule (`Q-030`/`Q-031`, `src/blades/cut.rs:214`). The design is doing
+exactly what it was built to do; the script was reading a fixed point in space where there is a
+moving target with a back.
+
+**The script-authoring rule:** *a cortex act belongs on a titan that has not been fought yet.*
+`f031-damage.txt` now spawns a second husk 60 m up the −Z axis — outside `aggro_radius_m` 45 from
+where the player stands, so he is asleep until the warp and gets the same 0.9 s of lead the fresh
+pass in `f030-cortex.txt` gets. Green: 6 asserts, exit 0, `cut titan 2 Cortex at 20.67 m/s` at
+tick 379.
+
+**And it is a better test than the one it replaces**, because the husk that ate three passes is
+still standing in the same run: `assert titans == 2` after the body work, `assert titans == 1`
+after the nape. Emptying the pool twice over is not a kill; only the nape is.
+
+---
+
+## FIND-166 — 🔶 FOREIGN (titan): `crowd.arrive_m` delays a crowd titan's first blow by 269 ticks
+
+**2026-08-26 · `src/titan/perception.rs`, `assets/data/titan.ron` · measured · NOT FIXED HERE**
+
+`tests/combat.rs::p5_the_mission_is_lost_when_every_player_is_down` went red between two builds
+twelve minutes apart, with **no change on the combat side** — the only combat test that runs
+`mission_app()`, i.e. the only one where the player is the target of a *crowd* (the tutorial
+queues four titans on a 24 m ring on top of the test's own husk). Every single-titan test in the
+file stayed green.
+
+Cause, from the diff that landed in between: `titan.ron: crowd.arrive_m` and the rule its comment
+states — *"a titan of a crowd HOLDS HIS ATTACK until he is inside `arrive_m` of his slot"*.
+
+Measured with a throwaway probe on the same fixture (`mission_app`, husk at `(0,0,-10)`, player
+5 m in his face, 3000 ticks):
+
+| | before | after |
+|---|---|---|
+| blows land at tick | 449 / 539 / 629 | **718 / 808 / 898** |
+| `Downed` at tick | 630 | **899** |
+| blows in 3000 ticks | — | 3, and 4 strikes begun |
+
+**Nothing is starved** — the crowd does strike, 4.5 s later. But a titan who *starts inside his
+own attack range* now walks to a 9 m ring slot before he is allowed to swing, and that is a real
+change to what a fight feels like, not only to a test's tick budget. **Whether that is wanted is
+`titan`'s call, not `combat`'s** — this entry exists so it is a decision and not a side effect.
+
+**What was done on the combat side:** the test's watch window went 400 → 1200 ticks, with the
+measurement and this id in a comment above it. **No assertion changed** — it still asserts
+`Lost`, still asserts `decided < deadline_tick()` (19 800) and still asserts
+`decided.abs_diff(downed) <= 2`. Only the run got long enough to reach the event.
+
+## FIND-167 — `F-055` silently invalidated the CONTROL half of two behaviour tests, and both looked like regressions
+
+**2026-08-26 · mission/titan · two reds in `tests/mission.rs`, neither of them a bug**
+
+The crowd ring (`titan::perception::ring_offset`, `titan.ron: crowd`) turned two green tests red
+on the day it landed. Neither red was a defect in the new code, and neither was a defect in the
+old test's *claim* — both were defects in its **control**, which had been asserting a literal
+that was true only because the feature did not exist yet.
+
+| test | control assert | why it broke |
+|---|---|---|
+| `f063_a_chorus_pair_splits_where_a_husk_pair_stacks` | `husk_m < 4.5` — *"they start 4 m apart and walk at one point, so they may only converge"* | two husks now claim two slots of a 9 m ring and spread to **5.29 m** |
+| `f057_the_errant_leaves_the_line_the_husk_walks` | `husk_worst < 0.5` — *"neither is inside the other's aggro, nothing here is a group effect"* | `titan::perception` slots by **the player a titan walks at**, not by how near two titans stand: a husk 40 m north and an errant 40 m east are one crowd of two, and the husk went **0.81 m** off its line |
+
+### The generalisation, and it is worth more than either fix
+
+**A control that is a literal is a claim with an expiry date.** Both of these said "the baseline
+does nothing" and encoded it as a number measured on the day they were written. A feature in
+*another domain* then made the baseline do something legitimate, and the test reported it as a
+failure of the thing under test — which is the most expensive kind of red, because the obvious
+reading is "the chorus/errant broke".
+
+Both were repaired the same way, and it is the `FIND-103` habit: **replace the literal control
+with a deletion control** — the same kind, in the same world, with the one number under test
+zeroed in that app's own copy of the data.
+
+```text
+  f063   chorus 18.45 m │ chorus with `flank_offset_m` deleted 6.43 m │ husks 5.29 m
+  f057   errant  1.58 m │ errant with `swerve_deg`      deleted 0.00 m │ husk  0.00 m
+```
+
+The residue is now visible instead of hidden: 6.43 m of the chorus's spread is the crowd ring
+that every kind gets, and it is *not* flanking.
+
+### And it caught a second artifact that had been in `f057` since it was written
+
+With the crowd ring removed, the errant was **still 1.12 m** off its line with the swerve
+deleted — it spawns 90° off the player and walks an **arc**. So the old floor of `> 2.0 m`
+against a "measured 3.15 m" was passing on 1.1 m of turn plus a crowd offset plus the swerve,
+and the behaviour's own contribution had never been measured. `face_the_player` (which
+`f063` already used, for exactly this reason) takes it to 0.00 m.
+
+**The two habits, for any behaviour test in this repo:** turn the body toward what it is walking
+at before measuring, and make the control a deletion rather than a number.
+
+
+---
+
+## FIND-168 — `F-055`'s ring was a path deflection, and a deflection cannot make a ring
+
+**Measured 2026-08-26**, `tests/titan.rs::f055_six_titans_on_one_player_stand_in_six_places`.
+
+The first `F-055` added a rotated copy of the approach line to a pursuing titan's aim and faded
+it out over `attack_range_m`, exactly the way `behaviour.flank_offset_m` fades. Six husks walked
+in from one line and came to rest with **1.49 m between the tightest pair** — the acceptance
+sentence (*"bei 6 Titanen stehen keine zwei in derselben Position"*) failing by a factor of four.
+Three variants were measured before the cause was right:
+
+```text
+  as built (fade over attack_range_m) ......... 1.49 m   fan  112°
+  fade removed, radius capped under the reach .. 0.40 m   fan   93°   ← WORSE
+  half-step bearings, group-anchored ring ...... 2.72 m   radii 2.7–4.8 m, uneven
+  absolute bearings + arrive + hold the swing .. 4.80 m   against 0.05 m with the ring deleted
+```
+
+Three separate causes, and each one is worth keeping:
+
+1. **The fade switched the ring off exactly where the bearings are decided.** `brain::walk`
+   stops pursuing at `attack_range_m`, and the fade reached zero at `attack_range_m` — so the
+   offset was full during the walk and gone at the moment the titan stopped and stood. It was
+   also never necessary: a ring offset is a *rotated copy of the line* and keeps an inward
+   component of `distance_m − radius·cos β`, so while `radius < attack_range_m` it can never
+   stall an approach. Only a *perpendicular* offset (the flank) needs a fade.
+2. **A deflection saturates.** Removing the fade made it worse, which is the interesting half:
+   the arrival bearing is a saturating function of the sustained lateral push, so the `±90°`
+   and the `±150°` slots of a six-ring both arrived at about `+40°` and stacked. **No strength
+   of lateral push produces an even ring.** A slot has to be a *place*.
+3. **A group-relative anchor is a feedback loop.** Anchoring the ring on the lowest-id
+   member's own bearing reads well and precesses: that titan is himself placed half a step off
+   his own anchor, so walking to his place moves the anchor, which moves his place. Nobody
+   arrived — six husks came to rest at 2.7 to 4.8 m from the player instead of six places at
+   5.4 m. **An anchor has to be something the ring cannot move**; `Vec3::Z` is the cheapest such
+   thing, and it is stable across machines without a message (`docs/multiplayer.md` rule 4).
+
+What it is now: absolute world bearings on the half steps, radius `min(ring_radius_m,
+0.9·attack_range_m)` so that standing in your slot is standing in your own reach, `crowd.arrive_m`
+to say when you are in it, and **`brain::decide` holds a crowd titan's swing until he is**. That
+last line is the feature: without it he plants at the first point of the reach circle he touches,
+and six titans off one line touch it in one place.
+
+**Everything is gated on `slot.of > 1`.** A lone titan has no place to take and is always in
+position, which is what leaves `F-030`, `F-034`, `q030`, `q031` and `F-032` untouched to the tick
+— all three scripts still report `MARK t=154`.
+
+---
+
+## FIND-169 — after `F-051`, every test that put the player on **+Z** was measuring blindness
+
+**Measured 2026-08-26.** `spawn titan` gives a body no rotation and Bevy's forward is **−Z**, so
+a titan spawned by a test faces −Z. A player placed on **+Z of the titan is dead astern of it.**
+That cost nothing while `aggro_radius_m` was a 360° circle. Since `F-051` it costs everything:
+the eye is a cone and the ear hears a **noise radius**, and a player standing still carries
+`perception.quiet_m` = 8 m of it — inaudible at 20 m to every kind in `titan.ron`.
+
+Three places were placing him there, and all three were **correct code with a stale setup**:
+
+```text
+  tests/titan.rs::f054_…  husk at z=−20, "well inside his own 45 m cone" — never wound up in 1400 ticks
+  tests/titan.rs::f055_…  six husks at z=−35 — stood where they were spawned for all 900 ticks
+  scripts/f051-kinds.txt   acts B and C — 2 of 7 asserts failed, health 100 where it wanted <70 / <40
+```
+
+`tests/titan.rs::f050_…` was already on +Z of the player with a comment explaining why, written
+long before `F-051`; it is the one that kept passing.
+
+Two second-order effects worth the same paragraph, because both look like bugs and are not:
+
+* **A husk that does not have to turn round arrives 3.6 s earlier.** On +Z the husk spent his
+  first 3.6 s turning 180° at `turn_deg_per_s` 50. Facing him from the start, ten seconds bought
+  him **two** blows instead of one and killed the run outright.
+* **`Awareness::detected` is a latch, so a lurker tracks a man 130 m away for 2.8 s.**
+  `1 / forget_per_s` is the hold. In `f051-kinds` that had him turn 126° to follow the player
+  through act B and turn all the way back in act C — his blow landed 4.0 s after the warp instead
+  of 0.42 s. The turn is correct; the setup was making him do it for nothing. All three acts now
+  stand on the same side of their titans.
+
+**The habit:** before measuring anything about what a titan *does*, check that he can perceive
+the player at all — `awareness.detected`, not `distance_m`. A titan that never noticed you is a
+titan whose whole behaviour test is measuring the number zero.
+
+---
+
+## FIND-170 — `F-054`'s brain-run count is proven; its **cost** saving is below the noise floor
+
+**Measured 2026-08-26**, pinned binary (`cp target/debug/defeated_by_titan $SCRATCH/dbt-pinned`),
+interleaved A/B, user CPU seconds over 900 headless ticks:
+
+```text
+  0 titans .................. 7.17 · 6.60
+  60 husks at  70 m (near) .. 7.63 · 7.52     every titan thinks every tick
+  60 husks at 400 m (far) ... 7.31 · 7.77     1 brain run in 12
+  20 husks near / far ....... 7.98 7.99 8.06 / 7.97 7.66 7.97
+```
+
+**Sixty titans cost about 0.5–0.9 user-seconds over 900 ticks — roughly 0.6–1.0 ms/tick against
+the 16.7 ms budget**, so the feature row's own acceptance (*"60 aktive Titanen unter 8 ms"*) is
+met with a wide margin. But the near/far difference is **inside the run-to-run spread**, and the
+far column is not even reliably the cheaper one. So:
+
+**`F-054`'s mechanism is measured and its saving is not.** The count is proven by
+`tests/titan.rs::f054_…` — 240 brain runs at 20 m against 20 at 400 m, with a deletion control
+(`lod.near_m` pushed past the far titan puts the count straight back to 240) — and that is a real
+assertion about the code. The *cost* claim would need a per-system profile this session did not
+have; a whole-process CPU measure cannot see it, because the titan brain is a small fraction of a
+Bevy frame that also runs physics, the world and the renderer's setup.
+
+⚠️ **Do not quote a ms saving for `F-054`.** Quote the run count.
+
+---
+
+## FIND-171 — `tests/mission.rs::f063_…` quotes three numbers that have moved (not mine to fix)
+
+**Measured 2026-08-26.** The `F-055` repair above changes how far a *pair* spreads on the
+approach, and `f063_a_chorus_pair_splits_where_a_husk_pair_stacks` quotes the old figures in its
+own doc comment:
+
+```text
+                          doc says   measured now
+  chorus, as shipped ....... 18.45      16.39
+  chorus, flank deleted ..... 6.43       5.21
+  husks ..................... 5.29       4.00
+```
+
+**Every assert in it still holds** and the suite is green (44/44) — `husk_m < 6.5 && < ring_m`,
+`chorus_m > flat_m * 2.5`, `|flat_m − husk_m| < 2.0`, `chorus_m > husk_m * 2.5`. Only the three
+numbers written into the prose above the test are stale, and the relationship they were quoted to
+demonstrate is unchanged. `tests/mission.rs` belonged to another hand this round, so this is
+reported rather than edited.

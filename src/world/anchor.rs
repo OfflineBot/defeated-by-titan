@@ -361,6 +361,15 @@ impl AnchorField {
         self.points.len()
     }
 
+    /// How many of the field's points a **model** brought, not [`generate_points`].
+    ///
+    /// The pack ships 439 `hook.*` points across 144 files and the loader has read them since
+    /// 2026-08-18 without anything consuming them (`docs/FINDINGS.md` FIND-116). This is the
+    /// number that says how many of them the game actually holds.
+    pub fn named(&self) -> usize {
+        self.points.iter().filter(|p| p.kind == AnchorKind::Named).count()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.points.is_empty()
     }
@@ -606,11 +615,22 @@ pub fn adopt_model_anchors(
     mut field: ResMut<AnchorField>,
     loaded: Query<(&AnchorBlock, &GlobalTransform, &ModelAnchors), Changed<ModelAnchors>>,
 ) {
+    let before = field.named();
     for (block, to_world, anchors) in &loaded {
         if anchors.is_empty() {
             continue;
         }
         field.adopt_named(block.0, to_world, anchors);
+    }
+    // ⚠️ **This log is the only place the pack's authored anchors are countable at runtime**,
+    // and it is here because "the loader reads 439 `hook.*` points" and "the game uses 439
+    // `hook.*` points" are two different claims (`docs/FINDINGS.md` FIND-116). `log_field`
+    // runs at `Startup`, before a single `.glb` has finished loading, so its count is the
+    // generated half and nothing else. Rate-limited to *a batch that actually changed
+    // something*, so a dressed district prints a handful of lines and then goes quiet.
+    let after = field.named();
+    if after != before {
+        info!("anchors: {} named hook.* points adopted, {} in the field", after, field.len());
     }
 }
 
@@ -657,6 +677,30 @@ pub fn generate_points(block: &BlockPlan, index: u32) -> Vec<AnchorPoint> {
         });
     };
 
+    // ## 0. Where the ladder's rungs go — computed **before** anything is placed, because
+    // the ladder's share of [`MAX_POINTS_PER_BLOCK`] is reserved out of the budget and the
+    // roof edges get what is left over.
+    //
+    // 🔴 **This ordering is the whole of the wall ladder.** Until 2026-08-26 the ladder was
+    // generated last and simply ran out of budget. Ashgate's gate towers are 120 m in one
+    // piece (`maps.ron`, `(±24, 60, -120)`, 20 × 120 × 55 m): four corners and ten roof-edge
+    // points, then six points per rung, and the 48 run out **five and a half rungs up**. So
+    // the rungs at 90 m and 105 m — the top of the climb, in front of the gate, the one
+    // place in this map a player is guaranteed to be — were the two that got dropped, and
+    // `f022_the_wall_stacks_into_a_ladder_of_rungs_every_fifteen_metres` was red on exactly
+    // y = 105. **A cap that truncates a ladder from the top is a ladder you cannot finish.**
+    let mut rung_heights: Vec<f32> = Vec::new();
+    if block.size_m.y >= COURSE_MIN_HEIGHT_M {
+        let mut rung_y = floor_y + COURSE_RISE_M;
+        while rung_y < roof_y - 1.0 {
+            rung_heights.push(rung_y);
+            rung_y += COURSE_RISE_M;
+        }
+    }
+    // One point on each of the four faces of each rung is what *a complete ladder* costs.
+    // Capped so the corners and a handful of roof edges always survive it.
+    let ladder_reserve = (rung_heights.len() * 4).min(MAX_POINTS_PER_BLOCK.saturating_sub(8));
+
     // ## 1. The four roof corners. Best points on the box: two edges meet, so a rope that
     // overshoots one still lands on the other.
     for (sx, sz) in [(-1.0f32, -1.0f32), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
@@ -677,7 +721,7 @@ pub fn generate_points(block: &BlockPlan, index: u32) -> Vec<AnchorPoint> {
     // odd. That last property is not decoration: the gate stands in the middle of Ashgate's
     // wall, so the middle of a course is exactly where a player is climbing.
     let perimeter_m = 4.0 * (ex + ez);
-    let edge_budget = (MAX_POINTS_PER_BLOCK - 4) as f32 * 0.6;
+    let edge_budget = (MAX_POINTS_PER_BLOCK - 4 - ladder_reserve) as f32 * 0.6;
     let spacing_m = EDGE_SPACING_M.max(perimeter_m / edge_budget.max(1.0));
     for (along_x, sign) in [(true, -1.0f32), (true, 1.0), (false, -1.0), (false, 1.0)] {
         let (len_m, fixed) = if along_x { (ex * 2.0, cz + sign * ez) } else { (ez * 2.0, cx + sign * ex) };
@@ -697,29 +741,47 @@ pub fn generate_points(block: &BlockPlan, index: u32) -> Vec<AnchorPoint> {
     //
     // Only for a box taller than [`COURSE_MIN_HEIGHT_M`]: below that the roof is inside one
     // rope-length of the ground and a rung buys nothing but a marker. Ashgate's gate towers
-    // are 120 m in one piece and its church is 35 m; the wall itself needs none of this,
+    // are 120 m in one piece and its church is 35 m; the wall band itself needs none of this,
     // because it is already built one 15 m course at a time and every course top is a roof.
-    if block.size_m.y >= COURSE_MIN_HEIGHT_M {
-        let mut rung_y = floor_y + COURSE_RISE_M;
-        while rung_y < roof_y - 1.0 {
-            for (normal, base) in [
-                (Vec3::X, Vec3::new(cx + half.x, rung_y, cz)),
-                (Vec3::NEG_X, Vec3::new(cx - half.x, rung_y, cz)),
-                (Vec3::Z, Vec3::new(cx, rung_y, cz + half.z)),
-                (Vec3::NEG_Z, Vec3::new(cx, rung_y, cz - half.z)),
-            ] {
-                let along_x = normal.x == 0.0;
-                let len_m = if along_x { ex * 2.0 } else { ez * 2.0 };
-                let n = ((len_m / COURSE_SPACING_M).floor() as i32).max(1);
-                for i in 0..n {
-                    let t = -len_m * 0.5 + len_m * (i as f32 + 0.5) / n as f32;
-                    let offset = if along_x { Vec3::X * t } else { Vec3::Z * t };
-                    keep(&mut out, base + offset, normal, AnchorKind::Course);
-                }
-            }
-            rung_y += COURSE_RISE_M;
+    //
+    // **Pass A — every rung gets its four face centres.** This is the guaranteed half, and
+    // `ladder_reserve` above is what pays for it. Completeness before density: a rung you can
+    // reach on all four sides beats two extra points on a rung nobody got to.
+    for &rung_y in &rung_heights {
+        for (normal, at) in facade_faces(cx, cz, half, rung_y) {
+            keep(&mut out, at, normal, AnchorKind::Course);
         }
     }
-
+    // **Pass B — the extra points along a long face**, at [`COURSE_SPACING_M`], out of
+    // whatever the block has left. This half *is* allowed to run out, and when it does it
+    // thins the ladder rather than cutting its top off: pass A already put a point on every
+    // rung of every face. (Where `n` is odd the middle point is the face centre again and
+    // [`MIN_SPACING_M`] drops it, which is why this pass is a fill and not a duplicate.)
+    for &rung_y in &rung_heights {
+        for (normal, at) in facade_faces(cx, cz, half, rung_y) {
+            let along_x = normal.x == 0.0;
+            let len_m = if along_x { ex * 2.0 } else { ez * 2.0 };
+            let n = (len_m / COURSE_SPACING_M).floor() as i32;
+            for i in 0..n {
+                let t = -len_m * 0.5 + len_m * (i as f32 + 0.5) / n as f32;
+                let offset = if along_x { Vec3::X * t } else { Vec3::Z * t };
+                keep(&mut out, at + offset, normal, AnchorKind::Course);
+            }
+        }
+    }
     out
+}
+
+/// The centre of each of a box's four vertical faces at one height, with its outward normal.
+///
+/// Both passes of the facade ladder walk the same four faces in the same order, and that
+/// order is part of `F-021`'s determinism contract (`docs/multiplayer.md`: a city that
+/// differs by iteration order is a desync).
+fn facade_faces(cx: f32, cz: f32, half: Vec3, rung_y: f32) -> [(Vec3, Vec3); 4] {
+    [
+        (Vec3::X, Vec3::new(cx + half.x, rung_y, cz)),
+        (Vec3::NEG_X, Vec3::new(cx - half.x, rung_y, cz)),
+        (Vec3::Z, Vec3::new(cx, rung_y, cz + half.z)),
+        (Vec3::NEG_Z, Vec3::new(cx, rung_y, cz - half.z)),
+    ]
 }

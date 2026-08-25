@@ -44,12 +44,34 @@
 #
 # The three acts stand 150 m apart in z, so nothing of a finished act is inside the
 # `aggro_radius_m` of the next one — the widest pair of eyes that can spawn is the husk's 45 m.
+# They are 150 m apart on **−z**, so that no act ever asks a titan of another act to turn round.
 #
-# ## What it produced, 2026-08-19, first clean run — 7 of 7 asserts held
+# ## ⚠️ The player stands on **−Z of the titan** in all three acts, and that is new (2026-08-26)
+#
+# Until `F-051` landed he stood on +Z, which is **dead astern of a titan's spawn facing** (Bevy's
+# forward is −Z and `spawn titan` gives a body no rotation). That cost nothing while
+# `aggro_radius_m` was a 360° circle. It costs everything now: the eye is a cone and the ear
+# hears a **noise radius**, and a player who has warped in and is standing still carries
+# `perception.quiet_m` = 8 m of it — inaudible at 20 m to every kind in the file. Both titans
+# were therefore perfectly correct to ignore him, and the run went
+# `2 of 7 asserts failed` — act B `health == 100` where it wanted `< 70`, act C `health == 100`
+# where it wanted `< 40`.
+#
+# **That is the feature working, and a setup that had stopped measuring what it says it does.**
+# Act A's claim is *"the ambusher does not come"*, and on +Z it was passing for the wrong reason
+# — a lurker who could not see the player would not have come either way, so the act proved
+# nothing about `behaviour.ambush`. On −Z he sees the player at 20 m (inside his `aggro_radius_m`
+# of 25), turns on the spot to watch him, and **still does not take a step**. That is the
+# measurement the file was always for.
+#
+# ## What it produced, 2026-08-26, after the −Z move — 7 of 7 asserts held
 #
 #   MARK t=92   A-lurker-waits      … ten seconds later: health 100.0/100.0, the lurker at (0,0,0)
-#   MARK t=693  B-husk-comes        … `strike: player 1 takes 34.0 — 66.0/100.0 left` after 8.8 s
-#   MARK t=1294 C-lurker-strikes    … `strike: player 1 takes 48.0 — 18.0/100.0 left` after 0.42 s
+#   MARK t=693  B-husk-comes        … `strike: player 1 takes 34.0 — 66.0/100.0 left`
+#   MARK t=1114 C-lurker-strikes    … `strike: player 1 takes 48.0 — 18.0/100.0 left` after 0.42 s
+#
+# The 2026-08-19 run stood at `MARK t=1294` for act C and is otherwise the same three lines; the
+# 180 ticks are act B's shortened wait, not a behaviour that moved.
 #
 # **Ten seconds at 20 m cost 0 against the lurker and 34 against the husk; 0.42 s at 5 m cost 48
 # against the same lurker.** That is the same player doing the same thing in front of two kinds,
@@ -60,8 +82,8 @@ wait 1.5
 
 # ---- ACT A — the ambusher. Twenty metres, ten seconds, no bill. ---------------------------
 spawn titan lurker 0 0 0
-warp 0 2 20
-look 180 0
+warp 0 2 -20
+look 0 0
 mark A-lurker-waits
 wait 10.0
 # He is inside his own aggro radius (20 < 25) and outside his own reach (20 > 8). A husk at
@@ -70,11 +92,26 @@ assert titans == 1
 assert health == 100
 
 # ---- ACT B — the husk. The same twenty metres, the same ten seconds. -----------------------
-spawn titan husk 0 0 150
-warp 0 2 170
-look 180 0
+# ⚠️ −150 and not +150. All three acts stand on the SAME side of their titans now, and that is
+# act C's requirement rather than act B's: an ambusher watches what he has noticed
+# (`brain::walk`, `crouched_and_watching`), `Awareness::detected` is a latch that holds for
+# `1 / forget_per_s` = 2.8 s after the player has gone, and act B on +150 therefore had the
+# lurker spend those 2.8 s turning 126° at his `turn_deg_per_s` of 45 to follow a man 130 m
+# away. He then had to turn all the way back in act C, and his blow landed 4.0 s after the warp
+# instead of 0.42 s. Measured 2026-08-26. The turn is correct behaviour; the setup was making
+# him do it for nothing.
+spawn titan husk 0 0 -150
+warp 0 2 -170
+look 0 0
 mark B-husk-comes
-wait 10.0
+# ⚠️ 7.0 s and not the 10.0 that stood here until 2026-08-26. On +Z the husk spent his first
+# 3.6 s turning 180° at `turn_deg_per_s` 50 before he could take a step, and ten seconds bought
+# him exactly one blow. Facing him from the start, he closes the 14 m to his reach in about
+# 5.2 s and swings at about 6.2 s — and his `attack_cooldown_s` of 1.5 gets him a SECOND blow in
+# at about 7.9 s. Two of them is 68 of 100, act C's 48 then takes the run to zero, and the
+# `assert health > 0` that guards this file against "the player simply died" went red.
+# Seven seconds is one blow, which is what the act has always claimed.
+wait 7.0
 assert titans == 2
 # `titan.ron: husk.damage` is 34 of `game.ron: player.health` 100. One landed blow puts him
 # under 70 and nothing else in this run can take health off him.
@@ -82,8 +119,8 @@ assert health < 70
 
 # ---- ACT C — the same lurker, one step too close. ------------------------------------------
 # Not a new titan: the one from act A, still standing where he was spawned twenty seconds ago.
-warp 0 2 5
-look 180 0
+warp 0 2 -5
+look 0 0
 mark C-lurker-strikes
 # 1.5 s and not more: his `attack_cooldown_s` is 1.8, the first blow lands 0.42 s after the
 # player crosses the line, and a second one would take the run to 0 health. Measured.
