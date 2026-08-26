@@ -2576,3 +2576,63 @@ walk out of the rope. If it feels like the rope is *giving*, it is right; if it 
 
 **Related:** `Q-056` · `Q-050` · `FIND-182` · `FIND-183` · `FIND-184` · `FIND-181` · `FIND-172` ·
 `FIND-152` · `FIND-035` · `docs/NEXT.md` §3D R4 · `F-004` `F-005`
+
+---
+
+## Q-058 — does `Drive` get a real rope? (the one decision attempt 3 must not make alone)
+
+**Asked 2026-08-26**, after `docs/NEXT.md` §3D was built twice and refuted 2/2 both times
+(`FIND-186`). **This is the interface question `CLAUDE.md` says must stand before the fan-out**, and
+it is his because it changes how the movement *feels*, not how it is written.
+
+### What was found while answering `FIND-152`
+
+**The ratchet he asked for already exists — under `Pendulum`, tested, with the one-writer rule
+already satisfied.** `player::rope::shorten_ropes` is the **single** writer of `limits.max`, and it
+already contains both halves (`src/player/rope.rs:420-465`):
+
+> 1. **The reel** takes `ReelSpeed · substep_dt` off the length while the button is held.
+> 2. **The take-up** (`B-004`) follows the length down to the distance that really exists — **no
+>    rate cap, no button, and never upward.** *"This is what makes the length a ratchet."*
+
+That is *„wenn das seil shcon eingezogen wurde soll es erstmal nicht länger werden"*, verbatim,
+already shipped — on the model the game is **not** currently running.
+
+### Why this is the whole of §3D and not just R4
+
+A `limits = (0, L)` joint corrects **only when the distance exceeds `L`**, and avian solves **all**
+of them simultaneously. So the acceptance sentence — *"the anchor distance must not increase"* —
+becomes the **solver's** job, **per arm, for two arms at once**. That is precisely the case both
+attempts got wrong by hand: attempt 1 bounded the sum instead of each, attempt 2 zeroed the whole
+command trying to satisfy both. **Neither failure is expressible against a joint.**
+
+### The cost, and it is real
+
+`FIND-149` is his own first-hand report that the reference **drives and does not swing**, and
+`Drive` exists because of it. **A hard maximum length puts an arc back in** — you can no longer fly
+straight past an anchor and keep going; at `L` you are turned. That is the difference between the
+two models, and this would make `Drive` *"a pendulum with a velocity drive on top"* rather than a
+third thing.
+⚠️ The test that already tells the two apart is
+`tests/vector_rope.rs::f149_under_drive_a_hooked_player_who_presses_nothing_is_not_held_up_by_his_rope`
+— **2.499 m of fall under `Drive` against `Pendulum`'s 0.000** with the anchor straight overhead. It
+stays green **only** if `rest_m` is born at the bite distance and the joint is a *maximum*, never a
+fixed length. **It is the gate on attempt 3.**
+
+### ASSUMPTION the work will continue under
+
+**`Drive` gets the joint**, born at the bite distance, `limits = (0, rest_m)`, `shorten_ropes` left
+as the sole writer and `rope_winch`'s `Ctrl` folded into it as the reel it already is. §3D's R1-R4
+then come from the solver rather than from a hand-rolled projection.
+
+**Rollback point:** `player::rope::attach_ropes` — the one branch that decides whether a `Drive`
+rope gets a `DistanceJoint`. Removing it takes the game back to today's jointless `Drive`, and
+`rope_force_model: Pendulum` in `game.ron` remains the other escape hatch (`Q-049`).
+
+**What settles it in thirty seconds of play:** fly straight at an anchor, pass it, and keep holding
+`W`. **With the joint you get swung around it. Without it you fly on.** If being turned feels like
+the reference, the assumption was right; if it feels like a leash, the answer is no and §3D needs a
+third design.
+
+**Related:** `FIND-186` · `FIND-152` · `FIND-149` · `B-004` · `B-005` · `Q-049` · `Q-057` ·
+`docs/NEXT.md` §3D · `F-004` `F-005` `F-006`
