@@ -834,6 +834,20 @@ fn f006_above_the_threshold_the_legs_stop_steering_and_the_air_takes_over() {
 /// running, so the trigger has to stay held (`Q` = `Buttons::HOOK_LEFT`, `src/net/local.rs`) or
 /// the arm lets go with `ReleaseReason::Released` on the very next tick, and the carrier has to
 /// be a body that really stands in the `SpatialIndex` or it lets go with `BodyGone`.
+/// Switches the **always-on pull** off for one fixture (`FIND-172`).
+///
+/// It is not a way of dodging an inconvenient result: it is the same move `kill_gravity` is in
+/// `tests/vector_rope.rs`. `F-004`'s claim is about the STATE MACHINE — that `ground_locomotion`
+/// stops writing the velocity of a body the rope has taken over, and that an anchored hook does
+/// not glue a standing player to the floor. Since 2026-08-26 the rope also applies a force of
+/// its own to every hooked player in flight, and a fixture that anchors on `a_real_body` and
+/// then runs 15 m away from it measures that force instead of the claim: measured 29.67 m/s →
+/// **0.00 m/s** with the pull left on. The pull's own bound is
+/// `f172_the_always_on_pull_never_hauls_harder_than_it_does_from_a_standing_start`.
+fn without_the_always_on_pull(app: &mut App) {
+    app.world_mut().resource_mut::<GameData>().game.vector.drive_idle_speed_m_s = 0.0;
+}
+
 fn anchor_the_left_hook(app: &mut App, e: Entity) {
     let body = a_real_body(app);
     hold(app, KeyCode::KeyQ);
@@ -900,6 +914,7 @@ fn f004_the_ground_does_not_write_the_velocity_of_a_player_the_rope_drags() {
     // 0.0, so `ground_locomotion` is the ONLY thing that can brake a horizontal velocity on
     // the ground — whatever is left after 30 ticks is its doing and nobody else's.
     let mut app = app();
+    without_the_always_on_pull(&mut app); // see the helper — this measures the GROUND
     let d = data(&app);
     let e = me(&mut app);
     launch_on_the_ground(&mut app, e, 30.0);
@@ -961,6 +976,7 @@ fn f004_a_hook_in_the_wall_does_not_glue_the_player() {
     // anchored is not the same as being off the ground, and a player standing on a roof with a
     // hook in it walks and jumps like anybody else.
     let mut app = app();
+    without_the_always_on_pull(&mut app); // see the helper — this measures the STATE MACHINE
     let d = data(&app);
     let e = me(&mut app);
     ticks(&mut app, 120); // land
@@ -1626,6 +1642,8 @@ fn drive_tuning(d: &GameData) -> DriveTuning {
         speed_m_s: d.game.vector.drive_speed_m_s,
         lateral_m_s: d.game.vector.drive_lateral_m_s,
         ramp_s: d.game.vector.drive_ramp_s,
+        accel_max_m_s2: d.game.vector.drive_accel_max_m_s2,
+        steer_pull_fraction: d.game.vector.drive_steer_pull_fraction,
     }
 }
 
@@ -1669,13 +1687,15 @@ fn f149_the_drive_chases_a_speed_instead_of_building_one() {
     let look = Intent::default().look_dir();
     let target = Vec3::NEG_Z * t.speed_m_s;
 
-    // From rest: the full gap over the ramp, along the rope.
+    // From rest: the full gap over the ramp, along the rope — **under the ceiling**
+    // (`FIND-172`). At `(52, 0.08, 250)` the unbounded term is 650 m/s² and the file's weight
+    // takes 250 of it; the direction is the rope's either way.
     let from_rest = rope_drive(&[ahead], look, 0.0, 0.0, 1.0, Vec3::ZERO, t);
-    let due = t.speed_m_s / t.ramp_s;
+    let due = (t.speed_m_s / t.ramp_s).min(t.accel_max_m_s2);
     assert!(
         (from_rest - Vec3::NEG_Z * due).length() < 1e-3,
-        "from rest the drive gave {from_rest:?}; {due:.2} m/s² along −Z is `drive_speed_m_s / \
-         drive_ramp_s` and nothing else"
+        "from rest the drive gave {from_rest:?}; {due:.2} m/s² along −Z is \
+         `min(drive_speed_m_s / drive_ramp_s, drive_accel_max_m_s2)` and nothing else"
     );
     // **At the target it is exactly zero** — the cap is the construction, not a clamp.
     let arrived = rope_drive(&[ahead], look, 0.0, 0.0, 1.0, target, t);
@@ -1696,12 +1716,19 @@ fn f149_the_drive_chases_a_speed_instead_of_building_one() {
     // out a little UNDER the analytic 63.2 % (64.4 %, and the old band was `0.55..0.68`); at
     // `0.08` it is 4.8 ticks, `dt/ramp` = 0.21, and the same sum lands a little OVER it
     // (68.9 %). Both are the exponential; only the sampling moved. The assert is the shape.
+    //
+    // ⚠️ **It starts inside the ceiling's linear regime and not from rest, since `FIND-172`.**
+    // Above `drive_accel_max_m_s2 · drive_ramp_s` of gap the drive is a straight line and not an
+    // exponential at all — that is the weight, and measuring the ramp through it would measure
+    // the cap. The gap here is a fifth of that threshold.
     let dt = 1.0 / d.game.simulation_hz as f32;
-    let mut v = Vec3::ZERO;
+    let gap0 = 0.2 * t.accel_max_m_s2 * t.ramp_s;
+    let start = Vec3::NEG_Z * (t.speed_m_s - gap0);
+    let mut v = start;
     for _ in 0..(t.ramp_s / dt).round() as u32 {
         v += rope_drive(&[ahead], look, 0.0, 0.0, 1.0, v, t) * dt;
     }
-    let closed = v.length() / t.speed_m_s;
+    let closed = (v.length() - start.length()) / gap0;
     assert!(
         (0.55..0.75).contains(&closed),
         "after one time constant the drive had closed {:.1} % of the gap, not the ~63 % an \
@@ -1721,10 +1748,12 @@ fn f149_a_and_d_hold_a_line_off_the_anchor_and_stay_horizontal() {
     let look = Intent { pitch: -60.0_f32.to_radians(), ..default() }.look_dir();
 
     let strafe = rope_drive(&[below], look, 0.0, 1.0, 0.0, Vec3::ZERO, t);
+    let due = (t.lateral_m_s / t.ramp_s).min(t.accel_max_m_s2);
     assert!(
-        (strafe.x - t.lateral_m_s / t.ramp_s).abs() < 1e-3,
-        "`D` alone gave {strafe:?}; `drive_lateral_m_s / drive_ramp_s` along +X is what the file \
-         buys"
+        (strafe.x - due).abs() < 1e-3,
+        "`D` alone gave {strafe:?}; {due:.2} m/s² along +X is \
+         `min(drive_lateral_m_s / drive_ramp_s, drive_accel_max_m_s2)` — the ceiling is the same \
+         one the forward axis pays (`FIND-172`)"
     );
     assert!(
         strafe.y.abs() < 1e-4 && strafe.z.abs() < 1e-4,
@@ -1767,7 +1796,7 @@ fn f149_the_two_force_models_are_not_the_same_thing() {
 }
 
 #[test]
-fn f149_the_three_drive_numbers_are_the_ones_the_file_can_defend() {
+fn f149_the_drive_numbers_are_the_ones_the_file_can_defend() {
     // ⚠️ Here and not in `tests/data.rs` for the reason the hook ceiling's bounds are: the
     // meaning of these three is `rope_drive`'s. All three are UNTUNED and are meant to move —
     // what is guarded is the shape, not the value.
@@ -1794,12 +1823,206 @@ fn f149_the_three_drive_numbers_are_the_ones_the_file_can_defend() {
         t.ramp_s
     );
     assert!(t.ramp_s < 1.0, "drive_ramp_s is {} s — „recht schnell\" it is not", t.ramp_s);
-    // `A`/`D` share the drive's own cap, so a lateral above it could never be reached.
+    // `A`/`D` share the drive's own cap, so a lateral above it could never be reached — which
+    // is exactly why *„staerker zur seite als rangezogen"* is bought with
+    // `drive_steer_pull_fraction` and not by raising this key past the speed (`FIND-172`).
     assert!(
         t.lateral_m_s > 0.0 && t.lateral_m_s <= t.speed_m_s,
         "drive_lateral_m_s is {} against a drive_speed_m_s of {}",
         t.lateral_m_s,
         t.speed_m_s
+    );
+    // `FIND-172`. The ceiling is the weight: below `speed/ramp` it is doing something at all,
+    // and it still has to leave the drive able to reach its own speed inside a flight.
+    assert!(
+        t.accel_max_m_s2 > 0.0 && t.accel_max_m_s2 < t.speed_m_s / t.ramp_s,
+        "drive_accel_max_m_s2 is {} against a `drive_speed_m_s / drive_ramp_s` of {:.0} — at or          above that the ceiling never binds and the player has no weight again",
+        t.accel_max_m_s2,
+        t.speed_m_s / t.ramp_s
+    );
+    // A steer that keeps the whole radial pull is the behaviour he asked to be changed; one
+    // that keeps none of it turns `W`+`D` into a pure strafe.
+    assert!(
+        (0.0..1.0).contains(&t.steer_pull_fraction),
+        "drive_steer_pull_fraction is {} — 1.0 is the pre-`FIND-172` behaviour the user rejected",
+        t.steer_pull_fraction
+    );
+    // The always-on pull. Above the winch it would make `Ctrl` pointless, and it has to stay
+    // under the drive so that `W` is still the thing that flies.
+    let idle = d.game.vector.drive_idle_speed_m_s;
+    assert!(
+        idle > 0.0 && idle < d.game.vector.reel_speed_m_s,
+        "drive_idle_speed_m_s is {idle} against a reel_speed_m_s of {} — a free pull at or above          the winch retires `Ctrl` (`F-005`)",
+        d.game.vector.reel_speed_m_s
+    );
+    // ⚠️ The bound that is a DESIGN statement and not a range: on a vertical rope the idle pull
+    // settles at `idle − |g|·ramp` m/s of climb, and hanging still must not out-climb walking.
+    let climb = idle + d.game.gravity_m_s2 * d.game.vector.drive_idle_ramp_s;
+    assert!(
+        climb < d.game.player.run_speed_m_s,
+        "hanging on a vertical rope and pressing NOTHING climbs at {climb:.2} m/s against a          run_speed_m_s of {} — „es soll immer ranziehen\" is not „es soll dich hochreissen\"",
+        d.game.player.run_speed_m_s
+    );
+    assert!(
+        d.game.vector.drive_idle_ramp_s > t.ramp_s,
+        "drive_idle_ramp_s is {} and drive_ramp_s is {} — nobody presses the idle pull, so it          must not arrive faster than the key does",
+        d.game.vector.drive_idle_ramp_s,
+        t.ramp_s
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// `FIND-172` — **it always pulls, `A`/`D` beat the pull, and the drive got a weight.** The
+// user, 2026-08-26, after playing the drive:
+//
+// > *„es ist zu aggressiv. also man wird zu sehr rangezogen. und folgendes soll verändert
+// > werden. ich will dass es immer ranzieht. nicht nur wenn ich w drücke! nur wenn ich a oder d
+// > drücke dass es stärker zur seite geht als rangezogen!"*
+//
+// and, one minute later:
+//
+// > *„zudem fühlt sich die gravitation nicht richtig an. oder die masse von dem character. es
+// > fühlt sich zu leicht an."*
+//
+// The always-on pull is wiring and is measured in `tests/vector_rope.rs::f172_*`; what a pure
+// function can hold is the ceiling and the steer.
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn f172_the_drive_can_never_yank_harder_than_the_files_own_ceiling() {
+    let d = game_data();
+    let t = drive_tuning(&d);
+    let ahead = anchor_at(0.0, 40.0);
+    let look = Intent::default().look_dir();
+
+    // The worst case there is: at rest, looking straight at the anchor, `W` down.
+    let yank = rope_drive(&[ahead], look, 0.0, 0.0, 1.0, Vec3::ZERO, t).length();
+    assert!(
+        (yank - t.accel_max_m_s2).abs() < 1e-2,
+        "the drive's hardest pull is {yank:.1} m/s² against a drive_accel_max_m_s2 of {} —          „zu aggressiv\" is this number",
+        t.accel_max_m_s2
+    );
+    // **The control that makes it a measurement**: the same call with the ceiling lifted. If
+    // these two ever answer the same, the clamp is not in the path.
+    let uncapped =
+        rope_drive(&[ahead], look, 0.0, 0.0, 1.0, Vec3::ZERO, DriveTuning { accel_max_m_s2: 1e9, ..t })
+            .length();
+    assert!(
+        uncapped > yank * 2.0,
+        "with the ceiling lifted the same geometry gave {uncapped:.1} m/s² against {yank:.1} —          `drive_accel_max_m_s2` is not being read"
+    );
+    // And a SMALL correction is untouched by it, which is why „man merkt es direkt"
+    // (`FIND-153`) survives the weight: near the target the ramp alone governs.
+    let nearly = Vec3::NEG_Z * (t.speed_m_s - 4.0);
+    let small = rope_drive(&[ahead], look, 0.0, 0.0, 1.0, nearly, t).length();
+    assert!(
+        (small - 4.0 / t.ramp_s).abs() < 1e-2,
+        "a 4 m/s gap was answered with {small:.2} m/s² instead of `4 / drive_ramp_s` = {:.2} —          the ceiling is binding where it must not",
+        4.0 / t.ramp_s
+    );
+}
+
+#[test]
+fn f172_reversing_a_fast_flight_costs_more_time_than_starting_one_and_that_is_the_weight() {
+    // *„es fühlt sich zu leicht an."* A velocity drive has no inertia by construction: without
+    // a ceiling `(v* − v)/τ` replaces the whole velocity in the same ~3τ **whatever the speed
+    // was**, so nothing in the game resists a direction change and mass is decoration
+    // (`Forces::apply_linear_acceleration` ignores it). The ceiling is what gives that back.
+    let d = game_data();
+    let t = drive_tuning(&d);
+    let ahead = anchor_at(0.0, 40.0);
+    let look = Intent::default().look_dir();
+    let dt = 1.0 / d.game.simulation_hz as f32;
+
+    // Ticks until the velocity along the rope reaches 90 % of the drive speed, from `start`.
+    let ticks_to_speed = |start: Vec3, t: DriveTuning| {
+        let mut v = start;
+        for n in 1..600 {
+            v += rope_drive(&[ahead], look, 0.0, 0.0, 1.0, v, t) * dt;
+            if v.dot(Vec3::NEG_Z) >= 0.9 * t.speed_m_s {
+                return n;
+            }
+        }
+        panic!("the drive never reached 90 % of {} m/s", t.speed_m_s);
+    };
+
+    let from_rest = ticks_to_speed(Vec3::ZERO, t);
+    // Flying away from the anchor at the drive's own top speed: twice the gap.
+    let reversal = ticks_to_speed(Vec3::Z * t.speed_m_s, t);
+    println!(
+        "f172 weight: {} ticks ({:.0} ms) from rest · {} ticks ({:.0} ms) to reverse a {} m/s flight",
+        from_rest,
+        from_rest as f32 * dt * 1000.0,
+        reversal,
+        reversal as f32 * dt * 1000.0,
+        t.speed_m_s
+    );
+    assert!(
+        reversal as f32 > 1.6 * from_rest as f32,
+        "starting from rest took {from_rest} ticks and reversing a {} m/s flight {reversal} — a          body that turns a full flight around in the time it takes to start one has no mass",
+        t.speed_m_s
+    );
+    // **The control.** With the ceiling lifted the two collapse onto each other, because that
+    // is exactly what a pure exponential does: the time constant does not know how big the gap
+    // is. This is the measurement of weightlessness, and it is the game before `FIND-172`.
+    let free = DriveTuning { accel_max_m_s2: 1e9, ..t };
+    let (free_rest, free_reversal) = (ticks_to_speed(Vec3::ZERO, free), ticks_to_speed(Vec3::Z * t.speed_m_s, free));
+    println!("f172 weight, ceiling lifted: {free_rest} ticks from rest · {free_reversal} to reverse");
+    assert!(
+        (free_reversal as f32) < 1.5 * free_rest as f32,
+        "with the ceiling lifted, rest took {free_rest} ticks and the reversal {free_reversal} —          if those already differ, this test is measuring something other than the ceiling"
+    );
+}
+
+#[test]
+fn f172_a_or_d_turns_the_drive_further_sideways_than_the_rope_pulls_it_in() {
+    // *„nur wenn ich a oder d drücke dass es stärker zur seite geht als rangezogen!"* — measured
+    // as the two components of the velocity the drive is chasing: across the rope against along
+    // it. Flown, not read off the target, so the cap and the ramp are both in the number.
+    let d = game_data();
+    let t = drive_tuning(&d);
+    let dt = 1.0 / d.game.simulation_hz as f32;
+    // The anchor straight ahead along −Z at the look, so „sideways" is +X and „inward" is −Z
+    // and neither needs a projection to be read.
+    let ahead = anchor_at(0.0, 40.0);
+    let look = Intent::default().look_dir();
+
+    let fly = |t: DriveTuning, move_x: f32| {
+        let mut v = Vec3::ZERO;
+        for _ in 0..30 {
+            v += rope_drive(&[ahead], look, 0.0, move_x, 1.0, v, t) * dt;
+        }
+        v
+    };
+
+    let straight = fly(t, 0.0);
+    let steered = fly(t, 1.0);
+    let sideways = steered.x;
+    let inward = steered.dot(Vec3::NEG_Z);
+    println!(
+        "f172 W+D after 0.5 s: {sideways:.2} m/s sideways vs {inward:.2} m/s inward          ({:.1}° off the rope) · W alone {:.1}°",
+        steered.angle_between(Vec3::NEG_Z).to_degrees(),
+        straight.angle_between(Vec3::NEG_Z).to_degrees()
+    );
+    assert!(
+        sideways > inward,
+        "`W`+`D` drove {sideways:.2} m/s across the rope against {inward:.2} m/s along it —          „stärker zur seite als rangezogen\" is the instruction and it is this comparison"
+    );
+    // **The control, and it is the one line that used to be the whole behaviour.** With the
+    // fraction back at 1.0 the radial wins, which is what he was complaining about.
+    let old = fly(DriveTuning { steer_pull_fraction: 1.0, ..t }, 1.0);
+    assert!(
+        old.dot(Vec3::NEG_Z) > old.x,
+        "with `drive_steer_pull_fraction` at 1.0 the drive came out {:.2} m/s sideways and {:.2}          inward — the radial is supposed to win there, or this test is not measuring the key",
+        old.x,
+        old.dot(Vec3::NEG_Z)
+    );
+    // And the steer must not be a brake (`Q-050`): turning costs direction, never speed.
+    assert!(
+        steered.length() > 0.9 * straight.length(),
+        "`W`+`D` reached {:.2} m/s against `W` alone at {:.2} — steering is supposed to turn the          drive, not slow it",
+        steered.length(),
+        straight.length()
     );
 }
 
@@ -1887,7 +2110,7 @@ fn f153_a_second_rope_does_not_halve_the_drive() {
 }
 
 #[test]
-fn f153_the_drive_is_felt_inside_a_fifth_of_a_second() {
+fn f153_the_drive_is_felt_inside_a_quarter_of_a_second() {
     // *„man macht was und man merkt es auch direkt"*, as a number: **how long until 90 % of the
     // target speed**. Integrated exactly the way `air_control` integrates it — once per tick,
     // explicitly — so this is the number the player's hand actually waits for and not the
@@ -1908,8 +2131,15 @@ fn f153_the_drive_is_felt_inside_a_fifth_of_a_second() {
     // See `tests/vector_rope.rs::f153_under_drive_w_pulls_the_flight_onto_the_rope_line`: the
     // two numbers `FIND-153` answers the user with are printed, not only asserted.
     println!("f153 ms to 90 % of {:.0} m/s: {ms:.0} ms ({ticks} ticks)", t.speed_m_s);
+    // ⚠️ **The band was 200 ms until `FIND-172` and it is 250 ms now, and that is a trade the
+    // user asked for, not a slipped number.** `drive_accel_max_m_s2` is what makes a *large*
+    // change of velocity take time — the weight behind *„es fühlt sich zu leicht an"* — and the
+    // start of a flight is the largest change there is. Measured: 167 ms at `(70, 0.08, ∞)`,
+    // **233 ms** at `(52, 0.08, 250)`. What „man merkt es direkt" is really about survives
+    // untouched: the first 50 ms still deliver 12.5 m/s, and a small correction never touches
+    // the ceiling at all (`f172_the_drive_can_never_yank_harder_than_the_files_own_ceiling`).
     assert!(
-        ms <= 200.0,
+        ms <= 250.0,
         "the drive needed {ms:.0} ms to reach 90 % of {:.0} m/s — *„es darf strenger sein … man \
          macht was und man merkt es auch direkt\"*. `drive_ramp_s: 0.25` cost 567 ms of it",
         t.speed_m_s
@@ -2185,7 +2415,57 @@ fn winch_tuning(d: &GameData) -> WinchTuning {
         speed_m_s: d.game.vector.reel_speed_m_s,
         min_rope_m: d.game.vector.min_rope_m,
         ramp_s: d.game.vector.drive_ramp_s,
+        // `Ctrl`'s own value — see `WinchTuning::accel_max_m_s2` for why the key `FIND-159`
+        // measured keeps its behaviour and the always-on pull does not.
+        accel_max_m_s2: f32::INFINITY,
     }
+}
+
+/// The **always-on** pull's tuning (`FIND-172`) — the same function, a lower speed, a longer
+/// ramp and a ceiling that is derived from the two of them.
+fn idle_pull_tuning(d: &GameData) -> WinchTuning {
+    WinchTuning {
+        speed_m_s: d.game.vector.drive_idle_speed_m_s,
+        min_rope_m: d.game.vector.min_rope_m,
+        ramp_s: d.game.vector.drive_idle_ramp_s,
+        accel_max_m_s2: d.game.vector.drive_idle_speed_m_s / d.game.vector.drive_idle_ramp_s,
+    }
+}
+
+#[test]
+fn f172_the_always_on_pull_never_hauls_harder_than_it_does_from_a_standing_start() {
+    // 🔴 **The trap this round actually fell into.** `rope_winch`'s property 1 says the winch
+    // can never brake — and that is a statement about the CLOSING SPEED, not about the
+    // acceleration. A player flying *away* from his anchor is a gap of `speed + |v|`, and
+    // divided by a ramp that is a haul nobody sized.
+    //
+    // Measured before the ceiling existed: `f004_the_ground_does_not_write_the_velocity_of_a_
+    // player_the_rope_drags` handed a player to the rope at **29.67 m/s** and found him at
+    // **0.00 m/s** half a second later — the always-on pull had reversed him.
+    let d = game_data();
+    let t = idle_pull_tuning(&d);
+    let to_anchor = Vec3::NEG_Z * 40.0;
+
+    let from_rest = rope_winch(&[to_anchor], Vec3::ZERO, t).length();
+    let outbound = rope_winch(&[to_anchor], Vec3::Z * 30.0, t).length();
+    assert!(
+        (outbound - from_rest).abs() < 1e-3,
+        "flying away at 30 m/s the always-on pull hauled at {outbound:.1} m/s² against the          {from_rest:.1} m/s² it uses from rest — „es ist zu aggressiv\" is what that is"
+    );
+    // **The control**: with the ceiling lifted the two come apart, which is the game before
+    // this ceiling and the shape of the measured 29.67 → 0.00.
+    let free = rope_winch(&[to_anchor], Vec3::Z * 30.0, WinchTuning { accel_max_m_s2: 1e9, ..t })
+        .length();
+    assert!(
+        free > from_rest * 2.0,
+        "with the ceiling lifted, flying away at 30 m/s gave {free:.1} m/s² against {from_rest:.1}          from rest — if those match, `accel_max_m_s2` is not in the path"
+    );
+    // And it still does its job: from rest it is exactly `idle / ramp` along the rope.
+    assert!(
+        (from_rest - t.speed_m_s / t.ramp_s).abs() < 1e-3,
+        "from rest the always-on pull gave {from_rest:.2} m/s² instead of          `drive_idle_speed_m_s / drive_idle_ramp_s` = {:.2}",
+        t.speed_m_s / t.ramp_s
+    );
 }
 
 #[test]

@@ -580,6 +580,14 @@ pub struct DriveTuning {
     /// [`crate::data::VectorTuning::drive_ramp_s`] — the time constant of the ramp. `<= 0`
     /// means **no drive at all**, which is the safe direction for a number that divides.
     pub ramp_s: f32,
+    /// [`crate::data::VectorTuning::drive_accel_max_m_s2`] — the ceiling on the chase, and
+    /// **the player's weight**. `<= 0` means no drive at all, the same safe direction as the
+    /// ramp.
+    pub accel_max_m_s2: f32,
+    /// [`crate::data::VectorTuning::drive_steer_pull_fraction`] — how much of the rope axis's
+    /// direction weight survives while `A`/`D` is held. `1.0` is the behaviour before
+    /// `FIND-172`.
+    pub steer_pull_fraction: f32,
 }
 
 impl DriveTuning {
@@ -607,9 +615,12 @@ impl DriveTuning {
 ///
 /// ```text
 /// r̂ᵢ = unit(tipᵢ − h)   cᵢ = max(0, l̂ · r̂ᵢ)   w⁺ = clamp(move_y, 0, 1)   ê_right = (cos yaw, 0, −sin yaw)
+/// s  = speed·w⁺·maxᵢ cᵢ                        (what `W` ALONE would chase — the magnitude)
+/// f  = mx = 0 ? 1 : steer_pull_fraction        (`A`/`D` tilt the target, they never slow it)
+/// d  = unit(r̂·s·f + ê_right·lateral·mx) · max( |r̂·s·f + ê_right·lateral·mx| , s )
 /// v⁰ = v − ê_right·(v·ê_right) + ê_right·lateral·mx        (the flight, KEPT, steered sideways)
-/// v* = clamp_len( lerp( v⁰ , unit(Σᵢ r̂ᵢ·cᵢ)·speed·w⁺·maxᵢ cᵢ + ê_right·lateral·mx , w⁺ ) , speed )
-/// a  = (v* − v) / ramp
+/// v* = clamp_len( lerp( v⁰ , d , w⁺ ) , speed )
+/// a  = clamp_len( (v* − v) / ramp , accel_max )
 /// ```
 ///
 /// ## The six things this function is, and why each one is that way
@@ -620,13 +631,20 @@ impl DriveTuning {
 ///    closed in `τ`, 95 % in `3τ`. *„etwas smoother übergang, aber recht schnell"* is a time
 ///    constant and nothing else. [`rope_steer`], the pendulum's term, is the opposite: a
 ///    constant acceleration that builds speed for as long as it is held.
-/// 2. **No target, no drive — and that is the load-bearing sentence.** `w⁺` is zero unless a
+/// 2. **No key, no DRIVE — but since `FIND-172` the rope still pulls.** `w⁺` is zero unless a
 ///    forward key is down, `mx` is zero unless a lateral one is, and if the whole target comes
-///    out `Vec3::ZERO` the function returns `Vec3::ZERO` *before* the subtraction. Without that
+///    out `Vec3::ZERO` this function returns `Vec3::ZERO` *before* the subtraction. Without that
 ///    early return a held-but-useless key would read as "chase 0 m/s" and **brake** a falling
-///    player — an air brake nobody asked for, and the exact opposite of what the sentence says.
-///    ⚠️ **Gravity is untouched either way.** He did not say you float; he said you are not
-///    *pulled*. A hooked player who presses nothing falls exactly as if he had no hook.
+///    player — an air brake nobody asked for.
+///    🔴 **What changed on 2026-08-26 is what happens NEXT TO this zero.** The user:
+///    *„ich will dass es immer ranzieht. nicht nur wenn ich w drücke!"* — so `air_control` now
+///    runs [`rope_winch`] at `vector.drive_idle_speed_m_s` for every hooked player in flight,
+///    key or no key. **That is the exact opposite of `FIND-149`**, which recorded the reference
+///    doing what the paragraph above describes (*„wenn ich nichts drucke dann wird auch nicht
+///    rangezogen!"*). The observation stands; it was deliberately not followed, because his
+///    instruction for this game beats his own earlier report of another one (`CLAUDE.md`).
+///    ⚠️ **Gravity is untouched either way**, and the idle pull is bounded by a closing SPEED,
+///    so a hooked player who presses nothing is carried, never hauled.
 /// 3. **`S` is not a haul.** The same `.max(0.0)` as [`air_thrust`] and [`rope_steer`], for the
 ///    same sentence (*„mit s »spannt« man nur das seil!"*) and the same requirement
 ///    (`docs/NEXT.md` §1A requirement 7).
@@ -661,6 +679,28 @@ impl DriveTuning {
 ///    flight arrived at **75.000 m/s**, which is `vector.max_speed_m_s` — the avian clamp, i.e.
 ///    the one number in this game nobody chose as a speed. Under the shared cap `A`/`D` is a
 ///    **redirect**: same speed, 23° of it pointing somewhere else.
+///
+/// 7. **`A`/`D` tilt the target; they never shorten it** (`FIND-172`). *„nur wenn ich a oder d
+///    drücke dass es stärker zur seite geht als rangezogen!"* The obvious implementation —
+///    raise `drive_lateral_m_s` past `drive_speed_m_s` — **cannot work**, because the two share
+///    one cap: a lateral bigger than the speed makes `clamp_length_max` eat the forward axis,
+///    and a 52 m/s flight that presses `D` comes out at 28.8 m/s. That is `Q-050`'s brake in a
+///    second key. So what `steer_pull_fraction` scales is the rope axis's **weight in the
+///    blend**, and the result is renormalised back to `s` — the speed `W` alone would have
+///    chased. Measured at `(52, 36, 0.35)`: `W`+`D` drives at the full 52 m/s, pointing
+///    **63°** off the rope, i.e. 46.4 m/s across it against 23.2 m/s along it.
+/// 8. **The ceiling is the player's WEIGHT, and it is the answer to two complaints at once**
+///    (`FIND-172`). *„es ist zu aggressiv. also man wird zu sehr rangezogen"* and, a minute
+///    later, *„die masse von dem character … es fühlt sich zu leicht an"*. Both are the same
+///    fact: `(v* − v)/τ` is unbounded, so it was **875 m/s² (44 g)** from rest at `(70, 0.08)`
+///    — and, worse, it replaces the *whole* velocity in the same ~3τ **however fast the player
+///    was going**. A body like that has no inertia; `Forces::apply_linear_acceleration` ignores
+///    mass on purpose, so nothing else in the game supplies any either. `clamp_length_max`
+///    gives it back without touching `gravity_m_s2` or the body: a **small** correction is
+///    under the ceiling and the ramp alone governs it — so *„man macht was und man merkt es
+///    direkt"* (`FIND-153`) survives — while a **large** change of velocity now costs time in
+///    proportion to its size. Measured: 15 ticks from rest to 90 % of the drive speed, **27** to
+///    turn a flight of it around; with the ceiling lifted, 11 and 15.
 ///
 /// **What is deliberately NOT here: the fade.** `air_pull_fade_m` exists because at
 /// `min_rope_m` the *constraint* takes 17 m/s out of the player in one tick (`FIND-035`) — and
@@ -698,16 +738,25 @@ pub fn rope_drive(
         blend += direction * aligned;
         gate = f32::max(gate, aligned);
     }
-    let along = blend.try_normalize().unwrap_or(Vec3::ZERO) * (t.speed_m_s * forward * gate);
+    let axis = blend.try_normalize().unwrap_or(Vec3::ZERO);
+    // **Point 7, `FIND-172`.** The speed `W` alone would chase — the magnitude of the whole
+    // forward target, whatever `A`/`D` do to its DIRECTION below.
+    let radial_m_s = t.speed_m_s * forward * gate;
 
     let (sin, cos) = yaw.sin_cos();
     let right = Vec3::new(cos, 0.0, -sin);
     let sideways = right * (t.lateral_m_s * move_x);
-    let driven = along + sideways;
+    // `steer_pull_fraction` shrinks the rope axis's weight in the blend and **nothing else**:
+    // with `A`/`D` down the target tilts off the rope, and the speed it is driven at is still
+    // `radial_m_s`. Scaling the speed instead would brake the flight the moment the player
+    // steered, which is `Q-050`'s bug in a second key.
+    let steered = if move_x == 0.0 { 1.0 } else { t.steer_pull_fraction };
+    let blended = axis * (radial_m_s * steered) + sideways;
+    let driven = blended.normalize_or_zero() * blended.length().max(radial_m_s);
     // Point 2 above. Exact equality and not an epsilon: the three ways to get here are all
     // exact zeros (no key, `S` alone, or every rope behind the look), and an epsilon would put
     // a dead band where a player who *is* holding a key gets nothing.
-    if driven == Vec3::ZERO {
+    if blended == Vec3::ZERO {
         return Vec3::ZERO;
     }
     // **Point 6, and it is a second TARGET, not a second chase.** With `W` released the drive
@@ -720,7 +769,9 @@ pub fn rope_drive(
     // kept flight too: without it `D` alone adds its 30 m/s to a 70 m/s flight and the player
     // arrives at `vector.max_speed_m_s`, i.e. at the avian clamp — measured 75.000 exactly.
     let target = kept.lerp(driven, forward).clamp_length_max(t.speed_m_s);
-    (target - velocity_m_s) / t.ramp_s
+    // **Point 8, `FIND-172`: the ceiling, and it is the player's weight.** Everything above is a
+    // target velocity; this is the only line that says how hard he may be thrown at it.
+    ((target - velocity_m_s) / t.ramp_s).clamp_length_max(t.accel_max_m_s2)
 }
 
 /// The three numbers [`rope_winch`] is made of — and **not one of them is new**: they are
@@ -741,6 +792,23 @@ pub struct WinchTuning {
     /// purpose: one rope, one onset. `<= 0` means **no winch at all**, the safe direction for a
     /// number that divides.
     pub ramp_s: f32,
+    /// **The ceiling on the haul, in m/s² — and it exists because of what a winch does to a
+    /// player flying AWAY from his anchor** (`FIND-172`).
+    ///
+    /// Property 1 below says the winch can never brake, and that is true of the *closing*
+    /// speed. It is not a bound on the *acceleration*: at 30 m/s outbound the coefficient is
+    /// `(speed + 30)/ramp`, which at the idle pull's own numbers is **120 m/s²** against the
+    /// 34 m/s² it produces from rest. Measured 2026-08-26 on
+    /// `tests/player.rs::f004_the_ground_does_not_write_the_velocity_of_a_player_the_rope_drags`:
+    /// with the always-on pull unbounded, a player handed over to the rope at 29.67 m/s was at
+    /// **0.00 m/s** half a second later. That is "zu aggressiv" in a new key.
+    ///
+    /// ⚠️ **`Ctrl` passes [`f32::INFINITY`] on purpose.** `FIND-159` measured the winch's whole
+    /// contribution to `scripts/game-full.txt` — 26.695 m/s at `game-reeled`, clearing
+    /// `assert speed > 25` by 1.7 m/s — and a ceiling on the key the flagship run is built out
+    /// of would move that number for a reason nobody asked for. The always-on pull is new and
+    /// gets the bound; the key that was already measured keeps its behaviour.
+    pub accel_max_m_s2: f32,
 }
 
 /// `F-005` Reel-in **under [`crate::data::RopeForceModel::Drive`]** — the winch: closing speed
@@ -791,6 +859,11 @@ pub struct WinchTuning {
 /// 4. **No look gate, and that is the whole point** (see the table). It is also why the winch
 ///    is **not** billed through `steer_has_effect`: `vector::gas` bills it on its own predicate,
 ///    `Ctrl` held and an arm beyond the floor.
+/// 5. **It has a ceiling, and property 1 is why it needs one** (`FIND-172`). "Can never brake"
+///    is a statement about the closing speed and **not** about the acceleration: a player
+///    travelling *outbound* at 30 m/s is 42 m/s of gap, i.e. 120 m/s² at the idle pull's
+///    numbers, against the 34 m/s² the same pull produces from rest. See
+///    [`WinchTuning::accel_max_m_s2`] for the measurement and for why `Ctrl` is exempt.
 ///
 /// ⚠️ **The one shape that is still ugly, measured and not explained away:** hold `Ctrl` through
 /// an anchor in **open air** — a hook that bit a lamp post rather than a wall — and you shoot
@@ -832,8 +905,8 @@ pub fn rope_winch(to_anchors_m: &[Vec3], velocity_m_s: Vec3, t: WinchTuning) -> 
         return Vec3::ZERO;
     }
     // Property 2: the whole output lies on `along`, so no other axis of the velocity is read
-    // and none is written.
-    along * ((t.speed_m_s - closing_m_s) / t.ramp_s)
+    // and none is written. Property 5, the ceiling, is the only thing that may shorten it.
+    (along * ((t.speed_m_s - closing_m_s) / t.ramp_s)).clamp_length_max(t.accel_max_m_s2)
 }
 
 /// `F-006` Swerve — WASD in the air, as an acceleration.
@@ -924,6 +997,8 @@ pub fn air_control(
         speed_m_s: data.game.vector.drive_speed_m_s,
         lateral_m_s: data.game.vector.drive_lateral_m_s,
         ramp_s: data.game.vector.drive_ramp_s,
+        accel_max_m_s2: data.game.vector.drive_accel_max_m_s2,
+        steer_pull_fraction: data.game.vector.drive_steer_pull_fraction,
     };
     // `F-005` under `Drive` — three numbers that already existed, read here for the first
     // time together. The ramp is the drive's on purpose: one rope, one onset.
@@ -931,6 +1006,8 @@ pub fn air_control(
         speed_m_s: data.game.vector.reel_speed_m_s,
         min_rope_m: data.game.vector.min_rope_m,
         ramp_s: data.game.vector.drive_ramp_s,
+        // `FIND-159`'s measured key, unchanged — see [`WinchTuning::accel_max_m_s2`].
+        accel_max_m_s2: f32::INFINITY,
     };
 
     for (intent, state, velocity, gas, hook, grant, transform, mut drive, forces) in &mut players {
@@ -954,7 +1031,8 @@ pub fn air_control(
             }
         }
 
-        let flight = if in_flight(*state, velocity.0.xz().length(), top_m_s) {
+        let in_the_air = in_flight(*state, velocity.0.xz().length(), top_m_s);
+        let flight = if in_the_air {
             let accel_m_s2 =
                 if gas.is_empty() { full_m_s2 * s.air_accel_empty_fraction } else { full_m_s2 };
             let look =
@@ -1034,9 +1112,33 @@ pub fn air_control(
         //   pendulum's reel stops dead on an empty tank too (`vector::reel` writes `ReelSpeed`
         //   only on a grant). An empty tank takes the winch with it under both models.
         // - **Outside the `in_flight` gate**, see `hand_m` above.
+        //
+        // 🔴 **And since `FIND-172` it is also the ALWAYS-ON pull.** *„ich will dass es immer
+        // ranzieht. nicht nur wenn ich w drücke!"* (the user, 2026-08-26). One term and not
+        // two: the winch is a **floor under the closing speed**, so the two speeds compose as a
+        // `max` and never as a sum — holding `Ctrl` is exactly as strong as it was before this
+        // line existed, which is what keeps `scripts/game-full.txt`'s 35 m roof at the numbers
+        // `FIND-159` measured. The free floor runs only in flight: a hooked player standing on
+        // the ground keeps his legs, and `Ctrl` is how he leaves it (`F-005`, and the reason
+        // `hand_m` is hoisted above).
         let winch = match model {
-            RopeForceModel::Drive if anchored > 0 && grant.reel_in => {
-                rope_winch(&to_anchors_m[..anchored], velocity.0, winch_tuning)
+            RopeForceModel::Drive if anchored > 0 && (grant.reel_in || in_the_air) => {
+                let t = if grant.reel_in {
+                    winch_tuning
+                } else {
+                    WinchTuning {
+                        speed_m_s: data.game.vector.drive_idle_speed_m_s,
+                        ramp_s: data.game.vector.drive_idle_ramp_s,
+                        // **Derived, not a fifth key**: the always-on pull may never haul
+                        // harder than it does off a standing start. Without it a player flying
+                        // *away* from his anchor is yanked back at `(idle + v)/ramp`
+                        // (`FIND-172`, and it took a `F-004` test to 0.00 m/s).
+                        accel_max_m_s2: data.game.vector.drive_idle_speed_m_s
+                            / data.game.vector.drive_idle_ramp_s,
+                        ..winch_tuning
+                    }
+                };
+                rope_winch(&to_anchors_m[..anchored], velocity.0, t)
             }
             _ => Vec3::ZERO,
         };

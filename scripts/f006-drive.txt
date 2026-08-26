@@ -1,4 +1,5 @@
-# f006-drive — FIND-149: THE ROPE DRIVES, IT DOES NOT SWING. Three claims, in his words.
+# f006-drive — FIND-149/172: THE ROPE DRIVES, IT DOES NOT SWING — AND SINCE 2026-08-26 IT
+# ALWAYS PULLS. Three claims, in his words.
 #
 # The user played *Attack on Titan Revolution* on Windows, beside this game, on 2026-08-23:
 #
@@ -6,6 +7,16 @@
 #    man zur seite gehen. aber sonst wird man direkt hingezogen! WENN ICH NICHTS DRUCKE DANN
 #    WIRD AUCH NICHT RANGEZOGEN!"   … „aber es ist ein etwas smoother uebergang! aber recht
 #    schnell!"
+#
+# 🔴 ON 2026-08-26 HE ASKED FOR THE OPPOSITE OF THAT LAST SENTENCE, FOR THIS GAME:
+#
+#   „es ist zu aggressiv. also man wird zu sehr rangezogen. und folgendes soll veraendert
+#    werden. ICH WILL DASS ES IMMER RANZIEHT. NICHT NUR WENN ICH W DRUECKE! nur wenn ich a
+#    oder d druecke dass es staerker zur seite geht als rangezogen!"
+#
+# The 2023 observation still stands as an observation of ANOTHER GAME and was deliberately not
+# followed (FIND-172). ACT 1 below therefore measures the reverse of what it measured before,
+# and its number is the pull.
 #
 #   ./target/debug/defeated_by_titan --headless --script scripts/f006-drive.txt --ticks 500
 #
@@ -31,16 +42,24 @@
 # `Drive` column moved twice in one day: first with (50, 0.25, 18) and then, on his own
 # instruction (FIND-153, „ziemlich gerade … es darf strenger sein"), with (70, 0.08, 30):
 #
-#   at the mark                    Drive 50/.25   Drive 70/.08   Pendulum
-#   hooked, nothing held, 1.0 s    21.33 m/s      21.33 m/s      21.33 m/s   <- gravity, nothing
-#                                                                               else, in ALL THREE
-#   +1.5 s of W                    52.94 m/s      70.90 m/s      59.66 m/s
-#   +1.0 s of D alone              20.93 m/s      71.12 m/s      22.32 m/s   <- see ACT 3
+#   at the mark                    Drive 50/.25   Drive 70/.08   Drive 52/.08/250   Pendulum
+#   hooked, nothing held, 1.0 s    21.33 m/s      21.33 m/s      24.22 m/s          21.33 m/s
+#   +1.5 s of W                    52.94 m/s      70.90 m/s      52.94 m/s          59.66 m/s
+#   +1.0 s of D alone              20.93 m/s      71.12 m/s      53.36 m/s          22.32 m/s
 #
-#   the two numbers he is being answered with (tests/player.rs + tests/vector_rope.rs):
-#     ms to 90 % of the target speed        567 ms  ->  167 ms
+# ⚠️ THE CONTROL FOR THE FIRST ROW, and it is the whole of FIND-172's first claim. Measured on
+# one pinned binary, one line of game.ron apart:
+#
+#   sed -i 's/drive_idle_speed_m_s: 12.0/drive_idle_speed_m_s: 0.001/' assets/data/game.ron
+#     -> ACT 1 measures 21.334 m/s, i.e. the 21.33 every column above reads: GRAVITY AND
+#        NOTHING ELSE. With the pull on it is 24.217. That difference IS „es zieht immer ran",
+#        and no assert in this file can see it without the control run.
+#
+#   the numbers he is being answered with (tests/player.rs + tests/vector_rope.rs):
+#     ms to 90 % of the target speed        567 -> 167 -> 233 ms   (the last one is the WEIGHT)
 #     angle between rope and velocity,
-#     0.25 s of W with 40 m/s across it     28.1 deg -> 2.2 deg   (Pendulum, same run: 85.5 deg)
+#     0.25 s of W with 40 m/s across it     28.1 -> 2.2 -> 8.0 deg (Pendulum, same run: 85.5)
+#     angle after 0.5 s, nothing / W / D    50.5 deg / 1.9 deg / 85.6 deg
 #
 # ## The geometry, and why it is in the sky
 #
@@ -61,7 +80,7 @@
 wait 1.5                # world, camera, meshes and the render pipelines come up (90 ticks)
 
 # ---- ACT 1 · hooked, and NOTHING held ------------------------------------------------------
-# „wenn ich nichts drucke dann wird auch nicht rangezogen!"
+# „ich will dass es immer ranzieht. nicht nur wenn ich w druecke!" (2026-08-26, FIND-172)
 warp 0 100 250          # `warp` zeroes the velocity (player::apply_warps)
 look 0 -13
 wait 0.20               # 12 ticks of falling: 4 m/s
@@ -73,15 +92,21 @@ assert rope > 0         # it bit; the log above says on which body and at what d
 
 wait 0.50               # ← THE MEASUREMENT: half a second with not one key held
 mark f006-half-a-second-with-nothing-held
-# 1.0 s of fall since the warp. Gravity owes 20 m/s, the rope owes nothing, measured 21.33.
-assert speed < 26
+# 1.0 s since the warp. Gravity owes 20 m/s and the ROPE OWES THE REST: measured 24.217 against
+# the 21.334 the same run gives with drive_idle_speed_m_s at zero (the control above). The lower
+# band is the one that would go red if the always-on pull were ever taken back out.
+assert speed > 22
+# And it is a carry, not a haul: drive_idle_speed_m_s is 12 m/s of CLOSING SPEED, so half a
+# second of it cannot put the player anywhere near the drive's own 52.
+assert speed < 30
 
 # ---- ACT 2 · W · „dann werde ich direkt rangezogen wenn ich ran gehe" -----------------------
 key W 1.5
 wait 1.5
 mark f006-a-second-and-a-half-of-w
-# It really hauls, and it does it fast: 1.5 s is nearly 19 x `drive_ramp_s`, measured 70.90 m/s
-# against the 21.33 m/s he had without a key. That difference IS the drive.
+# It really hauls, and it does it fast: 1.5 s is nearly 19 x `drive_ramp_s`, measured 52.940 m/s
+# against the 24.217 m/s he had without a key. That difference IS the drive.
+# ⚠️ 70.90 -> 52.94 is drive_speed_m_s 70 -> 52, FIND-172: „man wird zu sehr rangezogen".
 assert speed > 40
 # And it is a speed and not a build-up: 75 m/s is `vector.max_speed_m_s`, i.e. the avian CLAMP on
 # the body, and a run that reaches it is not being driven any more, it is being cut off. The band
@@ -94,9 +119,13 @@ assert rope > 0         # nothing let go on the way
 # the lateral speed ALONE, so the chase read the flight's own 52.9 m/s as an error and pulled it
 # down to 20.9 in one second — Q-050, and nobody had chosen it. Since FIND-153 the released-W
 # target KEEPS the flight on every axis it does not command and only replaces the sideways one,
-# under the drive's own shared cap: measured 71.12 m/s, i.e. the same speed pointing ~20 deg
-# somewhere else. ⚠️ The cap matters: without it the sideways 30 ADDS to the 70 and the run
-# arrives at 75.000 m/s exactly, which is `vector.max_speed_m_s` and not a speed anybody chose.
+# under the drive's own shared cap: measured 53.363 m/s against the 52.940 he came in with, i.e.
+# the same speed pointing somewhere else. ⚠️ The cap matters: without it the sideways ADDS to the
+# forward speed and the run arrives at `vector.max_speed_m_s` exactly, which is a clamp and not a
+# speed anybody chose.
+# ⚠️ Since FIND-172 the lateral also WINS over the pull while it is held — measured 46.31 m/s
+# across the rope against 23.41 m/s along it, 63.2 deg off the line (tests/player.rs::f172_*).
+# That is „nur wenn ich a oder d druecke dass es staerker zur seite geht als rangezogen".
 key D 1.0
 wait 1.0
 mark f006-a-second-of-d-alone

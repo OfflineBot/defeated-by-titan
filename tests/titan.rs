@@ -2448,7 +2448,22 @@ fn grapple(app: &mut App, player: Entity, limit: u64) -> Option<u64> {
 }
 
 /// The pair, set up: a husk in the lane, the player 14 m off him and pointed at his flank.
+///
+/// 🔴 **The always-on pull is switched off here, and that is the fixture's whole job.**
+/// `hold_the_player` says it *parks* the player — weightless and still — and until `FIND-172`
+/// that one insert was enough. It is not any more: a hooked player in flight is winched at
+/// `vector.drive_idle_speed_m_s` (12 m/s) with no key held, and the anchor of this fixture is
+/// the titan himself. Measured before this line existed: the player was hauled from x=−14.0 to
+/// **x=−5.675 in two seconds**, i.e. to 4.94 m of a husk whose `attack_range_m` is 6.0 — so the
+/// husk stopped walking and stood in `Windup`, and `f029_…_rides_him` read `walked 0.000 m`.
+/// He was never blind: the same run measured `saw=true`, `heard=0.853`, `detected=true` at
+/// 14 m (the husk's cone is 110° half-angle, so a player abeam is inside the eye, and a
+/// tethered player carries 34.8 m of noise against a 35 m ear). **The titan was not asleep;
+/// the player had arrived.** Same shape and same fix as the two `F-004` fixtures `FIND-172`
+/// turned it off in: `F-029`'s claim is that an anchor rides a moving carrier, and a fixture
+/// that flies the player into the carrier measures the winch instead.
 fn a_titan_in_the_crosshair(app: &mut App) -> (Entity, Entity) {
+    app.world_mut().resource_mut::<GameData>().game.vector.drive_idle_speed_m_s = 0.0;
     spawn(app, "husk", GRAPPLE_TITAN_M);
     let root = the_titan(app);
     hold_the_player(app, GRAPPLE_PLAYER_M);

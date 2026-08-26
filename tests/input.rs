@@ -297,7 +297,7 @@ fn intent_from(keys: &[KeyCode], mouse: &[MouseButton]) -> Intent {
 /// it he said so (`docs/NEXT.md` §1A req 7): *„aktuell wenn ich seil spanne und s drücke werde
 /// ich stark zum seil gezogen! das soll nicht sein!"*
 ///
-/// The number behind it is in `r7_s_held_on_a_taut_rope_does_not_close_the_distance`: a held
+/// The number behind it is in `r7_s_tightens_the_rope_and_never_reels_it_in`: a held
 /// `S` was worth `reel_speed_m_s` × 2 s = **56 m** of rope. What stays taut is the rope, and
 /// what keeps it taut is the rope constraint — not a key.
 #[test]
@@ -319,8 +319,8 @@ fn bindings_s_never_reels_and_still_walks_backwards() {
     );
 }
 
-/// ★ **R7, and it is the number the user reported.** A held `S` on a taut rope must not close
-/// the distance to the anchor.
+/// ★ **R7, and it is the number the user reported.** A held `S` **tautens** the rope; it never
+/// reels it in.
 ///
 /// *„aktuell wenn ich seil spanne und s drücke werde ich stark zum seil gezogen! das soll
 /// nicht sein!"* (user, 2026-08-12, `docs/NEXT.md` §1A req 7). The binding test above says
@@ -329,15 +329,55 @@ fn bindings_s_never_reels_and_still_walks_backwards() {
 ///
 /// The manoeuvre is `scripts/f003-ashgate.txt` ACT 4 leg 1 with `S` where that script holds
 /// `Ctrl`: from the market square at `(75, 2, -30)`, `look 0 44` puts the ray on the wall
-/// gallery 57.6 m away and 56 m up, i.e. ~80 m of rope. `reel_speed_m_s` is 28, so 120 ticks
-/// of reeling are **56 m** — which is exactly what this measured before `S` was taken off
-/// `REEL_IN`.
+/// gallery 57.6 m away and 56 m up, i.e. **81.2 m of rope, measured**. `reel_speed_m_s` is 28,
+/// so 120 ticks of reeling are **56 m** — which is exactly what this returned while `S` was a
+/// second binding for `REEL_IN`.
+///
+/// # 🔴 What this test claimed, what it claims now, and why it is the same claim
+///
+/// It was named `r7_s_held_on_a_taut_rope_does_not_close_the_distance` and it asserted the
+/// closing against **zero**: `with_s > −0.56 m`. Since `FIND-172` the rope **always pulls**
+/// (*„ich will dass es immer ranzieht. nicht nur wenn ich w drücke!"*, the user, 2026-08-26),
+/// and the shipped game now reads `S −9.427 m`. That is not `S` reeling. Measured, tick by
+/// tick, on this exact run:
+///
+/// ```text
+///   t0..t7   S walks backwards at 6.00 m/s, +Z, MovementState::Grounded, in_flight false
+///            — he is walking AWAY from the anchor and stretching the rope. That is „spannen".
+///   t8       v.y jumps 0.00 -> +1.86 m/s: the taut rope answers, and it points 44° UP.
+///   t10      MovementState::Tethered -> in_flight true -> FIND-172's free winch takes over
+///            and hauls him in for the remaining 110 ticks.
+/// ```
+///
+/// So the chain from *„spannen"* to *„zum Seil gezogen"* is three steps long now and **every
+/// one of them is something the user asked for**: `S` tautens, a taut rope lifts, and anything
+/// in flight is pulled in. `S` itself never touches the rope's length — which is exactly what
+/// the deletion control below shows, and it is a **stronger** statement than the old floor of
+/// zero was:
+///
+/// * with `drive_idle_speed_m_s` deleted in one key, the same held `S` **opens** the rope by
+///   **+8.911 m** (he walks his 12 m backwards and stays `Grounded` for all 120 ticks);
+/// * `A`, the one key here that never tautens the rope, is `+0.882 m` with the pull on **and**
+///   with it off — the winch never gets a hold on him at all;
+/// * `Ctrl`, which *is* the reel, is measured in the same fixture, so this run demonstrably can
+///   tell a reel from a walk (`docs/FINDINGS.md` rule 5: an assertion that cannot tell the two
+///   apart passes when both are wrong).
+///
+/// The open half — whether a player who tautens the rope on the ground **should** be lifted
+/// into the free winch — is his, and it stands as `docs/QUESTIONS.md` Q-054.
 #[test]
-fn r7_s_held_on_a_taut_rope_does_not_close_the_distance() {
+fn r7_s_tightens_the_rope_and_never_reels_it_in() {
     let idle = taut_rope_then_hold(&[]);
     let with_s = taut_rope_then_hold(&[KeyCode::KeyS]);
     let with_a = taut_rope_then_hold(&[KeyCode::KeyA]);
     let with_w = taut_rope_then_hold(&[KeyCode::KeyW]);
+    // **The control the whole test hangs on**, and it is a deletion, not a second opinion:
+    // one key of `game.ron` set to 0 takes `FIND-172`'s always-on pull out of the run and
+    // leaves everything else — the map, the rope, the ground, the binding — identical.
+    let s_alone = taut_rope_then_hold_with_pull(&[KeyCode::KeyS], false);
+    let a_alone = taut_rope_then_hold_with_pull(&[KeyCode::KeyA], false);
+    // And the shape of an actual reel, in this same fixture: `Ctrl` is `REEL_IN`.
+    let reel = taut_rope_then_hold_with_pull(&[KeyCode::ControlLeft], false);
 
     // The numbers first: a test that only says "assertion failed" leaves the report without
     // one, and the point of this one IS the number.
@@ -345,33 +385,76 @@ fn r7_s_held_on_a_taut_rope_does_not_close_the_distance() {
         "120 ticks on a taut rope — idle {idle:+.3} m · S {with_s:+.3} m · A {with_a:+.3} m · \
          W {with_w:+.3} m (S as a second REEL_IN binding: -56.001 m)"
     );
+    println!(
+        "  the always-on pull deleted — S {s_alone:+.3} m · A {a_alone:+.3} m · \
+         Ctrl (the real reel) {reel:+.3} m"
+    );
 
     // **The bound is derived, not chosen.** `S` used to be `REEL_IN`, and 120 ticks of that is
     // `reel_speed_m_s` × 2 s. A hundredth of that is still two orders of magnitude away from
     // anything a player would call "being pulled in", and no *slow* reel can sneak through it
     // either — a reel at 1 % of `reel_speed_m_s` would take three minutes to cover this rope.
+    // **The number it is applied to is the one `S` owns**: the run with the always-on pull
+    // taken out. That is the same sentence the old assert made, measured on the axis the key
+    // is actually responsible for.
     let reel_would_have = reel_speed_m_s() * 2.0;
     assert!(
-        with_s > -reel_would_have / 100.0,
-        "S closed {:.3} m in 120 ticks — a reel would have closed {reel_would_have:.1} m. \
-         `S` is backwards movement, not a reel (docs/NEXT.md §1A req 7)",
-        -with_s
+        s_alone > -reel_would_have / 100.0,
+        "with the always-on pull deleted, S still closed {:.3} m in 120 ticks — a reel would \
+         have closed {reel_would_have:.1} m. `S` is backwards movement, not a reel \
+         (docs/NEXT.md §1A req 7)",
+        -s_alone
     );
-    // And the half that says what `S` **is**: a movement key like the other three. Walking
-    // into a taut rope moves you, and the rope answers — `A` and `W` do far more of it than
-    // `S` does. Without this line a fix that merely made the reel *slow* would pass, and the
-    // user would still be dragged, only politely.
+    // Stronger, and the half a floor of zero could never say: `S` does not merely fail to
+    // reel, it **opens** the rope. He walks his 12 m backwards and the anchor gets further
+    // away. A binding that re-acquired `REEL_IN` cannot produce a positive number here.
     assert!(
-        with_s >= with_a && with_s >= with_w,
-        "S ({with_s:+.3} m) closes more distance than A ({with_a:+.3} m) or W ({with_w:+.3} m) \
-         — it still has a rope power the other movement keys do not have"
+        s_alone > 5.0,
+        "S on its own axis should be 12 m of walking backwards, i.e. the rope OPENING by \
+         several metres — it read {s_alone:+.3} m"
     );
-    // ⚠️ `idle` is 0.000 m and `S` is not: walking backwards pulls the rope taut, and a rope
-    // that points 44° upwards lifts you a few centimetres when it answers. That residual is
-    // measured in `docs/FINDINGS.md` FIND-083 and it is **not** what the user reported — the
-    // acceptance number for this job was -0.05 m, and this is the one line that says openly
-    // that the ground case lands at -0.17 m instead, for a reason that has nothing to do with
-    // the binding.
+    // 🔴 **The deletion control has to move the number.** If `S −9.427 m` and `S +8.911 m`
+    // were the same, the key removed would not be the one doing the closing, and every line
+    // above would be measuring something else (`CLAUDE.md` rule 5).
+    assert!(
+        with_s < s_alone - 5.0,
+        "deleting `drive_idle_speed_m_s` changed the held-S run from {with_s:+.3} m to \
+         {s_alone:+.3} m — if those two are the same number, the always-on pull is not what \
+         closes this rope and this test is measuring the wrong thing"
+    );
+    // 🔴 **And the fixture has to be able to SEE a reel**, or none of the above is evidence:
+    // `Ctrl`, under the same deleted pull, is `REEL_IN` and closes tens of metres.
+    assert!(
+        reel < -20.0,
+        "`Ctrl` closed only {:.3} m in this fixture — if the real reel is invisible here, the \
+         fact that S is invisible proves nothing",
+        -reel
+    );
+    // And the half that says what `S` **is**: a movement key like the other three, with no
+    // rope power they do not have. `W` — the key that flies you at the anchor — closes more
+    // than `S` does under the shipped game, and `A`, which never tautens the rope, closes
+    // nothing at all with the pull on or off. Without these two lines a fix that merely made
+    // the reel *slow* would pass, and the user would still be dragged, only politely.
+    assert!(
+        with_s >= with_w,
+        "S ({with_s:+.3} m) closes more distance than W ({with_w:+.3} m) — it still has a rope \
+         power the other movement keys do not have"
+    );
+    assert!(
+        with_a > -reel_would_have / 100.0 && a_alone > -reel_would_have / 100.0,
+        "A closed {:+.3} m with the pull and {a_alone:+.3} m without it; the key that never \
+         tautens the rope must not close it either",
+        with_a
+    );
+    // ⚠️ `idle` is exactly 0.000 m, and that is a claim of its own: the free winch is **not**
+    // free on the ground. A hooked player standing still keeps his legs, and it takes a key to
+    // take him off them — see `player::locomotion::in_flight` and `FIND-172`'s `in_the_air`
+    // gate. The −0.17 m residual `docs/FINDINGS.md` FIND-083 recorded here is gone.
+    assert!(
+        idle.abs() < 0.05,
+        "a hooked player who presses nothing drifted {idle:+.3} m — the always-on pull is \
+         supposed to stop at the ground"
+    );
     println!("idle control: {idle:+.3} m — anything above that is the rope, not the key");
 }
 
@@ -390,9 +473,16 @@ fn reel_speed_m_s() -> f32 {
 /// up — 82.2 m of rope, measured. `reel_speed_m_s` is 28, so 120 ticks of reeling are **56 m**,
 /// and that is exactly what this returned while `S` was a second binding for `REEL_IN`.
 fn taut_rope_then_hold(keys: &[KeyCode]) -> f32 {
+    taut_rope_then_hold_with_pull(keys, true)
+}
+
+fn taut_rope_then_hold_with_pull(keys: &[KeyCode], pull: bool) -> f32 {
     use defeated_by_titan::shared::{LookOverride, PlayerId, WarpPlayer};
 
     let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    if !pull {
+        app.world_mut().resource_mut::<GameData>().game.vector.drive_idle_speed_m_s = 0.0;
+    }
     // One `update()` is one tick here, by construction — the same reason `tap_script` does it:
     // "120 ticks" has to be 120 ticks and not the mood of the machine (`B-002`).
     app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));

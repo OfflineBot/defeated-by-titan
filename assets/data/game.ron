@@ -467,7 +467,7 @@
         //   - the reference's own „Gear Shift" setting reads 600 in his menu. Roblox counts
         //     STUDS (1 stud ~ 0.28 m), so that is ~168 m/s if it is a speed at all — more than
         //     twice our own hard clamp, and FIND-149 records it as UNRESOLVED.
-        drive_speed_m_s: 70.0,
+        drive_speed_m_s: 52.0,
         // ⚠️ UNTUNED. The time constant of the ramp, in seconds — „ein etwas smoother uebergang!
         // aber recht schnell!" is the whole specification. **0.25 until 2026-08-23, and that
         // quarter second WAS the complaint:** „man macht was und man merkt es auch direkt!"
@@ -495,7 +495,72 @@
         //     locomotion::rope_drive point 6), so this number is now a steering authority and
         //     nothing else — it used to double as the speed he got dragged back down to;
         //   - bound: <= drive_speed_m_s, or A/D alone would hit the drive's own cap.
-        drive_lateral_m_s: 30.0,
+        drive_lateral_m_s: 36.0,
+        // FIND-172. The acceleration ceiling of the drive, in m/s^2 — and it is the one number
+        // in this block that is about WEIGHT rather than about speed.
+        //
+        // The user, 2026-08-26, in the same breath as „es ist zu aggressiv. man wird zu sehr
+        // rangezogen": „zudem fuehlt sich die gravitation nicht richtig an. oder die masse von
+        // dem character. es fuehlt sich zu leicht an."
+        //   - a velocity drive has NO inertia by construction: `a = (v* - v)/ramp` replaces the
+        //     whole velocity in ~3*ramp NO MATTER HOW FAST the player was going. Mass cancels
+        //     out (`Forces::apply_linear_acceleration` ignores it on purpose), so nothing in
+        //     this game resists a direction change. That is what „zu leicht" is;
+        //   - and it is the same thing as „zu aggressiv" read from the other side: unbounded,
+        //     the term is speed/ramp from rest = **875 m/s^2 at (70, 0.08)**, i.e. 44 g;
+        //   - a ceiling gives it back without touching gravity_m_s2 or the body's mass: a SMALL
+        //     correction is under the cap and the ramp alone governs it (so „man merkt es
+        //     direkt" survives, FIND-153), while a LARGE change of velocity now takes time in
+        //     proportion to how much of it there is. Reversing a 52 m/s flight goes from 0.19 s
+        //     to ~0.45 s;
+        //   - 250 is still 12.5 g and nothing physical: „nicht so physics accurate aber mehr
+        //     haptisch" is the instruction, this is a weight the player can feel and not a
+        //     simulation. LOWER = heavier and more sluggish; raise it back to 875 to get
+        //     exactly the 2026-08-25 feel back.
+        // ⚠️ The winch (Ctrl) is deliberately NOT capped — see reel_speed_m_s and FIND-172.
+        drive_accel_max_m_s2: 250.0,
+        // FIND-172. How much of the RADIAL pull survives while A or D is held, 0..1.
+        //
+        // „nur wenn ich a oder d druecke dass es staerker zur seite geht als rangezogen!"
+        //   - raising drive_lateral_m_s past drive_speed_m_s does NOT do this: the two share
+        //     one cap (locomotion::rope_drive), so a bigger lateral brakes the flight instead
+        //     of turning it — Q-050's bug in a new key;
+        //   - what is scaled is the rope axis's DIRECTION WEIGHT, never the target speed. With
+        //     W+D held the target points atan(30 / (70*0.35)) = **50.7 deg** off the rope, and
+        //     it is still driven at the full drive speed. Steering TURNS the drive, it does not
+        //     slow it;
+        //   - 0.35 makes the sideways component 1.22x the radial one at full W+D. With W
+        //     released the radial pull is only drive_idle_speed_m_s and the ratio is 2.5x.
+        //     LOWER = A/D wins harder; 1.0 is the 2026-08-25 behaviour, where the radial won.
+        drive_steer_pull_fraction: 0.35,
+        // FIND-172. THE ALWAYS-ON PULL, in m/s of closing speed along the rope.
+        //
+        // „ich will dass es immer ranzieht. nicht nur wenn ich w druecke!"
+        //
+        // ⚠️ THIS REVERSES FIND-149, AND ON PURPOSE. That finding recorded the reference doing
+        // the opposite („wenn ich nichts drucke dann wird auch nicht rangezogen!") — his own
+        // observation, and it still stands as an observation. He has now asked for the opposite
+        // in THIS game, and his instruction beats his own earlier one (CLAUDE.md). Whoever
+        // „restores" the old behaviour thinking this is a regression is undoing an instruction.
+        //
+        //   - it is the WINCH at a lower speed (locomotion::rope_winch): a FLOOR under the
+        //     closing speed, so it can never brake, never touches the crossing momentum and
+        //     stops at min_rope_m. Ctrl raises the floor to reel_speed_m_s (28) and costs gas;
+        //     this one is free and always on. The two are one term, so holding Ctrl is exactly
+        //     as strong as it was before this line existed (FIND-159, scripts/game-full.txt);
+        //   - 12 m/s is 2x run_speed_m_s: a rope that carries you, not one that hauls you. On a
+        //     VERTICAL rope the player settles at 12 - 20*0.35 = **5 m/s of climb** — under his
+        //     own run speed, so hanging still is not faster than walking;
+        //   - it runs only while player::locomotion::in_flight. A hooked player STANDING on the
+        //     ground keeps his legs (and Ctrl is how he leaves the ground, F-005).
+        drive_idle_speed_m_s: 12.0,
+        // FIND-172. The time constant of the always-on pull, in seconds — deliberately NOT
+        // drive_ramp_s. 0.08 s is the answer to „man macht was und man merkt es auch direkt",
+        // and NOBODY PRESSES THIS ONE: it has to read as a rope taking up slack, not as a tug.
+        // At 0.35 s the onset peaks at (12-0)/0.35 = 34 m/s^2 against the drive's 250, and the
+        // climb it can hold against gravity is 12 - 20*0.35 = 5 m/s (see above). Bigger = softer
+        // AND weaker against gravity; the two are the same number and that is not an accident.
+        drive_idle_ramp_s: 0.35,
         // Gauss-Seidel iterations over both rope constraints. With one iteration the second
         // constraint violates the first again; two are enough in the normal case (two roofs,
         // angle over 60 degrees) for under 1 % residual error. The degenerate case — both

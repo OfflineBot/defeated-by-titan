@@ -1306,13 +1306,12 @@ fn hold_key(app: &mut App, key: KeyCode) {
 /// Hangs a player on a 20 m rope straight above him, presses **nothing** for `ticks_n`, and
 /// returns how far he fell and how far he drifted sideways.
 ///
-/// `dry` re-empties the tank every tick, and it is **not** a side note: with gas in the tank the
-/// drive never even runs for a key-less player, because `vector::gas::steer_has_effect` refuses
-/// the grant first. An empty tank is the one state in which `air_control` enters the drive
-/// branch with nothing held (`docs/NEXT.md` §1e, *„aber hälfte ca"*) — so it is the only case
-/// that can tell "the drive returns zero" apart from "the gas ledger happened to say no".
-/// Measured 2026-08-23: with the early return in `rope_drive` deleted, the wet run stayed green
-/// and this one went red.
+/// `dry` re-empties the tank every tick, and it is **not** a side note: `rope_drive` itself is
+/// refused for a key-less player by `vector::gas::steer_has_effect` whatever the tank says, so
+/// the two runs together are what tell the always-on pull (`FIND-172`, free, no grant) apart
+/// from anything that reaches the player through the gas ledger. Measured 2026-08-23 the other
+/// way round: with the early return in `rope_drive` deleted, the wet run stayed green and this
+/// one went red.
 fn hangs_and_holds_nothing(model: RopeForceModel, ticks_n: u64, dry: bool) -> (f32, f32) {
     let mut app = app();
     select(&mut app, model);
@@ -1330,56 +1329,151 @@ fn hangs_and_holds_nothing(model: RopeForceModel, ticks_n: u64, dry: bool) -> (f
 }
 
 #[test]
-fn f149_under_drive_a_hooked_player_who_presses_nothing_is_not_held_up_by_his_rope() {
-    // **The load-bearing sentence, measured.** Same app, same hook, same 20 m rope, same zero
-    // keys — the only difference is one line in `game.ron`.
+fn f172_under_drive_a_hooked_player_who_presses_nothing_is_pulled_in_anyway() {
+    // **The load-bearing sentence, and it is a NEW one.** The user, 2026-08-26:
     //
-    // ⚠️ Gravity is ON here, deliberately and against this file's usual doctrine: the question
-    // is precisely *what happens when nothing but gravity is left*. The control that makes the
-    // number mean something is the other model in the same test — if the two ever answer the
-    // same, this is measuring the harness and not the rope.
+    // > *„ich will dass es immer ranzieht. nicht nur wenn ich w drücke!"*
+    //
+    // ⚠️ This test replaces `f149_under_drive_a_hooked_player_who_presses_nothing_is_not_held_
+    // up_by_his_rope`, which asserted the exact opposite and was right to: `FIND-149` recorded
+    // *„wenn ich nichts drucke dann wird auch nicht rangezogen!"* off the reference. **That
+    // observation still stands and was deliberately not followed** — he has asked for the
+    // opposite in this game, and his instruction beats his own earlier report (`CLAUDE.md`).
+    // Whoever "restores" the old assert is undoing an instruction, not fixing a regression.
+    //
+    // The rope is 20 m **straight above**, so the pull and gravity are on the same axis and the
+    // sign of one number is the whole verdict.
     let ticks_n = 30; // 0.5 s
     let (drive_fall, drive_drift) = hangs_and_holds_nothing(RopeForceModel::Drive, ticks_n, false);
     let (pendulum_fall, pendulum_drift) =
         hangs_and_holds_nothing(RopeForceModel::Pendulum, ticks_n, false);
-    // The control that makes the first number worth anything — see [`hangs_and_holds_nothing`].
+    // The always-on pull is **free** — nothing bills it, because no key is down. So the empty
+    // tank has to give the same answer, and that is also the control `FIND-152` needed: with a
+    // full tank `vector::gas::steer_has_effect` refuses the grant for a key-less player, so a
+    // number that only appeared with gas in the tank would be the ledger's and not the rope's.
     let (dry_fall, dry_drift) = hangs_and_holds_nothing(RopeForceModel::Drive, ticks_n, true);
-
-    // Free fall over half a second at the file's −20 m/s² is 2.5 m. The drive's rope holds
-    // nothing at all, so that is what has to come out.
-    assert!(
-        drive_fall > 2.0,
-        "under `Drive` a hooked player with no key held fell {drive_fall:.3} m in 0.5 s — free \
-         fall owes ~2.5 m, so something is still carrying him and the rope is not a direction"
+    println!(
+        "f172 half a second hanging on a 20 m vertical rope, nothing held: Drive {:.3} m · \
+         Drive on an empty tank {:.3} m · Pendulum {:.3} m (negative = climbed)",
+        drive_fall, dry_fall, pendulum_fall
     );
-    // And the pendulum hangs, which is the whole of what the user says the reference does NOT do.
+
+    // Free fall over half a second at the file's −20 m/s² is 2.5 m. He must not do that any
+    // more, and the assert is on the SIGN: the rope wins against gravity.
     assert!(
-        pendulum_fall < 0.05,
-        "under `Pendulum` the same player fell {pendulum_fall:.3} m — the joint is supposed to \
+        drive_fall < 0.0,
+        "under `Drive` a hooked player with no key held moved {drive_fall:.3} m DOWN in 0.5 s — \
+         „ich will dass es immer ranzieht\" is the instruction and free fall owes ~2.5 m"
+    );
+    // ⚠️ And he must not be YANKED at it either — *„es ist zu aggressiv"* is the other half of
+    // the same message. `drive_idle_speed_m_s` is a ceiling on the closing speed, so half a
+    // second can never move him further than that.
+    let ceiling_m = shipped().game.vector.drive_idle_speed_m_s * 0.5;
+    assert!(
+        -drive_fall < ceiling_m,
+        "he climbed {:.3} m in 0.5 s against a `drive_idle_speed_m_s` of {:.1} m/s, which cannot \
+         carry him further than {ceiling_m:.3} m — something is hauling him at the anchor",
+        -drive_fall,
+        ceiling_m * 2.0
+    );
+    // The always-on pull costs nothing, so these two are the same run.
+    assert!(
+        (dry_fall - drive_fall).abs() < 0.05,
+        "with a full tank he moved {drive_fall:.3} m and with an empty one {dry_fall:.3} m — the \
+         idle pull is not billed by anything, so a difference means it is going through a gas \
+         grant it does not need"
+    );
+    // And the pendulum still hangs, which is what makes the first number the DRIVE's.
+    assert!(
+        pendulum_fall.abs() < 0.05,
+        "under `Pendulum` the same player moved {pendulum_fall:.3} m — the joint is supposed to \
          hold him, and every number measured before 2026-08-23 assumes it does"
     );
-    assert!(
-        drive_fall - pendulum_fall > 1.0,
-        "the two force models let the same player fall {drive_fall:.3} m and {pendulum_fall:.3} \
-         m — `vector.rope_force_model` is then a switch between one model and itself"
-    );
-    // Neither of them is *pulled* sideways. Under `Drive` because nothing acts at all; under
-    // `Pendulum` because the rope is vertical and taut. The assert is here so that a future
-    // "drive" that quietly hauls a key-less player at his anchor cannot pass this test.
+    // Neither of them drifts: the rope is vertical, and a pull that appears on X or Z is a bug
+    // in the direction, not a pull.
     assert!(
         drive_drift < 0.05 && pendulum_drift < 0.05 && dry_drift < 0.05,
         "a player who pressed nothing drifted {drive_drift:.3} m (Drive) / {pendulum_drift:.3} m \
-         (Pendulum) / {dry_drift:.3} m (Drive, empty tank) toward his anchor"
+         (Pendulum) / {dry_drift:.3} m (Drive, empty tank) sideways off a vertical rope"
     );
-    // **The one measurement the gas ledger cannot be responsible for.** With an empty tank the
-    // drive branch really is entered with no key held, so this number is `rope_drive`'s own
-    // answer and nothing else's.
+}
+
+/// The tuning as the game ships it — the asserts above are about `game.ron`'s own numbers and
+/// must not carry a second copy of them.
+fn shipped() -> GameData {
+    GameData::load(&std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/data"))
+}
+
+/// Hangs a player on a 60 m rope straight along −Z at hand height, holds `keys` for half a
+/// second and returns the **angle between his velocity and his rope**, in degrees.
+///
+/// That angle *is* the user's *„rangezogen gegen zur Seite"*: 0° is straight up the rope, 90° is
+/// a flight that is not converging on the anchor at all. Gravity is **on** — the question is
+/// what a player feels in the world he plays in, and half of "the pull is too strong" is how it
+/// compares to the fall.
+fn angle_with_keys(keys: &[KeyCode], idle_m_s: f32) -> f32 {
+    let mut app = app();
+    select(&mut app, RopeForceModel::Drive);
+    app.world_mut().resource_mut::<GameData>().game.vector.drive_idle_speed_m_s = idle_m_s;
+    let e = me(&mut app);
+    // 300 m up for `holds_w_toward_an_anchor`'s reason: the tallest thing in the world is a
+    // 123 m tower, so nothing here can fly into a building and report that as a curve.
+    let start = Vec3::new(0.0, 300.0, 0.0);
+    let eye = data(&app).game.player.eye_height_m;
+    let anchor = start + Vec3::Y * eye + Vec3::NEG_Z * 60.0;
+    hang_on(&mut app, e, start, anchor);
+    for k in keys {
+        hold_key(&mut app, *k);
+    }
+    ticks(&mut app, 30);
+    let to_anchor = anchor - (position(&app, e) + Vec3::Y * eye);
+    velocity(&app, e).angle_between(to_anchor).to_degrees()
+}
+
+#[test]
+fn f172_the_three_angles_between_the_rope_and_the_flight() {
+    // **The three numbers the user is answered with.** Half a second on the same rope, from
+    // rest, with gravity on:
+    //
+    //   nothing held — *„ich will dass es immer ranzieht"*
+    //   `W`          — *„ziemlich gerade"* (`FIND-153`, unchanged)
+    //   `D`          — *„stärker zur seite als rangezogen"*
+    let d = shipped();
+    let idle = d.game.vector.drive_idle_speed_m_s;
+    let nothing = angle_with_keys(&[], idle);
+    let forward = angle_with_keys(&[KeyCode::KeyW], idle);
+    let sideways = angle_with_keys(&[KeyCode::KeyD], idle);
+    println!(
+        "f172 angle between the rope and the velocity after 0.5 s: nothing {nothing:.1}° · \
+         W {forward:.1}° · D {sideways:.1}°"
+    );
+
+    // **The control, and it is the habit `CLAUDE.md` rule 5 asks for:** delete the thing being
+    // measured — the idle pull — and the same run has to answer differently. Without it the
+    // player only falls, and a fall on a horizontal rope is 90° off it.
+    let unpulled = angle_with_keys(&[], 0.0);
     assert!(
-        dry_fall > 2.0,
-        "under `Drive` with an EMPTY tank and no key held the player fell {dry_fall:.3} m in \
-         0.5 s instead of free-falling ~2.5 m — the drive is chasing a target of 0 m/s and \
-         braking him in mid-air, which is the exact opposite of „wenn ich nichts drucke dann \
-         wird auch nicht rangezogen\""
+        unpulled > 80.0,
+        "with `drive_idle_speed_m_s` at 0 the key-less player still flew {unpulled:.1}° off his \
+         rope instead of the ~90° a pure fall owes — this test is measuring gravity, not the pull"
+    );
+    assert!(
+        nothing < unpulled - 20.0,
+        "holding nothing came out {nothing:.1}° off the rope against {unpulled:.1}° with the \
+         idle pull switched off — „es zieht immer ran\" has to be visible in this number"
+    );
+    // `W` is the straight line, and it is the one thing `FIND-153` bought that must survive.
+    assert!(
+        forward < 15.0,
+        "`W` left the player flying {forward:.1}° off his own rope — „ziemlich gerade\" \
+         (`FIND-153`)"
+    );
+    // And `D` beats the pull: more than 45° off the rope is *by definition* more sideways than
+    // inward.
+    assert!(
+        sideways > 45.0,
+        "`D` left the player {sideways:.1}° off the rope — under 45° the rope is still winning, \
+         and „staerker zur seite als rangezogen\" is exactly the 45° line"
     );
 }
 
@@ -1522,8 +1616,16 @@ fn f153_under_drive_w_pulls_the_flight_onto_the_rope_line() {
     // `cargo test --test vector_rope f153 -- --nocapture`.
     println!("f153 angle to the rope after {ticks_n} ticks: Drive {drive:.1}° · Pendulum {pendulum:.1}°");
 
+    // ⚠️ **The band was 8° until `FIND-172` and it is 12° now — measured 2.2° at
+    // `(70, 0.08, ∞)` and 8.0° at `(52, 0.08, 250)`, and that is the WEIGHT, not a slipped
+    // number.** Straightening a flight that starts 40 m/s across its own rope is a 65 m/s change
+    // of velocity, and `drive_accel_max_m_s2` is precisely the rule that a big change of
+    // velocity costs time (*„es fühlt sich zu leicht an"*, 2026-08-26). A quarter second is the
+    // hardest moment there is for this number; by half a second the same flight is back inside
+    // 2°. 🔴 **If he ever says the drive bends instead of pulling, `drive_accel_max_m_s2` is
+    // the key — and raising it gives the weight back.**
     assert!(
-        drive < 8.0,
+        drive < 12.0,
         "a quarter second of `W` left the player flying {drive:.1}° off his own rope. He started \
          90° off it (40 m/s of crossing momentum) and gravity pulls another `drive_ramp_s · g` \
          out of the line — „ziemlich gerade\" is the instruction"

@@ -454,6 +454,50 @@ pub struct VectorTuning {
     /// and since `FIND-153` it is a **steering authority only**: `A`/`D` on their own chase this
     /// speed on their own axis and no longer brake the flight down to it (`Q-050`).
     pub drive_lateral_m_s: f32,
+    /// **The drive's acceleration ceiling, in m/s² — and it is the player's WEIGHT.**
+    ///
+    /// `rope_drive` chases a velocity: `a = (v* − v)/ramp`. Unbounded, that term is
+    /// `speed/ramp` from rest — **875 m/s² at (70, 0.08)**, 44 g — and, worse for the feel, the
+    /// time to reverse a flight is then *independent of how fast you were going*. A body whose
+    /// velocity can be replaced in a fixed 170 ms has no inertia and therefore no mass, which
+    /// is what the user reported on 2026-08-26 as *„es fühlt sich zu leicht an"* — and, from
+    /// the other side, as *„es ist zu aggressiv. man wird zu sehr rangezogen"*. One number
+    /// answers both: with a ceiling the drive still *corrects* instantly (a small gap is under
+    /// the cap and the ramp alone governs it), but a large change of velocity now takes time
+    /// proportional to how much of it there is. `FIND-172`. Must be `> 0`.
+    pub drive_accel_max_m_s2: f32,
+    /// **How much of the radial pull survives while `A` or `D` is held**, 0..=1.
+    ///
+    /// *„nur wenn ich a oder d drücke dass es stärker zur seite geht als rangezogen!"* (the
+    /// user, 2026-08-26). The lateral cannot simply be raised past
+    /// [`drive_speed_m_s`](Self::drive_speed_m_s) to achieve that — the two share one cap, so a
+    /// bigger lateral would brake the flight instead of turning it (`Q-050`). What is scaled is
+    /// the **direction weight** of the rope axis, never the target speed: steering turns the
+    /// drive, it does not slow it. `FIND-172`.
+    pub drive_steer_pull_fraction: f32,
+    /// **The always-on pull, in m/s of closing speed along the rope** —
+    /// [`RopeForceModel::Drive`] only.
+    ///
+    /// *„ich will dass es immer ranzieht. nicht nur wenn ich w drücke!"* (the user,
+    /// 2026-08-26). It is the same shape as the winch (`player::locomotion::rope_winch`) at a
+    /// lower speed: a floor under the closing speed that can never brake and never touches any
+    /// other axis of the flight. `Ctrl` raises the floor to
+    /// [`reel_speed_m_s`](Self::reel_speed_m_s) and costs gas; this one is free and always
+    /// there.
+    ///
+    /// ⚠️ **It reverses `FIND-149`**, which recorded the reference doing the opposite
+    /// (*„wenn ich nichts drucke dann wird auch nicht rangezogen!"*). That observation still
+    /// stands and was deliberately not followed — his instruction for THIS game beats his own
+    /// earlier report of another one (`CLAUDE.md`). `FIND-172`.
+    pub drive_idle_speed_m_s: f32,
+    /// The time constant of the always-on pull, in seconds — deliberately **not**
+    /// [`drive_ramp_s`](Self::drive_ramp_s).
+    ///
+    /// The short ramp is the answer to *„man macht was und man merkt es auch direkt"*, and
+    /// nobody presses this one: it has to read as a rope taking up slack, not as a tug. It also
+    /// decides how much of gravity the idle pull can beat — on a vertical rope the player
+    /// settles at `drive_idle_speed_m_s − |gravity_m_s2| · this` m/s of climb. Must be `> 0`.
+    pub drive_idle_ramp_s: f32,
     /// Gauss-Seidel iterations over both rope constraints (`shared::rope::rope_step`).
     pub rope_iterations: u32,
     pub gas_tank: f32,
