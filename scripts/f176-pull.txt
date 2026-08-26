@@ -1,0 +1,138 @@
+# f176-pull — docs/NEXT.md §3D: THE ROPE PULLS FROM EVERY KEY, AND THE LEGS CANNOT WALK OUT OF IT.
+#
+# 🔴 **THIS SCRIPT IS RED ON PURPOSE AND MUST STAY RED UNTIL §3D IS BUILT.**
+#
+# It encodes the user's own words below as asserts. TWO attempts at the feature were built and
+# BOTH were refuted 2/2 by independent adversaries and reverted (`docs/FINDINGS.md` FIND-186).
+# The requirement did not go away with them, so this file stays as the standing statement of
+# what has to become true. The saved attempt is at
+#   /tmp/claude-1000/-home-offlinebot-Documents-defeated-by-titan/e29ae3a7-3fb1-4023-b5fd-83655fd732f4/scratchpad/rope-3d-attempt.patch
+#
+# Expected today: RED at ACT 2 (`assert Speed < 2` reads ~6.03 — a hooked player walks away
+# from his anchor at full run speed). ⚠️ Do NOT "fix" it by loosening an assert.
+#
+#
+# The user, 2026-08-26, verbatim:
+#
+#   „ok wichtig: wenn ich von seil weg gehe. also seil ist vorne und ich laufe zurueck werde
+#    cih nicht ran gezogen. sonst werde ich ranzeogen! wenn ich a oder d druecke zur seite soll
+#    ich auch noch rangezogen werden! AUCH. aber weniger! aktuell kann ich a druecekn und w und
+#    ich gehe in einer geraden linie weg von dem ankerpunkt (nicht gut). wenn das seil shcon
+#    eingezogen wurde soll es erstmal nicht laenger werden!"
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/f176-pull.txt --ticks 900
+#
+# and, as a SEPARATE run, the one that returns a usable exit code:
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/f176-pull.txt --ticks 900 >/dev/null 2>&1; echo $?
+#
+# ## What this run can measure and what it cannot
+#
+# ⚠️ **The script harness has no anchor-distance metric** (`speed`, `height`, `gas`, `titans`,
+# `tick`, `health`, `kills`, `phase`, `rope`, `blades`, `sharpness` — `src/debug/script.rs`), and
+# §3D's acceptance IS a distance. So the nine-row matrix lives in
+# `tests/player.rs::f176_no_input_at_all_makes_the_rope_longer` and this run measures the one
+# half of §3D that a SPEED can see and nothing else in the game produces:
+#
+#   **R1 · on the ground, hooked, holding `S`, the player does not move.**
+#
+# Before 2026-08-26 he walked out of his own rope at `player.run_speed_m_s` = 6 m/s, because
+# `air_control`'s always-on pull is gated on `in_flight` and a hooked player standing up is
+# `Grounded` (`player::integrator::movement_state`). `ground_locomotion` now takes the outbound
+# half of the walk away (`player::locomotion::ground_desired_on_a_rope`), so `S` with the rope
+# ahead is a stand.
+#
+# 🔴 **THE CONTROL, and without it ACT 2's number is worthless** — a player who is simply stuck
+# on a wall also reads 0 m/s. ACT 3 lets go of the hook and holds the SAME key: it has to come
+# back at the full run speed. One run, both numbers, no second binary.
+#
+# Measured 2026-08-26 [offlinebot], debug build:
+#
+#   at the mark                        with the rope     with the rope let go
+#   1.0 s of S, hooked, on the ground   0.000 m/s         6.000 m/s
+#
+# The same pair as a test, with the anchor distance instead of the speed:
+# `tests/player.rs::f176_walking_backwards_on_a_rope_does_not_walk_away_in_the_real_app`
+# (30.00 -> 30.00 m hooked, -> 36.00 m released).
+
+wait 1.5                # world, camera, meshes and the render pipelines come up (90 ticks)
+
+# ---- ACT 1 · get him onto his legs with a rope in front of him ------------------------------
+# The same clear ground `scripts/game-full.txt` ACT 1 starts on, and for its reason: it was
+# checked rather than assumed (the market hall covers x −47..−15, z −13..13, this does not), and
+# a hook fired from here really bites. `look 180 66.6` puts the anchor **up and behind him at
+# yaw 180 = +Z**, so `S` walks him straight away from it — which is §3D's own sentence.
+# ⚠️ **`S` points at −Z from here and that is deliberate**: measured 2026-08-26, the +Z side of
+# this spot is blocked (a walk into it reads 0.915 m/s instead of 6.000), so a run that walked
+# the other way would report the wall and call it the rope. The anchor this bites — body 149 at
+# (45.00, 34.25, −29.00) — is up and at +Z, so „weg vom Anker" IS the clear direction.
+look 180 66.6
+warp 45 0 -43
+wait 0.5                # the warp takes effect one tick later than it is written
+mark f176-standing
+assert speed < 7        # on his LEGS, not still falling: this is the state R1 is about
+
+# ⚠️ **Held for exactly as long as ACT 2 needs it.** The `hook` command's second number is how
+# long the trigger stays down, and letting it go IS this run's control — 0.5 s of settling plus
+# ACT 2's second, and no more (`scripts/f006-drive.txt` learned the other half of this the hard
+# way: an act that outlives its trigger measures a free fall).
+# ⚠️ **3.0 s and not 1.6 since 2026-08-26**: ACT 2b was added between ACT 2 and ACT 3 and it
+# needs the rope for another 1.3 s. The release still lands before ACT 3 asks for it.
+hook right 3.0
+wait 0.5
+mark f176-hooked
+assert rope > 0         # it bit; the log line above says on which body and at what distance
+
+# ---- ACT 2 · R1 · „seil ist vorne und ich laufe zurueck" ------------------------------------
+# ⚠️ **1.5 s of key for 1.0 s of measurement, and that is not slack.** `ground_step` returns the
+# desired velocity directly below the run speed, so a walk stops in the SAME tick the key does —
+# a first version held `S` for exactly 1.0 s and both marks landed two ticks after it, measuring
+# a player who had already stopped. ACT 3 read 0.000 m/s and caught it (§6 rule 5).
+# ⚠️ **And it must not reach INTO act 3 either.** A second version held 1.5 s in both acts, so
+# ACT 2's release landed inside ACT 3's hold and cancelled it — 0.000 m/s again, from the
+# opposite mistake. 1.2 s covers the mark at +1.0 s and is over before the next `key` is written.
+key S 1.2
+wait 1.0
+mark f176-a-second-of-s-on-the-rope
+# The whole claim in one band. `run_speed_m_s` is 6.0, so anything at or over it is a player who
+# walked straight out of his own rope — which is what this used to read.
+assert speed < 2.0
+assert rope > 0         # and the rope is still there: R1 is a clamp on the legs, not a release
+
+# ---- ACT 2b · 🔴 THE GROUND ELEVATOR · one character different from ACT 2 --------------------
+# **`docs/FINDINGS.md` FIND-182, and this act IS the refutation.** `A` instead of `S`, same
+# stance, same rope, same anchor above and behind. A TANGENTIAL walk pushes body-to-anchor a few
+# centimetres past `Rope::rest_m` — 0.0075 m per second of forward-Euler residual, which
+# `tests/player.rs::f176_the_legs_never_walk_away_from_a_rope` calls „well under a hand's
+# breadth" — and until 2026-08-26 `player::locomotion::rope_taut_brake` ran on the ground and
+# answered that residual with up to 250 m/s² straight UP the rope. Contact stops penetration; it
+# does not stop sustained upward acceleration.
+#
+# Measured 2026-08-26 [offlinebot], debug build, one second of `A` from this exact stance:
+#
+#                          at +0.35 s          at +1.0 s
+#   the brake on the ground  5.858 @ 0.313 m   50.597 m/s @ 15.035 m     <- the elevator
+#   gated on `in_flight`     5.869 @ 0.300 m    5.121 m/s @  0.308 m     <- a man walking
+#
+# The gate costs nothing: an anchored player who is not standing on the ground is `Tethered`,
+# which `player::locomotion::in_flight` calls flight by definition, so the ledge case the old
+# comment worried about is covered on the tick it happens.
+wait 0.3                # ACT 2's `key S` is over at +1.7 s; this is +1.8 s
+key A 1.2
+wait 1.0
+mark f176-a-second-of-a-on-the-rope
+assert height < 1       # 🔴 THE ONE THAT WAS 15.035 — a walking man does not gain 15 metres
+assert speed < 7        # and 50.597 m/s is not a walk either; `run_speed_m_s` is 6.0
+assert speed > 3        # the control: he really is walking, he is not stuck against something
+assert rope > 0
+
+# ---- ACT 3 · THE CONTROL · the same key with nothing holding him ----------------------------
+# ⚠️ The trigger above ran out at the end of ACT 2b — the thing this number is supposed to be
+# measuring is now deleted (§6 rule 5, second half).
+wait 0.5
+assert rope < 1
+key S 1.2
+wait 1.0
+mark f176-the-same-second-of-s-with-no-rope
+# If this is not the run speed, ACT 2 was measuring a player who cannot walk at all.
+assert speed > 4.0

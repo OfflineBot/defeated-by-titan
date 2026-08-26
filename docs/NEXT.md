@@ -1420,3 +1420,39 @@ a steeper step reads from the air and costs walkability, which is exactly the tr
    matched by size and palette. 12 of 215 are dressed today because only stalls and barrels had an
    honest match; the HQ, the gates and the towers need to be told, not guessed.
 3. **Ask him about `step_m`** — 1.5 m over 42 m is his number and it is why the slope is invisible.
+
+## §3D — 🔴 THE ROPE, 2026-08-26, verbatim. Four requirements, and one of them is a bug.
+
+> *"ok wichtig: wenn ich von seil weg gehe. also seil ist vorne und ich laufe zurück werde cih
+> nicht ran gezogen. sonst werde ich ranzeogen! wenn ich a oder d drücke zur seite soll ich auch
+> noch rangezogen werden! AUCH. aber weniger! aktuell kann ich a drücekn und w und ich gehe in
+> einer geraden linie weg von dem ankerpunkt (nicht gut). wenn das seil shcon eingezogen wurde soll
+> es erstmal nicht länger werden!"*
+
+**This continues 2026-08-24's *„ich will dass es immer ranzieht. nicht nur wenn ich w drücke!"*** —
+the always-pull landed, and he is now saying the steering still has a hole in it.
+
+**R1 · `S` must not cancel the pull.** Rope ahead, walking backwards → *"werde ich nicht ran
+gezogen"*. The pull is unconditional; `S` is the one input that is allowed to fight it, and even
+then it may only **slow** the approach, not reverse it into a retreat.
+
+**R2 · `A`/`D` keep pulling. „AUCH. aber weniger!"** Lateral is a *component added to* the pull,
+never a *replacement for* it. `drive_steer_pull_fraction` (0.35 today) is exactly this knob — the
+question is whether it is applied at all on the lateral path, or only on the forward one.
+
+**R3 · 🔴 THE BUG, and it is stated as a repro:** *"aktuell kann ich a drücken und w und ich gehe
+in einer geraden linie weg von dem ankerpunkt"*. `A`+`W` together produce a straight line **away
+from the anchor**. Two inputs that each individually pull, in combination push. That is a sign
+error or a normalise-after-sum, not a tuning value.
+⚠️ **Repro it before touching anything** — hook something, hold `A`+`W`, log rope length per tick.
+Rising monotonically is the failure.
+
+**R4 · The rope is a RATCHET.** *"wenn das seil shcon eingezogen wurde soll es erstmal nicht länger
+werden"* — once reeled in, the rest length must not grow back on its own. `Ctrl` shortens it;
+nothing silently lengthens it. („erstmal" = until released/re-fired, not forever.)
+⚠️ This is a **`DistanceJoint` rest-length** change, and it interacts with `rope_winch`. It is also
+the one of the four that is a **new mechanic** rather than a fix.
+
+**Acceptance is one number, and it is the same for R1–R3:** with an anchor ahead and ANY of
+`W`, `A`, `D`, `A+W`, `D+W`, `S`, or no key at all, **the anchor distance must not increase** while
+the rope is taut. `S` may hold it flat; nothing may make it rise.

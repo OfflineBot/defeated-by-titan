@@ -221,3 +221,44 @@ picture has destroyed something more valuable than the picture.**
 `(730, 1680)`, roughly **0.625 × request**. Use closed-loop relative movement with `grim`/`grim -c`
 diffing to verify where the pointer actually is (`FIND-092` established that technique), or drive
 the UI by keyboard.
+
+---
+
+## The machine is shared with OTHER projects' sessions — measure whose load it is before throttling your own
+
+Measured 2026-08-26, while the user was gaming and had asked **twice** for this session to use less
+CPU (*„mein discord ruckelt sehr! kannst du noch weniger verbruachen?"*):
+
+```
+load average: 35,98  on  nproc = 16
+process args matching  elderfell_3d       : 6720
+process args matching  defeated-by-titan  :    0
+```
+
+**None of it was ours.** A Claude session in `~/Documents/elderfell_3d` was running
+`cargo test --test canyons` with six `rust-lld` linkers at 37–53 % CPU each — and at **`nice -4`**,
+i.e. *above* normal desktop priority, which is precisely why Discord stuttered: it outranked it.
+This session's commissions had been pinned to `nice -n 15 -j 3` for hours.
+
+**The trap:** the honest response to "you are using too much CPU" is to cut your own width, and it
+would have cost real throughput here while fixing **nothing**. Throttling yourself against someone
+else's load is invisible failure — the user's symptom persists, you look like you ignored him, and
+you have paid for it in wall-clock.
+
+**So, before answering a performance complaint:**
+
+```bash
+uptime; nproc                                          # is the load actually high for this box?
+ps -eo pid,ni,pcpu,args --sort=-pcpu | grep -E 'rustc|cargo|rust-lld' | grep -v grep | head
+ps -eo args | grep -oE '<project-a>|<project-b>' | sort | uniq -c    # WHOSE is it?
+```
+
+**Attribute the load, then act.** If it is ours, cut `-j` and raise `nice`. If it is not,
+**say so plainly and do not touch it** — killing a process you did not start is what took the
+user's own running game down once already (the `pkill -f` entry above). Report the owning
+directory and let him decide; the knob is in the other terminal, not this one.
+
+⚠️ **And note the asymmetry: `nice` only helps if everyone uses it.** A well-behaved session at
+`nice 15` yields to a badly-behaved one at `nice -4` every time. Being the polite process on a
+shared box means your own work is the first thing starved — budget wall-clock for that, and do not
+read a slow build as a broken build.

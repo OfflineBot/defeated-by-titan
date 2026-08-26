@@ -2352,3 +2352,227 @@ winch match in `src/player/locomotion.rs` (`RopeForceModel::Drive if anchored > 
 
 **Related:** `docs/FINDINGS.md` FIND-175 · FIND-172 · `Q-053` · `docs/NEXT.md` §1A req 7 ·
 `F-005` `F-006`
+
+---
+
+## Q-055 — ⛔ SUPERSEDED BY `Q-056`, and the assumption in it was never implemented
+
+> **Do not act on this entry.** It was written before the work landed and it describes a design
+> that was then not built: it assumed the `in_the_air` gate would be **deleted** so the pull
+> reaches the ground. That gate is **untouched**. What was built instead is a *forbid*, not a
+> *haul* — `ground_desired_on_a_rope` removes the outbound half of the walk — and its assumption
+> and rollback point live in **`Q-056`**. Kept for the record because it is what the reasoning
+> looked like before the measurement, not because any part of it is current.
+>
+> ⚠️ And `Q-056` was itself refuted on the day it was written: it argued the winch out of the
+> ground because it *"would have LIFTED A HOOKED PLAYER OFF THE FLOOR"*, and then a 250 m/s²
+> taut-brake was put on the ground instead, which lifts him at 11-16 m/s². **A hazard you
+> correctly name and then re-introduce through a different term is not a hazard you avoided.**
+
+### the original question, superseded
+
+**Asked 2026-08-26**, out of his *„wenn ich von seil weg gehe. also seil ist vorne und ich **laufe**
+zurück werde cih nicht ran gezogen"* (`docs/NEXT.md` §3D, R1).
+
+**The conflict is between two things he asked for, not between his wish and my taste.**
+
+`src/player/locomotion.rs:~1124` gates the always-on pull behind `in_the_air`:
+
+```rust
+RopeForceModel::Drive if anchored > 0 && (grant.reel_in || in_the_air) => { ... }
+```
+
+and the comment says why: *"a hooked player standing on the ground keeps his legs, and `Ctrl` is
+how he leaves it"*. **His word is „laufe" — walking, i.e. on the ground** — so R1 asks for exactly
+the gate that was put there on purpose.
+
+**Why it is not obviously safe to just delete the gate:**
+
+- **the hub is a walkable place** (`f072_the_hub_is_a_place_and_not_a_screen`). A pull that reaches
+  the ground means a player who fires a hook in the hub is dragged while trying to walk.
+- **ground locomotion owns the velocity there** — `FIND-037`, *"the legs cannot produce more than
+  the ground's top speed"*, and `f004_the_ground_does_not_write_the_velocity_of_a_player_the_rope_drags`
+  is the test that pins the handover. A second writer on the ground is the shape that test exists
+  to forbid.
+
+**ASSUMPTION the work continues under:** the pull reaches the ground, **but the legs win** — the
+ground keeps authority over the velocity and the pull becomes a lean, not a drag. Concretely: the
+always-on pull applies on the ground **only while the player is not producing ground movement of
+his own**, so walking backwards is *resisted* rather than *overridden*, and standing still slides
+you in.
+
+**Rollback point:** the `in_the_air` gate in `src/player/locomotion.rs`, one condition. Restoring
+it is a one-line revert and takes the ground behaviour back to what it was on 2026-08-26.
+
+**What would settle it in ten seconds of play:** fire a hook at a hub wall and try to walk away. If
+that feels broken, the answer is "flight only" and the fix is the revert above. If it feels like a
+tether, the assumption was right.
+
+**Related:** `docs/NEXT.md` §3D · `FIND-172` · `FIND-037` · `Q-050` · `F-005` `F-006`
+
+---
+
+## Q-056 — on the ground the rope **forbids** instead of **hauls**, and that supersedes Q-055's assumption (2026-08-26)
+
+**🔴 This replaces the `ASSUMPTION:` written in `Q-055`.** That one said the pull would reach the
+ground and *„become a lean, not a drag"* — applying while the player produces no ground movement of
+his own. **That is not what shipped, and Q-055's rollback point no longer describes the code.**
+Read this entry instead; `Q-055`'s question and its four *"why it is not obviously safe"* paragraphs
+still stand and are still worth answering.
+
+**What actually shipped, and why it is a third answer rather than either of the two Q-055 weighed:**
+
+The always-on pull keeps its `in_the_air` gate, untouched. What changed is one line in
+`ground_locomotion`: the walk the legs ask for has its **outbound half along the horizontal rope
+direction removed** before `ground_step` ever sees it
+(`player::locomotion::ground_desired_on_a_rope`).
+
+**ASSUMPTION the work continues under:** on the ground a rope is a **constraint and not a motor**.
+Walking *at* the anchor is the full `run_speed_m_s`, walking *around* it is the full
+`run_speed_m_s`, walking *away* is the one component that disappears. `S` with the rope ahead is a
+**stand**, not a slide-in.
+
+**Why this and not the pull:** `ground_locomotion` **assigns** `LinearVelocity.xz` every tick below
+the run speed (`ground_step` property 1: *"the result **is** `desired`"*). An acceleration handed to
+avian is therefore worth `a·Δt` = **0.57 m/s** at the idle pull's own ceiling and is overwritten
+before it can travel a metre — so *"let the pull reach the ground"* would have changed nothing
+horizontally and would only have **lifted a hooked player off the floor** wherever his anchor is
+above him (34.3 m/s² up against the file's 20 m/s² of gravity). That is the hub broken for a
+mechanic nobody would have felt.
+
+**What it costs, plainly:** a hooked player cannot back off. There is no *„das Seil spannen"* by
+walking backwards any more — the rope is already taut by construction (`Rope::rest_m` is a `min`
+over the distance ever reached). Releasing the hook is `Q`/`E` and one key.
+
+**Rollback point:** `src/player/locomotion.rs`, `ground_locomotion` — the
+`let desired = if rope_holds_the_legs && let Some(anchors) = …` block, five lines, and the
+`rope_holds_the_legs` line above the loop. Deleting both takes the ground back to 2026-08-26
+exactly. The gate is `vector.rope_force_model == Drive && vector.drive_idle_speed_m_s > 0.0`, so
+`sed -i 's/drive_idle_speed_m_s: 12.0/drive_idle_speed_m_s: 0.0/'` switches it off without a
+rebuild — the same key `tests/player.rs::without_the_always_on_pull` uses.
+
+**What would settle it in ten seconds of play:** hook a hub wall and try to walk away. If being
+unable to feels like a bug, the answer is the revert above. If it feels like a rope, keep it — and
+then the open question is whether the ground should also *drag*, which is the half this deliberately
+did not do.
+
+**Evidence:** `tests/player.rs::f176_walking_backwards_on_a_rope_does_not_walk_away_in_the_real_app`
+(30.00 → 30.00 m hooked, → 36.00 m with the hook released) ·
+`scripts/f176-pull.txt` (0.000 m/s hooked, 6.000 m/s released, 6 asserts, exit 0).
+
+### 🔴 AMENDED 2026-08-26 — this entry was right, and the round that wrote it did the thing it forbade
+
+The paragraph *„Why this and not the pull"* above argues the always-on winch **out of the ground**
+because an acceleration handed to avian there *"would only have **lifted a hooked player off the
+floor** wherever his anchor is above him (34.3 m/s² up against the file's 20 m/s² of gravity)"*.
+
+**A 250 m/s² brake was then put on the ground in the same round** — `rope_taut_brake`, in the `taut`
+arm of `air_control`, with no `in_flight` gate. Seven times the term this entry refused, and it did
+exactly what this entry said it would: hooked, standing, anchor above, one second of `A` took the
+player from **5.858 m/s at 0.313 m to 50.597 m/s at 15.035 m** (`FIND-182`, reproduced on the
+user's own binary). A tangential walk leaves its circle by 0.0075 m/s of forward-Euler residual and
+the brake read that as an escape.
+
+**So the entry's ASSUMPTION is unchanged and now actually holds:** on the ground the rope is a
+**constraint and not a motor**, and `ground_desired_on_a_rope` — which never leaves the XZ plane and
+therefore cannot lift anybody — is the **only** rope force a grounded player feels. The brake is
+gated on `in_flight`, which costs nothing: an anchored player who is not standing is `Tethered`, and
+`player::locomotion::in_flight` calls that flight by definition.
+
+**Rollback point, unchanged and now two lines wider:** the `let desired = if rope_holds_the_legs …`
+block in `ground_locomotion`, plus the `in_the_air &&` in the `taut` arm of `air_control`.
+
+**Evidence for the amendment:** `scripts/f176-pull.txt` ACT 2b — exit **1** before, **0** after,
+failing on `assert Height < 1 — measured 15.035` and `assert Speed < 7 — measured 50.597`.
+
+**⚠️ And two comments in `src/player/locomotion.rs` used to name `Q-052` as this entry's rollback
+point.** They name `Q-056` now (`FIND-184`). `src/data/mod.rs:665`'s `Q-052` is a different and
+correct reference.
+
+**Related:** `Q-055` · `Q-050` · `FIND-182` · `FIND-183` · `FIND-184` · `FIND-181` · `FIND-172` ·
+`FIND-037` · `docs/NEXT.md` §3D · `F-004` `F-005` `F-006`
+
+---
+
+## Q-057 — the rope is a ratchet now: how hard may it catch you, and does `min_rope_m` become a leash? (2026-08-26)
+
+**Asked out of** *„wenn das seil shcon eingezogen wurde soll es erstmal nicht länger werden!"*
+(`docs/NEXT.md` §3D R4).
+
+**What shipped:** `player::rope::Rope::rest_m` — recorded at the distance the hook bit at,
+`min`-ed with the distance actually reached on every tick, floored at `vector.min_rope_m`, and dead
+when the rope is (a re-fire gets the full length back). `sync_rope_length` publishes it as
+`RopeLength::lengths_m` under `Drive`, where that field used to be *"however far away he happens to
+be"*. `locomotion::rope_taut_brake` enforces it: beyond the rest length, the **outbound** half of
+the velocity is cancelled, at up to `vector.drive_accel_max_m_s2`.
+
+**Two decisions in it are yours.**
+
+**1. The catch is bounded, and the bound is borrowed.** A velocity-level constraint asks for
+`−v·r̂ / Δt`, which at 50 m/s outbound is **3000 m/s²** in one tick — a wall, and the same shape
+`FIND-035` measured at the other end of the rope. It is clamped to `drive_accel_max_m_s2` (250)
+instead, so 50 m/s of outbound flight is caught in 0.2 s over roughly 5 m of stretch: the rope
+gives, then holds.
+**ASSUMPTION:** 250 is right because it is already the number called *the player's weight*
+(`FIND-172`). **It is a borrowed key, not a chosen one** — see the RON diff in this round's report
+for the dedicated `vector.rope_catch_m_s2` that should replace it.
+**Rollback:** the `taut` arm of the `match` in `air_control`, six lines.
+
+**2. `min_rope_m` can become a leash, and nobody has played it.** The ratchet floors at
+`vector.min_rope_m` = 3 m. A player who arrives within 3 m of an anchor and then flies out is held
+on a 3 m rope until he lets go — a tether-ball. Under `Pendulum` that was the shipped behaviour
+(the joint's `limits.max` does the same thing), so it is not new; under `Drive` it never existed
+until today, and `Drive` is the model that ships.
+**ASSUMPTION:** parity with the pendulum is the safe default. **Rollback:** the same six lines, or
+raise the floor.
+
+**What would settle both in a minute of play:** reel all the way in on a roof edge, then boost away.
+If the catch feels like a wall, (1) is too high; if being stuck at 3 m feels wrong, (2) is the one to
+change.
+
+### 🔴 AMENDED 2026-08-26 — *„parity with the pendulum"* was false, and decision 2 has an ASSUMPTION now
+
+**The contested sentence is the one in decision 2:** *"Under `Pendulum` that was the shipped
+behaviour (the joint's `limits.max` does the same thing), so it is not new."* **It is not parity.**
+Under `Pendulum` the rope only shortens when the player holds `Ctrl`; under `Drive` the always-on
+pull shortens it **for free**. Measured 2026-08-26: one `W` at a 51.55 m anchor drove `Rope::rest_m`
+to the 3 m floor in **2.5 s**, and it arrives on its own after about **eight idle seconds**. After
+that, `W` pointed **away** from the anchor moved the player **0.00 m for 190 consecutive ticks** —
+`air_thrust`'s 10 m/s² answered by a 250 m/s² catch the instant the distance passed `rest_m` by one
+float. That is not a tight leash, it is an **absolute cage**, and it is reached without the player
+asking for it. The user's word for R4 is *„erstmal"*, not *„nie"*.
+
+**ASSUMPTION the work now continues under: the brake RESISTS, it does not FORBID.** A sustained
+deliberate drive away pays the rope out, slowly. `rope_taut_brake` cancels the outbound speed **in
+excess of `payout_m_s`** and leaves that much.
+
+**"Slowly", as a number: `payout_m_s` = 0.333 m/s, and the sustained payout is 0.500 m/s.**
+
+- **0.333 m/s** is `-gravity_m_s2 / simulation_hz` — the speed one tick of falling adds, i.e. the
+  smallest speed this simulation can tell apart from *not moving*. A player must lean on the key for
+  **three seconds to buy one metre**; a swing that goes momentarily outbound pays out under 7 cm
+  before the ratchet takes it back.
+- The **sustained** figure is `payout + a_out·dt`, because the brake and the thrust are two
+  accelerations summed into one tick: the brake lands the outbound speed on exactly `payout_m_s` and
+  `air_thrust`'s own 0.167 m/s of the same tick sits on top. At `player.air_accel_m_s2` = 10 that is
+  **0.500 m/s**; the most any term in this game could add is `vector.boost_m_s2 · dt` = 0.57 m/s
+  more. Measured: **1.492 m in three seconds of `W` away from a 3.00 m cage**, against **0.500 m**
+  with the payout deleted — and 0.500 m is itself only the one tick of thrust the brake is always
+  one tick behind.
+
+**⚠️ DERIVED, and it wants to be a key.** `assets/data/game.ron` is the main head's file, so the
+number is expressed out of two values already in it rather than added as a third. **The honest home
+for it is `vector.rope_payout_m_s`**, next to `drive_idle_speed_m_s`, with no `serde(default)`. Whoever
+owns `game.ron` should add it and delete the derivation; until then the derivation is one line.
+
+**Rollback point:** `src/player/locomotion.rs`, `air_control` — the `let payout_m_s = …` line, and
+the `payout_m_s` argument in the `taut` arm. Passing `0.0` there is bit-identical to the behaviour
+this entry described, and `tests/player.rs::q057_the_taut_rope_resists_a_drive_away_instead_of_forbidding_it`
+asserts both halves so the revert cannot be silent.
+
+**What would settle it in a minute of play:** reel all the way in on a roof edge and then try to
+walk out of the rope. If it feels like the rope is *giving*, it is right; if it feels like it is
+*slipping*, `payout_m_s` is too high; if it still feels like a wall, it is too low.
+
+**Related:** `Q-056` · `Q-050` · `FIND-182` · `FIND-183` · `FIND-184` · `FIND-181` · `FIND-172` ·
+`FIND-152` · `FIND-035` · `docs/NEXT.md` §3D R4 · `F-004` `F-005`

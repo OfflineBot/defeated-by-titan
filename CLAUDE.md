@@ -69,6 +69,23 @@ went unseen.**
    the cheap part: **before believing a measurement, delete the thing it is supposed to be
    measuring and check the number moves.** Same shape as `FIND-103` — *a test that asks the
    screen and the function the same question passes when both are wrong.*
+   🔴 **And the third shape, measured 2026-08-26: a fixture that passes ONE element cannot see a
+   TWO-element bug.** `rope_drive(to_anchors_m: &[Vec3], ...)` was given a per-arm guarantee —
+   *"the outbound half is projected out, so `target · r̂ >= 0` on every tick and for every key"* —
+   and implemented against `unit(Sum r̂_i)`, which bounds the **sum** of the distances and not
+   **each** of them. With two anchors 120° apart the player flies `40.00 -> 69.33 m` **away** from
+   an anchor: the exact symptom the round existed to fix. Of **21** `rope_drive(&[` call sites in
+   `tests/player.rs`, **exactly one passed two anchors — and it set `move_x = 0.0` and asserted
+   only magnitude.** `rope_taut_brake` was *never* called with more than one. The suite was
+   271 + 65 green and every number in the report was honest; **what it measured was not the whole
+   function.**
+   **This game has two hooks. Two is not an edge case here, it is the premise** — and the same trap
+   sits in every signature taking a slice, a `Vec` or an iterator. **When a function takes a
+   collection, a test that passes one element is a test of a different function.** Write the
+   `n = 2` case *first* and make the elements **disagree** — two anchors at 120°, two players
+   pulling opposite ways, two writers on one field. An aggregate (`Sum`, `mean`, `max`) is exactly
+   where a per-element promise goes to die, and it is invisible at `n = 1` because there the
+   aggregate **is** the element.
 6. **Nothing changes per frame, everything per second**, and nothing runs over all entities to
    answer a question about the ten meters in front of your nose.
    → [`docs/lessons/performance.md`](docs/lessons/performance.md)
