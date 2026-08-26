@@ -1456,3 +1456,50 @@ the one of the four that is a **new mechanic** rather than a fix.
 **Acceptance is one number, and it is the same for R1–R3:** with an anchor ahead and ANY of
 `W`, `A`, `D`, `A+W`, `D+W`, `S`, or no key at all, **the anchor distance must not increase** while
 the rope is taut. `S` may hold it flat; nothing may make it rise.
+
+## §3E — 🔴 YOU SPAWN IN THE HUB WITH YOUR BACK TO THE DOOR, and the file says otherwise
+
+**Measured 2026-08-27**, from the untouched cold-start frame (`--hub --offscreen`, no `look`, no
+key). This is the root of the user's *„von der lobby aus muss man auch neue missionen starten
+können!"* — not a missing feature, a missing **direction**.
+
+`assets/data/missions.ron:57` states the design intent:
+
+> *"`recruit` stands **straight ahead** of the spawn point — it is the door you find without
+> looking for it; the two harder ones stand off to [either side]"*
+
+**It is not ahead. It is behind.** Bearings from the spawn point at the default facing:
+
+| pad | position | bearing from the spawn look |
+|---|---|---|
+| `skirmish` / **recruit** | `(0, 0, 16)` | **180.0°** — dead behind |
+| `skirmish` / veteran | `(-9, 0, 16)` | 150.7° |
+| `skirmish` / elite | `(9, 0, 16)` | 209.3° |
+| `parcours` / recruit | `(-10, 0, -8)` | 51.3° — the only one on screen, and only its **corner** |
+
+The camera faces **−Z** by default; every skirmish pad sits at **+Z**. `parcours` is 51.3° off-axis
+against a half-FOV of 45.7° (`game.ron: camera.fov_deg` 60 vertical, 16:9), so **6120 px of one
+corner clipping the bottom-left edge is the entire visible evidence that this place has doors** —
+0.66 % of the frame.
+
+**So the file's own sentence has never been true**, and nothing has ever checked it: no test
+compares a pad's bearing against the spawn facing, and every script sets its own `look` before
+walking (`f175-loop.txt` uses `look 180 0`, which is exactly the 180° turn a player does not know
+to make).
+
+### The fix is one of two lines, and it is the main head's
+
+1. **Turn the spawn to face `+Z`** — one facing value, and `recruit` becomes what the file says it
+   is. ⚠️ Check what reads the default facing first: the scripts all set `look` explicitly, so the
+   blast radius should be small, but `f070-hub.txt` and `f177-door.txt` must be re-run.
+2. **Or move the skirmish pads to `−Z`** and keep the facing. More disruptive: `f175-loop`,
+   `f070-hub`, `f185-parcours` and `f072-breach` all walk to fixed coordinates.
+
+**(1) is the cheap one and it matches the sentence already in the file.** ⚠️ Do it **after**
+`F-177`'s round closes — it moves the geometry that round is measuring against, and a data change
+under a live measurement has already cost this project two matrices.
+
+⚠️ **And it does not replace `F-177`.** A visible door still needs to say what it is; turning the
+player around only means he can see the paint. Both, in this order.
+
+**Related:** `FIND-187` · `FIND-178` · `FIND-173` · `docs/QUESTIONS.md` Q-058 · `F-177` `F-175`

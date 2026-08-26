@@ -61,6 +61,12 @@ hud -> mission     # the objective line draws the kill counter and the verdict, 
                    #  a HUD has to be right in the frame it is drawn in, so it needs the
                    #  STATE (`KillTally`, `State<MissionPhase>`), not a TitanHit that
                    #  fired three ticks ago. Read-only — `mission` stays the one writer.
+                   #  ⭐ Since 2026-08-26 the same edge also carries `F-177`, the hub line
+                   #  (`hud::hub_prompt`): it reads `mission::hub::DeploymentPoint` — where
+                   #  the doors are and what they are called — for the same reason. A pad is
+                   #  world state that the player is looking at RIGHT NOW; a message saying
+                   #  "you entered a pad" arrives after the sentence had to be on screen.
+                   #  Read-only, and `missions.ron` stays the one source of the names.
 hud -> menu        # the HUD is the GAME's overlay and a menu is not the game: the crosshair
                    #  ran straight down the middle of the pause column, and the objective
                    #  counter, the gas bar, the blade pips and the Q/E markers drew over all
@@ -68,6 +74,14 @@ hud -> menu        # the HUD is the GAME's overlay and a menu is not the game: t
                    #  as the two lines above and no other: what is on screen has to be right in
                    #  the frame it is drawn in, so `hud::hide_while_a_menu_is_up` needs the
                    #  STATE (`menu::Screen`) and not an event that fired three ticks ago.
+                   #  ⭐ Since 2026-08-26 it also carries one CONSTANT, `menu::pause::MISSION_SELECT_ROW`,
+                   #  so `hud::hub_prompt`'s third line quotes the button the player will
+                   #  actually see instead of re-spelling it. A HUD that names a menu row has
+                   #  to break when that row is renamed, and sharing the string is what makes
+                   #  it break. Read-only, and `menu` stays the one writer of its own labels.
+                   #  ⚠️ `tests/domains.rs` compares EDGE PAIRS only and never reads these
+                   #  reasons, so a stale clause here rots silently — which is why both of
+                   #  these stars were added by hand and not by a failing test (`FIND-180`).
                    #  **Read-only, one comparison** — `menu` stays the one writer of `Screen`,
                    #  and this system writes only the HUD's own `Visibility`, never a
                    #  `Node.display`, which is what keeps the pixel-exact F-170/F-171 claims
