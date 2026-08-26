@@ -11,6 +11,16 @@
 # Expected today: RED at ACT 2 (`assert Speed < 2` reads ~6.03 — a hooked player walks away
 # from his anchor at full run speed). ⚠️ Do NOT "fix" it by loosening an assert.
 #
+# 🔴 **ACT 2b's two asserts (`height < 1`, `speed < 7`) are NOT a validated statement about the
+# tree, and must not be read as one.** They were written against the reverted build to catch its
+# ground elevator. Against HEAD they read `9.706 m` / `38.427 m/s`, and the cause is NOT isolated:
+# the same stance in ISOLATION holds both asserts (hook, then `key A`, nothing before it → 3
+# asserts checked, 0 failed). What differs here is that ACT 2 runs `key S 1.2` first and the hook
+# is `hook right 3.0` rather than `8.0` — and an adversary measured that changing only the hook
+# duration to 6.0 swings the last mark from `6.000 m/s @ 0.050 m` to `15.332 m/s @ 10.169 m`.
+# **So ACT 2b is currently measuring an accumulated state, not the property it names.** Whoever
+# builds attempt 3 should re-derive it from a clean stance rather than trusting these two lines.
+#
 #
 # The user, 2026-08-26, verbatim:
 #
