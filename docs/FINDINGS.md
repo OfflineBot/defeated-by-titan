@@ -11476,6 +11476,32 @@ instead of a new mechanic.
 ⚠️ **It is not free:** `FIND-152` removed the joint from `Drive` for a reason, and that reason
 has to be read and answered before this is attempted — **read it first.**
 
+**READ, 2026-08-26. The answer is: the precondition does not block attempt 3.** `FIND-152`'s
+sentence is
+
+> *"`Drive` builds no `DistanceJoint` at all. **Not `JointDisabled`**: `combat::hitstop::advance`
+> removes that marker from every joint of a body when a freeze lifts (`src/combat/hitstop.rs:295`),
+> so a rope disabled for a **model** reason would come back to life after the first hit the player
+> takes, mid-flight, and nothing would say why."*
+
+That is an argument against a **disabled** joint — a joint switched off by a marker that another
+domain silently strips. It says nothing against an **enabled** joint whose `limits.max` is the
+ratchet's `rest_m`, which is precisely what `Pendulum` already runs in this codebase. The hazard
+`FIND-152` names cannot fire on a joint that is never disabled.
+
+🔴 **The one real interaction to handle instead**, and it is not the one the finding warns about:
+`player::rope::shorten_ropes` queries `(&Rope, &mut DistanceJoint)`, and a jointless rope *simply
+does not match* — which is why `B-005`'s ratchet is inert under `Drive` today. **Give `Drive` a
+joint and `shorten_ropes` starts running on it**, so `Ctrl`'s reel and the new `rest_m` become two
+writers on one `limits.max`. **One field, one writer** (rule 3) has to be settled *before* the
+joint exists, not after — decide whether `rest_m` IS `limits.max` (one writer, the ratchet, and
+`Ctrl` simply lowers it) or whether the two are separate quantities.
+⚠️ And `f149_under_drive_a_hooked_player_who_presses_nothing_is_not_held_up_by_his_rope` asserts
+**2.499 m of fall against `Pendulum`'s 0.000** with the anchor straight overhead. A `limits.max`
+joint at the bite distance keeps that test green *only* while `rest_m` starts at the bite distance
+and the joint is a **maximum** and not a fixed length. **That test is the gate on attempt 3** — it
+is the one that tells a rope apart from a leash, and it already exists.
+
 ### What is NOT in doubt
 
 The user's requirement stands, and `scripts/f176-pull.txt` is kept **red on purpose** to say so.
