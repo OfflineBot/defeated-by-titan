@@ -86,6 +86,23 @@ went unseen.**
    pulling opposite ways, two writers on one field. An aggregate (`Sum`, `mean`, `max`) is exactly
    where a per-element promise goes to die, and it is invisible at `n = 1` because there the
    aggregate **is** the element.
+   🔴 **The fourth shape, and it has now hidden three rounds in a row: A SWEEP'S SIZE IS NOT ITS
+   COVERAGE — ask what it HOLDS CONSTANT.** `f177_no_stance_in_the_hub_names_a_door_and_opens_another`
+   swept **2 361 960 stances** and reported **0** lies while the shipped game lied deterministically
+   at `(0, 2, 0)` yaw 140, photographed. It varied `x`, `z` and `yaw`, and took its **height** from
+   one `stand()` call — and height is the single axis the rule under test depended on, because the
+   miss-distance was three-dimensional. It is also the axis the game moves the player along at the
+   exact moment he enters the hub (`open_hub` warps to `y = 2.0`, an 11.5-tick fall). **A million
+   samples of the wrong slice measure the slice, not the function.**
+   The same round earlier reported `0` for a defect its sweep skipped by construction:
+   `let Some(walked) = ... else { continue; }` dropped every stance where nothing starts — which
+   was **55.8 %** of the stances whose line promised something. **A `continue` in a sweep is a
+   silent exclusion, and it is invisible in the denominator.**
+   **So, before believing any sweep:** name every variable the function reads, then name every
+   variable the sweep varies. **The difference is the bug.** Write both lists into the test's own
+   comment — if a variable the code reads is not in the sweep, say why in that comment or add it.
+   And **count what you skipped**: a sweep that reports `0 of N` must also report how many samples
+   it never reached, or the `0` is arithmetic about the wrong set.
 6. **Nothing changes per frame, everything per second**, and nothing runs over all entities to
    answer a question about the ten meters in front of your nose.
    → [`docs/lessons/performance.md`](docs/lessons/performance.md)

@@ -1004,3 +1004,58 @@ same stand, same data, pinned old binary vs new: **exactly two clusters differ, 
 (a `BEST_PX` ring plus its `LABEL_PX` letter), 0.058 % of the frame, and the removed `Q`
 cluster's centre `(446.5, 345.5)` lands within 1 px of the ring measured above.
 `docs/images/f026-marks-square.png` · `docs/FINDINGS.md` FIND-178
+
+---
+
+## B-012 — `f175-loop` reported `11 of 19 asserts failed` twice, then went green nine times
+
+**Observed 2026-08-27 [offlinebot]** by an adversarial verifier who was measuring something else,
+and reported **because it touches evidence quality**, not because it can be attributed to any round.
+
+**What happened.** In one batch at 23:15 UTC, `scripts/f175-loop.txt` reported
+`11 of 19 asserts failed` and `scripts/f070-hub.txt` reported `15 of 42 asserts failed` — **each
+twice in a row, exit 1** — with the **MARK ticks identical to the green runs**. Nine subsequent
+`f175-loop` runs and a `f070-hub` run were green, including at load average 10.8 and immediately
+after a forced relink.
+
+**Why this matters more than a flaky test usually does.** `f175-loop` is the script the whole
+hub→sortie→debrief→hub ring rests on, and it is quoted as evidence in several `FIND-` entries and
+commit messages. **"19 asserts, exit 0" now has at least one observed counter-run on this machine.**
+Every claim resting on a single green run of it is weaker than it reads.
+
+⚠️ **The MARK ticks being identical is the interesting part.** The script reached the same places at
+the same ticks and then disagreed about what it found there — so this is not a timing drift in the
+script driver. Candidates, none checked:
+
+- **load-dependent physics** — the machine was shared with an `elderfell_3d` session at `nice -4`
+  (`docs/lessons/environment.md`), and `FixedUpdate` under starvation can run a different number of
+  steps per frame;
+- **`saves/player-1.ron`** — every run writes it and the path follows `CARGO_MANIFEST_DIR`, so runs
+  share a career profile that advances (159 → 164 sorties in one session). An adversary checked
+  this incidentally and found every assert matched to three decimals across profiles 0→4 and
+  159→164, so it is **unlikely but not excluded**;
+- **Bevy's nondeterministic startup ordering**, which the same adversary saw as the only difference
+  between otherwise byte-identical logs.
+
+### No repro yet, and that is the honest state
+
+**`CLAUDE.md` rule 5 says a bug without evidence is a rumor — this one has evidence but no repro**,
+so it is filed rather than fixed. **Do not "fix" it by re-running until it is green.**
+
+**What would settle it, cheapest first:**
+
+```bash
+# 1. does it survive repetition at all?
+for i in $(seq 1 40); do
+  ./target/debug/defeated_by_titan --headless --hub --script scripts/f175-loop.txt --ticks 1800 \
+    >/dev/null 2>&1; echo "$i:$?"
+done | grep -v ':0$'          # anything printed is a reproduction
+
+# 2. if it reproduces, does it stop reproducing with a fresh profile each run?
+# 3. and does it reproduce under artificial load (the elderfell case, nice -4)?
+```
+
+⚠️ **Run it against a PINNED binary** (`cp target/debug/defeated_by_titan $SCRATCH/dbt-pinned`) —
+a rebuild underneath a 40-run loop has destroyed two measurement series in this project already.
+
+**Related:** `docs/lessons/environment.md` (the shared machine) · `F-175` `F-177` · `FIND-188`
