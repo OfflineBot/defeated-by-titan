@@ -200,7 +200,44 @@ pub struct Game {
     pub vector: VectorTuning,
     pub camera: CameraTuning,
     pub world: WorldTuning,
+    /// `F-026` + `F-027` — how many anchor marks the HUD draws, how far it looks for them and
+    /// how often. See [`HudTuning`].
+    pub hud: HudTuning,
     pub net: NetTuning,
+}
+
+/// `game.ron: game.hud` — **the anchor marker field** (`F-026`, `F-027`, `F-030a`).
+///
+/// Every number here is a game value in `CLAUDE.md` rule 2's sense: it changes what the player
+/// sees and how much the frame costs, and none of it is a shape constant. The shape — a candidate
+/// ring is 9 px, and since `FIND-178` that is the only one the field draws — stays in
+/// `src/hud/anchor_marks.rs`, the same split `crosshair::shape_of` and `arm_aim::ArmShape` make.
+///
+/// **No `serde(default)` on any of them** (rule 2): a missing value crashes the load.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HudTuning {
+    /// `F-027`'s *„Maximal 12 gleichzeitig sichtbare Marker"*. It is also the number of nodes
+    /// `hud::anchor_marks::spawn_anchor_marks` puts down at `Startup`, so it is the ceiling the
+    /// future settings slider moves under, not a live value.
+    ///
+    /// **`0` switches the whole element off** — `F-027`'s *„inklusive vollstaendiger
+    /// Abschaltung"* — and it switches off the *search*, not only the drawing.
+    pub marker_max: u32,
+    /// `F-023`'s view cone, horizontal degrees. The design's default is 130.
+    pub marker_cone_h_deg: f32,
+    /// `F-023`'s view cone, vertical degrees. The design's default is 90.
+    pub marker_cone_v_deg: f32,
+    /// `F-030a`'s *Aktualisierungsrate* for the chosen **set**, in hertz. The projection of
+    /// each chosen point is recomputed every frame regardless — see the module header of
+    /// `src/hud/anchor_marks.rs` for why those are two different things.
+    pub marker_refresh_hz: f32,
+    /// `F-027`'s *„Marker verblassen mit Distanz"*: the opacity multiplier of a weak candidate
+    /// at the far end of `vector.hook_range_m`. `1.0` is no fade at all.
+    pub marker_far_opacity: f32,
+    /// `F-027`'s *„bei hoher Punktdichte ausgeduennt"*: two marks closer together than this
+    /// many **screen** pixels are one blob of ink, so the lower-scoring one is dropped.
+    pub marker_min_gap_px: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -74,6 +74,20 @@ hud -> menu        # the HUD is the GAME's overlay and a menu is not the game: t
                    #  true while playing. A message will not do: "is a menu up" is state, and
                    #  mirroring it into shared/ would give it a second writer for the sake of
                    #  one overlay.
+hud -> world       # `F-026`/`F-027`: the anchor marks. 1520 authored `hook.*` points are
+                   #  loaded and until today NOTHING outside `src/world/` read them
+                   #  (`docs/FINDINGS.md` FIND-160) — the candidate search, the markers and
+                   #  the density cap were tested functions with no caller, an authored system
+                   #  no player could feel. The HUD is the consumer. Same argument as the three
+                   #  lines above and no other: a marker has to be right in the frame it is
+                   #  drawn in, so it needs the STATE (`world::anchor::AnchorField`, a
+                   #  `Resource` built once at `Startup`) and not an event. **Read-only, and
+                   #  the scoring stays `world`'s** — `hud::anchor_marks` calls
+                   #  `AnchorField::candidates` and re-derives no score of its
+                   #  own, because a second scoring rule in the HUD is how a marker and a snap
+                   #  start disagreeing about which point is best. A message will not do: the
+                   #  field is 25 000 static points, and mirroring it into shared/ would copy
+                   #  a map into a second place.
 titan -> mission   # a titan's LIFETIME is his sortie: `titan::spawn_titan` hangs
                    #  `DespawnOnExit(MissionPhase::Active)` on the rig root, so the bodies of a
                    #  finished sortie stop existing in the same transition as its pending waves

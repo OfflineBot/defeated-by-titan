@@ -949,3 +949,58 @@ camera. Only the hook ray was asked and only the hook ray was answered.
 
 **Evidence:** `tests/vector_aiming.rs` 22/22 · `src/shared/layers.rs::
 a_hook_ray_sees_the_world_and_a_titan_but_never_a_player` · `docs/FINDINGS.md` FIND-131
+
+## B-011 — the anchor field lettered `Q` and `E` for a key that goes somewhere else — 🟧 FIXED 2026-08-26 (the letters withdrawn; `F-024` still owes the snap)
+
+**Reported by** the refutation round of 2026-08-26, against `F-026`'s own acceptance sentence:
+*„Ein Testspieler kann jederzeit ohne Nachdenken sagen, wohin Q und E ihn bringen wuerden."*
+
+`src/hud/anchor_marks.rs` drew the best candidate of each hemisphere — straight out of
+`world::AnchorField::best_of` — as a big cyan ring carrying the letter `Q` or `E`. **`F-024`,
+the feature that makes the hook fire at that candidate, is unbuilt.** `vector::hook::fire`
+takes `vector::aim`'s raycast target, a probe sweep over colliders that has never heard of
+`AnchorField` (`grep AnchorField src/` outside `src/world/` finds only the HUD file). So the
+letter and the rope named two different points, and both were on screen at once.
+
+**Repro** (pinned binary, the element's own stand, `scripts/f026-marks.txt` leg 1):
+
+```
+the game's log:  hook Left anchored on body 980 at (51.00, 1.65, -1.00), 14 m dead ahead
+that point projects to                              (640.00, 357.77)
+anchor_marks' `Q` ring was drawn at                 (445.93, 352.07)  -> 194.15 px = 17.30 deg
+arm_aim's `Q` — the one the key OBEYS — at          (639.50, 375.50)  -> within 0.5 px in x
+```
+
+and in the harness, one stand, one frame:
+
+```
+cargo test --test hud f026_exactly_one_q_and_one_e 2>&1 | grep -E 'glyphs at|test result'
+  the screen carries 2 `Q` glyphs at [Vec2(470.5, 362.0), Vec2(616.0, 425.0)]   (156.9 px apart)
+  and 2 `E` glyphs at                [Vec2(806.5, 362.0), Vec2(755.0, 638.0)]   (279.7 px apart)
+```
+
+**What was fixed, and what was NOT.** The *claim* came off, not the field. `MarkState::BestLeft`
+and `MarkState::BestRight`, the `Q`/`E` labels and the `BEST_PX` rings are gone; the honest half
+— the candidate field, `F-027`'s density cap and thinning, the distance fade, the off-switch,
+the anchored rope's filled disc, the 0.0 px placement — is untouched and still measured.
+**The snap itself is still missing**, and that is this entry's open half.
+
+⚠️ **The fix is deliberately NOT "move the ring onto the ray's target".** That would be
+`hud::arm_aim` drawn a second time and would put the anchor field back in the state FIND-160
+found it in — 1520 authored points with no consumer that means anything.
+
+**What earns the letters back:** `F-024` — wire `vector::hook::fire` to
+`AnchorField::best_of(.., Hemisphere::Left|Right, 1)`. The day `Q` really flies at the ring,
+`BestLeft`/`BestRight` and their labels come back with it and `F-026`'s acceptance sentence
+becomes answerable for the first time. Until then the element says *"there is an anchor here"*
+and nothing about a key.
+
+**Guards, both of which go red on one line** (`Text::new("Q")` added to the mark spawn):
+`tests/hud.rs::f026_exactly_one_q_and_one_e_are_on_the_screen_and_they_are_the_arms` (13 `Q`s,
+12 of them owned by nothing) and `tests/hud.rs::f026_the_field_marks_name_no_key`.
+
+**Evidence:** `tests/hud.rs` 53/53 · `--lib` 271/271 · before/after `--offscreen` frames at the
+same stand, same data, pinned old binary vs new: **exactly two clusters differ, each 20x32 px**
+(a `BEST_PX` ring plus its `LABEL_PX` letter), 0.058 % of the frame, and the removed `Q`
+cluster's centre `(446.5, 345.5)` lands within 1 px of the ring measured above.
+`docs/images/f026-marks-square.png` · `docs/FINDINGS.md` FIND-178

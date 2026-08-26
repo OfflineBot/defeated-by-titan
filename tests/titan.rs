@@ -3030,6 +3030,106 @@ fn f055_six_titans_on_one_player_stand_in_six_places() {
     );
 }
 
+/// ★ **`F-055`'s other half: a lone titan is a place, a crowded one is not.**
+///
+/// This is the mechanism that took `scripts/game-full.txt` from 24 green asserts to 19 without
+/// anybody touching it, and it is the general trap behind every scripted pass in this
+/// repository, so it gets a test rather than a comment.
+///
+/// The fixture is `game-full`'s ACT 3 reduced to its bones: a husk, and a player standing
+/// **1.88 m** from him — `|(-1.80, 0.55)|`, the file's own offset from the nape. Nothing else
+/// changes between the three runs.
+///
+/// * **Alone** the husk is planted. `perception`'s `target.distance_m` is *horizontal*
+///   (`Vec3::new(to.x, 0.0, to.z)`), so 1.88 m is inside his 6 m `attack_range_m`; `slot.of` is
+///   1, `brain::walk`'s `in_position` is therefore true and `pursuing` is false. He may turn on
+///   the spot, but the nape stays where it was put — which is the entire reason `q030-reach`
+///   and ACTS 2 and 4 of `game-full` work at all.
+/// * **With one more husk 38 m away** who has also noticed the player, `claim_slots` hands both
+///   of them a ring bearing. `slot.of` is 2, the husk's standing place moves out to
+///   `ring_radius_m(9.0, 6.0)` = `min(9.0, 6.0 * 0.9)` = 5.4 m, `at_slot` is false — and
+///   `pursuing` is now true **at 1.88 m**. He walks off the coordinate, and a 0.55 m pass aimed
+///   at where he was spawned meets empty street.
+/// * **The control, and it is the point of the test**: the same crowded run with
+///   `crowd.arrive_m` raised so that `at_slot` is true everywhere. The second husk is still
+///   there, `slot.of` is still 2 — only the reason to walk is gone, and the displacement
+///   collapses. Delete the thing you think you are measuring and check the number moves.
+///
+/// `detected` is asserted in **all three** runs. Without that this fixture would pass just as
+/// well on a husk who never noticed anybody and stood still out of blindness (`FIND-169`), and
+/// a green run would mean nothing.
+#[test]
+fn f055_a_lone_titan_holds_his_ground_and_a_crowded_one_walks_off_it() {
+    /// `(how far he drifted, slot.of, detected)`
+    fn run(a_second_husk: bool, arrive_m: Option<f32>) -> (f32, u32, bool) {
+        // 1.88 m in front of him — `spawn` faces a titan down −Z, so the player is dead ahead
+        // and the eye cannot be the thing under test.
+        let mut app =
+            app_with_pinned_player(Vec3::new(0.0, 2.0, -1.88), 0.0, MovementState::Grounded);
+        if let Some(a) = arrive_m {
+            app.world_mut().resource_mut::<GameData>().titans.crowd.arrive_m = a;
+        }
+        let spawned_at = Vec3::ZERO;
+        spawn(&mut app, "husk", spawned_at);
+        let near = the_titan(&mut app);
+        if a_second_husk {
+            // Far enough to be no part of the pass and near enough to be part of the crowd:
+            // 39.9 m from the player is inside the husk's `aggro_radius_m` of 45, which is the
+            // bound `in_the_crowd` uses. On +Z, so his spawn facing already points at the
+            // player and he acquires him the same way the near one does.
+            spawn(&mut app, "husk", Vec3::new(0.0, 0.0, 38.0));
+        }
+        // 120 ticks = 2.0 s, a little over the 0.90 s `game-full` leaves between the spawn and
+        // the slash — the FSM has to reach `Pursue` before a step is even possible.
+        ticks(&mut app, 120);
+        let now = app.world().get::<Transform>(near).expect("the husk still exists").translation;
+        let d = now - spawned_at;
+        let slot = *app.world().get::<CrowdSlot>(near).expect("every titan carries a CrowdSlot");
+        (Vec3::new(d.x, 0.0, d.z).length(), slot.of, awareness_of(&mut app, near).detected)
+    }
+
+    let (alone, alone_of, alone_saw) = run(false, None);
+    let (crowded, crowded_of, crowded_saw) = run(true, None);
+    let (control, control_of, control_saw) = run(true, Some(1000.0));
+
+    assert!(
+        alone_saw && crowded_saw && control_saw,
+        "the husk has to have NOTICED the player in all three runs, or this measures blindness \
+         and not the ring — alone {alone_saw}, crowded {crowded_saw}, control {control_saw}"
+    );
+    assert_eq!(alone_of, 1, "one husk on one player is a crowd of one");
+    assert_eq!(crowded_of, 2, "two husks on one player are a crowd of two");
+    assert_eq!(control_of, 2, "the control keeps both husks — only `arrive_m` moved");
+
+    assert!(
+        alone < 0.25,
+        "a husk alone with a player inside his reach must hold his ground; he drifted {alone:.2} m"
+    );
+    // The bar is not a taste: `cortex_radius_m` is how wide the nape is, so a drift bigger than
+    // it is a pass aimed at the spawn point that **cannot** reach the kill zone any more. It
+    // comes out of `titan.ron`, never out of this file.
+    let nape_m = data(&app_with_pinned_player(Vec3::ZERO, 0.0, MovementState::Grounded))
+        .titans
+        .kinds["husk"]
+        .cortex_radius_m;
+    assert!(
+        crowded > nape_m && crowded > alone + nape_m,
+        "a husk of a crowd walks to his slot even from inside his reach, and far enough that a \
+         pass aimed at where he was spawned misses the nape: he moved {crowded:.2} m against the \
+         lone husk's {alone:.2} m, and the nape is {nape_m:.2} m wide"
+    );
+    assert!(
+        control < 0.25,
+        "with `arrive_m` past his own distance the crowded husk is already in his slot and has \
+         nothing to walk to; he moved {control:.2} m"
+    );
+    println!(
+        "F-055 drift off the spawn point after 120 ticks: alone {alone:.2} m (of {alone_of}), \
+         crowded {crowded:.2} m (of {crowded_of}), crowded with arrive_m 1000 {control:.2} m \
+         (of {control_of}) — the nape is {nape_m:.2} m wide"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // F-054 — the level of detail
 // ---------------------------------------------------------------------------

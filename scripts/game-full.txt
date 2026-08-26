@@ -16,7 +16,19 @@
 #   t=898   cut titan 4 Cortex at 30.33 m/s   -> 3/3
 #   t=898   MISSION WON (decided_at_tick 898, deadline 19 800) — 3/3 kills, health 100
 #   headless: 24 asserts held, 1200 ticks, exit 0  (23 until 2026-08-19; the 24th is the
-#             invocation guard at line 95 and it is an ADDED claim, not a changed one)
+#             invocation guard at line 102 and it is an ADDED claim, not a changed one)
+#
+# ⚠️ **AND ON 2026-08-26 THE CROWD RING TOOK ACT 3 AWAY — RE-AIMED AGAIN, NOT LOOSENED.**
+# Five of the 24 were red because `F-055` gives a titan a standing place to walk to as soon as
+# **one other titan** has also noticed the player, and `missions.ron: tutorial` brings its own
+# husk to the fight. The whole diagnosis, its five controls and the positive control stand at
+# ACT 3 below and in `docs/FINDINGS.md` FIND-177. Three coordinates moved; no assert was touched.
+#
+# ⚠️ **AND THAT RE-AIM PARKED ACT 3 TEN METRES FROM ACT 4 — RE-AIMED ONCE MORE, TO z = -90.**
+# Green it made no difference; with `slash right 0.40` deleted from ACT 3 it made ACT 4 stop
+# cutting too (final kills **1**, where the acts-are-independent answer is **2**). The two
+# stands are now 50.99 m apart — `Senses::sight_range_m` is 45 m — and the fault-injection
+# control is at ACT 3 with its arithmetic. `docs/FINDINGS.md` FIND-179.
 #
 # ⚠️ **THE MAP CHANGED UNDER THIS FILE ON 2026-08-12 AND IT WAS RE-AIMED, NOT LOOSENED.**
 # `maps.ron: current` is `"ashgate"`; the graybox watchtower ACT 1 hooked and the lot ACT 4
@@ -90,7 +102,7 @@ key F3 0.05       # the overlay carries pos, tick, phase and kills into the PNG
 # tally to read and `Phase` reads 0. The flight, the map, the aiming and the roster were all
 # innocent — the command line was short one flag.
 #
-# The assert below is that trap made loud: it fires at line 95 instead of at line 292, and its
+# The assert below is that trap made loud: it fires at line 102 instead of at line 314, and its
 # message is the diagnosis. `Phase == 2` is `Active` (0 Briefing 1 Deploying 2 Active 3 Won
 # 4 Lost) and the tutorial is Active from tick 1.
 assert phase == 2 # ⚠️ RUN THIS AS `--headless --mission tutorial`. A 0.000 here means the
@@ -248,10 +260,100 @@ assert phase == 2       # one kill of three does not win it
 # ACT 3 — the second husk. 1/3 -> 2/3.
 # =========================================================================================
 
-warp 14.20 30.8 12.55
+# ⚠️ **RE-AIMED 2026-08-26: this act used to stand in the crowd.** It was `warp 14.20 30.8
+# 12.55` / `spawn titan husk 16 0 12`, and since `F-055` landed that is a place where the pass
+# cannot work — for a reason that has nothing to do with the geometry and everything to do with
+# who else is on the street.
+#
+# `missions.ron: tutorial` spawns **its own husk at `at_s: 0.0`**, and by tick 750 he has been
+# walking after the player for twelve seconds. At `x 14.2, z 12.55` he is still inside his own
+# `aggro_radius_m` (45 m, and `Senses::sight_range_m` is that same number) of the player and he
+# has noticed him — so `perception::in_the_crowd` is true for **both** him and the husk this act
+# just spawned, and `perception::claim_slots` hands each of them a ring bearing: `slot.of == 2`.
+#
+# That one number is the whole failure. `brain::walk` reads
+#
+#     in_position = slot.of <= 1 || slot.at_slot
+#     pursuing    = Pursue && seen && (distance_m > attack_range_m || !in_position)
+#
+# and `target.distance_m` is **horizontal** (`perception.rs`, `Vec3::new(to.x, 0.0, to.z)`), so
+# a player falling 1.88 m to the side of the nape is 1.88 m away, not 28 m. **Alone** the husk
+# is therefore inside his 6 m reach with `in_position` true, `pursuing` is false and he is
+# planted — which is exactly what ACTS 2 and 4 rely on and what `q030-reach.txt` proved. **In a
+# crowd of two** his standing place moves to `player + ring_offset` — `min(9.0, 6.0 * 0.9)` =
+# 5.4 m out — `at_slot` is false, and `pursuing` is true *even at 1.88 m*. He walks 2.7 m in the
+# 0.90 s before the slash and the 0.55 m pass meets empty street. The symptom is the one ACT 4
+# already documents for a bad position: **no `cut titan 3` line at all**.
+#
+# Measured, each control its own run (`--headless --mission tutorial`, 950 ticks):
+#   husk speed_m_s 3.0 -> 0.0        -> the cut lands, 774/777   (he cannot walk)
+#   crowd.arrive_m 1.0 -> 100.0      -> all three land            (at_slot always true)
+#   crowd.ring_radius_m 9.0 -> 0.0   -> still red                 (the slot is still 1.88 m off)
+#   tutorial wave at_s 0.0 removed   -> all three land            (no second crowd member)
+#   ACT 4's lonely husk given a neighbour 6 m away -> **ACT 4 fails too**
+# The last one is the positive control: crowding an act that works breaks it.
+#
+# **The game is right and this file was stale.** So the pass moves to the lonely southern
+# stretch ACT 4 already proved clear — `x -15..15` is street the whole way — and it goes to the
+# **far** end of it, at `z = -90`, for a second reason that is not the crowd at all.
+#
+# ⚠️ **RE-AIMED A SECOND TIME, 2026-08-26: `z = -40` COUPLED THIS ACT TO ACT 4.**
+# The first re-aim put this husk at `(10, 0, -40)` — **ten metres from ACT 4's** at
+# `(0, 0, -40)`. In the green run that is invisible, because a husk that dies leaves the crowd
+# and is dissolved 60 ticks later. It is not invisible the moment ACT 3 goes wrong, and that is
+# the case a regression test exists for. Measured, pinned binary, `slash right 0.40` deleted
+# from THIS act and nothing else changed:
+#
+#   ACT 3 husk at (10, 0, -40)  ->  final kills **1**   — ACT 4 never cuts at all
+#   ACT 3 husk at (10, 0, -90)  ->  final kills **2**   — `cut titan 4 Cortex` at 899
+#
+# A surviving ACT 3 husk at `z = -40` is 11.8 m from ACT 4's stand, so he is `detected` and
+# inside `Senses::sight_range_m` (45 m, = husk `aggro_radius_m`), `in_the_crowd` is true for
+# both him and ACT 4's husk, `slot.of == 2`, and ACT 4's husk walks off his nape exactly the way
+# this act's used to. **One broken act silenced the next one**, and the file would have reported
+# a single failure for two independent bugs.
+#
+# **The separation is 51.91 m and it is chosen against `sight_range_m`, not against taste:**
+#
+#   ACT 3 husk (10, 0, -90)  ->  ACT 4 stand (-1.80, -39.45):  dx 11.80, dz 50.55  =  51.91 m
+#   ACT 3 stand (8.20, -89.45) -> ACT 4 stand (-1.80, -39.45): dx 10.00, dz 50.00  =  50.99 m
+#
+# 51.91 - 45 = **6.91 m of margin**, and the only thing that eats it is the husk walking: he is
+# `speed_m_s` 3.0 and ACT 4 spends 0.92 s between its warp (t=843) and its slash (t=899), so he
+# can close at most 2.75 m. **49.16 m at the slash tick, 4.16 m clear of the ring.** He cannot
+# be half of ACT 4's crowd, whatever ACT 3 does.
+#
+# ⚠️ **And the terrace is why it is `z = -90` and not `z = +105`.** The obvious separation is
+# northwards up the lane, and it does not work: `world::map` terraces the ground in 42 m cells,
+# and the settled player height (`assert height`, one warp per stand, 3.0 s of fall each) reads
+#
+#   z = -90, -84, -60, -40 on x = 8.2  ->  **0.050**   (the y = 0 terrace, ACT 4's own)
+#   z = +70  ->  1.500      z = +105 -> 3.000      z = +140 -> 3.000
+#   z = -99  ->  30.000     (that is the top of the wall, `z <= -98`)
+#
+# A stand on a 1.5 m terrace is a 30.8 m drop onto ground 1.5 m high with the husk's feet at 0,
+# which is a different pass and a different tick. **The one direction that keeps the drop is
+# south**, and south runs out at the wall — so `z = -90` is very nearly the far end of the
+# usable ground, which is exactly why it is the right end of it to stand on.
+#
+# **The pass itself is untouched**: the 1.80 m of -X offset, the 0.55 m of cortex set-back, the
+# 30.8 m drop and every wait are ACT 2's, and the cut lands on the same tick arithmetic, t=774
+# torso, t=777 cortex. **No assert was touched.** Two coordinates moved; the 24 claims are the
+# ones from 2026-08-19.
+#
+# The positive control still fires here, so the aloneness is a fact about this stand and not a
+# rule that stopped applying: **giving this husk a neighbour at `(16, 0, -90)` deletes the
+# `cut titan 3` line entirely** — same symptom, same mechanism, 6 m away.
+# 🔴 **The standing lesson for every script in this repo:** a pass aimed at a fixed coordinate
+# is only valid while its titan is **alone** in the player's crowd — and **two acts that each
+# hold that on their own do not hold it together unless they are more than `sight_range_m`
+# apart.** `assert titans` cannot see either half: it read 2.000 in the failing run and 2.000
+# in the fixed one.
+
+warp 8.20 30.8 -89.45
 look 0 0
 wait 0.45
-spawn titan husk 16 0 12
+spawn titan husk 10 0 -90
 wait 0.90
 slash right 0.40
 wait 0.60

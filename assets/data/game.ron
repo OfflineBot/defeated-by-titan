@@ -994,6 +994,35 @@
         // surface. Without it every contact jitters, and the number lands as 1e-3 in Rust.
         collision_margin_m: 0.01,
     ),
+    // F-026 + F-027 + F-030a — the anchor marker field. The SHAPES (a ring is 9 px) stay in
+    // src/hud/anchor_marks.rs; what stands here is what changes the game.
+    hud: (
+        // F-027 verbatim: „Maximal 12 gleichzeitig sichtbare Marker". It is also the node count
+        // spawned at Startup. 0 = the whole element off, search included (F-027's
+        // „inklusive vollstaendiger Abschaltung").
+        marker_max: 12,
+        // F-023's Sichtkegel, „Standard 130 Grad horizontal, 90 Grad vertikal" — verbatim, and
+        // deliberately WIDER than camera.fov_deg (60): a mark is allowed to exist for a point
+        // that is off screen, and world_to_viewport is then the thing that declines to draw it.
+        // Narrowing this to the lens would make the two best candidates flip every time the
+        // player turns, because a point 31 deg off axis would stop being a candidate at all.
+        marker_cone_h_deg: 130.0,
+        marker_cone_v_deg: 90.0,
+        // F-030a verbatim: „10 Hz Aktualisierungsrate". The SET refreshes at 10 Hz; every
+        // chosen point is re-projected every frame, so the marks still glide (module header).
+        marker_refresh_hz: 10.0,
+        // F-027's „Marker verblassen mit Distanz". A candidate at the end of hook_range_m
+        // keeps a quarter of its opacity — visible enough to count, faint enough not to be
+        // mistaken for something you can reach comfortably. ⚠️ UNTUNED.
+        marker_far_opacity: 0.25,
+        // F-027's „bei hoher Punktdichte ausgeduennt", in SCREEN pixels, because the
+        // acceptance is a statement about the Bildflaeche. 24 px is well over two candidate
+        // rings (9 px each), so two marks never overlap each other's ink. ⚠️ UNTUNED.
+        // ⚠️ This used to be justified against a 20 px "best ring" that `FIND-178` deleted
+        // along with the `Q`/`E` claim it carried — the NUMBER was never re-derived, only its
+        // reason. 24 px may now be larger than it needs to be.
+        marker_min_gap_px: 24.0,
+    ),
     // The session (docs/multiplayer.md). ⚠️ UNTUNED, and two of the four are not free
     // inventions: slot_hold_s is the bible's own 120 s (F-158a), and the port is only a
     // default — --host <port> overrides it.
