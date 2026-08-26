@@ -295,3 +295,71 @@ assert height > 0.10  # inside the hall, at the back wall, in reach of both rack
 assert sharpness > 0.99  # ⭐ 9. HONED BACK. The blunt pair of ACT 6 is fresh again, and the two
 assert blades == 5    #     asserts together are the before/after this file did not have before
 mark f072-resupplied-after-the-sortie
+
+# =========================================================================================
+# ACT 8 — ⭐ THE YARD IS A PLACE: there is something out there, and it stops you.
+# =========================================================================================
+#
+# > „zudem gibt es auch noch keine lobby. mit lobby mein ich auch rumlaufen. also eher eine
+# > art hub." — the user, 2026-08-26.
+#
+# ACTs 1–7 above prove the hub WORKS. They cannot prove it is anywhere: every one of them
+# walks to a pad or to a rack, and until 2026-08-26 those were the only things in it —
+# measured, of `maps.ron: ashgate`'s 2871 blocks not one stood within 30 m of the spawn point.
+# `maps.ron: THE MUSTER YARD` is the answer and this act is the half of it a SCRIPT can see:
+# a player walking east across the yard runs into a handcart at (9, 0, -10) that was not there
+# the day before, and stops dead against it while still holding W.
+#
+# ⚠️ **Why a handcart and not the signpost or a lantern.** The cart is 4.8 m of collider across
+# the walk direction, so a capsule that arrives anywhere in the middle of it cannot slide round
+# the corner and keep going — the assert measures the prop and not the physics of a glancing
+# blow. `warp 0 2 -10` puts him on the cart's own z, dead centre of a 4.8 m face.
+#
+# The contact is arithmetic, not a guess: the cart spans x = 7.8..10.2 and the capsule radius
+# is 0.35, so it is 7.45 m out — 1.24 s at the ground speed. W is held for 3.0 s and the assert
+# is read at 2.5 s, i.e. **1.3 s of pushing into it**.
+
+warp 0 2 -10
+wait 1.0
+assert height < 0.10  # on the street apron south of the yard, 10 m out
+assert phase == 5     # still the hub — the warp crossed no pad
+
+look 270 0            # EAST, straight down the cart's own z line
+key W 3.0
+wait 2.5
+
+assert speed < 0.8    # ⭐ 10. HE IS STANDING AGAINST SOMETHING, with W still down. Before this
+                      #     act's props existed the same walk carried him 18 m at full speed.
+assert height < 0.10  # and against it, not on top of it — a 1.8 m cart is not a step
+assert phase == 5     # and nothing in the yard is a door: no pad fired on the way
+mark f156-the-yard-has-something-in-it
+
+# ⚠️ **The half-second below is load-bearing, and it cost a run to find.** `key` does not block,
+# so the asserts above are read at 2.5 s of a 3.0 s hold — and a `warp` issued while a movement
+# key is STILL DOWN does not put the player where it says: measured 2026-08-26, the ACT 9 walk
+# then started from the cart he was leaning on instead of from the spawn point, ran its full
+# 3.4 s at 6.0 m/s, and reached no pad at all. `assert phase == 2` was the only thing that
+# noticed. Let the key go first. (`docs/FINDINGS.md` FIND-174 — the cause is in `player/**`
+# and that was another hand's this round.)
+wait 1.0
+
+# =========================================================================================
+# ACT 9 — and after all of it, the doors still open. `FIND-162`'s lesson, walked.
+# =========================================================================================
+#
+# Thirty props went into the yard, and the one failure mode that has already happened here is
+# **silent**: two pads once stood behind the garrison hall's east wall and nothing said so
+# (`FIND-162`). `tests/world.rs::f156_every_deployment_pad_can_be_walked_to_from_the_hub_spawn_
+# in_a_straight_line` measures all six against every placed block; this is the same claim from
+# the player's side, on the one door a held W actually reaches — the recruit pad at z = 16.
+
+warp 0 2 0
+wait 1.0
+assert phase == 5
+
+look 180 0            # +Z, the same walk as ACT 3, after the yard was furnished
+key W 3.4
+wait 4.0
+
+assert phase == 2     # ⭐ 11. the recruit door still opens on a held W and nothing is in the way
+mark f156-the-door-still-opens

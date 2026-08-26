@@ -374,6 +374,72 @@
         // the 0.34 m canister a soldier carries on his rig, and scaling it 5.3x to fill a
         // depot bottle is the exact mistake `art.ron`'s header forbids.
         "gas_drum":       (source: Gltf("3d/glb/a-132-fass-stehend.glb"), scale: 1.0, attribution: None, animations: {}),
+
+        // ---- the six rows the HUB YARD brought (2026-08-26) -----------------------------
+        //
+        // > „zudem gibt es auch noch keine lobby. mit lobby mein ich auch rumlaufen. also eher
+        // > eine art hub." — the user, the SECOND time he has said the lobby is missing.
+        //
+        // The hub was a spawn point, six deployment circles and two supply racks: a
+        // configuration, not a place. `tests/world.rs::f156_the_hub_yard_is_furnished_and_not_
+        // an_empty_apron` is that sentence as a number — before these rows, **zero** of the
+        // 2871 blocks in Ashgate stood within 30 m of the point the player spawns on.
+        //
+        // ⚠️ **These six are the OTHER direction of the rule above.** The two rows before them
+        // are models found for boxes that already existed; these are boxes drawn in
+        // `maps.ron: ashgate` **at the file's own measured extent**, so the collider, the
+        // anchor surface and the mesh are one silhouette exactly and not within a tolerance.
+        // Every number in the comments is the file's own `hit.min`/`hit.max` pair, read with
+        // `.abs()` because it is a CORNER pair, and
+        // `tests/world.rs::f156_the_placed_dressing_catalogue_is_what_the_glb_files_really_
+        // measure` parses all eight files and falls over on a re-export that moves them.
+        //
+        // ⚠️ All six stand on their own origin (`hit.min.y = 0.000` on all six, measured), so
+        // they are hung on blocks through `ModelName::feet_y_m = -size.y/2` like every house —
+        // `FIND-132`, the bug where a model positioned by a box CENTRE floats by half its own
+        // height, is a bug that has been fixed once and must not come back.
+
+        // 3d/glb/a-088-laterne-strasse.glb — 0.64 x 4.20 x 0.64 m. `roof_slate`, the district's
+        // dark iron: a lantern is not stone and it is not wood. The kandelaber (1.80 x 4.50)
+        // and the mauer-laterne (0.62 x 2.10, a bracket that needs a wall to hang on) are the
+        // other two in the family and neither is a free-standing post.
+        "lamp_post":      (source: Gltf("3d/glb/a-088-laterne-strasse.glb"), scale: 1.0, attribution: None, animations: {}),
+
+        // 3d/glb/a-088-wegweiser.glb — 2.26 x 3.60 x 1.63 m. The one prop in the yard that is
+        // about information rather than decoration: it stands where a player has to choose
+        // which of six doors he is walking to. ⚠️ **It says nothing** — the drop has no text
+        // and this game has no world-space labels, so a signpost is a landmark, not a sign.
+        "signpost":       (source: Gltf("3d/glb/a-088-wegweiser.glb"), scale: 1.0, attribution: None, animations: {}),
+
+        // 3d/glb/a-133-banner-lang.glb — 1.24 x 4.20 x 0.68 m. Hung flat on the garrison
+        // facade, which is the only place its 1.24 m of collider costs nothing: a box wider
+        // than the pole you can see is a phantom obstacle everywhere except against a wall.
+        // (`a-133-fahne-mast` is 2.25 m wide for the same reason and is therefore NOT a row.)
+        "banner_long":    (source: Gltf("3d/glb/a-133-banner-lang.glb"), scale: 1.0, attribution: None, animations: {}),
+
+        // 3d/glb/a-131-karren-intakt.glb — 2.40 x 1.80 x 4.80 m. A depot without a cart in it
+        // is a depot nothing was ever delivered to. `-beschaedigt` and `-wrack` are the same
+        // cart broken and belong outside the wall, not in the yard the Vanguard musters in.
+        "hand_cart":      (source: Gltf("3d/glb/a-131-karren-intakt.glb"), scale: 1.0, attribution: None, animations: {}),
+
+        // 3d/glb/a-132-kiste-klein.glb — 0.60 m cubed. ⚠️ `a-132-sackstapel` (0.90 x 0.72 x
+        // 0.70) is deliberately NOT a row beside it: at 1.2x scale this crate covers the sack
+        // stack on both footprint axes, so the two would swap depending on the order of
+        // `world::map::PLACED_DRESSING`. One of the pair, and it is the one with the cleaner
+        // silhouette.
+        "crate_small":    (source: Gltf("3d/glb/a-132-kiste-klein.glb"), scale: 1.0, attribution: None, animations: {}),
+
+        // 3d/glb/a-136-npc-vanguard.glb — 0.68 x 1.81 x 0.62 m. **A figure that stands there,
+        // and that is the entire specification.** No path, no idle, no dialogue, no name: the
+        // drop ships zero animation clips (see the header), and anything that walks or talks
+        // would be a feature nobody has asked for wearing a model as a disguise.
+        //
+        // ⚠️ **This is NOT the `vanguard` row above and it does not unblock it.** That row is
+        // the *player's own body* and is blocked by a first-person/third-person decision that
+        // is the user's (the camera is a child of the player at eye height, so a body model on
+        // the local player is seen from inside). A sentry is a `maps.ron` block wearing a
+        // model, which is a thing this file can already do; the player is not.
+        "sentry":         (source: Gltf("3d/glb/a-136-npc-vanguard.glb"), scale: 1.0, attribution: None, animations: {}),
     },
     // How far a model's own `cortex` empty may sit from the height scale.ron names for that
     // size class before the loader shouts. 0.15 m is a fifth of a stone course — visible in

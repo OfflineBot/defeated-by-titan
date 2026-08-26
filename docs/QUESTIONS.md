@@ -2235,3 +2235,120 @@ the five it is the one that **keeps you alive**, and that argues for putting it 
 
 Related: `Q-033` · `Q-044` · `Q-046` · `Q-017` · `docs/FINDINGS.md` FIND-158 · `F-008` `F-009`
 `F-010` `F-017` `F-019`
+
+---
+
+## Q-053 — the drive has a weight now, and how much of it is yours. Also: mass is decoration in this game, and that is a decision (2026-08-26)
+
+**You said, one minute after asking for the always-on pull:**
+
+> *„zudem fühlt sich die gravitation nicht richtig an. oder die masse von dem character. es fühlt
+> sich zu leicht an."*
+
+**It is neither gravity nor the mass, and both were left alone.** `gravity_m_s2` is −20.0, twice
+the real number. Your body's avian mass is real but **nothing in this game reads it**: every force
+on the player goes through `Forces::apply_linear_acceleration`, which ignores mass on purpose so
+that a tuning number never has to be divided by a weight.
+
+What actually made you weightless is the shape of the rope drive. It chases a **velocity**:
+`a = (v* − v)/ramp`. Unbounded, that replaces your whole velocity in the same ~0.2 s **however
+fast you were going** — measured 167 ms to start a flight from nothing and **217 ms to turn a
+70 m/s flight around**. Nothing resists you, because nothing was ever asked to.
+
+**ASSUMPTION (the work continued under this):** the answer is a ceiling on the drive's
+acceleration, `game.ron: vector.drive_accel_max_m_s2 = 250.0`, and **not** a gravity or mass
+number. It is still 12.5 g — *„nicht so physics accurate aber mehr haptisch"* — but it is finite,
+so a big change of velocity now costs time in proportion to its size: **233 ms** to start a
+flight, **433 ms** to reverse one.
+
+**What it costs, in your numbers, and this is the part to feel:**
+
+| | before | now |
+|---|---|---|
+| ms to 90 % of the drive speed, from rest | 167 | **233** |
+| angle off the rope after a quarter second of `W`, from 40 m/s across it | 2.2° | **8.0°** |
+| ms to turn a full flight around | 217 | **433** |
+
+So: **it is a little slower to start and it bends a little more before it straightens, and in
+exchange it has weight.** If you want the old snap back, that is one line —
+`drive_accel_max_m_s2: 875.0` is the game you played on 2026-08-25 to the digit. If it is still
+too light, **lower** it (150 is noticeably heavy).
+
+**Roll back:** `assets/data/game.ron: vector.drive_accel_max_m_s2`. Nothing else has to move —
+the two test bands that were widened for it name the old number in their comment
+(`tests/player.rs::f153_the_drive_is_felt_inside_a_quarter_of_a_second`,
+`tests/vector_rope.rs::f153_under_drive_w_pulls_the_flight_onto_the_rope_line`).
+
+### The three other numbers of this round, in the same place
+
+- **`drive_speed_m_s: 70.0 → 52.0`** — *„man wird zu sehr rangezogen"*. This is how fast `W`
+  hauls you along the rope. `f006-drive` measures 52.940 m/s after 1.5 s of `W` against 70.90
+  before. **Bounded below by ~21 m/s** (a pendulum swing) and above by `max_speed_m_s: 75`.
+- **`drive_idle_speed_m_s: 12.0` / `drive_idle_ramp_s: 0.35`** — the always-on pull. 12 m/s of
+  closing speed, twice your run speed. ⚠️ **This is the one with a side effect worth knowing
+  about:** on a rope that points straight up, holding **nothing** now climbs at 5 m/s, free and
+  for ever. `Ctrl` is still 2.3× faster and it is what `F-005` is for, but *vertical is no longer
+  something you have to pay for*. If that is wrong, the fix is one number
+  (`drive_idle_ramp_s: 0.6` makes a vertical rope hold you exactly still instead of lifting you).
+- **`drive_steer_pull_fraction: 0.35`** — how much of the inward pull survives while `A`/`D` is
+  held. Lower = the sideways move wins harder. At 1.0 you get the 2026-08-25 game back, where the
+  rope won.
+
+**Related:** `docs/FINDINGS.md` FIND-172 · `Q-050` · `FIND-149` (amended: the *„wenn ich nichts
+drücke wird nicht rangezogen"* observation was deliberately not followed) · `FIND-153`
+
+---
+
+## Q-054 — on the ground, `S` now lifts you into the free pull. „Spannen" and „immer ranziehen" meet there, and the meeting is yours (2026-08-26)
+
+**Two of your own instructions, both still in force:**
+
+> *„mit s »spannt« man nur das seil!"* (2026-08-12, `docs/NEXT.md` §1A req 7 — and, after
+> playing it: *„aktuell wenn ich seil spanne und s drücke werde ich stark zum seil gezogen! das
+> soll nicht sein!"*)
+
+> *„ich will dass es immer ranzieht. nicht nur wenn ich w drücke!"* (2026-08-26, `FIND-172`)
+
+**They do not collide in the air.** They collide in exactly one place: **standing on the ground
+with a rope already taut.** Measured, tick by tick, on the market square with 81.2 m of rope up to
+the wall gallery (`docs/FINDINGS.md` FIND-175):
+
+```text
+  t0..t7   S walks you backwards at 6 m/s, away from the anchor. Grounded. That is „spannen".
+  t8       the taut rope answers, and it points 44° up: v.y 0.00 -> +1.86 m/s. You leave the ground.
+  t10      MovementState::Tethered — and the always-on pull now has you, at 12 m/s, for free.
+  t120     9.427 m closer to the anchor than you started.
+```
+
+**`S` itself is innocent** and that is measured, not argued: with the always-on pull deleted in one
+key, the same held `S` **opens** the rope by **+8.911 m** — he walks his 12 m backwards and stays
+`Grounded` for all 120 ticks. `A`, which never tautens the rope, reads `+0.882 m` with the pull and
+without it. So `S` never touches the rope's length. What drags you is your own *„immer ranziehen"*,
+one tick after the rope has picked you up off the street.
+
+**The question is only this: should tautening the rope on the ground be allowed to launch you?**
+
+1. **Leave it.** It is the shortest path from standing to flying that does not cost gas, and it is
+   arguably a *feature*: hook a roof, walk back, get lifted. `F-005` says `Ctrl` is how a standing
+   player leaves the ground; this makes `S` a second, free way.
+2. **The free pull only starts in the air you did not get there by rope tension** — i.e. gate the
+   idle winch on `MovementState::Airborne` from a jump or a fall, not from `Tethered`. More rule
+   than the game has anywhere else, and hard to see while playing.
+3. **The rope must not lift a grounded player at all** — the constraint clamps the body but never
+   adds upward velocity while `Grounded`. That deletes the 2026-08-12 symptom at the root and
+   costs the launch in option 1.
+
+**ASSUMPTION: option 1 — it stays as it is, and the test was rewritten to say so honestly.**
+`tests/input.rs::r7_s_tightens_the_rope_and_never_reels_it_in` (renamed from
+`…_does_not_close_the_distance`, because under the shipped game it *does* close it) now asserts
+that `S` is not a reel **on the axis `S` owns** — the run with the pull deleted — and keeps
+`with_s >= with_w` on the shipped one. Nothing in the game changed for this.
+
+**ROLLBACK if you want 2 or 3:** the only production line involved is the `in_the_air` arm of the
+winch match in `src/player/locomotion.rs` (`RopeForceModel::Drive if anchored > 0 && (grant.reel_in
+|| in_the_air)`). Narrow that predicate and the test's `with_s` number goes to roughly the
+`s_alone` it already measures (`+8.911 m`); the two asserts that would then need re-aiming are
+`with_s < s_alone - 5.0` and `with_s >= with_w`, both named in the test with the reason.
+
+**Related:** `docs/FINDINGS.md` FIND-175 · FIND-172 · `Q-053` · `docs/NEXT.md` §1A req 7 ·
+`F-005` `F-006`

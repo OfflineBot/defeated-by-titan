@@ -3435,3 +3435,233 @@ fn f031a_a_point_inside_another_block_is_unreachable_and_never_reaches_the_field
         "F-031a: a point placed in the middle of `outer` was not reported as buried"
     );
 }
+
+// =====================================================================================
+// F-156 — THE HUB IS A PLACE, AND EVERY DOOR IN IT CAN BE WALKED TO
+// =====================================================================================
+//
+// > *„zudem gibt es auch noch keine lobby. mit lobby mein ich auch rumlaufen. also eher eine
+// > art hub."* — the user, 2026-08-26, the **second** time he has said the lobby is missing.
+//
+// It exists. `missions.ron: hub` puts a spawn point, six deployment circles and two supply
+// stations on the map and `scripts/f070-hub.txt` walks all of it. What it did not have is
+// anything to walk **to**: 2871 blocks in the district and not one of them inside the yard the
+// player stands in. The four tests below are the two halves of the answer —
+// **there is something there** and **it does not stand in the way**.
+
+/// Half the width of the lane an approach needs, in metres, measured to a block's **edge**.
+///
+/// ⚠️ **Calibrated against what the map already had, not chosen.** The tightest existing pair
+/// is the veteran and elite approach against the two gantry columns at `(±14, 17.5)`: the
+/// straight line from the hub spawn point to `(∓9, 16)` passes a column footprint at exactly
+/// **1.00 m**, and those columns are the swing spine — they are not moving for a pad. So the
+/// floor is set below that and above nothing: `0.90` fails only for geometry that is genuinely
+/// *in the way*, and `FIND-162`'s two pads behind the garrison hall's east wall measure **0.00**
+/// on this scale. Everything this session placed keeps **2.0 m** by construction; the assert is
+/// the guard, not the design rule.
+const APPROACH_CLEARANCE_M: f32 = 0.90;
+
+/// A block is **in the way** only if it is tall enough to walk into and low enough to be under
+/// your head: top above [`STEP_OVER_M`], bottom below [`HEAD_ROOM_M`].
+///
+/// Without both halves this test measures the floor. The hall's own depot slab lies across the
+/// supply walk (top 0.15 m) and its door lintel hangs over it (bottom 4.5 m) — one is stepped
+/// on and the other is walked under, and neither has ever stopped anybody.
+const STEP_OVER_M: f32 = 0.50;
+const HEAD_ROOM_M: f32 = 1.80;
+
+/// The 2D distance from a segment to an axis-aligned box footprint, in metres. `0.0` means the
+/// segment crosses the box — which is what a wall in front of a door measures.
+fn segment_to_footprint_m(a: Vec2, b: Vec2, center: Vec2, half: Vec2) -> f32 {
+    // 64 samples over a segment that is never longer than the hub is wide (≈20 m) is a
+    // resolution of 0.3 m, and the quantity being measured is a metre-scale clearance. An
+    // exact segment/AABB routine would be the right thing in the game; in a test that runs
+    // eight segments against 215 boxes it would be code nobody checks.
+    let mut best = f32::MAX;
+    for i in 0..=64 {
+        let p = a.lerp(b, i as f32 / 64.0);
+        let d = ((p - center).abs() - half).max(Vec2::ZERO);
+        best = best.min(d.length());
+    }
+    best
+}
+
+/// The hand-placed blocks that a walking player can collide with, as (name, centre, half) in 2D.
+fn walkable_obstacles(plan: &[BlockPlan]) -> Vec<(String, Vec2, Vec2)> {
+    plan.iter()
+        .filter(|b| b.name.starts_with("block_"))
+        .filter(|b| {
+            let bottom = b.center_m.y - b.size_m.y * 0.5;
+            let top = b.center_m.y + b.size_m.y * 0.5;
+            top > STEP_OVER_M && bottom < HEAD_ROOM_M
+        })
+        .map(|b| {
+            (
+                b.name.clone(),
+                Vec2::new(b.center_m.x, b.center_m.z),
+                Vec2::new(b.size_m.x * 0.5, b.size_m.z * 0.5),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn f156_every_deployment_pad_can_be_walked_to_from_the_hub_spawn_in_a_straight_line() {
+    // 🔴 **`FIND-162`, and it is the reason this test exists at all.** Two of the six pads were
+    // placed at `(-18, 0, ±8)` — **behind the garrison hall's east wall**, which `maps.ron`
+    // places by hand at `x = -47..-15, |z| <= 13`. A player could not walk to two of the six
+    // doors of his own hub, and **nothing said so**: the pads were fine, the mission keys were
+    // fine, the `clear_radius_m` check was fine (and irrelevant — a clear radius answers the
+    // GENERATOR, never the level designer). The failure was silent until somebody flew there.
+    //
+    // This is that check, and it is written against the **files** and not against a list of
+    // coordinates: every pad in `missions.ron: hub.deployments`, from the spawn point in
+    // `missions.ron: hub.spawn_m`, against every hand-placed block in `maps.ron`. A pad added
+    // tomorrow is checked the day it is added, and so is a crate put down in front of an old one.
+    let d = data();
+    let plan = plan();
+    let hub = &d.missions.hub;
+    let spawn = Vec2::new(hub.spawn_m.0, hub.spawn_m.2);
+    let obstacles = walkable_obstacles(&plan);
+    assert!(
+        obstacles.len() > 50,
+        "only {} walkable placed blocks — is this ashgate, and did the filter eat the map?",
+        obstacles.len()
+    );
+    assert!(!hub.deployments.is_empty(), "missions.ron: hub has no deployment pads to walk to");
+
+    for pad in &hub.deployments {
+        let target = Vec2::new(pad.center_m.0, pad.center_m.2);
+        let (mut worst, mut culprit) = (f32::MAX, String::new());
+        for (name, center, half) in &obstacles {
+            let d = segment_to_footprint_m(spawn, target, *center, *half);
+            if d < worst {
+                worst = d;
+                culprit = name.clone();
+            }
+        }
+        eprintln!(
+            "{}/{} at {:?}: {:.2} m of daylight, tightest against {culprit}",
+            pad.mission, pad.difficulty, pad.center_m, worst
+        );
+        assert!(
+            worst >= APPROACH_CLEARANCE_M,
+            "the walk from the hub spawn to the {}/{} pad at {:?} passes {culprit} with \
+             {worst:.2} m of daylight — below {APPROACH_CLEARANCE_M} m that is a door the \
+             player cannot reach on foot, and nothing in the game says so (FIND-162)",
+            pad.mission,
+            pad.difficulty,
+            pad.center_m
+        );
+    }
+}
+
+#[test]
+fn f156_the_hub_yard_is_furnished_and_not_an_empty_apron() {
+    // 🔴 **The user has said the lobby is missing twice**, and the hub demonstrably exists both
+    // times. This test is what the sentence means when it is turned into a number: **how many
+    // things are there in the yard he stands in.**
+    //
+    // Before 2026-08-26 the answer was **zero** — the whole district is 2871 blocks and not one
+    // of them was inside 30 m of the hub spawn point except the garrison hall, the two gantry
+    // frames and the street under his feet. A spawn point, six circles and two racks is a
+    // *configuration*, not a place.
+    //
+    // ⚠️ It counts **dressed** blocks, not blocks. A cuboid is not furniture: the thing that
+    // makes a lantern a lantern is that `world::map::placed_dress_for` found it a file in the
+    // drop, and a row that quietly falls back to `Primitive` in `art.ron` puts the count
+    // straight back down.
+    let plan = plan();
+    let d = data();
+    let hub = &d.missions.hub;
+    let spawn = Vec3::new(hub.spawn_m.0, 0.0, hub.spawn_m.2);
+    let yard: Vec<&BlockPlan> = plan
+        .iter()
+        .filter(|b| b.name.starts_with("block_"))
+        .filter(|b| {
+            let p = Vec3::new(b.center_m.x, 0.0, b.center_m.z);
+            p.distance(spawn) <= 30.0
+        })
+        .collect();
+    let dressed: Vec<&&BlockPlan> = yard.iter().filter(|b| b.model.is_some()).collect();
+
+    let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();
+    for b in &dressed {
+        *kinds.entry(b.model.expect("filtered")).or_default() += 1;
+    }
+    eprintln!("{} placed blocks within 30 m of the hub spawn, {} of them dressed: {kinds:?}",
+        yard.len(), dressed.len());
+
+    assert!(
+        dressed.len() >= 20,
+        "only {} of the {} hand-placed blocks in the hub yard wear a model — the hub is a spawn \
+         point, six circles and two racks again, which is exactly what the user calls a missing \
+         lobby (`user-messages.md`, 2026-08-26)",
+        dressed.len(),
+        yard.len()
+    );
+    assert!(
+        kinds.len() >= 5,
+        "the yard is furnished out of only {} different models ({kinds:?}) — a place needs a \
+         vocabulary, not one prop repeated",
+        kinds.len()
+    );
+}
+
+#[test]
+fn f156_the_placed_dressing_catalogue_is_what_the_glb_files_really_measure() {
+    // The same guard `f003_the_dressing_catalogue_...` puts on the three house rows, for the
+    // table that dresses **hand-placed** blocks. Every number in `world::map::PLACED_DRESSING`
+    // is copied out of a `.glb`'s own `hit.min`/`hit.max` pair, and a copied number rots
+    // silently: a re-export that makes the signpost 20 cm wider leaves the map placing a box
+    // the model does not fill, and nothing about that has a picture.
+    let files = [
+        ("market_stall", "a-087-marktstand-zeltdach.glb"),
+        ("gas_drum", "a-132-fass-stehend.glb"),
+        ("lamp_post", "a-088-laterne-strasse.glb"),
+        ("signpost", "a-088-wegweiser.glb"),
+        ("banner_long", "a-133-banner-lang.glb"),
+        ("hand_cart", "a-131-karren-intakt.glb"),
+        ("crate_small", "a-132-kiste-klein.glb"),
+        ("sentry", "a-136-npc-vanguard.glb"),
+    ];
+    let table = defeated_by_titan::world::map::PLACED_DRESSING;
+    assert_eq!(table.len(), files.len(), "a PLACED_DRESSING row was added without a file beside it");
+    for (i, (name, _color, authored_m)) in table.iter().enumerate() {
+        let (want, file) = files[i];
+        assert_eq!(*name, want, "PLACED_DRESSING row {i} is {name:?}, the file list says {want:?}");
+        let measured = glb_extent_m(file);
+        let claimed = Vec3::new(authored_m[0], authored_m[1], authored_m[2]);
+        assert!(
+            (measured - claimed).abs().max_element() < 0.011,
+            "{name}: {file} measures {measured:?} m, PLACED_DRESSING says {claimed:?} — the map \
+             would place a box the model does not fill"
+        );
+    }
+}
+
+#[test]
+fn f156_no_dressing_row_can_be_mistaken_for_another_one() {
+    // `world::map::placed_dress_for` returns the **first** row that matches, so two rows whose
+    // (colour, proportion) windows overlap make the table order-dependent — and the box that
+    // was drawn for a lantern silently grows a market awning. With two rows that was obvious by
+    // inspection; with nine it is not, and this is the assertion that keeps it out.
+    //
+    // It also fixes what "the box for this row" means: the model brought to its authored height
+    // and **rounded to the centimetre**, which is exactly how `maps.ron` writes a size.
+    let d = data();
+    for (name, color, authored_m) in defeated_by_titan::world::map::PLACED_DRESSING {
+        let nominal = Vec3::new(
+            (authored_m[0] * 100.0).round() / 100.0,
+            (authored_m[1] * 100.0).round() / 100.0,
+            (authored_m[2] * 100.0).round() / 100.0,
+        );
+        let got = defeated_by_titan::world::map::placed_dress_for(&d, nominal, color);
+        assert_eq!(
+            got,
+            Some(name),
+            "a {color} box of {nominal:?} m is the {name:?} model's own silhouette and the \
+             catalogue answers {got:?} — the rows are not telling each other apart"
+        );
+    }
+}

@@ -1454,35 +1454,29 @@ fn f175_the_title_lets_no_frame_of_the_game_run() {
     assert_eq!(cursor(&app, window).grab_mode, CursorGrabMode::None, "the pointer was taken");
 }
 
-/// *Play* opens the **mission list**, and the hub is one *Back* behind it.
+/// *Play* puts the player **in the hub, on his feet** — pointer taken, clock running, no plate.
 ///
-/// ⚠️ **Rewritten on 2026-08-24.** It used to assert that *New Game* handed the pointer straight
-/// to the hub, which is exactly the routing hole `F-175` closed: the lobby existed, worked, and
-/// could not be reached by anybody who had not learnt that `Esc` was hiding it. What the old
-/// test guarded — the pointer, the clock, the plate — is guarded here on the door the lobby's
-/// *Back* row now opens, so nothing was given up in the move.
+/// 🔴 **Rewritten twice, and the second rewrite undoes the first.** On 2026-08-24 this test was
+/// changed to assert that *Play* opens the mission list, on the premise that the list was
+/// otherwise unreachable from a cold start. **That premise was false** — `menu::pause` has
+/// offered *Mission select* outside a sortie since 2026-08-18, one day before the title screen
+/// existed, so the cold-start route was always `Play → hub → Esc → Mission select`
+/// (`f175_the_mission_list_is_still_reachable_from_the_hub` is that route as an assertion).
+/// What the change actually did was take the walking away: *„mit lobby mein ich auch rumlaufen.
+/// also eher eine art hub"* (the user, 2026-08-26). `docs/FINDINGS.md` FIND-173.
 #[test]
-fn f175_play_opens_the_mission_list_and_the_hub_is_behind_it() {
+fn f175_play_puts_the_player_in_the_hub_and_not_behind_a_plate() {
     use defeated_by_titan::shared::Tick;
 
     let (mut app, window) = app_at_the_front_door();
     press(&mut app, &TitleAction::NewGame);
     app.update();
 
-    assert_eq!(*app.world().resource::<Screen>(), Screen::Lobby);
-    assert_eq!(plates(&mut app), vec![Screen::Lobby], "the title plate stayed up under the lobby");
-    let c = cursor(&app, window);
-    assert_eq!(c.grab_mode, CursorGrabMode::None, "the lobby is clicked, so the pointer is free");
-    assert!(c.visible);
-    assert!(
-        app.world().resource::<Time<Virtual>>().is_paused(),
-        "the game ran underneath the mission list"
+    assert_eq!(
+        *app.world().resource::<Screen>(),
+        Screen::Playing,
+        "*Play* has to hand the player the world he stands in, not another plate"
     );
-
-    // And the hub is the second click, through the lobby's own way out.
-    press(&mut app, &LobbyAction::Back);
-    app.update();
-    assert_eq!(*app.world().resource::<Screen>(), Screen::Playing);
     assert!(plates(&mut app).is_empty(), "a plate stayed up over the running game");
 
     let c = cursor(&app, window);
@@ -2038,21 +2032,53 @@ fn win_it(app: &mut App) {
     }
 }
 
-/// ★ **The routing hole.** The lobby exists, works, and could not be reached from a cold start.
+/// ★ **The half that must not be lost twice**: from a cold start, the mission list is still
+/// two presses away — and the way to it never went through the title screen.
+///
+/// 🔴 This test used to assert the opposite (`f175_the_front_door_leads_to_the_mission_list`,
+/// 2026-08-24) on a premise it did not check: that *Play* was the only door into
+/// `Screen::Lobby`. It was not. `menu::pause` pushes *Mission select* in its **not in a sortie**
+/// branch — i.e. exactly when the player is standing in the hub — and has done since
+/// 2026-08-18, one day before the title screen was built. Measured, not remembered:
+/// `git show 9e51c16:src/menu/pause.rs`.
+///
+/// So the walk below is the whole cold start: `Play` (1 click) → hub → `Esc` (1 key) →
+/// *Mission select* (2nd click). `F-175`'s *"every screen in at most two clicks"* holds.
 #[test]
-fn f175_the_front_door_leads_to_the_mission_list() {
+fn f175_the_mission_list_is_still_reachable_from_the_hub() {
     let start = Cli::from_args(["--headless".to_string()]);
     assert!(start.title, "a run that names no door has to open on the title screen");
 
-    let (mut app, _window) = windowed(start);
+    let (mut app, window) = windowed(start);
     assert_eq!(*app.world().resource::<Screen>(), Screen::Title);
+
     press(&mut app, &TitleAction::NewGame);
     assert_eq!(
         *app.world().resource::<Screen>(),
+        Screen::Playing,
+        "*Play* has to put him in the hub — that is the place he says is missing"
+    );
+
+    press_esc(&mut app, window);
+    assert_eq!(*app.world().resource::<Screen>(), Screen::Paused);
+    let mut actions = app.world_mut().query::<&PauseAction>();
+    let rows: Vec<PauseAction> = actions.iter(app.world()).copied().collect();
+    assert!(
+        rows.contains(&PauseAction::Lobby),
+        "the pause screen in the hub has to offer the mission list, and offers {rows:?}"
+    );
+
+    press(&mut app, &PauseAction::Lobby);
+    app.update();
+    assert_eq!(
+        *app.world().resource::<Screen>(),
         Screen::Lobby,
-        "the first row of the title screen has to open the mission list — until today it \
-         dropped the player into the hub and the lobby was reachable only from the pause \
-         menu of a game that was already running"
+        "two clicks and a key from a cold start have to reach the mission list"
+    );
+    let lines = plate_text(&mut app);
+    assert!(
+        lines.iter().any(|l| l.contains("Pick a sortie")),
+        "the plate that came up is not the mission list: {lines:?}"
     );
 }
 

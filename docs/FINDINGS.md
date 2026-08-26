@@ -1663,7 +1663,7 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 
 ## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
 
-**NEXT FREE ID: FIND-172.** Claim it by bumping this line in the same `cat >>` that
+**NEXT FREE ID: FIND-176.** Claim it by bumping this line in the same `cat >>` that
 appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
 file separately and both read the same maximum. One line beats a 108 kB grep.
  — and append with `>>`, never with an edit tool
@@ -9051,6 +9051,18 @@ Related: FIND-147 (the reach change) · FIND-113 · FIND-112 · FIND-073 · FIND
 
 ## FIND-149 — the reference is a DRIVE, not a pendulum: no input, no pull
 
+> 🔴 **AMENDED 2026-08-26 — the "no input, no pull" half is DELIBERATELY NOT FOLLOWED in our
+> game. The observation below still stands; it is an observation of *Attack on Titan
+> Revolution*, and our rope now does the opposite.** The user, after playing our drive:
+> *„es ist zu aggressiv. also man wird zu sehr rangezogen. … **ich will dass es immer ranzieht.
+> nicht nur wenn ich w drücke!**"* His instruction for THIS game beats his own earlier report of
+> another one (`CLAUDE.md`, *„seine Anweisung schlägt seine eigene frühere Zahl"*), so
+> `vector.drive_idle_speed_m_s` is an always-on pull on every hooked player in flight, and
+> `tests/vector_rope.rs::f149_under_drive_a_hooked_player_who_presses_nothing_is_not_held_up_by_his_rope`
+> was **replaced** by `f172_..._is_pulled_in_anyway`, which asserts the reverse.
+> **Whoever "restores" the old behaviour thinking this is a regression is undoing an
+> instruction.** → `FIND-172`.
+
 **Stage:** 🟨 — first-hand observation by the user, played on Windows 2026-08-23. No number, no
 measurement, nobody has attacked it.
 
@@ -10501,3 +10513,334 @@ own doc comment:
 numbers written into the prose above the test are stale, and the relationship they were quoted to
 demonstrate is unchanged. `tests/mission.rs` belonged to another hand this round, so this is
 reported rather than edited.
+
+---
+
+## FIND-173 — *„es fehlt die lobby"* was read as a routing hole **twice**, and the routing hole never existed
+
+**Measured 2026-08-26**, out of the git history and not out of memory.
+
+The user has now said the lobby is missing twice. The first time (2026-08-23, *„es fehlt die
+lobby"*) it was diagnosed as **unreachability**: the mission-list screen `Screen::Lobby` existed
+and, so the argument in `src/menu/title.rs` went, *"the only door into it was the pause screen
+inside a game that was already running"*. On 2026-08-24 the title screen's *Play* was therefore
+re-pointed from `Screen::Playing` to `Screen::Lobby` (`d63f672`).
+
+**The premise is false and one command shows it:**
+
+```bash
+git show 9e51c16:src/menu/pause.rs | grep -n 'Mission select'
+#  53:            buttons.push((PauseAction::Lobby, "Mission select".to_string()));
+```
+
+`9e51c16` is the parent of the commit that made the change — i.e. the state of the tree the
+argument was written against. That `push` sits in `spawn_pause_screen`'s **`else` branch**, the
+one that runs when `in_a_sortie` is false, which is exactly *standing in the hub*. It has been
+there since `e0a2682`, **2026-08-18** — one day *before* the title screen was built at all
+(`862e234`, 2026-08-19). So from the day the front door existed, the cold-start route to the
+mission list was:
+
+```text
+  Play (1 click) → hub → Esc (1 key) → Mission select (2nd click)
+```
+
+**There was no hole.** What the "fix" actually did was take away the only thing the sentence was
+about: pressing *Play* used to put the player on his feet in a 3D place, and afterwards it put
+him behind a plate. The second message says so in as many words:
+
+> *„zudem gibt es auch noch keine lobby. mit lobby mein ich auch rumlaufen. also eher eine art
+> hub."*
+
+**Reversed on 2026-08-26.** `Play` writes `Screen::Playing` again;
+`tests/menu.rs::f175_play_puts_the_player_in_the_hub_and_not_behind_a_plate` and
+`::f175_the_mission_list_is_still_reachable_from_the_hub` are the two halves, and the second one
+walks the full cold start (title → Play → `Esc` → *Mission select* → the plate that says
+*"Pick a sortie"*), so the list cannot be lost a second time by anybody fixing this again.
+
+### The lesson, and it is not about menus
+
+🔴 **A one-line report is a symptom, and the first plausible cause is not a diagnosis.** The
+2026-08-24 round produced a coherent story (*"the lobby is unreachable"*), wrote it into three
+doc headers as fact, and never ran the one `git show` that would have refuted it — while the
+repository already held the counter-evidence in a file the same round was editing. `CLAUDE.md`'s
+rule *"a symptom he reports is real even when the code looks right — find the cause; do not
+explain the symptom away"* has a second half this round adds:
+**explaining the symptom with something you can check, and then not checking it, is the same
+mistake wearing evidence.** The cheap habit: before acting on *"X is unreachable"*, grep for
+every writer of X.
+
+⚠️ **And the correction cost more than the check would have.** The rollback point was one line;
+the hub the user actually wanted (`F-156`, the muster yard) is 30 blocks, six `art.ron` rows and
+four tests, and none of that work was reachable while the diagnosis pointed at routing.
+
+---
+
+## FIND-174 — a `warp` issued while a movement key is still held does not put the player where it says
+
+**Measured 2026-08-26** while writing `scripts/f070-hub.txt` ACT 9. Reproduced three times,
+cause **not** chased: `src/player/**` was another hand's this round.
+
+```text
+  key W 3.0        # `key` does not block — the hold runs to t+3.0
+  wait 2.5
+  warp 0 2 0       # issued at t+2.5, i.e. 0.5 s INSIDE the hold
+  wait 1.0
+  look 180 0
+  key W 3.4        # 20 m of intent at a pad 16 m away
+  wait 4.0
+  assert phase == 2   # ✗ measured 5.000 — no pad ever fired
+```
+
+The second walk is not slow and is not blocked: `assert speed` reads **6.000 m/s at +1.0 s and
+at +2.0 s** and 0 at +3.5 s, which is the key being released on schedule after a clean 20 m run.
+It simply ran **from the wrong place** — the player was still leaning on the handcart at
+`(9, 0, -10)` that the first `key W` had walked him into. Moving the `warp` to *after* the hold
+ends (one extra `wait 1.0`) makes the identical walk deploy at 2.9 m from the pad, every time.
+
+⚠️ **What makes this expensive is that nothing shouts.** The warp logs nothing, the walk looks
+perfect in every metric a script can read, and the only assert that noticed was the one about a
+*consequence* (`phase == 2`). A script that had asserted `speed > 4` after the walk would have
+passed while measuring a player 15 m from where the author thought he was — the same shape as
+`CLAUDE.md` rule 5's chain-test trap.
+
+**Two things to do with this:**
+
+1. **For script authors, now:** never `warp` inside a `key` hold. `f070-hub.txt` carries the
+   rule at the point where it bit.
+2. **For whoever owns `player/**` next:** find out whether `WarpPlayer` is being applied and
+   then overwritten by the same tick's locomotion, or dropped. Repro above, 30 seconds headless.
+   This is a **real** hazard and not only a scripting one — `mission::hub::open_hub` warps every
+   player home at the end of a sortie, and a player who happens to be holding `W` at that moment
+   is in exactly this case.
+
+
+---
+
+## FIND-172 — it always pulls, `A`/`D` beat the pull, and the drive finally has a weight
+
+**Stage:** 🟧 — every number below is measured off one build, every fix has a test that goes red
+when the fix is taken out again in one line (all four were broken together and six tests fell
+over), `scripts/f006-drive.txt` runs 10 of 10 with exit 0 and `scripts/f175-loop.txt` 19 of 19
+with exit 0. **Not played by a human**, so ✅ is his.
+
+The user, 2026-08-26, after playing the drive `FIND-153` shipped:
+
+> *„es ist zu aggressiv. also man wird zu sehr rangezogen. und folgendes soll verändert werden.
+> ich will dass es immer ranzieht. nicht nur wenn ich w drücke! nur wenn ich a oder d drücke dass
+> es stärker zur seite geht als rangezogen!"*
+
+and one minute later:
+
+> *„zudem fühlt sich die gravitation nicht richtig an. oder die masse von dem character. es fühlt
+> sich zu leicht an."*
+
+### 🔴 The two messages are ONE fact, and it is not gravity
+
+`gravity_m_s2` is **−20.0**, already twice the real number, and nothing about it is wrong.
+`rope_drive` is a **velocity** drive: `a = (v* − v)/τ`, unbounded. Measured on the shipped
+`(70, 0.08)`:
+
+| | before | after |
+|---|---|---|
+| hardest pull, from rest, `W` on a rope straight ahead | **875 m/s²** (44 g) | **250 m/s²** |
+| ticks to 90 % of the drive speed **from rest** | 10 (167 ms) | 14 (233 ms) |
+| ticks to 90 % of it **while flying the other way at that speed** | **13** (217 ms) | **26** (433 ms) |
+
+**Read the last two rows together: before, turning a full flight around cost 30 % more than
+starting from nothing.** A body whose whole velocity can be replaced in a fixed ~3τ *however fast
+it was going* has no inertia — and `Forces::apply_linear_acceleration` ignores mass on purpose
+(`src/player/locomotion.rs:45`), so nothing else in the game supplies any either. **The player's
+avian mass is decoration; no force in this game reads it.** That is *„zu leicht"*, and it is the
+same sentence as *„zu aggressiv"* read from the other end: a pull that overrides weight *is* a
+pull that feels too strong.
+
+**So no gravity number was touched and no mass was invented.** One key, `drive_accel_max_m_s2`,
+puts a ceiling on the chase. A **small** correction stays under it and the ramp alone governs it,
+so `FIND-153`'s *„man macht was und man merkt es auch direkt"* survives; a **large** change of
+velocity now costs time in proportion to its size. → `Q-053`, because how much weight is his call.
+
+### The three angles he asked about — rope against velocity, 0.5 s, gravity on
+
+`tests/vector_rope.rs::f172_the_three_angles_between_the_rope_and_the_flight`:
+
+| held | angle to the rope | what it means |
+|---|---|---|
+| **nothing** | **50.5°** | pulled in *and* falling. Control: with `drive_idle_speed_m_s` at 0 the same run reads **92.7°** — a pure fall |
+| **`W`** | **1.9°** | *„ziemlich gerade"*, unchanged |
+| **`D`** | **85.6°** | *„stärker zur seite als rangezogen"* |
+
+and the hard case, `W` **and** `D` together on the pure function: **46.31 m/s across the rope
+against 23.41 m/s along it, 63.2° off the line** — against **27.55 vs 64.28 (23.2°)** before.
+
+### The three changes, and the one that is a trap
+
+1. **It always pulls.** `player::locomotion::rope_winch` now runs for every hooked player *in
+   flight*, key or no key, at `drive_idle_speed_m_s` (12 m/s) with `drive_idle_ramp_s` (0.35 s).
+   **One term with `Ctrl`, not two**: the winch is a *floor* under the closing speed, so the two
+   speeds compose as a `max` — holding `Ctrl` is bit for bit what `FIND-159` measured, which is
+   why `scripts/game-full.txt`'s ACT 1 still puts the player on the same 35 m roof. It is
+   **free** (no key, nothing to bill) and `f172_..._is_pulled_in_anyway` asserts the empty-tank
+   run is identical to the full one. Measured hanging on a 20 m vertical rope with nothing held
+   for 0.5 s: **climbed 1.310 m** where the same run used to fall ~2.5 m.
+   On a vertical rope the settled climb is `idle − |g|·ramp` = **5 m/s**, under `run_speed_m_s`
+   (6) on purpose: hanging still must not beat walking.
+2. **`A`/`D` beat the pull — with `drive_steer_pull_fraction` (0.35), not with a bigger lateral.**
+   🔴 **Raising `drive_lateral_m_s` past `drive_speed_m_s` CANNOT do this and is a trap.** The two
+   share one `clamp_length_max`, so a lateral above the speed makes the clamp eat the forward
+   axis: a 52 m/s flight that presses `D` would come out at 28.8 m/s. That is `Q-050`'s brake in a
+   new key. What is scaled is the rope axis's **weight in the blend**, and the blend is
+   renormalised back to the speed `W` alone would have chased — **steering turns the drive, it
+   never slows it** (measured: `W`+`D` 53.363 m/s against `W` alone at 52.940).
+3. **The pull is weaker: `drive_speed_m_s` 70 → 52, `drive_lateral_m_s` 30 → 36**, and
+   `drive_ramp_s` is **untouched at 0.08** — that key is his own instruction from `FIND-153`
+   (*„man merkt es auch direkt"*) and the aggression he is complaining about is the ceiling and
+   the speed, not the onset.
+
+### 🔴 And the trap the round actually fell into: a winch hauls hardest OUTBOUND
+
+`rope_winch`'s property 1 — *"it can never brake"* — is a statement about the **closing speed**,
+not about the acceleration. A player flying *away* from his anchor is a gap of `speed + |v|`, and
+divided by a ramp that is a haul nobody sized. With the always-on pull unbounded,
+`tests/player.rs::f004_the_ground_does_not_write_the_velocity_of_a_player_the_rope_drags` handed a
+player to the rope at **29.67 m/s** and found him at **0.00 m/s** half a second later. The bound
+is derived and not a fifth key: the idle pull may never haul harder than it does off a standing
+start, `idle/ramp` = **34.3 m/s²**. ⚠️ **`Ctrl` is deliberately exempt** (`f32::INFINITY`) —
+`FIND-159` measured its whole contribution to the flagship run and a ceiling there would move a
+number nobody asked about.
+
+Two `F-004` fixtures now switch the pull off explicitly (`without_the_always_on_pull`), the way
+`kill_gravity` is used elsewhere: `F-004`'s claim is about the **state machine** — that the ground
+stops writing a roped body's velocity, and that an anchored hook does not glue a standing player —
+and a fixture that anchors on the graybox ground and then runs 15 m away from it measures the new
+force instead of the claim.
+
+### What was re-run, and what is red for somebody else's reason
+
+`--lib` **271** · `--test player` **59** · `--test vector_rope` **21** · `--test vector_gas` 26 ·
+`--test vector_boost` 28 · `--test data` 56 — all green.
+`scripts/f006-drive.txt` **10 of 10, exit 0** (re-banded: ACT 1 asserts `speed > 22` now, and the
+control run with `drive_idle_speed_m_s: 0.001` reads **21.334** against the pull's **24.217**).
+`scripts/f175-loop.txt` **19 of 19, exit 0**.
+⚠️ **`scripts/game-full.txt` is 5 of 24 red and NOT this round's**: every failure is `Kills` or
+`Phase` in ACT 2/3, and a control run with the drive reverted to `(70, 30, 1e9, 1.0, 0.001)` —
+which is the pre-`FIND-172` model bit for bit — **reproduces the same 5**. ACT 1's flight and the
+35 m roof still hold.
+⚠️ `scripts/f003-ashgate.txt` **7 of 40**, the same count as before this round and deliberately
+**not re-aimed**; the numbers moved toward their bands (`line 101` reads 30.493 against 32.5, up
+from 13.2).
+⚠️ `tests/world.rs::f156_the_hub_yard_is_furnished_and_not_an_empty_apron` is red and belongs to
+**another agent who is writing in this tree right now** — `assets/data/{art,maps}.ron`,
+`src/world/map.rs`, `src/menu/*`, `tests/{menu,world}.rs` and `scripts/f070-hub.txt` were all
+dirty and none of them are this job's. Every measurement above therefore ran against a binary
+that includes their in-flight map work, which is exactly the hazard `CLAUDE.md` records — the
+drive numbers are pure-function and script measurements and are unaffected, but `game-full`'s
+kills may well be theirs.
+
+Related: `FIND-149` (amended) · `FIND-152` · `FIND-153` · `FIND-159` · `Q-050` · `Q-053` ·
+`F-004` `F-005` `F-006` · `src/player/locomotion.rs::rope_drive` / `::rope_winch` ·
+`assets/data/game.ron: vector.drive_*` · `scripts/f006-drive.txt`
+
+---
+
+## FIND-175 — the two red tests after the drive round: one titan was **not** blind, and `S` is **not** a reel
+
+**Measured 2026-08-26**, one build, both tests broken again in one line afterwards and both went
+red again. **Neither red had the cause the round gate assumed**, and they are two different
+problems that happen to share one key: `vector.drive_idle_speed_m_s`, `FIND-172`'s always-on pull.
+
+### 1 · `tests/titan.rs::f029_…_rides_him` — the husk saw him from the first tick
+
+The gate read this as another instance of `FIND-169` (*after `F-051`, a fixture that puts the
+player where a titan cannot perceive him is measuring blindness*). **It is not.** Instrumented on
+the failing run, at the moment the test reads `walked 0.000 m`:
+
+```text
+  awareness  saw=true  heard=0.853  level=1.000  detected=true  noise=34.80 m
+  titan      pos (-0.87, 60.0, -1.27)   state Windup
+  player     pos (-5.68, 63.0, -0.13)   ← started at (-14.0, 63.0, 0.0)
+```
+
+He was never blind, and could not have been: the husk's `sight_half_angle_deg` is **110**, so a
+player standing **abeam** of him (90° off the forward) is inside the eye — and a *tethered*
+player carries `(quiet_m 8 + speed × 1.2) × rope_factor 1.6` = **34.8 m** of noise against the
+husk's 35 m ear. Both senses fired.
+
+**The husk stopped walking because the player arrived.** `hold_the_player` parks him weightless
+and still — one insert, and that was enough until `FIND-172`. Since then a hooked player *in
+flight* is winched at `drive_idle_speed_m_s` (12 m/s) with no key held, and in this fixture the
+anchor **is the titan**. The pull hauled the player from x = −14.0 to **x = −5.675 in two
+seconds**, i.e. to **4.94 m** of a husk whose `attack_range_m` is 6.0, so `brain::decide` left
+`Pursue` for `Windup` and the carrier stood still — which is exactly what the test's own
+precondition assert is for, and it fired.
+
+**Fix:** `a_titan_in_the_crosshair` now switches the always-on pull off, the same way and for the
+same reason `FIND-172` did it in the two `F-004` fixtures. `F-029`'s claim is that *an anchor
+rides a moving carrier*; a fixture that flies the player into the carrier measures the winch.
+With the line: **the husk walks 2.910 m in the measured second and the tip follows to within
+0.0389 m**, against a bound of one tick of his own travel (0.0582 m). Without it: `0.000 m`, red.
+
+⚠️ **The habit `FIND-169` asked for needs a second half.** *"Before measuring what a titan does,
+check he can perceive the player"* is right — and here it would have sent the round the wrong way,
+because he could. **Check `Awareness::detected` AND the distance he ended at.** A titan who
+notices you and one who has already reached you both read `walked 0.000`.
+
+### 2 · `tests/input.rs::r7_…` — `S` tautens, the taut rope lifts, and the lift starts the winch
+
+Renamed `r7_s_held_on_a_taut_rope_does_not_close_the_distance` →
+**`r7_s_tightens_the_rope_and_never_reels_it_in`**, because under the shipped game `S` *does*
+close the distance and the old name became false. (`FIND-083` quotes the old name.)
+
+The collision the gate named is real — *„mit s »spannt« man nur das seil"* (2026-08-12) against
+*„ich will dass es immer ranzieht"* (2026-08-26) — but **its mechanism is not a reel and it is not
+the idle pull acting on `S`.** Per-tick, holding `S` on the 81.207 m rope from the market square:
+
+```text
+  t0..t7   S walks backwards at 6.00 m/s, +Z, Grounded, in_flight=false — AWAY from the anchor.
+           That is „spannen": the key stretches the rope and touches its length not at all.
+  t8       v.y jumps 0.00 -> +1.86 m/s. The taut rope answers, and it points 44° UP.
+  t10      MovementState::Tethered -> in_flight true -> the free winch takes over for 110 ticks.
+```
+
+**Every one of the three steps is something the user asked for.** The deletion control says the
+same thing in one number — `drive_idle_speed_m_s` set to 0 and nothing else changed:
+
+```text
+  120 ticks on a taut rope        with the pull    pull deleted
+    nothing held ................   +0.000 m         +0.000 m    ← the winch is NOT free on the ground
+    S ..........................    -9.427 m         +8.911 m    ← S OPENS the rope by 12 m of walking
+    A ..........................    +0.882 m         +0.882 m    ← never tautens it, never lifts, Grounded 120/120
+    W ..........................   -11.414 m        -11.333 m
+    Ctrl (the real REEL_IN) .....        —          -49.595 m    ← what a reel looks like in this fixture
+```
+
+**What the test claimed, what it claims now, why it is the same claim.** It claimed
+`with_s > −0.56 m` — one hundredth of `reel_speed_m_s × 2 s` — i.e. *`S` is not a reel*, measured
+against a floor of zero. It now applies **the same derived bound to the number `S` owns**
+(`s_alone`, the run with the pull deleted) and adds three lines the old floor could not carry:
+`s_alone > +5.0` (it does not merely fail to reel, it **opens** the rope), `with_s < s_alone − 5.0`
+(the deletion control has to move the number, or the key removed is not the one closing the rope),
+and `reel < −20.0` (**the fixture can see a reel** — `CLAUDE.md` rule 5's addendum: an assertion
+that cannot tell the two apart passes when both are wrong). The `with_s >= with_a` half was
+dropped: `A` is now the only key here that never leaves the ground, so it is not a comparable
+measurement; it is asserted separately as *the key that does not tauten the rope does not close it
+either*. `with_s >= with_w` survives untouched.
+
+**So `S` still means exactly what he asked for, and the answer to *„does `S` still do anything"*
+is yes** — it is the only key in the set that moves you *away* from the anchor, and it is the one
+that puts the rope under tension. What is new is that a taut rope on the ground now **lifts you
+into** the free winch. Not mine to settle → `docs/QUESTIONS.md` **Q-054**, with the assumption and
+the one-line rollback.
+
+### What was re-run
+
+`--lib` **271** · `--test input` **26** · `--test player` **59** · `--test titan` **37** ·
+`--test vector_rope` **21** — all green.
+`scripts/f006-drive.txt` **10 of 10, exit 0** · `scripts/f175-loop.txt --hub --ticks 1800`
+**19 of 19, exit 0**.
+⚠️ `scripts/game-full.txt --mission tutorial` **5 of 24 red, exit 1 — unchanged and not this
+round's**: the same five `Kills`/`Phase` lines in ACT 2/3 (259, 289, 290, 309, 310) that `FIND-172`
+reproduced with the drive reverted bit for bit. **The count did not move.**
+
+Related: `FIND-169` (corrected in scope) · `FIND-172` · `FIND-083` (quotes the old test name) ·
+`Q-054` · `F-029` · `docs/NEXT.md` §1A req 7 · `tests/titan.rs::a_titan_in_the_crosshair` ·
+`tests/input.rs::r7_s_tightens_the_rope_and_never_reels_it_in`

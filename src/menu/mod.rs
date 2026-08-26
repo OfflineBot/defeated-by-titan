@@ -6,16 +6,24 @@
 //! Five screens since then, and one key that walks between them:
 //!
 //! ```text
-//!   Title ──Play──► Lobby ──Deploy──► Playing ──Esc──► Paused ──Settings──► Settings
-//!     │              │  ▲                │                │                    │
-//!     └─Settings─────┘  │             (a sortie ends)     └─Mission select─────┤
-//!                       │                │                                     │
-//!                       └─Esc/To the lobby──── Debrief ◄──hub.verdict_s────────┘
+//!   Title ──Play──► Playing ──Esc──► Paused ──Settings──► Settings
+//!     │               ▲   ▲            │                     │
+//!     └─Settings──────┼───┼────────────┴─Mission select─┐    │
+//!                     │   │                             ▼    │
+//!             (a pad) │   └──Back/Deploy─────────────── Lobby ◄──┐
+//!                     │                                  ▲       │
+//!             (a sortie ends) ──hub.verdict_s──► Debrief ─┘  Esc/To the lobby
 //! ```
 //!
 //! **The loop closes at the debrief**, and that is what was missing until 2026-08-24: the
-//! verdict was a log line, the hub took over three seconds later, and the mission list could
-//! only be reached from inside a running game (`title.rs`, `debrief.rs`).
+//! verdict was a log line and the hub took over three seconds later (`debrief.rs`).
+//!
+//! 🔴 **What was NOT missing was a door into the lobby**, and believing otherwise cost the hub.
+//! `Play` was pointed at `Screen::Lobby` on 2026-08-24 to "close a routing hole"; the hole was
+//! not there — `pause.rs` has offered *Mission select* in the hub since 2026-08-18 — and what
+//! the change did instead was put a plate where the user wanted to be standing
+//! (*„mit lobby mein ich auch rumlaufen"*, 2026-08-26). Reversed the same day; `title.rs` and
+//! `docs/FINDINGS.md` FIND-173 carry the argument, and `tests/menu.rs` carries both halves.
 //!
 //! ## The title screen is the door, and it is the **first** thing a launch shows
 //!
@@ -412,9 +420,10 @@ pub enum Screen {
     /// **The main lobby** — pick a mission, pick a difficulty, deploy. The screen the walk-in
     /// deployment pads never had, and it starts the same sortie they do.
     ///
-    /// Since 2026-08-24 it is also where the **title screen** leads: it was built, it worked,
-    /// and the only route into it was the pause menu of a game that was already running
-    /// (`title.rs`).
+    /// ⚠️ **The title screen does NOT lead here** — it leads to the hub, which is a place.
+    /// It did between 2026-08-24 and 2026-08-26, on the belief that this screen was otherwise
+    /// unreachable; it never was (`pause.rs`, *Mission select*, since 2026-08-18). See
+    /// `title.rs` and `FIND-173`.
     Lobby,
     /// **The debrief** — what the sortie just did, and the way back to the lobby.
     ///

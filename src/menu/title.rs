@@ -11,21 +11,47 @@
 //! cannot do anything is the registry rule of §4 in menu form — do not add a row nothing can
 //! spawn. The first of the four is called *Play* in the backlog and it is called *Play* here.
 //!
-//! ## Where *Play* goes, and why it is not the hub
+//! ## Where *Play* goes: **the hub, on your feet** — and the premise that was wrong
 //!
-//! ⚠️ **Changed on 2026-08-24, and it closed a routing hole.** *New Game* used to hand the
-//! screen straight to the game, which is the hub — and the **lobby was then unreachable from a
-//! cold start**. It existed, it worked, it listed every mission in `missions.ron`, and the only
-//! door into it was the pause screen *inside a game that was already running*: a player who
-//! never pressed `Esc` never saw that this game has a mission list at all
-//! (the user, 2026-08-23: *„es fehlt die lobby"* — it did not, the way to it did).
+//! 🔴 **Reversed on 2026-08-26, and what it reverses is a diagnosis, not a preference.**
 //!
-//! So *Play* opens [`Screen::Lobby`](super::Screen::Lobby). The hub is still standing behind
-//! it, stopped, exactly as before; the lobby's *Back* is the hub floor, one click further.
-//! Nothing about the second door had to be answered twice, because the lobby's *Back* was
-//! already "hand the screen to the game" and that is the same sentence from either route.
-//! `F-175`'s acceptance — *every screen in at most two clicks* — is met by the shorter path,
-//! not the longer one: mission list 1, hub 2, settings 1.
+//! From 2026-08-24 this row opened [`Screen::Lobby`](super::Screen::Lobby), the mission-list
+//! plate, and the header here argued that it *closed a routing hole*: *"the lobby was
+//! unreachable from a cold start … the only door into it was the pause screen inside a game
+//! that was already running"*. The user had said *„es fehlt die lobby"* and that was read as a
+//! routing complaint.
+//!
+//! ⚠️ **The routing hole never existed, and it is one `git show` away.** `menu::pause` has
+//! offered *Mission select* → `Screen::Lobby` **outside a sortie** — i.e. standing in the hub —
+//! since `e0a2682` on **2026-08-18**, one day *before* the title screen was built at all
+//! (`git show 9e51c16:src/menu/pause.rs`, the commit this row's old behaviour was written on,
+//! already carries `buttons.push((PauseAction::Lobby, "Mission select"))` in the not-in-a-sortie
+//! branch). So the cold-start path was **Play → hub → `Esc` → Mission select**: one click, one
+//! key, one click. What was actually missing was never a door.
+//!
+//! What he meant is in the sentence he wrote the second time:
+//! *„zudem gibt es auch noch keine lobby. mit lobby mein ich auch rumlaufen. also eher eine art
+//! hub."* — **by *lobby* he means a place you walk around in.** The first fix answered a
+//! routing question he had not asked and took away the one thing he had: pressing *Play* used
+//! to put him on his feet in the world, and afterwards it put him behind a plate.
+//! `docs/FINDINGS.md` FIND-173 is the record, because the mistake is about **how a report was
+//! read**, not about a line of code.
+//!
+//! So *Play* hands the screen to [`Screen::Playing`](super::Screen::Playing) again — the hub,
+//! standing, pointer captured, clock running.
+//!
+//! **And the mission list stays reachable**, which is the half that must not be lost twice:
+//!
+//! | route | clicks | since |
+//! |---|---|---|
+//! | `Esc` → *Mission select* | 1 key + 1 click | 2026-08-18, unchanged |
+//! | walk onto a deployment pad | 0 | 2026-08-12, unchanged |
+//! | the debrief's own *To the lobby* | 1 | 2026-08-24, unchanged |
+//!
+//! `F-175`'s acceptance — *every screen in at most two clicks* — is still met: mission list 2
+//! (`Esc`, then the row), hub 1, settings 1.
+//! `tests/menu.rs::f175_play_puts_the_player_in_the_hub_and_not_behind_a_plate` and
+//! `::f175_the_mission_list_is_still_reachable_from_the_hub` are the two halves as assertions.
 //!
 //! ## What is deliberately NOT on it
 //!
@@ -53,8 +79,12 @@ use super::{plate, Screen};
 /// What a button on the title screen does.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TitleAction {
-    /// Into the game — and the first thing the game asks is *which sortie*, so this opens the
-    /// **lobby**. The hub is already standing behind the plate and is one *Back* further.
+    /// **Into the game, which is the hub** — a place, on foot, with the pointer captured.
+    /// The world is already standing behind the plate (`menu::apply_screen` stopped its clock),
+    /// so this row lets go rather than builds.
+    ///
+    /// ⚠️ It opened [`Screen::Lobby`](super::Screen::Lobby) from 2026-08-24 to 2026-08-26 on a
+    /// premise that turned out to be false — see the module header, and `FIND-173`.
     ///
     /// ⚠️ The variant kept the name `NewGame` on purpose while the label became *Play*: the day
     /// there is a profile to continue, `NewGame` is the row that starts a **fresh** one and
@@ -74,7 +104,7 @@ pub enum TitleAction {
 ///
 /// | row | what it does | why it is here |
 /// |---|---|---|
-/// | *Play* | opens the lobby | the mission list was unreachable without it |
+/// | *Play* | into the hub, on foot | it is the game; the mission list has three doors of its own |
 /// | *Settings* | opens the options | the second route into them, and the reason `SettingsFrom` exists |
 /// | *Quit* | `AppExit` | the one entry a launcher screen must never be missing |
 ///
@@ -133,8 +163,8 @@ pub fn spawn_title_screen(commands: &mut Commands) {
 /// *Play* writes nothing but the screen. **The world behind the plate is already there** —
 /// a flagless run loads the hub and then stops the clock (`menu::apply_screen`), so starting is
 /// letting go rather than building: no second boot path, no `DeployRequest`, and `mission` keeps
-/// being the only writer of the phase. The screen it hands over to is the **lobby**, which does
-/// not let go either: the clock stays stopped until something on that plate is pressed.
+/// being the only writer of the phase. Writing `Playing` is the whole of it: `apply_screen`
+/// takes the pointer, unpauses `Time<Virtual>`, and the player is standing in the muster yard.
 pub fn title_buttons(
     buttons: Query<(&Interaction, &TitleAction)>,
     mut screen: ResMut<Screen>,
@@ -146,8 +176,8 @@ pub fn title_buttons(
         }
         match action {
             TitleAction::NewGame => {
-                info!("title: play - into the lobby");
-                *screen = Screen::Lobby;
+                info!("title: play - into the hub, on foot");
+                *screen = Screen::Playing;
             }
             TitleAction::Settings => *screen = Screen::Settings,
             TitleAction::Quit => {

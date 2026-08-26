@@ -238,7 +238,32 @@ const DRESS_TOLERANCE: f32 = 0.25;
 /// the block has to carry and the full extent of that file's own `hit.min`/`hit.max` pair in
 /// metres (x / y / z, `abs`, because the pair is a corner pair — see [`REMNANTS`]).
 ///
-/// ## 🔴 It is two rows long, and that is the measurement of 2026-08-19, not laziness
+/// ## 🔴 It was two rows long, and that was a measurement — but only of ONE direction
+///
+/// ⚠️ **Read this before adding a row, and read it before deleting one.** The 2026-08-19
+/// paragraph below is still true and it answers exactly one question: *given the 215 boxes
+/// `maps.ron` already draws, which of them has a file in the drop?* Two. That is a fact about
+/// the wall, the gatehouses and the gantries, and it has not changed.
+///
+/// **It says nothing about the other direction**, which is the one the hub yard needed on
+/// 2026-08-26: *given a file in the drop, draw the box that IS it.* A lantern is not a box
+/// somebody happened to place that turned out to be lantern-shaped; it is a box drawn at
+/// `0.64 x 4.20 x 0.64` **because** that is what `a-088-laterne-strasse` measures, so the
+/// collider, the anchor surface and the mesh are one thing by construction and the fit is
+/// exact rather than inside a tolerance. Six rows came in that way, and every one of them is
+/// a prop in `maps.ron: ashgate` that did not exist the day before.
+///
+/// ⚠️ **A new row must not be able to claim an OLD box.** `placed_dress_for` returns the first
+/// match, so two rows whose (colour, proportion) windows overlap make the table
+/// order-dependent — a crate would grow a market awning, or a barrel a uniform. That is a
+/// test and not a habit: `tests/world.rs::f156_no_dressing_row_can_be_mistaken_for_another_one`
+/// walks every row's own silhouette back through this function, and the eight rows were
+/// checked against all 215 placed blocks before they landed (0 newly claimed). It is also why
+/// the sack stack (`a-132-sackstapel`, 0.90 x 0.72 x 0.70) is **not** here: at 1.2x scale the
+/// crate covers it on both footprint axes, and the two would have swapped depending on row
+/// order.
+///
+/// ## The 2026-08-19 measurement, unchanged
 ///
 /// The user, twice: *„die map passt aber immernoch nicht."* `FIND-132` measured that only
 /// *generated* houses are dressed and that the **215 hand-placed blocks wear nothing** — the
@@ -269,11 +294,28 @@ const DRESS_TOLERANCE: f32 = 0.25;
 /// measured against. So the model is fitted to the box and never the other way round, and a
 /// row is only allowed here when the overhang that leaves is something the object may
 /// physically have (a market awning) or is nothing (1.5 % on a barrel).
-pub const PLACED_DRESSING: [(&str, &str, [f32; 3]); 2] = [
+pub const PLACED_DRESSING: [(&str, &str, [f32; 3]); 8] = [
+    // ---- the two rows of 2026-08-19: models found for boxes that were already there -------
     // a-087-marktstand-zeltdach — the eight stalls of the market square, 3.0 x 2.5 x 3.0 m.
     ("market_stall", "brick_red", [4.20, 2.91, 3.64]),
     // a-132-fass-stehend — the four gas bottles in the headquarters' bay, 1.3 x 1.8 x 1.3 m.
     ("gas_drum", "olive_green", [0.66, 0.90, 0.66]),
+    // ---- the six rows of 2026-08-26: boxes drawn FOR a model, in the hub yard -------------
+    // a-088-laterne-strasse — a street lantern, 0.64 x 4.20 x 0.64 m, `roof_slate` iron.
+    ("lamp_post", "roof_slate", [0.64, 4.20, 0.64]),
+    // a-088-wegweiser — a signpost, 2.26 x 3.60 x 1.63 m. The one prop in the yard that is
+    // about *information*: it stands where a player has to decide which door he is walking to.
+    ("signpost", "sand_brown", [2.26, 3.60, 1.63]),
+    // a-133-banner-lang — a long banner, 1.24 x 4.20 x 0.68 m. Hung flat on the garrison
+    // facade, so the 1.24 m of collider it brings is against a wall nobody walks into.
+    ("banner_long", "brick_red", [1.24, 4.20, 0.68]),
+    // a-131-karren-intakt — a handcart, 2.40 x 1.80 x 4.80 m.
+    ("hand_cart", "sand_brown", [2.40, 1.80, 4.80]),
+    // a-132-kiste-klein — a crate, 0.60 m cubed.
+    ("crate_small", "sand_brown", [0.60, 0.60, 0.60]),
+    // a-136-npc-vanguard — a soldier, 0.68 x 1.81 x 0.62 m. **He stands and does nothing**;
+    // see the `sentry` row in `art.ron` for why that is the whole specification.
+    ("sentry", "olive_green", [0.68, 1.81, 0.62]),
 ];
 
 /// **Which model dresses this hand-placed cuboid** — or `None`, which is the answer for 203 of
@@ -291,7 +333,7 @@ pub const PLACED_DRESSING: [(&str, &str, [f32; 3]); 2] = [
 ///    canvas awning.
 /// 3. **The model, scaled uniformly to the box's height, has to fit both footprint axes
 ///    within [`DRESS_TOLERANCE`]** — and unlike a house, the box does not move to meet it.
-fn placed_dress_for(data: &GameData, size_m: Vec3, color_key: &str) -> Option<&'static str> {
+pub fn placed_dress_for(data: &GameData, size_m: Vec3, color_key: &str) -> Option<&'static str> {
     for (name, wants_color, authored_m) in PLACED_DRESSING {
         if wants_color != color_key || authored_m[1] <= f32::EPSILON || size_m.y <= 0.0 {
             continue;

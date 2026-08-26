@@ -1287,6 +1287,125 @@
                 (center_m: (-43.75, 1.60,  9.95), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: true, solid: true, landmark: false),
                 (center_m: (-43.75, 1.60, 10.25), size_m: (0.05, 1.3, 0.20), color: "stone_gray", anchorable: true, solid: true, landmark: false),
 
+                // ================================================================================
+                // ⭐ THE MUSTER YARD — 2026-08-26, and the reason it exists is one sentence
+                // ================================================================================
+                //
+                // > „zudem gibt es auch noch keine lobby. mit lobby mein ich auch rumlaufen.
+                // > also eher eine art hub." — the user, and it is the SECOND time he has said
+                // > the lobby is missing.
+                //
+                // Both times we solved a different problem. The first time it was read as a
+                // routing hole and the title screen's *Play* was pointed at the mission-list
+                // SCREEN; this sentence is him saying that made it worse. By *lobby* he means
+                // **a place you walk around in**, and the hub is one — it just was not
+                // anywhere. Measured before this block existed: of Ashgate's 2871 blocks,
+                // **not one** stood within 30 m of the point the player spawns on. Six amber
+                // circles, two racks behind a wall 15 m away, and 60 m of empty stone apron in
+                // every direction. That is a configuration, not a place, and it is exactly why
+                // he can stand in a hub and report that there isn't one.
+                //
+                // ## What is here, and why each group is where it is
+                //
+                //   the garrison front  banners flat on the facade, a lantern each side of the
+                //                       gate, two sentries at the door — the hall stops being
+                //                       a grey slab with a hole in it and reads as a front
+                //   the pad row         two signposts BEHIND the three z = 16 doors and two
+                //                       lanterns short of them, so the row of circles has a
+                //                       silhouette from the spawn point and not only a colour
+                //   the yard            a signpost at the spawn (the first thing you see when
+                //                       you turn round), lanterns marking the yard's edges
+                //   the work corner     two handcarts, five crates, three gas drums — a depot
+                //                       that takes deliveries. It is 10..20 m south-east, i.e.
+                //                       somewhere you WALK to, which is the whole point
+                //   the market corner   three stalls reaching in from the market square at
+                //                       x = 24, so the yard has a direction that is not a pad
+                //
+                // ## ⚠️ FOUR RULES, and three of them are `FIND-162` written out
+                //
+                // 1. **A clear radius answers the GENERATOR, never the level designer.** That
+                //    is what `FIND-162` cost: two pads at (-18, 0, ±8) passed the
+                //    `clear_radius_m` check and stood behind the garrison hall's east wall,
+                //    which this file places by hand. Nothing said so. So every prop below was
+                //    checked against the hall, the gantry frames and every other placed block
+                //    for overlap — 0 — and against the straight line from the spawn point to
+                //    each of the six pads — the tightest is 2.0 m of daylight to a block EDGE.
+                //    ⚠️ It is now a test and not a habit:
+                //    `tests/world.rs::f156_every_deployment_pad_can_be_walked_to_from_the_hub_
+                //    spawn_in_a_straight_line` measures every pad in `missions.ron` against
+                //    every placed block in this file, so a crate put down tomorrow in front of
+                //    an old door goes red the same day.
+                // 2. **The four scripted walks are geometry, not suggestions.**
+                //    `scripts/f070-hub.txt` and `f175-loop.txt` hold `W` from the spawn point
+                //    along `x = 0, z = 0..20` and `z = 0, x = 0..-47`; `f072-breach.txt` and
+                //    `f185-parcours.txt` walk the diagonals to (-10, 0, ±8). Every prop here
+                //    keeps **2.0 m** from all four lanes, measured to its edge.
+                // 3. **Nothing goes past 29 m from the origin.** `terrain.flat_radius_m` is 30
+                //    and a placed block taller than `paving_top_m` pins its terrain cell flat —
+                //    a prop at 35 m would quietly re-cut the terrace ring around the hub.
+                // 4. **Every size below is a MODEL's own measured extent**, not a shape
+                //    somebody liked: `world::map::PLACED_DRESSING` dresses a placed block by
+                //    (palette key, proportion), so a box drawn at the file's own
+                //    `hit.min`/`hit.max` extent IS the model — collider, anchor surface and
+                //    mesh are one silhouette, and the fit is exact rather than inside the 25 %
+                //    tolerance a found match has to live with. `art.ron` carries the file per
+                //    row and the numbers are held down by
+                //    `f156_the_placed_dressing_catalogue_is_what_the_glb_files_really_measure`.
+                //
+                // ⚠️ **The sentries STAND.** They are `a-136-npc-vanguard` on a block, which is
+                // set dressing; the drop ships zero animation clips and nothing here walks,
+                // talks or has a name. Anything that did would be a feature nobody specified.
+                //
+                // ⚠️ **All of them anchorable**, like everything else in this map — *„überall!
+                // ohne ausnahmen!"*. A 4.2 m lantern is the first thing in the hub that is
+                // worth hooking, which is not nothing: the yard was previously a place where
+                // the Vector Gear had exactly one target, the hall roof at 11.5 m.
+
+                // -- the garrison front: the hall stops being a slab with a hole in it
+                (center_m: (-14.2, 2.1, 4.8), size_m: (1.24, 4.2, 0.68), color: "brick_red", anchorable: true, solid: true, landmark: false),
+                (center_m: (-14.2, 2.1, -4.8), size_m: (1.24, 4.2, 0.68), color: "brick_red", anchorable: true, solid: true, landmark: false),
+                (center_m: (-14.2, 2.1, 8.0), size_m: (0.64, 4.2, 0.64), color: "roof_slate", anchorable: true, solid: true, landmark: false),
+                (center_m: (-14.2, 2.1, -8.0), size_m: (0.64, 4.2, 0.64), color: "roof_slate", anchorable: true, solid: true, landmark: false),
+                (center_m: (-13.6, 0.905, 2.9), size_m: (0.68, 1.81, 0.62), color: "olive_green", anchorable: true, solid: true, landmark: false),
+                (center_m: (-13.6, 0.905, -2.9), size_m: (0.68, 1.81, 0.62), color: "olive_green", anchorable: true, solid: true, landmark: false),
+
+                // -- the pad row at z = 16: signposts BEHIND the doors, lanterns short of them
+                (center_m: (4.5, 1.8, 20.5), size_m: (2.26, 3.6, 1.63), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (-4.5, 1.8, 20.5), size_m: (2.26, 3.6, 1.63), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (4.5, 2.1, 13.0), size_m: (0.64, 4.2, 0.64), color: "roof_slate", anchorable: true, solid: true, landmark: false),
+                (center_m: (-4.5, 2.1, 13.0), size_m: (0.64, 4.2, 0.64), color: "roof_slate", anchorable: true, solid: true, landmark: false),
+                (center_m: (-4.5, 0.905, 18.0), size_m: (0.68, 1.81, 0.62), color: "olive_green", anchorable: true, solid: true, landmark: false),
+
+                // -- the yard itself: the signpost at (3.6, -4.2) is what you see when you
+                //    turn round on the spawn point, and the lanterns give the yard an edge
+                (center_m: (3.6, 1.8, -4.2), size_m: (2.26, 3.6, 1.63), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (12.0, 2.1, -6.0), size_m: (0.64, 4.2, 0.64), color: "roof_slate", anchorable: true, solid: true, landmark: false),
+                (center_m: (3.0, 2.1, -15.0), size_m: (0.64, 4.2, 0.64), color: "roof_slate", anchorable: true, solid: true, landmark: false),
+                (center_m: (19.0, 2.1, -14.0), size_m: (0.64, 4.2, 0.64), color: "roof_slate", anchorable: true, solid: true, landmark: false),
+                (center_m: (8.6, 0.905, -4.0), size_m: (0.68, 1.81, 0.62), color: "olive_green", anchorable: true, solid: true, landmark: false),
+                (center_m: (19.5, 0.905, -1.0), size_m: (0.68, 1.81, 0.62), color: "olive_green", anchorable: true, solid: true, landmark: false),
+
+                // -- the work corner, 10..20 m south-east: a depot that takes deliveries.
+                //    ⚠️ It is deliberately NOT next to the door — a prop you stand on top of
+                //    from the spawn point is scenery; one you have to walk to is a place.
+                (center_m: (9.0, 0.9, -10.0), size_m: (2.4, 1.8, 4.8), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (5.5, 0.9, -11.0), size_m: (2.4, 1.8, 4.8), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (7.4, 0.3, -7.2), size_m: (0.6, 0.6, 0.6), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (8.1, 0.3, -6.5), size_m: (0.6, 0.6, 0.6), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (12.0, 0.3, -12.5), size_m: (0.6, 0.6, 0.6), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (12.8, 0.3, -12.0), size_m: (0.6, 0.6, 0.6), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (13.9, 0.3, -11.3), size_m: (0.6, 0.6, 0.6), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                // 1.4 m pitch on a 1.3 m drum: 0.1 m of air, so the row reads as a row.
+                (center_m: (16.5, 0.9, -8.6), size_m: (1.3, 1.8, 1.3), color: "olive_green", anchorable: true, solid: true, landmark: false),
+                (center_m: (16.5, 0.9, -10.0), size_m: (1.3, 1.8, 1.3), color: "olive_green", anchorable: true, solid: true, landmark: false),
+                (center_m: (16.5, 0.9, -11.4), size_m: (1.3, 1.8, 1.3), color: "olive_green", anchorable: true, solid: true, landmark: false),
+
+                // -- the market corner: the square's own stalls (x = 32..48) reaching in, so
+                //    the yard has a direction east that is not a deployment pad
+                (center_m: (20.0, 1.25, -5.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: true, solid: true, landmark: false),
+                (center_m: (20.0, 1.25, -11.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: true, solid: true, landmark: false),
+                (center_m: (22.0, 1.25, 3.0), size_m: (3.0, 2.5, 3.0), color: "brick_red", anchorable: true, solid: true, landmark: false),
+
                 // ---- Deleted 2026-08-12: the hand-placed row housing and the pocket ----
                 // 75 detached boxes stood here — a 20 m pitch along the main street and a
                 // 24 m pitch in the pocket, each one an island with an untagged ridge cap on
