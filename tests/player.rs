@@ -342,11 +342,18 @@ fn t007_a_jump_reaches_exactly_the_height_the_file_allows() {
 
     hold(&mut app, KeyCode::Space);
     ticks(&mut app, 12); // 0.2 s
-    // v0 = 6.5 m/s at g = −20: 6.5·0.2 − 10·0.04 = 0.90 m.
+    // 🔴 **RE-DERIVED 2026-08-27, and derived from the file rather than typed.** This line read
+    // a literal `0.90` — `6.5·0.2 − 10·0.04` at `jump_speed_m_s` 6.5 and `gravity_m_s2` −20.
+    // Both moved on 2026-08-27 (8.2 against −32) and the same formula now gives
+    // `8.2·0.2 − 16·0.04` = **1.000 m**; the run reads 0.9977 (discrete Euler over 12 ticks).
+    // The number is computed here so the next constant change moves it by itself — a literal
+    // is what made this test a stale assert instead of a guard (`docs/NEXT.md` §3G rule 1:
+    // re-derive, do not widen — the band stays ±0.05 m).
+    let rise_02 = v0 * 0.2 - 0.5 * -d.game.gravity_m_s2 * 0.2 * 0.2;
     let after_02 = at(&app, e).y;
     assert!(
-        (after_02 - 0.9).abs() < 0.05,
-        "0.2 s after the jump he is at {after_02} m instead of 0.90 (v0 = {v0}, g = {})",
+        (after_02 - rise_02).abs() < 0.05,
+        "0.2 s after the jump he is at {after_02} m instead of {rise_02:.4} (v0 = {v0}, g = {})",
         d.game.gravity_m_s2
     );
     assert_eq!(state(&app, e), MovementState::Airborne, "in the air he is not grounded");
@@ -442,37 +449,69 @@ fn f014_a_held_key_does_not_pull_a_landing_back_to_the_run_speed() {
 
 #[test]
 fn f014_a_slide_comes_to_a_full_stop_without_input() {
-    // Momentum that never ends is not a chain, it is ice. At `-gravity_m_s2` = 20 m/s² a
-    // 20 m/s slide needs 20/20 = 1.00 s and 10.0 m — inside `clear_radius_m`.
+    // Momentum that never ends is not a chain, it is ice. The deceleration IS `-gravity_m_s2`
+    // (`player::locomotion::ground_step`), so a `v0` slide needs `v0/decel` seconds.
+    //
+    // 🔴 **RE-DERIVED 2026-08-27.** Every number in this test used to be a literal written for
+    // `gravity_m_s2` = −20: *"20/20 = 1.00 s"*, *"halfway 10 m/s"*, *"two ticks and he is still
+    // over 19"*. At −32 the run reads 18.9333 / 4.0 / 0.0 and the first two literals went red —
+    // the behaviour never changed, the constant did. They are computed from `decel` now, so the
+    // next constant change moves them by itself (`docs/NEXT.md` §3G rule 1: re-derive, do not
+    // widen — every band below is the one it always was).
     let mut app = app();
     let d = data(&app);
     let e = me(&mut app);
     let decel = -d.game.gravity_m_s2;
-    launch_on_the_ground(&mut app, e, 20.0);
+    let hz = d.game.simulation_hz as f32;
+    let v0 = 20.0f32;
+    launch_on_the_ground(&mut app, e, v0);
 
-    // It must not be instant — that is exactly the bug this feature is about.
+    // It must not be instant — that is exactly the bug this feature is about. Two ticks of
+    // `decel` and not one metre more: at −20 that was 19.33 m/s, at −32 it is 18.93.
     ticks(&mut app, 2);
+    let after_2 = v0 - decel * 2.0 / hz;
     assert!(
-        ground_speed(&app, e) > 19.0,
-        "two ticks after arriving at 20 m/s he is already at {:.4} m/s",
+        ground_speed(&app, e) > after_2 - 0.1,
+        "two ticks after arriving at {v0} m/s he is already at {:.4} m/s, and {decel} m/s² of \
+         deceleration owes {after_2:.4}",
         ground_speed(&app, e)
     );
 
-    // Halfway: 20 − 20·0.5 = 10 m/s.
-    ticks(&mut app, 28); // 30 ticks = 0.5 s in total
+    // 🔴 **AND THE RAMP HAS AN END THAT IS NOT ZERO, which is what a literal hid for a year.**
+    // `ground_step` returns the desired velocity *directly* below `run_speed_m_s`, so the linear
+    // brake runs only down to `run_speed_m_s + decel/hz` and the last 6.5 m/s go in one tick.
+    // At −20 that snap sat at 0.683 s, i.e. **after** the 0.5 s this line used to sample, and
+    // `20 − 20·0.5 = 10` was a fair mid-ramp reading. At −32 the snap is at 0.421 s and the same
+    // sample reads **0.0000** — the ramp was over. The sample time is derived from the snap now,
+    // and the guard below is what says so out loud instead of letting the next constant change
+    // measure a standstill and call it a ramp.
+    let snap_at = d.game.player.run_speed_m_s + decel / hz;
+    let sample_s = 0.25;
+    let due = v0 - decel * sample_s;
+    assert!(
+        due > snap_at,
+        "at {decel} m/s² the slide is already under the {snap_at:.4} m/s snap after \
+         {sample_s} s, so this line measures a standstill and not a ramp — move the sample \
+         earlier"
+    );
+    ticks(&mut app, 13); // 15 ticks = 0.25 s in total
     let halfway = ground_speed(&app, e);
     assert!(
-        (halfway - 10.0).abs() < 1.0,
-        "0.5 s into the slide he is at {halfway:.4} m/s; at {decel} m/s² it has to be 10 m/s"
+        (halfway - due).abs() < 1.0,
+        "{sample_s} s into the slide he is at {halfway:.4} m/s; at {decel} m/s² it has to be \
+         {due:.4}"
     );
 
-    // And 20/20 = 1.00 s in he is standing. 90 ticks = 1.5 s leaves half a second of slack.
+    // And the stop is due at `(v0 − snap_at)/decel` — 0.421 s at −32, 0.683 s at −20. The wait
+    // below leaves at least half a second of slack over it, exactly as it always did.
+    let stop_s = (v0 - snap_at) / decel;
+    assert!(stop_s < 0.75, "a {stop_s:.3} s stop does not fit in the 1.25 s this test waits");
     ticks(&mut app, 60);
     let end = ground_speed(&app, e);
     assert!(
         end < 0.01,
-        "1.5 s after a 20 m/s slide he still moves at {end:.4} m/s — at {decel} m/s² the stop \
-         is due after 1.00 s"
+        "1.25 s after a {v0} m/s slide he still moves at {end:.4} m/s — at {decel} m/s² the \
+         stop is due after {stop_s:.3} s"
     );
 }
 
@@ -532,15 +571,21 @@ fn f014_the_input_still_steers_the_carried_momentum() {
     // ⚠️ **Since F-006 (2026-08-12) this number is the AIR CONTROL's, not the legs'.** Above
     // `run_speed_m_s + (-gravity_m_s2)/simulation_hz` `ground_locomotion` passes `Vec2::ZERO`
     // as `desired`, so `ground_step` only brakes; what bends the line is
-    // `locomotion::air_control` at `-gravity_m_s2 / 2`. Measured `[offlinebot]`: the legs used
-    // to turn this by **22.44°**, the air control turns it by **11.22°**, and with an empty
-    // tank by **5.67°** (`f006_above_the_threshold_the_legs_stop_steering_and_the_air_takes_over`
-    // is the other half of this pair). **The margin over the 10° below is 1.22°** — whoever
-    // lowers the air control below ≈ 0.53·g makes this test go red, and that is the guard
-    // working, not a flaky test (`docs/FINDINGS.md` FIND-051).
+    // `locomotion::air_control` at `game.ron: player.air_accel_m_s2`. Measured `[offlinebot]`:
+    // the legs used to turn this by **22.44°**, the air control turns it by **11.22°**, and
+    // with an empty tank by **5.67°**
+    // (`f006_above_the_threshold_the_legs_stop_steering_and_the_air_takes_over` is the other
+    // half of this pair). **The margin over the 10° below is 1.22°** — whoever lowers
+    // `air_accel_m_s2` makes this test go red, and that is the guard working, not a flaky test
+    // (`docs/FINDINGS.md` FIND-051).
+    // ⚠️ **That sentence used to say `-gravity_m_s2 / 2`, and it was true when the two were 10
+    // and −20.** `air_accel_m_s2` has been its own key for a while and gravity moved to −32 on
+    // 2026-08-27 without it; the derivation was carried here by hand and nobody noticed.
     let mut app = app();
+    let d = data(&app);
     let e = me(&mut app);
-    launch_on_the_ground(&mut app, e, 30.0);
+    let v0 = 30.0f32;
+    launch_on_the_ground(&mut app, e, v0);
 
     hold(&mut app, KeyCode::KeyA); // yaw = 0 ⇒ A is −X, perpendicular to the +Z momentum
     ticks(&mut app, 30); // 0.5 s
@@ -559,11 +604,15 @@ fn f014_the_input_still_steers_the_carried_momentum() {
          to brake it into nothing",
         v
     );
-    // And the turn cost him only the ordinary deceleration: 30 − 20·0.5 = 20 m/s.
+    // And the turn cost him only the ordinary deceleration: `v0 − (-gravity_m_s2)·0.5`.
+    // 🔴 **RE-DERIVED 2026-08-27** — the literal `20.0` here was `30 − 20·0.5` and the file now
+    // says −32, i.e. 14.0 m/s. The run reads 14.4922, the band is the ±1.5 it always was, and
+    // the claim (*"turning is not a second brake"*) is unchanged.
+    let due = v0 - -d.game.gravity_m_s2 * 0.5;
     let speed = v.length();
     assert!(
-        (speed - 20.0).abs() < 1.5,
-        "steering left him at {speed:.4} m/s instead of the 20 m/s the plain deceleration \
+        (speed - due).abs() < 1.5,
+        "steering left him at {speed:.4} m/s instead of the {due:.4} m/s the plain deceleration \
          allows — turning must not be a second brake"
     );
 }
@@ -620,10 +669,17 @@ fn f006_w_flies_where_you_look_a_and_d_go_sideways_and_s_never_thrusts() {
     // **0.0000 m/s** of horizontal speed: `ground_locomotion` skipped every one of them.
     let mut app = app();
     let d = data(&app);
-    // The magnitude is derived, not typed: `-gravity_m_s2 / 2` — "the air control is half of
-    // gravity, so WASD alone can never hold you up". See `src/player/locomotion.rs`. The day
-    // it becomes `game.ron: player.air_accel_m_s2` this line reads that key.
-    let a = -d.game.gravity_m_s2 / 2.0;
+    // The magnitude is derived, not typed — and 🔴 **since 2026-08-27 it is derived from the
+    // RIGHT key.** It read `-gravity_m_s2 / 2` under the sentence *"the air control is half of
+    // gravity, so WASD alone can never hold you up"*, which was true only while the two were
+    // 10 and −20. `player.air_accel_m_s2` has been its own key in `game.ron` for a while
+    // (`src/player/locomotion.rs:1037` reads it and nothing else), and when the user moved
+    // gravity to −32 this line started demanding 16 m/s from a 10 m/s² accelerator: measured
+    // 10.0002, i.e. the air control working exactly as its key says.
+    // ⚠️ **The sentence it stood for is now `air_accel_m_s2 < -gravity_m_s2`, and that is
+    // `tests/data.rs`' business, not this test's** — here the claim is only that a held key in
+    // the air is worth its own key's acceleration.
+    let a = d.game.player.air_accel_m_s2;
 
     let bodies = flyers(&mut app, 4);
     let (forward, sideways, backwards, idle) = (bodies[0], bodies[1], bodies[2], bodies[3]);
@@ -915,7 +971,6 @@ fn f004_the_ground_does_not_write_the_velocity_of_a_player_the_rope_drags() {
     // the ground — whatever is left after 30 ticks is its doing and nobody else's.
     let mut app = app();
     without_the_always_on_pull(&mut app); // see the helper — this measures the GROUND
-    let d = data(&app);
     let e = me(&mut app);
     launch_on_the_ground(&mut app, e, 30.0);
     anchor_the_left_hook(&mut app, e);
@@ -1006,13 +1061,20 @@ fn f004_a_hook_in_the_wall_does_not_glue_the_player() {
     ticks(&mut app, 60); // come to a stop again
     let before = at(&app, e).y;
     hold(&mut app, KeyCode::Space);
-    ticks(&mut app, 12); // 0.2 s: v0·0.2 − 10·0.04 = 0.90 m
+    ticks(&mut app, 12); // 0.2 s
     release(&mut app, KeyCode::Space);
+    // Same re-derivation as `t007_a_jump_reaches_exactly_the_height_the_file_allows`, and it
+    // has to be the same expression: this test's whole claim is *"the hook changes nothing"*,
+    // so its number is the free jump's number and never one of its own. `v0·t − ½gt²` with the
+    // 2026-08-27 pair (8.2, −32) is 1.000 m where the literal `0.90` this line carried was
+    // (6.5, −20).
+    let rise_02 =
+        d.game.player.jump_speed_m_s * 0.2 - 0.5 * -d.game.gravity_m_s2 * 0.2 * 0.2;
     let risen = at(&app, e).y - before;
     assert!(
-        (risen - 0.9).abs() < 0.05,
-        "0.2 s after a jump with a hook in the wall he has risen {risen:.4} m instead of 0.90 \
-         — an anchored hook must not cost the player his jump"
+        (risen - rise_02).abs() < 0.05,
+        "0.2 s after a jump with a hook in the wall he has risen {risen:.4} m instead of \
+         {rise_02:.4} — an anchored hook must not cost the player his jump"
     );
 }
 
@@ -2410,13 +2472,20 @@ fn anchor_on_a_body_with_rope_left(app: &mut App, e: Entity, d: &GameData) -> Ve
     to_anchor
 }
 
+/// A **strong, unbounded** winch — the shape the four property tests below are about.
+///
+/// ⚠️ **This is no longer a tuning the game ever passes.** Until `Q-058` it was `Ctrl`'s
+/// (`reel_speed_m_s`, `drive_ramp_s`, no ceiling); `Ctrl` shortens the joint now
+/// (`player::locomotion::rope_winch`'s header), so the only caller in the game is the always-on
+/// pull and its numbers are [`idle_pull_tuning`]'s. The values are kept because the four
+/// properties — never brakes, rope axis only, stops at `min_rope_m`, no look gate — are
+/// statements about the **function**, and an unbounded, fast winch is where each of them is
+/// easiest to falsify.
 fn winch_tuning(d: &GameData) -> WinchTuning {
     WinchTuning {
         speed_m_s: d.game.vector.reel_speed_m_s,
         min_rope_m: d.game.vector.min_rope_m,
         ramp_s: d.game.vector.drive_ramp_s,
-        // `Ctrl`'s own value — see `WinchTuning::accel_max_m_s2` for why the key `FIND-159`
-        // measured keeps its behaviour and the always-on pull does not.
         accel_max_m_s2: f32::INFINITY,
     }
 }
@@ -2567,88 +2636,55 @@ fn f005_the_winch_stops_at_min_rope_m_and_the_arm_inside_it_contributes_nothing(
 }
 
 #[test]
-fn f005_under_the_drive_ctrl_winds_in_a_player_who_is_standing_still_on_the_ground() {
-    // **The wiring, and it is the one that `scripts/game-full.txt` ACT 1 hangs on.** The act
-    // begins with the player standing still — `MovementState::Grounded`, so [`in_flight`] is
-    // false — and climbs a 35 m church roof on `Ctrl` alone. Under `Pendulum` that works
-    // because the reel moves the joint's `limits.max` and never asks about the player's state;
-    // the winch is an acceleration on the **body**, so it had to be lifted out of
-    // `air_control`'s flight branch or ACT 1 would have measured `Height 0.300` forever — which
-    // is exactly what the pushed build did measure, four asserts red.
+fn f005_ctrl_never_adds_an_acceleration_to_the_body_under_either_model() {
+    // 🔴 **`Q-058`, 2026-08-27 — this test replaces two, and one of them asserted the
+    // opposite.** Until this day `RopeForceModel::Drive` built no `DistanceJoint`, so
+    // `player::rope::shorten_ropes` never saw a `Drive` rope, `Ctrl` was a dead key that
+    // `vector::gas` still billed (`Q-050`), and `player::locomotion::rope_winch` was given the
+    // job as a body acceleration at `reel_speed_m_s`. The old test measured exactly that:
+    // `f005_under_the_drive_ctrl_winds_in_a_player_who_is_standing_still_on_the_ground`,
+    // `(reel_speed − closing)/drive_ramp_s` along the rope.
     //
-    // Red by putting the winch back inside `if in_flight(...)`.
-    let mut app = app();
-    app.world_mut().resource_mut::<GameData>().game.vector.rope_force_model =
-        defeated_by_titan::data::RopeForceModel::Drive;
-    ticks(&mut app, 30); // the player lands and settles on the graybox floor
-    let e = me(&mut app);
-    let d = data(&app);
-    assert_eq!(
-        state(&app, e),
-        MovementState::Grounded,
-        "the fixture is a player STANDING — if he is airborne this test proves nothing"
-    );
-
-    let to_anchor = anchor_on_a_body_with_rope_left(&mut app, e, &d);
-    let along = to_anchor.normalize();
-    let velocity_before = app.world().get::<Velocity>(e).expect("a player carries a Velocity").0;
-
-    // WARNING: the closing speed is read BEFORE the tick, not after it. `air_control` decides
-    // on `Velocity`, which `player::integrator::readback` writes at the END of the previous
-    // tick — reading `LinearVelocity` after `update()` measures the tick's own result and the
-    // number came out 22 m/s2 short. A fixture bug this test made once, kept as a warning.
-    let closing = velocity_before.dot(along);
-    let due = (d.game.vector.reel_speed_m_s - closing) / d.game.vector.drive_ramp_s;
-
-    hold(&mut app, KeyCode::ControlLeft);
-    app.update();
-
-    let a = run_accel(&app, e);
-    assert!(
-        (a - along * due).length() < 1.0,
-        "`Ctrl` on a {:.1} m rope has to wind a STANDING player in at ({} − {closing:.2})/{} = \
-         {due:.1} m/s² along it. Measured {a:?}",
-        to_anchor.length(),
-        d.game.vector.reel_speed_m_s,
-        d.game.vector.drive_ramp_s,
-    );
-
-    // The control that makes the number mean something: the same tick, the same held key, the
-    // hook let go of. If this is not ZERO the test above was measuring gravity, a jump or the
-    // look term — not the rope. (`CLAUDE.md` §6 rule 5: delete the thing you think you are
-    // measuring and check the number moves.)
-    let_go_of_the_left_hook(&mut app, e);
-    app.update();
-    assert_eq!(
-        run_accel(&app, e),
-        Vec3::ZERO,
-        "with no rope the very same held `Ctrl` must move nothing at all"
-    );
-}
-
-#[test]
-fn f005_under_the_pendulum_ctrl_adds_no_acceleration_at_all() {
-    // The model fork. The pendulum's reel is a **length**, carried out by
-    // `player::rope::shorten_ropes` on the joint — it must never grow a second, additive
-    // acceleration on the body, or the reel would be paid once and delivered twice.
+    // **A `Drive` rope has a joint now**, so `Ctrl` is the joint's reel under both models —
+    // one key, one mechanism, with the `L_prev/L_new` amplification that is the whole feel of
+    // the Vector Gear (`player::rope`'s header: 58.23 m/s out of `v0 = 20`, against 20.000 for
+    // an acceleration). Keeping both would pay the reel once and deliver it twice, which is the
+    // sentence the surviving half of this test has always made about `Pendulum`.
     //
-    // Red by deleting the `RopeForceModel::Drive` arm of the winch `match` (making it fire under
-    // both models).
-    let mut app = app();
-    app.world_mut().resource_mut::<GameData>().game.vector.rope_force_model =
-        defeated_by_titan::data::RopeForceModel::Pendulum;
-    ticks(&mut app, 30);
-    let e = me(&mut app);
-    let d = data(&app);
-    // The same fixture as the `Drive` test, and it has to be: a rope already at the floor makes
-    // this assertion pass no matter what the `match` says.
-    anchor_on_a_body_with_rope_left(&mut app, e, &d);
-    hold(&mut app, KeyCode::ControlLeft);
-    app.update();
+    // **What `Ctrl` DOES do now is measured where a real joint exists**:
+    // `tests/vector_rope.rs::q058_under_drive_ctrl_shortens_the_joint_exactly_as_under_pendulum`.
+    // This fixture forces `HookState::Anchored` by hand and writes no `HookAnchored`, so
+    // `attach_ropes` never runs and there is no joint here to measure — which is precisely why
+    // the claim this test can still make is a claim about `air_control` and nothing else.
+    //
+    // Red by putting `grant.reel_in` back into the winch's `match` in `air_control`.
+    for model in [
+        defeated_by_titan::data::RopeForceModel::Drive,
+        defeated_by_titan::data::RopeForceModel::Pendulum,
+    ] {
+        let mut app = app();
+        app.world_mut().resource_mut::<GameData>().game.vector.rope_force_model = model;
+        ticks(&mut app, 30); // the player lands and settles on the graybox floor
+        let e = me(&mut app);
+        let d = data(&app);
+        assert_eq!(
+            state(&app, e),
+            MovementState::Grounded,
+            "{model:?}: the fixture is a player STANDING — if he is airborne this proves nothing"
+        );
+        // ⚠️ **A rope with room left in it.** A rope already at `min_rope_m` would make the
+        // assertion pass whatever the `match` says — the helper asserts that itself.
+        let to_anchor = anchor_on_a_body_with_rope_left(&mut app, e, &d);
+        hold(&mut app, KeyCode::ControlLeft);
+        app.update();
 
-    assert_eq!(
-        run_accel(&app, e),
-        Vec3::ZERO,
-        "under `Pendulum` the reel is the joint's business and this function contributes nothing"
-    );
+        assert_eq!(
+            run_accel(&app, e),
+            Vec3::ZERO,
+            "{model:?}: `Ctrl` on a {:.1} m rope put an acceleration on the BODY. The reel is a \
+             change of `limits.max` and `player::rope::shorten_ropes` is its one writer — a \
+             second, additive haul here pays it once and delivers it twice",
+            to_anchor.length()
+        );
+    }
 }

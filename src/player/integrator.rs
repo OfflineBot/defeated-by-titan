@@ -41,8 +41,12 @@
 //! that at face value costs exactly what was measured on 2026-08-09: a jumping player stayed
 //! `Grounded` for about three more ticks, `locomotion::ground_locomotion` set his jump
 //! velocity again on each of them, and the apex came out at **1.2642 m instead of the
-//! 1.0562 m** that `jump_speed_m_s²/2g` allows. Holding the button was worth 20 % of extra
-//! height — that is not a feature, it is a leak. So a contact counts as ground only from
+//! 1.0562 m** that `jump_speed_m_s²/2g` allowed at the time (`jump_speed_m_s` 6.5 against a
+//! `gravity_m_s2` of −20). **Both moved on 2026-08-27** — 8.2 against −32 — and the allowance
+//! is **1.0506 m** now: the pair was picked to keep the height and shorten the *time*, so the
+//! 20 % this leak was worth is unchanged and so is the reason for the threshold. Holding the
+//! button was worth 20 % of extra height — that is not a feature, it is a leak. So a contact
+//! counts as ground only from
 //! `penetration > -world.collision_margin_m`, i.e. from the distance at which a body comes to
 //! a stop in front of a surface anyway.
 //!

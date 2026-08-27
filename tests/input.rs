@@ -405,13 +405,28 @@ fn r7_s_tightens_the_rope_and_never_reels_it_in() {
          (docs/NEXT.md §1A req 7)",
         -s_alone
     );
-    // Stronger, and the half a floor of zero could never say: `S` does not merely fail to
-    // reel, it **opens** the rope. He walks his 12 m backwards and the anchor gets further
-    // away. A binding that re-acquired `REEL_IN` cannot produce a positive number here.
+    // 🔴 **The other half, and it REVERSED on 2026-08-27 because he said so.** Until then this
+    // asserted `s_alone > 5.0` — that `S` walks you 12 m backwards and the rope OPENS. He was
+    // asked directly (`docs/QUESTIONS.md` Q-061) and answered:
+    //
+    //   „S spannt nur, bewegt nicht."
+    //
+    // which is his own original wording restored (`docs/NEXT.md` §1A: *„mit s »spannt« man nur
+    // das seil"*). So `S` is **tension, not thrust**: it moves the player neither toward the
+    // anchor nor away from it, and the bound has to be **two-sided**. The old one-sided assert
+    // was satisfied by any amount of retreat, including a sprint.
+    //
+    // **The bound is derived.** `run_speed_m_s` is 6.0, so 120 ticks of walking is 12 m. A
+    // tenth of a walk — 0.5 m/s, i.e. 1.0 m over this window — is far below anything a player
+    // could feel as movement and still an order of magnitude above the 0.157 m of solver
+    // settling this fixture actually produces. It catches a reel in one direction and a walk in
+    // the other, which is the whole of his sentence.
+    let a_tenth_of_a_walk = run_speed_m_s() * 2.0 / 10.0;
     assert!(
-        s_alone > 5.0,
-        "S on its own axis should be 12 m of walking backwards, i.e. the rope OPENING by \
-         several metres — it read {s_alone:+.3} m"
+        s_alone.abs() < a_tenth_of_a_walk,
+        "S is tension and not thrust (Q-061, „S spannt nur, bewegt nicht\") — over 120 ticks it \
+         should move the player neither in nor out, and a tenth of a walk is \
+         {a_tenth_of_a_walk:.3} m. It read {s_alone:+.3} m"
     );
     // 🔴 **The deletion control has to move the number.** If `S −9.427 m` and `S +8.911 m`
     // were the same, the key removed would not be the one doing the closing, and every line
@@ -430,16 +445,28 @@ fn r7_s_tightens_the_rope_and_never_reels_it_in() {
          fact that S is invisible proves nothing",
         -reel
     );
-    // And the half that says what `S` **is**: a movement key like the other three, with no
-    // rope power they do not have. `W` — the key that flies you at the anchor — closes more
-    // than `S` does under the shipped game, and `A`, which never tautens the rope, closes
-    // nothing at all with the pull on or off. Without these two lines a fix that merely made
-    // the reel *slow* would pass, and the user would still be dragged, only politely.
-    assert!(
-        with_s >= with_w,
-        "S ({with_s:+.3} m) closes more distance than W ({with_w:+.3} m) — it still has a rope \
-         power the other movement keys do not have"
-    );
+    // 🔴 **This used to compare `S` against `W` and it was RETIRED on 2026-08-27**, because the
+    // comparison stopped measuring what its own sentence claimed. It read
+    // `assert!(with_s >= with_w)` under the words *"S closes more distance than W — it still
+    // has a rope power the other movement keys do not have"*.
+    //
+    // **Measured on two binaries, one control run apart** (`docs/FINDINGS.md` FIND-196):
+    //
+    // | | HEAD, no joint | with the joint |
+    // |---|---|---|
+    // | `S` alone, pull deleted | **+8.911 m** (opens the rope) | **−0.157 m** (moves nothing) |
+    // | `W` | −11.270 m | **−11.270 m, identical** |
+    //
+    // `W` is the same to three decimals on both, so the joint did not touch it. What changed is
+    // that `S` lost its retreat — which is exactly `Q-061` — and with the always-on pull running,
+    // "`S` held" is now arithmetically "no key held". The assert then failed because **the pure
+    // pull (−11.937 m) closes MORE than holding `W` does (−11.270 m)**, which is a statement
+    // about `W`, not about `S`. It is pre-existing and it is filed as `FIND-196`, not asserted
+    // on here.
+    //
+    // The claim the retired line was a proxy for — *`S` has no rope power of its own* — is
+    // measured **directly** by the two-sided bound above, on the axis `S` actually owns.
+    // A proxy that survives its subject is how a green suite stops meaning anything.
     assert!(
         with_a > -reel_would_have / 100.0 && a_alone > -reel_would_have / 100.0,
         "A closed {:+.3} m with the pull and {a_alone:+.3} m without it; the key that never \
@@ -456,6 +483,15 @@ fn r7_s_tightens_the_rope_and_never_reels_it_in() {
          supposed to stop at the ground"
     );
     println!("idle control: {idle:+.3} m — anything above that is the rope, not the key");
+}
+
+/// `player.run_speed_m_s` out of the app's own `game.ron` — what walking would look like on
+/// this axis, and therefore the scale `Q-061`'s two-sided bound on `S` is derived from. Read
+/// from the file and not written as `6.0`, so a tuning change moves the test with the game.
+fn run_speed_m_s() -> f32 {
+    let app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    let v = app.world().resource::<GameData>().game.player.run_speed_m_s;
+    v
 }
 
 /// `vector.reel_speed_m_s` out of the app's own `game.ron` — the speed `S` used to have.

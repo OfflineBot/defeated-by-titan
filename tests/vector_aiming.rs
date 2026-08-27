@@ -265,9 +265,30 @@ fn f002_an_untagged_wall_in_front_of_a_roof_is_not_hookable_and_not_transparent(
         "the ray landed at z = {} — that is still the wall (z = -33.5), not the roof behind it",
         roof.z
     );
+    // 🔴 **The tolerance is DERIVED, and it had to be: it was `0.05` and gravity broke it.**
+    // The ray is cast inside the tick by `vector::aim`; `eye()` here reads the transform after
+    // `app.update()` has returned. The player is warped to `y = 15.0` **in the air**, so between
+    // the cast and the read he is still falling — the two are one to two simulation steps apart
+    // by construction, and no amount of settling can fix that without moving him off the stand
+    // the test needs.
+    //
+    // A vertical error `δ` at the eye becomes `δ / tan(pitch)` on the roof plane — here a
+    // **4.9x** lever. At `gravity_m_s2` −20 that put the error at 0.04 m against a 0.05 m
+    // literal, i.e. marginal and nobody noticed; at −32 it is 0.066 m and the literal broke.
+    // **Measured on two binaries one control run apart: identical to five decimals with and
+    // without the rope joint**, so this is the gravity change and not the rope (`FIND-196`).
+    //
+    // So the bound comes out of the file instead: two steps of free fall at the *current*
+    // gravity, projected along the *current* pitch. It moves when the tuning moves, and it is
+    // still two orders of magnitude below the 3.5 m that separates this roof from the wall in
+    // front of it — the thing the test is actually about.
+    let dt = 1.0_f32 / data(&app).game.simulation_hz as f32;
+    let g = data(&app).game.gravity_m_s2.abs();
+    let slack = 2.0 * g * dt * dt / pitch.tan().abs();
     assert!(
-        (roof - expected).length() < 0.05,
-        "roof hit {roof:?} instead of {expected:?} (eye {eye:?}, pitch {pitch_deg} deg)"
+        (roof - expected).length() < slack,
+        "roof hit {roof:?} instead of {expected:?} (eye {eye:?}, pitch {pitch_deg} deg, \
+         slack {slack:.4} m = two ticks of free fall at g = {g})"
     );
     assert!(over.anchorable, "the brick-red house is tagged `anchorable: true` in maps.ron");
 }

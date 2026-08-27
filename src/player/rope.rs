@@ -12,6 +12,14 @@
 //! (`avian3d-0.7.0/src/dynamics/joints/mod.rs:329-343`). That *is* the definition of "a rope
 //! pulls, it does not push" — no `if` here says so, the limit does.
 //!
+//! 🔴 **And since `Q-058` (2026-08-27) that holds under BOTH force models.**
+//! [`crate::data::RopeForceModel::Drive`] used to build no joint at all (`FIND-149`); the user
+//! settled it with *„aber NICHT das seil verlängern!!"* (`docs/NEXT.md` §3F), which **is** a
+//! hard maximum length. `Drive` and `Pendulum` now differ only in what `player::locomotion`
+//! does with the body — the rope itself is one thing. The rollback point is the one `match` in
+//! [`attach_ropes`], and everything below — the ratchet, `B-003`, `B-004` — was already written
+//! for a joint and did not move.
+//!
 //! ## The five decisions in this file
 //!
 //! 1. **Reeling in happens per SUBSTEP, never per tick.** Measured with 24 substeps, `v0 50`:
@@ -291,36 +299,50 @@ pub fn attach_ropes(
             .with_local_anchor1(Vec3::ZERO)
             .with_local_anchor2(Vec3::ZERO)
             .with_limits(0.0, length_m);
-        // `B-004`, third face — a hook that bites **inside** an impact frame. A disabled body
-        // has no island (`combat::hitstop`, header), and `add_joint` merges the islands of the
-        // two ends, so a live joint born here aborts the process in `merge_islands` with
-        // "Neither body … is in an island" instead of hanging on the player. Born disabled it
-        // is never registered in the first place (`avian3d-0.7.0/src/dynamics/solver/
-        // joint_graph/plugin.rs:79`, the `Without<JointDisabled>` filter), and
-        // `combat::hitstop::advance` takes the marker off with every other one when the freeze
-        // lifts. The rope exists from this tick on either way — its length and its
-        // `RopeLength` are the ones measured here.
-        //
         // ⚠️ **In the bundle, not as a second `insert`.** `Commands::spawn` is applied on its
         // own and triggers avian's `On<Add, DistanceJoint>` observer right there; a marker
         // queued behind it arrives one command too late and the joint is already registered.
         //
-        // `FIND-149`, and it is the whole of [`RopeForceModel::Drive`]: **the joint is simply
-        // not built.** Not `JointDisabled` — `combat::hitstop::advance` takes that marker off
-        // every joint of a body when the freeze lifts (`src/combat/hitstop.rs:295`), so a rope
-        // disabled for a *model* reason would come alive again after the first hit the player
-        // takes, in the middle of a flight, and nothing would say why. A rope with no
-        // `DistanceJoint` is invisible to `hitstop::joints_of`, to [`shorten_ropes`] and to
-        // avian's island bookkeeping — and that is the correct meaning of "the rope applies no
-        // force of its own".
+        // 🔴 **`Q-058`, 2026-08-27 — THE ROLLBACK POINT, and it is this `match` and nothing
+        // else.** Until this day [`RopeForceModel::Drive`] built **no joint at all**
+        // (`FIND-149`), and `docs/NEXT.md` §3D was attempted twice on top of that and refuted
+        // 4/4 (`FIND-186`): both attempts tried to prove *"the anchor distance may not
+        // increase"* by hand, in a velocity target, and neither could do it for two arms.
+        //
+        // The user settled it (`docs/NEXT.md` §3F): *„aber NICHT das seil verlängern!!"* **is**
+        // a hard maximum length, and `limits = (0, L)` is exactly that — it corrects **only**
+        // when the distance exceeds `L` (`avian3d-0.7.0/src/dynamics/joints/mod.rs:329-343`)
+        // and avian holds **all** of them at once. Attempt 1 bounded the *sum* of the two
+        // distances and attempt 2 scaled the whole command to zero; **neither failure is
+        // expressible against a joint**, because the solver never sees a command at all.
+        //
+        // ⚠️ `FIND-152`'s objection is read and answered, and it is an objection to a
+        // **disabled** joint: `combat::hitstop::advance` takes `JointDisabled` off every joint
+        // of a body when a freeze lifts (`src/combat/hitstop.rs:295`), so a rope switched off
+        // for a *model* reason would come back mid-flight and nothing would say why. It says
+        // nothing about an **enabled** joint whose `limits.max` is the ratchet's length — which
+        // is what `Pendulum` has always run in this file.
+        //
+        // **To roll back**, `Q-058` names one branch: put `commands.spawn(rope);` back in the
+        // `Drive` arm below. `rope_force_model: Pendulum` in `game.ron` stays the other escape
+        // hatch (`Q-049`).
+        //
+        // The `frozen` split is `B-004`'s third face and belongs to **both** models now — a
+        // hook that bites *inside* an impact frame. A disabled body has no island
+        // (`combat::hitstop`, header) and `add_joint` merges the islands of the two ends, so a
+        // live joint born here aborts the process in `merge_islands` with "Neither body … is in
+        // an island". Born disabled it is never registered in the first place
+        // (`avian3d-0.7.0/src/dynamics/solver/joint_graph/plugin.rs:79`, the
+        // `Without<JointDisabled>` filter), and `combat::hitstop::advance` takes the marker off
+        // with every other one when the freeze lifts.
         match model {
-            RopeForceModel::Drive => {
-                commands.spawn(rope);
-            }
-            RopeForceModel::Pendulum if frozen => {
+            // `Q-058` — the one branch. Same joint, same birth length, same `frozen` rule as
+            // `Pendulum`: the two models now differ **only** in what `player::locomotion`
+            // does, which is where `FIND-149`'s drive actually lives.
+            RopeForceModel::Drive | RopeForceModel::Pendulum if frozen => {
                 commands.spawn((rope, joint, JointDisabled));
             }
-            RopeForceModel::Pendulum => {
+            RopeForceModel::Drive | RopeForceModel::Pendulum => {
                 commands.spawn((rope, joint));
             }
         }
@@ -380,12 +402,12 @@ pub fn detach_ropes(
     let slack_m = data.game.vector.warp_rope_slack_m;
 
     for (entity, rope, joint) in &ropes {
-        // **A rope with no joint cannot be dragged by a teleport, so a teleport cannot cut it**
-        // (`FIND-149`, [`RopeForceModel::Drive`]). `B-003` exists because the constraint
-        // corrects the excess inside one substep and throws the player 14 m/s per centimetre of
-        // it; with no constraint there is no excess and no kick. What still ends such a rope is
-        // [`sync_rope_length`]'s `overextended` — the wall winning at `hook_range_m` — one tick
-        // later, which is the same path an ordinary flight out of range takes.
+        // ⚠️ **Since `Q-058` (2026-08-27) every rope has a joint, under both models**, so this
+        // `map_or` is defence and no longer a fork: `f32::INFINITY` means "nothing here can be
+        // dragged by a teleport", which was [`RopeForceModel::Drive`]'s whole behaviour until
+        // that day (`FIND-149`) and is now unreachable. It is kept rather than unwrapped
+        // because a missing component must not decide a *release* by panicking, and because the
+        // rollback `Q-058` names puts jointless ropes straight back.
         let enforced_m = joint.map_or(f32::INFINITY, |j| j.limits.max);
         // The rule, and the only place it is decided: a teleport that lands inside the rope's
         // own length has nothing for the joint to correct, so the rope survives it. A missing
@@ -574,11 +596,15 @@ pub fn sync_rope_length(
             let reach_m: Option<f32> =
                 anchors.get(rope.anchor).ok().map(|a| (a.translation - position.0).length());
             // **With no joint there is no enforced length, so what is published is the length
-            // the rope really has** (`FIND-149`, [`RopeForceModel::Drive`]). The type's contract
-            // is "the enforced rope length per side, `0.0` means no constraint", and `0.0` here
-            // would be a lie of a different kind: `vector::hook` would keep an arm anchored on a
-            // rope the HUD draws as absent. The floor is `min_rope_m` for the same reason
-            // [`attach_ropes`] applies it — a length under it is not a length this game has.
+            // the rope really has.** The type's contract is "the enforced rope length per side,
+            // `0.0` means no constraint", and `0.0` here would be a lie of a different kind:
+            // `vector::hook` would keep an arm anchored on a rope the HUD draws as absent. The
+            // floor is `min_rope_m` for the same reason [`attach_ropes`] applies it — a length
+            // under it is not a length this game has.
+            // ⚠️ Since `Q-058` the `None` arm is unreachable in the shipped game: a `Drive`
+            // rope has a joint too (`FIND-149` describes the model as it was until 2026-08-27).
+            // It stays for the rollback and because a `RopeLength` of `0.0` on a rope that
+            // exists would let go of an arm.
             next.lengths_m[i] = match joint {
                 Some(joint) => joint.limits.max,
                 None => reach_m.unwrap_or(min_rope_m).max(min_rope_m),
@@ -607,10 +633,11 @@ pub fn sync_rope_length(
                     .iter()
                     .find(|(rope, _)| rope.player == *id && rope.side == side)
                     .and_then(|(rope, joint)| {
-                        // A jointless rope (`Drive`) has nothing that could drag the player, so
-                        // it survives every teleport — the same rule [`detach_ropes`] applies,
-                        // and it has to be the same one or the flag and the joint would
-                        // disagree about whether the rope still exists.
+                        // A jointless rope has nothing that could drag the player, so it
+                        // survives every teleport — the same rule [`detach_ropes`] applies, and
+                        // it has to be the same one or the flag and the joint would disagree
+                        // about whether the rope still exists. ⚠️ Unreachable since `Q-058`;
+                        // see [`detach_ropes`].
                         let enforced_m = joint.map_or(f32::INFINITY, |j| j.limits.max);
                         anchors.get(rope.anchor).ok().map(|a| (a.translation, enforced_m))
                     })

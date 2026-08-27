@@ -1663,7 +1663,7 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 
 ## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
 
-**NEXT FREE ID: FIND-196.** Claim it by bumping this line in the same `cat >>` that
+**NEXT FREE ID: FIND-197.** Claim it by bumping this line in the same `cat >>` that
 appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
 file separately and both read the same maximum. One line beats a 108 kB grep.
  — and append with `>>`, never with an edit tool
@@ -12099,3 +12099,51 @@ reel about the other arm's geometry — the hand-rolled multi-arm reasoning that
 
 **Related:** `FIND-191` · `FIND-186` · `FIND-172` · `FIND-183` · `Q-058` · `docs/NEXT.md` §3F ·
 `F-004` `F-005` `F-006`
+
+---
+
+## FIND-196 — holding `W` closes LESS distance than holding nothing, and it predates the joint
+
+**2026-08-27 · [offlinebot] · measured on two binaries one control run apart**
+
+Found while landing the rope joint, as a side effect of re-aiming `Q-061`'s `S` assert. It is not
+the joint's doing and it is not a regression — **it is a pre-existing property of the drive that
+nobody had a number for.**
+
+`tests/input.rs::r7_s_tightens_the_rope_and_never_reels_it_in`'s fixture: from `(75, 2, -30)`,
+`look 0 44`, an 82.2 m rope onto the wall gallery, 120 ticks.
+
+| key held | HEAD (no joint) | with the joint |
+|---|---|---|
+| `S` alone, always-on pull **deleted** | **+8.911 m** — opens the rope | **−0.157 m** — moves nothing |
+| `S`, pull on | +8.308 m | **−11.937 m** |
+| `W`, pull on | **−11.270 m** | **−11.270 m — identical to three decimals** |
+
+**Two things fall out of this table.**
+
+**1 · The joint does exactly what the user asked for, and touches nothing else.** *„aber NICHT das
+seil verlängern!!"* — with the joint, `S` cannot open the rope, so walking backwards moves the
+player **0.157 m** instead of **8.911 m**. `W` is unchanged to three decimals, so the joint is not
+paying for that with the drive.
+
+**2 · 🔴 But `W` closes 11.270 m where the pure always-on pull closes 11.937 m.** Holding the key
+that is supposed to fly you *at* your anchor is **0.667 m worse over two seconds than holding no key
+at all**, in a geometry where the anchor is 44° up and 82 m away. The drive does not add to the
+winch here — it **replaces it with something slower**, and it is the shipped composition
+(`wanted = flight + winch`, where `flight`'s look gate `max(0, l̂ · r̂)` shrinks the target while
+the winch's floor does not).
+
+**Why nobody saw it:** the assert that spanned these two numbers said
+`assert!(with_s >= with_w)` under the words *"S closes more distance than W — it still has a rope
+power the other movement keys do not have"*. It was **a proxy for a claim about `S`** and it passed
+for eighteen days because `S` used to walk you backwards (+8.308) and any closing number beat it.
+The moment `S` stopped retreating, the proxy started reporting on `W` — and failed. **A proxy that
+outlives its subject is how a green suite stops meaning anything**, which is the same family as
+`FIND-103` and the four fixture failures of this week.
+
+**Not fixed here, deliberately.** Whether `W` should beat the free pull is a tuning question that
+belongs with `Q-064` (Shift) and `Q-063` (gravity) at the play test, and the drive numbers are all
+provisional until he has flown them. **Filed with its number so the next round starts from a
+measurement instead of from the proxy.**
+
+**Related:** `Q-061` · `Q-063` · `Q-064` · `FIND-172` · `FIND-103` · `F-005` `F-006`

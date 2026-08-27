@@ -1280,7 +1280,6 @@ fn b003_the_warp_slack_is_bounded_by_the_files_own_numbers() {
     );
 }
 
-
 // ---------------------------------------------------------------------------------------
 // `FIND-149` — the DRIVE, in the whole app. `game.ron: vector.rope_force_model`.
 //
@@ -1547,34 +1546,113 @@ fn f149_under_drive_w_hauls_the_player_along_the_rope_and_without_a_rope_it_does
 }
 
 #[test]
-fn f149_the_drive_builds_no_joint_and_still_publishes_a_length() {
-    // The mechanism, not the feel. Under `Drive` **there is no `DistanceJoint` in the world at
-    // all** — that is what "the rope applies no force of its own" means here, and it is why
-    // `combat::hitstop` (which takes `JointDisabled` off every joint of a body when a freeze
-    // lifts) cannot bring the constraint back to life in the middle of a flight.
+fn q058_the_drive_builds_a_real_joint_born_at_the_bite_distance() {
+    // 🔴 **This test says the opposite of what it said until 2026-08-27, and that is the
+    // feature.** It was `f149_the_drive_builds_no_joint_and_still_publishes_a_length`, and it
+    // asserted `joint_count == 0` under `Drive` — *"the rope applies no force of its own"*
+    // (`FIND-149`). `docs/NEXT.md` §3D was then attempted twice on top of that model and
+    // refuted 4/4 (`FIND-186`), because *"the anchor distance must not increase"* cannot be
+    // proved by hand in a velocity target for two arms.
+    //
+    // The user settled it (`docs/NEXT.md` §3F, `Q-058`): *„aber NICHT das seil verlängern!!"*
+    // **is** a hard maximum length. Whoever "restores" the old assert is undoing an
+    // instruction, not fixing a regression.
+    //
+    // 🔴 **`limits.max` is born at the BITE DISTANCE, and that is the half that keeps it a rope
+    // instead of a leash.** `(0, L)` corrects only when the distance *exceeds* `L`, so a rope
+    // born at the distance that already exists cannot yank and cannot hold the player up — see
+    // `f172_*` below, which measures exactly that under both models.
+    let nominal_m = 20.0;
     let mut driven = app();
     select(&mut driven, RopeForceModel::Drive);
     let e = me(&mut driven);
-    let published = hang(&mut driven, e, Vec3::new(0.0, 60.0, 0.0), 20.0);
+    let published = hang(&mut driven, e, Vec3::new(0.0, 60.0, 0.0), nominal_m);
 
-    assert_eq!(joint_count(&mut driven), 0, "a `Drive` rope built a distance joint");
+    assert_eq!(joint_count(&mut driven), 1, "a `Drive` rope built no distance joint (`Q-058`)");
     assert!(
         hook_state(&driven, e, Side::Left).is_anchored(),
         "the arm is not anchored — then this test measured nothing"
     );
-    // `RopeLength` is read by `vector::hook` (`overextended`) and drawn by the HUD. `0.0` means
-    // "no constraint" in that type, so a jointless rope publishes the length it really has.
+    // The published length is `limits.max` now, not the reach — `sync_rope_length`'s `Some`
+    // arm. The harness holds the player on his spot until the hook bites, so the bite distance
+    // IS the nominal one.
+    let here = position(&driven, e);
+    let anchor = anchor_point(&mut driven).expect("the joint has an anchor marker");
     assert!(
-        (published - 20.0).abs() < 1.0,
-        "a `Drive` rope published {published:.3} m for a 20 m rope — `vector::hook` reads this"
+        (published - (anchor - here).length()).abs() < 0.05,
+        "the rope was born at {published:.3} m and the player really stands {:.3} m from his \
+         anchor — a length that is not the bite distance is a yank on the first tick",
+        (anchor - here).length()
+    );
+    assert!(
+        (published - nominal_m).abs() < 1.0,
+        "a `Drive` rope published {published:.3} m for a {nominal_m} m rope — `vector::hook` \
+         reads this"
     );
 
-    // The control: the same hook under the other model does build one.
+    // The control: the other model builds exactly the same thing. Since `Q-058` the two differ
+    // **only** in what `player::locomotion` does with the body, and if this ever disagrees then
+    // `attach_ropes` has grown a fork it is not supposed to have.
     let mut other = app();
     select(&mut other, RopeForceModel::Pendulum);
     let e = me(&mut other);
-    hang(&mut other, e, Vec3::new(0.0, 60.0, 0.0), 20.0);
+    let pendulum = hang(&mut other, e, Vec3::new(0.0, 60.0, 0.0), nominal_m);
     assert_eq!(joint_count(&mut other), 1, "a `Pendulum` rope did NOT build a distance joint");
+    assert!(
+        (published - pendulum).abs() < 0.05,
+        "the same hook was born {published:.3} m long under `Drive` and {pendulum:.3} m under \
+         `Pendulum` — the rope is one thing now and only the locomotion forks"
+    );
+}
+
+#[test]
+fn q058_under_drive_ctrl_shortens_the_joint_exactly_as_under_pendulum() {
+    // **Where `Ctrl` went.** `player::locomotion::rope_winch` lost its `grant.reel_in` branch
+    // on 2026-08-27 because `player::rope::shorten_ropes` can finally see a `Drive` rope, and
+    // the claim that replaces it is this one: the reel is a **length**, and it is the same
+    // length under both models.
+    //
+    // Red by putting `commands.spawn(rope);` back into the `Drive` arm of `attach_ropes` — with
+    // no joint there is nothing to shorten and the `Drive` row stops moving at all.
+    let reeled = |model| {
+        let mut app = app();
+        select(&mut app, model);
+        let e = me(&mut app);
+        let born = hang(&mut app, e, Vec3::new(0.0, 60.0, 0.0), 20.0);
+        hold_reel_in(&mut app);
+        ticks(&mut app, 30); // half a second
+        (born, rope_length(&app, e, Side::Left), position(&app, e).y)
+    };
+    let (born_d, after_d, y_d) = reeled(RopeForceModel::Drive);
+    let (born_p, after_p, y_p) = reeled(RopeForceModel::Pendulum);
+    println!(
+        "q058 half a second of Ctrl on a 20 m vertical rope: Drive {born_d:.3} → {after_d:.3} m \
+         (y {y_d:.3}) · Pendulum {born_p:.3} → {after_p:.3} m (y {y_p:.3})"
+    );
+
+    // It really shortens, and by the file's own rate — `reel_speed_m_s` over half a second,
+    // with the take-up free to take more. Anything less than a fifth of that is a dead key.
+    let d = data(&app()); // the shipped tuning; the asserts must not carry a second copy
+    let due_m = d.game.vector.reel_speed_m_s * 0.5;
+    assert!(
+        born_d - after_d > due_m * 0.2,
+        "`Ctrl` took {:.3} m off a `Drive` rope in half a second, and `reel_speed_m_s` alone is \
+         worth {due_m:.1} m — the key is dead again",
+        born_d - after_d
+    );
+    // 🔴 **The one that makes it the JOINT's reel and not something else**: the same key, the
+    // same half second, the same length under the model that has always had a joint.
+    assert!(
+        (after_d - after_p).abs() < 0.05,
+        "half a second of `Ctrl` left a `Drive` rope at {after_d:.3} m and a `Pendulum` rope at \
+         {after_p:.3} m — `shorten_ropes` is one system and it must not see two models"
+    );
+    // And the rope really carried him: the reel is a length, the lift is the constraint's.
+    assert!(
+        y_d > 60.0 + 1.0,
+        "he was reeled up a vertical rope for half a second and ended at y {y_d:.3} from 60.0 — \
+         the length moved and the body did not, which is a rope that is not connected to him"
+    );
 }
 
 /// Holds `W` toward an anchor 60 m along −Z while the player is **already flying sideways** at
@@ -1638,4 +1716,842 @@ fn f153_under_drive_w_pulls_the_flight_onto_the_rope_line() {
         "the drive came out {drive:.1}° off the rope and the pendulum {pendulum:.1}° — those are \
          supposed to be different models"
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// `docs/NEXT.md` §3F · `Q-058` — THE HARD MAXIMUM LENGTH, FOR **TWO** ARMS AT ONCE
+//
+// The user, 2026-08-27:
+//
+//   *„wenn man a oder d drückt (relativ zum anker (DAS IST WICHTIG), immer alles relativ zum
+//    anker gesehen) dann soll man zur seite gehen können. **aber NICHT das seil verlängern!!**"*
+//
+// Two attempts proved that invariant **by hand, in a velocity target**, and both were refuted
+// 4/4 (`docs/FINDINGS.md` FIND-186): attempt 1 bounded the **sum** of the two distances and
+// flew 40.00 → 69.33 m away from an arm; attempt 2 scaled the whole command to `Vec3::ZERO` on
+// 25.8 % of ticks. **Neither failure is expressible against a joint**, which is why the answer
+// to `Q-058` is a real `DistanceJoint` with `limits = (0, L)` on a `Drive` rope too.
+// ---------------------------------------------------------------------------------------
+
+/// One arm as the acceptance criterion sees it: where its anchor is, and what its rope allows.
+#[derive(Clone, Copy, Debug)]
+struct Arm {
+    side: Side,
+    anchor_m: Vec3,
+    /// `limits.max` — the maximum the joint enforces. `None` for a rope with no joint at all,
+    /// which is what a `Drive` rope was until `Q-058`.
+    enforced_m: Option<f32>,
+}
+
+/// Every rope in the world, read out of the components rather than remembered by the test.
+fn arms(app: &mut App) -> Vec<Arm> {
+    let mut q = app
+        .world_mut()
+        .query::<(&defeated_by_titan::player::rope::Rope, Option<&DistanceJoint>)>();
+    let found: Vec<(Side, Entity, Option<f32>)> = q
+        .iter(app.world())
+        .map(|(rope, joint)| (rope.side, rope.anchor, joint.map(|j| j.limits.max)))
+        .collect();
+    found
+        .into_iter()
+        .filter_map(|(side, anchor, enforced_m)| {
+            app.world()
+                .get::<Position>(anchor)
+                .map(|p| Arm { side, anchor_m: p.0, enforced_m })
+        })
+        .collect()
+}
+
+/// Fires one arm at `anchor_m` and holds the player on `hold_m` until it bites. Returns the
+/// length the rope was born with.
+///
+/// The anchor gets a [`BodyId`] of its own, so the two arms really hang on two different
+/// bodies — [`hang_right`] deliberately re-uses the first one's, which is the single-anchor
+/// case and not the one FIND-186 got wrong.
+fn bite_on(
+    app: &mut App,
+    e: Entity,
+    side: Side,
+    anchor_m: Vec3,
+    body: BodyId,
+    hold_m: Vec3,
+) -> f32 {
+    app.world_mut().resource_mut::<SpatialIndex>().insert(IndexEntry {
+        id: body,
+        center_m: anchor_m,
+        half_size_m: Vec3::splat(1.0),
+        mask: BodyMask::SOLID.with(BodyMask::ANCHORABLE),
+    });
+    app.world_mut().entity_mut(e).insert(ForcedAim(AimPoint {
+        point_m: Some(anchor_m),
+        body: Some(body),
+        anchorable: true,
+    }));
+    let key = match side {
+        Side::Left => KeyCode::KeyQ,
+        Side::Right => KeyCode::KeyE,
+    };
+    place(app, e, hold_m);
+    set_velocity(app, e, Vec3::ZERO);
+    app.update();
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+    for _ in 0..600 {
+        place(app, e, hold_m);
+        set_velocity(app, e, Vec3::ZERO);
+        app.update();
+        if hook_state(app, e, side).is_anchored() {
+            place(app, e, hold_m);
+            set_velocity(app, e, Vec3::ZERO);
+            app.update();
+            let l = rope_length(app, e, side);
+            assert!(l > 0.0, "the {side:?} hook bit and no rope came into being");
+            return l;
+        }
+    }
+    panic!("the {side:?} hook did not bite in 600 ticks — it is {:?}", hook_state(app, e, side));
+}
+
+/// Hangs **both** arms on **two different** anchors. Returns the birth length per side.
+fn hang_two(app: &mut App, e: Entity, hold_m: Vec3, left_m: Vec3, right_m: Vec3) -> (f32, f32) {
+    let l = bite_on(app, e, Side::Left, left_m, BodyId(80_101), hold_m);
+    let r = bite_on(app, e, Side::Right, right_m, BodyId(80_102), hold_m);
+    (l, r)
+}
+
+/// The nine key combinations §3D's acceptance sentence names, by their `KeyCode`s.
+const COMBOS: [(&str, &[KeyCode]); 9] = [
+    ("none", &[]),
+    ("W", &[KeyCode::KeyW]),
+    ("A", &[KeyCode::KeyA]),
+    ("D", &[KeyCode::KeyD]),
+    ("S", &[KeyCode::KeyS]),
+    ("A+W", &[KeyCode::KeyA, KeyCode::KeyW]),
+    ("D+W", &[KeyCode::KeyD, KeyCode::KeyW]),
+    ("A+S", &[KeyCode::KeyA, KeyCode::KeyS]),
+    ("D+S", &[KeyCode::KeyD, KeyCode::KeyS]),
+];
+
+const SEPARATIONS_DEG: [f32; 4] = [60.0, 90.0, 120.0, 170.0];
+/// Open air, far above anything: `MovementState::Tethered`, `in_flight` true, no ground under
+/// the feet to write the horizontal velocity.
+const AIR_SPOT_M: Vec3 = Vec3::new(0.0, 300.0, 0.0);
+/// `scripts/f176-pull.txt`'s spot, and for its measured reason: the market hall covers
+/// x −47..−15, z −13..13 and this does not, so a walk from here is a walk.
+const GROUND_SPOT_M: Vec3 = Vec3::new(45.0, 0.6, -43.0);
+const YAWS_DEG: [f32; 4] = [0.0, 90.0, 180.0, 270.0];
+const ELEVATIONS_DEG: [f32; 2] = [20.0, 70.0];
+
+/// One cell of the matrix: how far past its own `limits.max` an arm got, in metres.
+#[derive(Clone, Copy, Debug)]
+struct Cell {
+    separation_deg: f32,
+    elevation_deg: f32,
+    yaw_deg: f32,
+    stance: &'static str,
+    combo: &'static str,
+    /// The worst `distance − enforced` over every tick and both arms. Negative = slack.
+    worst_excess_m: f32,
+    /// 🔴 **The same number over the ticks where the two maxima are SATISFIABLE AT ALL.**
+    ///
+    /// Two joints with maxima `Lₗ` and `Lᵣ` on anchors `dₐ` apart have a solution iff
+    /// `Lₗ + Lᵣ ≥ dₐ` — the triangle inequality, and it is the whole of it. Below that no
+    /// position in space honours both and the solver has to abandon one arm; that is
+    /// `FIND-191`, it is `player::rope::shorten_ropes`' defect and it predates the joint on
+    /// `Drive` by the whole life of `Pendulum`.
+    ///
+    /// **This field is the acceptance criterion `Q-058` can actually be held to**, and it is
+    /// not a loosened assert: it is `worst_excess_m` restricted to the ticks where the promise
+    /// is a promise. [`Cell::ticks_infeasible`] is what stops that restriction from being a
+    /// silent exclusion — it is printed in the matrix and asserted on separately.
+    worst_feasible_excess_m: f32,
+    /// How many of the cell's ticks were excluded from [`Cell::worst_feasible_excess_m`] because
+    /// `Lₗ + Lᵣ < dₐ`. **A `continue` in a sweep is an exclusion invisible in the denominator**
+    /// (`CLAUDE.md` §6 rule 5), so it is counted and reported instead of skipped.
+    ticks_infeasible: u32,
+    /// How many ticks had fewer than two ropes left. A rope that is *gone* cannot be measured,
+    /// and a cell that lost one is not a two-anchor cell any more.
+    ticks_with_one_rope: u32,
+}
+
+/// The whole sweep, one stance, as a `Vec<Cell>` — so the caller can print a matrix and assert
+/// on it separately.
+///
+/// # 🔴 What this reads, and what it varies. The difference is the bug.
+///
+/// **Read by the code under test** (`player::locomotion::air_control` → `rope_drive` +
+/// `rope_winch` + `air_thrust`, `player::rope::attach_ropes` + `shorten_ropes`, and the avian
+/// solver): `Intent::move_x`, `Intent::move_y`, `Intent::yaw`, `Intent::look_dir()` (yaw AND
+/// pitch), `Buttons::REEL_IN`, `LinearVelocity`, `MovementState`, `Gas` / `GasGrant::steer` /
+/// `GasGrant::reel_in`, `Hook::arm(side).tip_m` for both arms, `Transform::translation`,
+/// `ReelSpeed`, `DistanceJoint::limits.max` per rope, both anchor `Position`s, and out of
+/// `game.ron`: `drive_speed_m_s`, `drive_lateral_m_s`, `drive_ramp_s`, `drive_accel_max_m_s2`,
+/// `drive_steer_pull_fraction`, `drive_idle_speed_m_s`, `drive_idle_ramp_s`, `reel_speed_m_s`,
+/// `min_rope_m`, `air_accel_m_s2`, `air_accel_empty_fraction`, `gravity_m_s2`, `max_speed_m_s`,
+/// `eye_height_m`, `run_speed_m_s`.
+///
+/// **Varied by this sweep:** the nine key combos, `yaw` (4 values, a full turn — this is the
+/// coordinate `FIND-183`'s elevator lived in, because `ê_right` is built out of it and out of
+/// nothing else), the two anchors' **angular separation** (4), their **elevation** above the
+/// hand (2), and — by the caller, one matrix each — the **stance** (open air at 300 m,
+/// `MovementState::Tethered`, `in_flight` true; against standing on clear ground, `Grounded`,
+/// the winch's other branch and `ground_locomotion`'s), the **force model**, and whether
+/// **`Ctrl`** is held.
+///
+/// 🔴 **`ctrl` and `model` are the caller's, and there are FOUR matrices, not one.** The two
+/// `Ctrl`-free ones assert an absolute bound (`f3f_two_anchors_…`, `f3f_the_same_two_anchors_…`);
+/// the two with `Ctrl` held assert a **difference against `Pendulum`**, because with the reel in
+/// the composition the absolute bound is not reachable by any solver — `FIND-191`. That is not a
+/// loosened assert: it is a different claim, and it is the claim `Q-058` actually made
+/// (*"`Drive` INHERITS the joint `Pendulum` has always had"*).
+///
+/// **NOT varied, and each one is a hole somebody may fall into later:** `pitch` (fixed at 0,
+/// so a player looking straight down at his own anchor is never sampled); the gas (always
+/// full, so `air_accel_empty_fraction`'s half-strength drive is never sampled); the rope
+/// **length** (30 m, one value — `min_rope_m` = 3 is never approached, so `FIND-035`'s cliff
+/// is outside this matrix); the two ropes' lengths relative to each other (always equal); the
+/// player's velocity at the start (always zero); `game.ron` itself (shipped values only); and
+/// the number of arms (always exactly two — the one-arm case is `f172`/`f153`'s).
+fn two_anchor_matrix(
+    model: RopeForceModel,
+    stance: &'static str,
+    stand_m: Vec3,
+    ticks_n: u64,
+    ctrl: bool,
+) -> Vec<Cell> {
+    let mut cells = Vec::new();
+    let mut skipped = 0u32;
+    for &separation_deg in &SEPARATIONS_DEG {
+        for &elevation_deg in &ELEVATIONS_DEG {
+            for &yaw_deg in &YAWS_DEG {
+                for (combo, keys) in COMBOS {
+                    let mut app = app();
+                    select(&mut app, model);
+                    let e = me(&mut app);
+                    let eye = data(&app).game.player.eye_height_m;
+                    let hand = stand_m + Vec3::Y * eye;
+                    // The two anchors, 30 m out, `separation_deg` apart **around the vertical**
+                    // and `elevation_deg` above the horizon. Two roofs, which is the shape the
+                    // player really hooks — and the shape both refuted attempts got wrong.
+                    let l_m = 30.0f32;
+                    let half = (separation_deg * 0.5).to_radians();
+                    let el = elevation_deg.to_radians();
+                    let dir = |a: f32| {
+                        Vec3::new(a.sin() * el.cos(), el.sin(), -a.cos() * el.cos()).normalize()
+                    };
+                    let left_m = hand + dir(-half) * l_m;
+                    let right_m = hand + dir(half) * l_m;
+
+                    let (birth_l, birth_r) = hang_two(&mut app, e, stand_m, left_m, right_m);
+                    let birth = |side: Side| match side {
+                        Side::Left => birth_l,
+                        Side::Right => birth_r,
+                    };
+                    for k in keys {
+                        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(*k);
+                    }
+                    if ctrl {
+                        app.world_mut()
+                            .resource_mut::<ButtonInput<KeyCode>>()
+                            .press(KeyCode::ControlLeft);
+                    }
+
+                    let mut worst_excess_m = f32::NEG_INFINITY;
+                    let mut worst_feasible_excess_m = f32::NEG_INFINITY;
+                    let mut ticks_infeasible = 0;
+                    let mut ticks_with_one_rope = 0;
+                    // The anchors do not move, so their separation is a constant of the cell —
+                    // it is the `dₐ` of [`Cell::worst_feasible_excess_m`]'s triangle inequality.
+                    let anchors_apart_m = (right_m - left_m).length();
+                    for _ in 0..ticks_n {
+                        // The look is an absolute angle and it is consumed every tick
+                        // (`net::local::read_input` `take()`s it), so it is written every tick.
+                        app.world_mut()
+                            .resource_mut::<defeated_by_titan::shared::LookOverride>()
+                            .0 = Some((yaw_deg.to_radians(), 0.0));
+                        app.update();
+                        let here = position(&app, e);
+                        let found = arms(&mut app);
+                        if found.len() < 2 {
+                            ticks_with_one_rope += 1;
+                        }
+                        // `Lₗ + Lᵣ ≥ dₐ` — whether a position satisfying BOTH maxima exists at
+                        // all this tick. A rope with no joint has no maximum, so it cannot make
+                        // the pair impossible: `f32::INFINITY` is the honest reading of "no
+                        // constraint" and it is also what the pre-`Q-058` build measured.
+                        let budget_m: f32 = found
+                            .iter()
+                            .map(|a| a.enforced_m.unwrap_or(f32::INFINITY))
+                            .sum();
+                        let feasible = found.len() == 2 && budget_m >= anchors_apart_m;
+                        if !feasible {
+                            ticks_infeasible += 1;
+                        }
+                        for arm in found {
+                            // **The joint constrains the body ORIGIN**, not the hand: both
+                            // local anchors are `Vec3::ZERO` (`player::rope::attach_ropes`), so
+                            // this is the very distance `DistanceLimit` measures.
+                            let distance_m = (arm.anchor_m - here).length();
+                            // No joint = no enforced maximum, so the rope is held to the length
+                            // it was BORN with. That is the LENIENT reading: the ratchet only
+                            // ever takes length away, so a build that passes this would also
+                            // have to pass against `limits.max`.
+                            let max_m = arm.enforced_m.unwrap_or_else(|| birth(arm.side));
+                            worst_excess_m = worst_excess_m.max(distance_m - max_m);
+                            if feasible {
+                                worst_feasible_excess_m =
+                                    worst_feasible_excess_m.max(distance_m - max_m);
+                            }
+                        }
+                    }
+                    if worst_excess_m == f32::NEG_INFINITY {
+                        // Counted, never silent: a cell that measured nothing is not a pass.
+                        skipped += 1;
+                        continue;
+                    }
+                    cells.push(Cell {
+                        separation_deg,
+                        elevation_deg,
+                        yaw_deg,
+                        stance,
+                        combo,
+                        worst_excess_m,
+                        // `NEG_INFINITY` here means *every* tick of the cell was infeasible.
+                        // It is not a pass and it is not a `continue`: it is carried into the
+                        // matrix as `-inf` and `ticks_infeasible == ticks_n` says why.
+                        worst_feasible_excess_m,
+                        ticks_infeasible,
+                        ticks_with_one_rope,
+                    });
+                }
+            }
+        }
+    }
+    let expected = SEPARATIONS_DEG.len() * ELEVATIONS_DEG.len() * YAWS_DEG.len() * COMBOS.len();
+    assert_eq!(
+        cells.len() + skipped as usize,
+        expected,
+        "the sweep lost cells it never counted"
+    );
+    assert_eq!(
+        skipped, 0,
+        "{skipped} of {expected} {stance} cells measured NOTHING and would have passed in \
+         silence — a `continue` in a sweep is an exclusion invisible in the denominator"
+    );
+    cells
+}
+
+/// Prints the matrix worst-first and returns the worst cell.
+fn report(name: &str, cells: &[Cell]) -> Cell {
+    let mut sorted: Vec<Cell> = cells.to_vec();
+    sorted.sort_by(|a, b| b.worst_excess_m.total_cmp(&a.worst_excess_m));
+    let infeasible: u32 = cells.iter().map(|c| c.ticks_infeasible).sum();
+    let lost: u32 = cells.iter().map(|c| c.ticks_with_one_rope).sum();
+    println!(
+        "--- {name}: {} cells, worst 12 by excess · {infeasible} tick(s) where no position \
+         satisfies both maxima · {lost} tick(s) with <2 ropes ---",
+        cells.len()
+    );
+    println!("  sep   el   yaw  keys   worst excess     worst FEASIBLE   infeasible ticks");
+    for c in sorted.iter().take(12) {
+        println!(
+            "  {:5.0} {:4.0} {:5.0}  {:5}  {:+13.4}  {:+15.4}  {:8}",
+            c.separation_deg,
+            c.elevation_deg,
+            c.yaw_deg,
+            c.combo,
+            c.worst_excess_m,
+            c.worst_feasible_excess_m,
+            c.ticks_infeasible
+        );
+    }
+    sorted[0]
+}
+
+/// The solver's own error is not a rope getting longer.
+///
+/// `docs/measurements/rope-decision.md` records 2–5 mm of `DistanceJoint` error under load, and
+/// the drive presses against the limit at `drive_accel_max_m_s2` = 250 m/s² for as long as a key
+/// is held. **1 cm is the band, and it is not a tuning number:** the failures this test exists
+/// to catch are 29 m (`FIND-186` attempt 1: 40.00 → 69.33 m) and 45 m (`A`+`W` on HEAD:
+/// 51.55 → 96.75 m), i.e. three orders of magnitude away from it.
+const SOLVER_SLOP_M: f32 = 0.01;
+
+/// The band the two force models are allowed to differ by **with `Ctrl` held**, and it is a band
+/// on a DIFFERENCE, not on an excess.
+///
+/// `FIND-191`'s single stance measured `Drive` and `Pendulum` agreeing to three decimals. Over
+/// the 288-cell matrix the agreement is looser, and it has to be: with both `limits.max` driven
+/// below what the geometry allows the solver is choosing which arm to abandon, and that choice
+/// is decided by millimetres of position error which the drive's own acceleration then amplifies
+/// over 90 ticks. **This number is measured and stated below, not tuned** — and the failures it
+/// exists to catch are the ones `FIND-186` measured: 29 m and 45 m.
+const CTRL_MODEL_GAP_M: f32 = 0.05;
+
+#[test]
+fn f3f_two_anchors_and_no_arm_ever_gets_further_from_its_own_anchor_than_its_rope_allows() {
+    // 🔴 **RED FIRST, and this is what it read before `Q-058` was built: +51.1978 m** at 60°
+    // separation, 20° elevation, yaw 90°, `A` held — a `Drive` rope had no joint at all, so
+    // nothing in the game held either distance and `A`/`D` walked straight out of both ropes.
+    //
+    // 🔴 **AND RED AGAIN AFTERWARDS, 2026-08-27 [offlinebot], by putting `commands.spawn(rope);`
+    // back into the `Drive` arm of `player::rope::attach_ropes`** — the rollback point `Q-058`
+    // names, one branch, and the whole feature. All four matrices went red on the same run:
+    //
+    // | matrix | worst excess | where |
+    // |---|---|---|
+    // | air | **+51.1978 m** | 60° / 20° / yaw 90° / `A` |
+    // | ground | **+50.0737 m** | 170° / 20° / yaw 270° / `W` |
+    // | air + `Ctrl` (feasible ticks only) | **+51.1978 m** | 60° / 20° / yaw 90° / `A` |
+    // | ground + `Ctrl` (feasible ticks only) | **+50.0737 m** | 170° / 20° / yaw 270° / `W` |
+    //
+    // Restored, all four are green at ≤ 0.0050 m / ≤ 0.2750 m. The band between the two states
+    // is four orders of magnitude, which is what makes this a guard and not a tolerance.
+    //
+    // ⚠️ **`Ctrl` is deliberately NOT in THIS matrix, and that is not a loosened assert** — the
+    // reel can drive two maxima below what the geometry allows, and then no solver can honour
+    // both (`FIND-191`). The ratchet is not left out of the acceptance criterion, it is measured
+    // where it can be measured: `f3f_with_the_ratchet_held_no_arm_escapes_a_maximum_a_position_could_satisfy`
+    // and `f3f_the_same_with_the_ratchet_held_…` run this same 288-cell sweep with `Ctrl` down
+    // under **both** force models. What they assert is stated in [`ctrl_matrix`]: the excess
+    // over the ticks where both maxima are SATISFIABLE (bounded by one tick of reel), and the
+    // per-cell difference to `Pendulum` in the saturated regime, which is the claim `Q-058`
+    // made.
+    let air = two_anchor_matrix(RopeForceModel::Drive, "air", AIR_SPOT_M, 90, false);
+    let worst = report("two anchors, open air", &air);
+    assert!(
+        worst.worst_excess_m <= SOLVER_SLOP_M,
+        "air: at {:.0}° separation, {:.0}° elevation, yaw {:.0}°, keys `{}`, an arm ended \
+         {:.4} m FURTHER from its anchor than its own rope allows. „aber NICHT das seil \
+         verlängern!!\" — the joint is what is supposed to make that impossible",
+        worst.separation_deg,
+        worst.elevation_deg,
+        worst.yaw_deg,
+        worst.combo,
+        worst.worst_excess_m
+    );
+}
+
+#[test]
+fn f3f_the_same_two_anchors_hold_with_the_player_standing_on_the_ground() {
+    // The other stance, and it is a different code path in three places: `in_flight` is false,
+    // so the winch's always-on branch is off; `ground_locomotion` writes the horizontal
+    // velocity; and the ground itself can push the player around. `FIND-182`'s elevator lived
+    // exactly here — a walking hooked player at 50.6 m/s and 16.5 m up.
+    //
+    // The spot is `scripts/f176-pull.txt`'s, and for its measured reason: the market hall
+    // covers x −47..−15, z −13..13 and this does not, so a walk from here is a walk.
+    let ground = two_anchor_matrix(RopeForceModel::Drive, "ground", GROUND_SPOT_M, 90, false);
+    let worst = report("two anchors, standing", &ground);
+    assert!(
+        worst.worst_excess_m <= SOLVER_SLOP_M,
+        "ground: at {:.0}° separation, {:.0}° elevation, yaw {:.0}°, keys `{}`, an arm ended \
+         {:.4} m further from its anchor than its own rope allows",
+        worst.separation_deg,
+        worst.elevation_deg,
+        worst.yaw_deg,
+        worst.combo,
+        worst.worst_excess_m
+    );
+}
+
+/// **The comparison the two `Ctrl` matrices make, factored out** — same sweep, two force models,
+/// per cell. Returns `(worst cell under `Drive`, worst per-cell gap, the cell it was in)`.
+///
+/// The pairing is positional and it is checked, not trusted: [`two_anchor_matrix`] asserts
+/// `skipped == 0`, so both matrices carry every combination in the same loop order and cell `i`
+/// on the left is cell `i` on the right. If that ever stops being true the `assert_eq!` below
+/// says so instead of comparing two different stances and calling them equal.
+fn ctrl_matrix(stance: &'static str, spot_m: Vec3) {
+    let drive = two_anchor_matrix(RopeForceModel::Drive, stance, spot_m, 90, true);
+    let pendulum = two_anchor_matrix(RopeForceModel::Pendulum, stance, spot_m, 90, true);
+    report(&format!("{stance} — Drive"), &drive);
+    report(&format!("{stance} — Pendulum"), &pendulum);
+    assert_eq!(drive.len(), pendulum.len(), "the two matrices are not the same sweep");
+
+    // ---- 1. the acceptance criterion, over the ticks where it is a criterion ------------
+    let mut worst_feasible = drive[0];
+    let mut measured_cells = 0;
+    let mut infeasible_ticks = 0u32;
+    for c in &drive {
+        infeasible_ticks += c.ticks_infeasible;
+        if c.worst_feasible_excess_m > f32::NEG_INFINITY {
+            measured_cells += 1;
+            if c.worst_feasible_excess_m > worst_feasible.worst_feasible_excess_m {
+                worst_feasible = *c;
+            }
+        }
+    }
+    // 🔴 **THE BAND WITH `Ctrl` HELD IS ONE TICK OF REEL, AND IT IS DERIVED, NOT TUNED.**
+    // `player::rope::shorten_ropes` takes `reel_speed_m_s / simulation_hz` = 28/60 = **0.4667 m**
+    // off `limits.max` every tick, and the sample below is read once a tick, *after* the update.
+    // So the maximum can move that far underneath a body the solver has already placed, and
+    // `distance − limits.max` is then a **shrinking** maximum and not a lengthening rope — the
+    // opposite of what §3F forbids. `SOLVER_SLOP_M` (1 cm) is the band when nothing moves the
+    // maximum; this is the band when the ratchet does, and it is the same 1 cm plus the one
+    // thing that changed.
+    // ⚠️ It is a bound, not a measurement: the run reads 0.2748 m (air) / 0.2750 m (ground),
+    // i.e. 59 % of it. If it ever exceeds one tick of reel, something is moving the BODY out
+    // and not the maximum in.
+    let reel_lag_m =
+        shipped().game.vector.reel_speed_m_s / shipped().game.simulation_hz as f32
+            + SOLVER_SLOP_M;
+    let ticks_total = drive.len() as u32 * 90;
+    println!(
+        "{stance}: {measured_cells} of {} cells had at least one satisfiable tick ·          {infeasible_ticks} of {ticks_total} ticks ({:.1} %) asked for two maxima no position          satisfies (`FIND-191`) · worst FEASIBLE excess {:+.4} m",
+        drive.len(),
+        100.0 * f64::from(infeasible_ticks) / f64::from(ticks_total),
+        worst_feasible.worst_feasible_excess_m
+    );
+    assert!(
+        measured_cells > 0,
+        "{stance}: not one of {} cells had a single tick where both maxima were satisfiable, so          this matrix asserted NOTHING — the reel reaches `min_rope_m` before the sweep starts          measuring and the fixture needs a shorter hold, not a weaker assert",
+        drive.len()
+    );
+    assert!(
+        worst_feasible.worst_feasible_excess_m <= reel_lag_m,
+        "{stance}: with the ratchet in the composition, an arm ended {:.4} m FURTHER from its \
+         anchor than its own `limits.max` allows at {:.0}° separation, {:.0}° elevation, yaw \
+         {:.0}°, keys `{}` — **and on a tick where both maxima WERE satisfiable**, so \
+         `FIND-191` does not excuse it. One tick of reel is {reel_lag_m:.4} m and that is all \
+         a shrinking maximum can explain",
+        worst_feasible.worst_feasible_excess_m,
+        worst_feasible.separation_deg,
+        worst_feasible.elevation_deg,
+        worst_feasible.yaw_deg,
+        worst_feasible.combo
+    );
+
+    // ---- 2. and the 50 m is the REEL's defect, not the drive's -------------------------
+    //
+    // 🔴 **AND THE CONTROL IS THE SATURATED NUMBER, NOT THE FEASIBLE ONE — measured, after
+    // writing the assert the other way round first.** The obvious version of this control
+    // compares both numbers and it goes red at **0.1878 m** (120° separation, 20° elevation,
+    // yaw 0°, `D` held). That is not a defect: over the ticks where the pair IS satisfiable the
+    // two models are supposed to move the player DIFFERENTLY — `D` under `Drive` is
+    // `rope_drive`'s 36 m/s lateral velocity target, `D` under `Pendulum` is `rope_steer`'s
+    // force, and with no key at all `Drive` still has `rope_winch`'s always-on pull that
+    // `Pendulum` has never had (`f172_…`, `f149_the_two_force_models_are_not_the_same_thing`).
+    // **A model comparison over the feasible ticks is a test that the two models are the same
+    // thing, and they are not.**
+    //
+    // What `FIND-191` claims is narrower and it is exactly what the saturated number says:
+    // once the reel has driven `Lₗ + Lᵣ` below the anchors' separation, **the end state is
+    // geometric** — the player sits at `min_rope_m` from one anchor and the other rope is over
+    // by the rest, whatever the keys were doing. If that fixpoint were different under the two
+    // models, `Q-058` would have changed the reel instead of inheriting it. It is 0.0000 m
+    // across all 288 cells in both stances.
+    let mut worst_gap = 0.0f32;
+    let mut worst_cell = drive[0];
+    let mut worst_feasible_gap = 0.0f32;
+    for (a, b) in drive.iter().zip(pendulum.iter()) {
+        assert_eq!(
+            (a.separation_deg, a.elevation_deg, a.yaw_deg, a.combo),
+            (b.separation_deg, b.elevation_deg, b.yaw_deg, b.combo),
+            "the two matrices drifted out of step — cell {a:?} is being compared with {b:?}"
+        );
+        let gap = (a.worst_excess_m - b.worst_excess_m).abs();
+        if gap > worst_gap {
+            worst_gap = gap;
+            worst_cell = *a;
+        }
+        // Printed and NOT asserted on, for the reason above — it is the size of the difference
+        // between two force models, and a round that wants it smaller wants a different game.
+        worst_feasible_gap = worst_feasible_gap
+            .max((a.worst_feasible_excess_m - b.worst_feasible_excess_m).abs());
+    }
+    println!(
+        "{stance}: worst per-cell gap `Drive` vs `Pendulum` — saturated {worst_gap:.4} m (at \
+         {:.0}°/{:.0}°/yaw {:.0}° `{}`), over the FEASIBLE ticks {worst_feasible_gap:.4} m \
+         (the two force models, doing their two different jobs)",
+        worst_cell.separation_deg,
+        worst_cell.elevation_deg,
+        worst_cell.yaw_deg,
+        worst_cell.combo
+    );
+    assert!(
+        worst_gap <= CTRL_MODEL_GAP_M,
+        "{stance}: with `Ctrl` held, `Drive` and `Pendulum` disagree by {worst_gap:.4} m at \
+         {:.0}° separation, {:.0}° elevation, yaw {:.0}°, keys `{}` — `Q-058` gave `Drive` the \
+         joint `Pendulum` already had, so a difference means it changed the reel instead of \
+         inheriting it (`FIND-191`)",
+        worst_cell.separation_deg,
+        worst_cell.elevation_deg,
+        worst_cell.yaw_deg,
+        worst_cell.combo
+    );
+}
+
+/// 🔴 **THE RATCHET IS INSIDE THE COMPOSITION, and this is the matrix that says what it does.**
+///
+/// The acceptance criterion of `Q-058` names *thrust + drive + winch + gravity + the joint + the
+/// ratchet* — and `Ctrl` is the ratchet's key. The two `Ctrl`-free matrices above hold an
+/// **absolute** bound (`worst excess ≤ 1 cm`). **With the reel held that bound is not reachable
+/// by any solver**, and not because of anything `Q-058` built: `player::rope::shorten_ropes`
+/// walks BOTH `limits.max` down toward `vector.min_rope_m` while the two anchors stay tens of
+/// metres apart, so it asks for a pair of maxima that **no point in space satisfies** and avian
+/// keeps one arm and abandons the other (`FIND-191`).
+///
+/// So this test asserts the claim `Q-058` actually made — **`Drive` INHERITS the rope `Pendulum`
+/// has always had** — as a per-cell difference. It cannot be satisfied by weakening anything:
+/// making `Drive` better than `Pendulum` fails it exactly as making it worse does.
+///
+/// # What this reads, and what it varies
+///
+/// Same lists as [`two_anchor_matrix`]'s header, plus the force model. **Not varied here and it
+/// matters:** the reel SPEED (`reel_speed_m_s`, one shipped value) and the floor
+/// (`min_rope_m` = 3 m, one value) — the pair that decides how fast the two maxima become
+/// impossible.
+#[test]
+fn f3f_with_the_ratchet_held_no_arm_escapes_a_maximum_a_position_could_satisfy() {
+    ctrl_matrix("air+Ctrl", AIR_SPOT_M);
+}
+
+/// The other stance of the same claim — `Ctrl` on the ground is `F-005`'s *„Spieler kann aus dem
+/// Tiefpunkt Hoehe gewinnen"*, i.e. the key that takes the player off the floor, and it runs
+/// through `ground_locomotion` and the winch's `in_flight == false` branch on the way.
+#[test]
+fn f3f_the_same_with_the_ratchet_held_and_the_player_standing_on_the_ground() {
+    ctrl_matrix("ground+Ctrl", GROUND_SPOT_M);
+}
+
+/// `FIND-191` — **the reel can ask for two lengths that no position in space satisfies, and
+/// then avian keeps one arm and abandons the other.** Two anchors 170° apart, `Ctrl` held: both
+/// `limits.max` march down to `vector.min_rope_m` = 3 m while the anchors stay 56 m apart, the
+/// player is dragged onto the right-hand anchor, and the left rope ends **50.167 m** past its
+/// own maximum.
+///
+/// 🔴 **This test asserts that `Q-058` did not cause it, not that it is acceptable.** The whole
+/// premise of giving `Drive` a joint is *"the solver holds all of them at once"*, and this is
+/// the case where that sentence is false — so it is measured rather than assumed, against the
+/// model that has had the joint since the beginning. Measured 2026-08-27: the two models agree
+/// to **three decimals on every sampled tick**, which is what makes this `shorten_ropes`'
+/// defect and not the drive's.
+///
+/// **What would fix it is not in this round**, and `FIND-186` is why: the rule would have to
+/// teach one arm's reel about the other arm's geometry, which is exactly the hand-rolled
+/// multi-arm reasoning that was refuted 4/4. → `docs/FINDINGS.md` FIND-191.
+#[test]
+fn find191_the_reel_can_make_two_maxima_impossible_and_that_is_older_than_the_drive_s_joint() {
+    let worst = |model| {
+        let mut app = app();
+        select(&mut app, model);
+        let e = me(&mut app);
+        let stand = Vec3::new(0.0, 300.0, 0.0);
+        let eye = data(&app).game.player.eye_height_m;
+        let hand = stand + Vec3::Y * eye;
+        let half = 85.0f32.to_radians();
+        let el = 20.0f32.to_radians();
+        let dir =
+            |a: f32| Vec3::new(a.sin() * el.cos(), el.sin(), -a.cos() * el.cos()).normalize();
+        hang_two(&mut app, e, stand, hand + dir(-half) * 30.0, hand + dir(half) * 30.0);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ControlLeft);
+        let mut worst_m = f32::NEG_INFINITY;
+        for _ in 0..90 {
+            app.update();
+            let here = position(&app, e);
+            for arm in arms(&mut app) {
+                let max_m = arm.enforced_m.expect("every rope carries a joint since `Q-058`");
+                worst_m = worst_m.max((arm.anchor_m - here).length() - max_m);
+            }
+        }
+        worst_m
+    };
+    let drive = worst(RopeForceModel::Drive);
+    let pendulum = worst(RopeForceModel::Pendulum);
+    println!("find191 two anchors 170° apart, Ctrl held: Drive {drive:.4} m · Pendulum {pendulum:.4} m past the maximum");
+
+    // The defect is real and it is big — if it ever stops being either, this test is measuring
+    // the wrong thing and the finding needs re-reading.
+    assert!(
+        drive > 10.0,
+        "the reel no longer over-constrains the pair (worst {drive:.4} m) — `FIND-191` is either \
+         fixed or no longer reproduced by this fixture, and it must not stay written as if it \
+         were still true"
+    );
+    // 🔴 **The whole point.** `Pendulum` has carried a `DistanceJoint` since `F-004` and
+    // `shorten_ropes` has been its reel the whole time. If the two models disagree, then
+    // `Q-058` DID make this worse and the finding's "older than the joint on `Drive`" is wrong.
+    assert!(
+        (drive - pendulum).abs() < 0.05,
+        "Drive ended {drive:.4} m past a maximum and Pendulum {pendulum:.4} m — `FIND-191` claims \
+         these are the same defect, and a difference means giving `Drive` a joint changed the \
+         reel rather than inheriting it"
+    );
+}
+
+/// **The probe behind `FIND-191`** — two anchors 170° apart, `Ctrl` held, both models.
+///
+/// Prints the per-tick truth: `limits.max` and the real distance for each arm. Run it with
+/// `cargo test --test vector_rope probe_two_opposite -- --nocapture`.
+#[test]
+#[ignore = "a measurement, not a guard — see FIND-191"]
+fn probe_two_opposite_anchors_with_the_reel_held() {
+    for model in [RopeForceModel::Drive, RopeForceModel::Pendulum] {
+        let mut app = app();
+        select(&mut app, model);
+        let e = me(&mut app);
+        let stand = Vec3::new(0.0, 300.0, 0.0);
+        let eye = data(&app).game.player.eye_height_m;
+        let hand = stand + Vec3::Y * eye;
+        let half = 85.0f32.to_radians();
+        let el = 20.0f32.to_radians();
+        let dir = |a: f32| Vec3::new(a.sin() * el.cos(), el.sin(), -a.cos() * el.cos()).normalize();
+        let (bl, br) = hang_two(&mut app, e, stand, hand + dir(-half) * 30.0, hand + dir(half) * 30.0);
+        println!("--- {model:?}: birth {bl:.3} / {br:.3} m, anchors 170° apart ---");
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ControlLeft);
+        for t in 0..90 {
+            app.update();
+            if t % 6 != 0 {
+                continue;
+            }
+            let here = position(&app, e);
+            let v = velocity(&app, e).length();
+            let row: Vec<String> = arms(&mut app)
+                .iter()
+                .map(|a| {
+                    format!(
+                        "{:?} max {:6.3} dist {:7.3}",
+                        a.side,
+                        a.enforced_m.unwrap_or(f32::NAN),
+                        (a.anchor_m - here).length()
+                    )
+                })
+                .collect();
+            println!("  t{t:3} |v| {v:7.3}  {}", row.join("  |  "));
+        }
+    }
+}
+
+/// One second of `keys` for a hooked player standing at `scripts/f176-pull.txt`'s stance, as
+/// **the distance to his anchor** — which is what `docs/NEXT.md` §3D's acceptance is about and
+/// what the script harness cannot see (`src/debug/script.rs`: `rope` is the anchored ARM COUNT,
+/// not a length).
+fn distance_after_a_second_of(model: RopeForceModel, keys: &[KeyCode], hooked: bool) -> (f32, f32) {
+    let mut app = app();
+    select(&mut app, model);
+    let e = me(&mut app);
+    // ⚠️ **`warp`, not `place`.** `place` writes `Position` and the next tick's `Transform`
+    // sync puts the body back where its `Transform` still says it is — a first version of this
+    // fixture measured a player at the ORIGIN on a 63.5 m rope that was slack for every tick,
+    // and every number it produced was about nothing at all.
+    warp(&mut app, e, Vec3::new(45.0, 0.6, -43.0));
+    ticks(&mut app, 40); // he lands and settles
+    let start = position(&app, e);
+    assert!(
+        (start.xz() - Vec2::new(45.0, -43.0)).length() < 1.0,
+        "the fixture is supposed to stand at (45, −43) and it stands at {start:?}"
+    );
+    // `scripts/f176-pull.txt`'s own anchor: body 149 at (45.00, 34.25, −29.00), up and at +Z,
+    // so `S` walks him straight away from it. It is 36.72 m off and the rope is born there, so
+    // the rope is TAUT from the first tick — which is the state §3D R1 is about.
+    let anchor = Vec3::new(45.0, 34.25, -29.0);
+    if hooked {
+        hang_on(&mut app, e, start, anchor);
+    }
+    set_velocity(&mut app, e, Vec3::ZERO);
+    let before = (anchor - position(&app, e)).length();
+    for k in keys {
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(*k);
+    }
+    for _ in 0..60 {
+        // ⚠️ **`look 180 66.6`, exactly `scripts/f176-pull.txt`'s, and it is load-bearing.**
+        // Measured 2026-08-26 and written into that script: the **+Z** side of this spot is
+        // blocked, and a walk into it reads 0.915 m/s instead of 6.000. At the default yaw `S`
+        // walks toward +Z, so a first version of this fixture measured a player pressed against
+        // a wall — its control moved 0.028 m and called that "a man walking away". At yaw 180
+        // `S` points at −Z, which is the clear direction AND the one away from the anchor.
+        // The override is consumed every tick (`net::local::read_input` `take()`s it).
+        app.world_mut().resource_mut::<defeated_by_titan::shared::LookOverride>().0 =
+            Some((180.0f32.to_radians(), 66.6f32.to_radians()));
+        app.update();
+    }
+    (before, (anchor - position(&app, e)).length())
+}
+
+/// `docs/NEXT.md` §3D **R1**, and it is the one the script can only see as a speed.
+///
+/// > *„wenn ich von seil weg gehe. also seil ist vorne und ich laufe zurück werde cih nicht ran
+/// > gezogen. sonst werde ich ranzeogen!"* — read in §3D as **"the pull is unconditional; `S`
+/// > is the one input that is allowed to fight it, and even then it may only slow the approach,
+/// > not reverse it into a retreat."**
+///
+/// Measured 2026-08-27 over one second of `S` from a taut 36.72 m rope:
+///
+/// | | before | after |
+/// |---|---|---|
+/// | `Drive` | 36.723 | **35.637** — slowed to a crawl and still closing |
+/// | `Pendulum` | 36.723 | 36.715 — he stops dead; **nothing pulls** |
+/// | `Drive`, no rope | 36.723 | 39.619 — a man walking away at `run_speed_m_s` |
+///
+/// 🔴 **The two models are NOT alike here and that is the point.** `Pendulum`'s rope is a
+/// constraint and nothing else, so `S` into a taut rope is a stand — which satisfies
+/// `scripts/f176-pull.txt`'s `assert Speed < 2` and fails §3D R1. `Drive` keeps `FIND-172`'s
+/// always-on pull on top of the same constraint, so `S` is *slowed approach* and not *retreat*,
+/// which is R1 verbatim and reads 7.63 m/s on that same assert. **The assert cannot tell an
+/// escape at 6 m/s from a haul at 12 m/s** — `CLAUDE.md` §6 rule 5, second half — and this test
+/// is what tells them apart. → `docs/FINDINGS.md` FIND-192.
+#[test]
+fn f176_under_drive_walking_backwards_on_a_taut_rope_still_closes_on_the_anchor() {
+    let (b_d, a_d) = distance_after_a_second_of(RopeForceModel::Drive, &[KeyCode::KeyS], true);
+    let (b_p, a_p) = distance_after_a_second_of(RopeForceModel::Pendulum, &[KeyCode::KeyS], true);
+    // 🔴 **The control §6 rule 5 demands: delete the rope and check the number moves.**
+    let (b_f, a_f) = distance_after_a_second_of(RopeForceModel::Drive, &[KeyCode::KeyS], false);
+    println!(
+        "f176 one second of `S` from a taut rope, distance to the anchor: Drive {b_d:.3} → \
+         {a_d:.3} m · Pendulum {b_p:.3} → {a_p:.3} m · no rope {b_f:.3} → {a_f:.3} m"
+    );
+
+    // One second of `run_speed_m_s` = 6 m at an angle to the rope, so the DISTANCE grows by
+    // less than the walk: 2.896 m measured. Two metres is the band, and it is what tells a walk
+    // from the 0.028 m a first version of this fixture read while pressed against the +Z wall.
+    assert!(
+        a_f > b_f + 2.0,
+        "the control gained {:.3} m and it is supposed to be a man leaving — then this test is \
+         measuring a wall, not a rope",
+        a_f - b_f
+    );
+    // R1, and it is a SIGN: the distance may not grow. „aber NICHT das seil verlängern"
+    // (`§3F`) is the same sentence from the other side.
+    assert!(
+        a_d < b_d,
+        "one second of `S` on a taut rope took the player from {b_d:.3} m to {a_d:.3} m — §3D R1 \
+         is that `S` may only SLOW the approach, never reverse it into a retreat"
+    );
+    // And it is really the always-on pull doing it, not the constraint: the model that has the
+    // constraint and no pull does not close at all.
+    assert!(
+        (a_p - b_p).abs() < 1.0,
+        "under `Pendulum` the same second moved him {:.3} m — if the constraint alone closes the \
+         distance then the number above is not `FIND-172`'s pull and this test is mislabelled",
+        b_p - a_p
+    );
+}
+
+const PROBE_KEY: KeyCode = KeyCode::KeyS;
+
+#[test]
+#[ignore = "a probe — the per-tick truth behind FIND-192 and `scripts/f176-pull.txt` ACT 2/2b"]
+fn probe_ground_walk_on_a_rope() {
+    for model in [RopeForceModel::Drive, RopeForceModel::Pendulum] {
+        let mut app = app();
+        select(&mut app, model);
+        let e = me(&mut app);
+        warp(&mut app, e, Vec3::new(45.0, 0.6, -43.0));
+        ticks(&mut app, 40);
+        let start = position(&app, e);
+        hang_on(&mut app, e, start, Vec3::new(45.0, 34.25, -29.0));
+        set_velocity(&mut app, e, Vec3::ZERO);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(PROBE_KEY);
+        println!("--- {model:?} {PROBE_KEY:?} start {start:?} ---");
+        for t in 0..90 {
+            app.update();
+            if t % 9 != 0 { continue; }
+            let st = *app.world().get::<defeated_by_titan::shared::MovementState>(e).unwrap();
+            let ra = app.world().get::<defeated_by_titan::shared::RunAccel>(e).map(|r| r.0).unwrap_or(Vec3::ZERO);
+            let here = position(&app, e);
+            let max = arms(&mut app).first().map(|a| a.enforced_m.unwrap_or(f32::NAN)).unwrap_or(f32::NAN);
+            let dist = arms(&mut app).first().map(|a| (a.anchor_m - here).length()).unwrap_or(f32::NAN);
+            println!("  t{t:3} {st:?} y {:7.3} |v| {:7.3} runaccel {:8.2} max {max:7.3} dist {dist:7.3}", here.y, velocity(&app, e).length(), ra.length());
+        }
+    }
 }
