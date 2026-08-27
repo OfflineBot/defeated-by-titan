@@ -28,6 +28,19 @@ use bevy::prelude::*;
 use super::{plate, PauseAction, Screen};
 use crate::shared::AbandonSortie;
 
+/// **The row that opens the mission list**, and the HUD quotes this constant rather than
+/// spelling the words a second time.
+///
+/// Anything that tells the player where the mission list is quotes this constant rather than
+/// spelling the words a second time — today that is the pause column itself, and next it will be
+/// the **mission board in the hub** the user asked for on 2026-08-27 (*„wenn man in der hub auf
+/// ein board drückt (F) dann kommt man in eine mission übersciht"*, `Q-059`).
+///
+/// A screen that carries its own copy of a label is exactly how a renamed button ends up being
+/// promised somewhere it no longer exists — `FIND-178`, where the HUD lettered `Q`/`E` on a snap
+/// that did not exist. **One spelling, one place.**
+pub const MISSION_SELECT_ROW: &str = "Mission select";
+
 /// Builds the plate. Called by `menu::spawn_menu`, which owns the "is one already there"
 /// question for all five screens.
 ///
@@ -50,7 +63,7 @@ pub fn spawn_pause_screen(commands: &mut Commands, in_a_sortie: bool) {
         } else {
             // In the hub there is nothing to quit *from* — the same door is simply the way to
             // the mission list.
-            buttons.push((PauseAction::Lobby, "Mission select".to_string()));
+            buttons.push((PauseAction::Lobby, MISSION_SELECT_ROW.to_string()));
         }
         buttons.push((PauseAction::Quit, "Quit to desktop".to_string()));
 

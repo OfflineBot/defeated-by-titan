@@ -3106,3 +3106,50 @@ piece of work. It does **not** go before the gate.
 
 **Still open, deliberately:** `Q-063` gravity, `Q-064` Shift, `Q-046` gas tank — all three wait for
 him at the controller. `Q-029` the 26 numbers, at balancing.
+
+---
+
+## Q-076 — ✅ ANSWERED 2026-08-27: the player gets **real mass**. Forces, not accelerations.
+
+**He asked the right question and it was not the one he thought:** *„kann es sein, dass der player
+bei der gravitation nur 1kg wiegt und deshalb so leicht fällt?"*
+
+**Mass cannot affect falling** — gravity is an *acceleration*, `a = g`, in this engine and in
+reality. So the answer to the literal question is no. **But his instinct was right one level over**,
+and `src/player/locomotion.rs:701` already says so, quoting him:
+
+> *„die masse von dem character … es fühlt sich zu leicht an"* … **A body like that has no
+> inertia**; `Forces::apply_linear_acceleration` ignores mass on purpose, so nothing else in the
+> game supplies any either.
+
+Every force in the game — `vector::boost`, `vector::dodge`, `player::locomotion` (both the ground
+and the rope drive) — calls `apply_linear_acceleration`, **documented by avian as "ignoring mass"**.
+So a boost changes your velocity by the same amount whether you are standing still or flying at
+70 m/s. **That is the "too light", and it is a decision, not a bug.**
+
+**He chose: build real mass.** `apply_force` instead.
+
+### ⚠️ What that costs, stated before anyone starts
+
+1. **Every tuning number in `game.ron` changes meaning.** `boost_m_s2: 34` is an acceleration you
+   can check against `gravity_m_s2: -32` in your head — *"the boost beats gravity by 6 %"*. As a
+   force it is newtons, and the sentence becomes `F/m` against `g`. The file's whole style of
+   self-checking comments is built on the current form.
+2. **It is measured how big the difference is** (`src/vector/boost.rs:38`, `tests/vector_boost.rs`):
+   with `apply_force` a **10 kg** player reaches **−7.68 m/s** where a **0.6 kg** one reaches
+   **−112.79**; with the acceleration both reach **−68.002785, bit for bit**. So mass becomes the
+   single most load-bearing number in the file, and it does not exist yet.
+3. **It is not one edit.** `boost.rs:307`, `dodge.rs:179`, `locomotion.rs:1208` and the rope drive
+   all write through the same door, and the rope **joint** now solves against the body too — a
+   mass the solver disagrees with is a different kind of bug.
+4. **Every measured number in `docs/FINDINGS.md` that quotes an acceleration becomes historical.**
+
+### The sequencing, and it matters
+
+**Mass lands BEFORE the play test**, not after — otherwise he tunes gravity, Shift and the gas tank
+against numbers that are about to change meaning underneath him (`Q-063`, `Q-064`, `Q-046`).
+⚠️ But **Shift must be restored first** (`boost_m_s2` nets +2 m/s² today), or there is nothing to
+feel the mass with.
+
+**Rollback point:** the `apply_force` / `apply_linear_acceleration` call sites named in (3), plus
+the mass value itself. Reverting is mechanical; re-tuning afterwards is not.
