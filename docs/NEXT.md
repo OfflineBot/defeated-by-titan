@@ -1551,3 +1551,48 @@ impossible*, not because a projection removed it.
 
 **Related:** `Q-058` · `FIND-186` · `FIND-183` · `FIND-152` · `FIND-149` · `B-004` · `B-005` ·
 `docs/NEXT.md` §3D · `F-004` `F-005` `F-006`
+
+## §3G — 🔴 THE SCRIPT CORPUS IS AIMED AT `gravity_m_s2: -20` AND THE FILE NOW SAYS `-32`
+
+**Measured 2026-08-27 by the main head**, and independently by an adversary against **one pinned
+binary** with only `game.ron` differing — so this is the gravity change and nothing else:
+
+| script | before `1ca7d26` | now |
+|---|---|---|
+| `scripts/f175-loop.txt` | 19 asserts held, **15 of 15 runs** | **10 of 19 failed** |
+| `scripts/f070-hub.txt` | 42 asserts, exit 0 | **16 of 42 failed** |
+| `scripts/f177-door.txt` | 13 asserts, exit 0 | **5 of 13 failed** |
+
+**This was predicted in the commit's own comment and it is not a regression** — the world got
+heavier because the user asked for it twice, and a 30.8 m drop now takes **1.39 s instead of
+1.76 s**. Everything timed against a fall is aimed at the old constant.
+
+### The re-aim waits for the rope round, on purpose
+
+`F-006`'s attempt 3 (the `DistanceJoint` under `Drive`, `Q-058`) is **live right now** and will move
+flight geometry again. Re-aiming the corpus against gravity today and against the joint tomorrow is
+the same work twice, and the second pass would be done against numbers the first pass invented.
+**One re-aim, after the joint lands.**
+
+### The rules for that re-aim, and they are not negotiable
+
+1. **Re-derive, do not widen.** A bracket comes out of the new constant (`v = sqrt(2gh)`,
+   `t = sqrt(2h/g)`), not out of whatever the run happened to print. **Loosening an assert until it
+   passes is how a corpus stops being evidence.**
+2. **Separate the two causes.** Both gravity and the joint landed in the same window. Every
+   re-aimed line must say which of the two moved it — a report that conflates them is useless.
+3. **A line that cannot be re-derived is marked red on purpose**, with a header saying why, the way
+   `scripts/f176-pull.txt` already is.
+4. **Pin the binary and the data** before any before/after (`cp target/debug/defeated_by_titan
+   $SCRATCH/dbt-pinned`), and pin `assets/` too — this entry exists because that was not done.
+
+### And the process failure, recorded because it is mine
+
+The gravity change was made **while a round was live**, in the exact file (`assets/data/game.ron`)
+that the same round's commission forbade its agents from touching, an hour after that commission
+was written. It corrupted three of that round's evidence scripts and briefly looked like the
+unexplained flake in `B-012`. **`CLAUDE.md` already carries this rule twice** — a measurement round
+pins its own binary, and a data change under a live measurement has destroyed two matrices in this
+project. It has now destroyed a third, and the supervisor wrote the warning himself.
+
+**Related:** `docs/BUGS.md` B-012 · `Q-058` · `docs/NEXT.md` §3F · `F-006` `F-175` `F-177`

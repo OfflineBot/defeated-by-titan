@@ -1009,6 +1009,35 @@ cluster's centre `(446.5, 345.5)` lands within 1 px of the ring measured above.
 
 ## B-012 — `f175-loop` reported `11 of 19 asserts failed` twice, then went green nine times
 
+> ⚠️ **PARTLY RESOLVED, 2026-08-27, and the resolution is the supervisor's own mistake.**
+> A SECOND cause of this exact symptom was found and it is **fully explained and deterministic**:
+> commit **`1ca7d26`** ("docs: the frame of reference is the anchor, and gravity is his number")
+> raised `gravity_m_s2` **−20 → −32** and `jump_speed_m_s` **6.5 → 8.2**, **while a round was
+> live**. Measured by an adversary against **one pinned binary**, before → after:
+>
+> | script | before | after |
+> |---|---|---|
+> | `f175-loop.txt` | 19 asserts held, **15 of 15 runs** | **10 of 19 failed, 9 of 9 runs** |
+> | `f177-door.txt` | 13 asserts, exit 0 | **5 of 13 failed**, exit 1 |
+> | `f070-hub.txt` | 42 asserts, exit 0 | **16 of 42 failed** |
+>
+> This is **not** a flake: same binary, same data, deterministic on both sides. It is the
+> gravity change doing exactly what its own comment said it would — *"it moves every fall in the
+> script corpus"* — and it is the trap `CLAUDE.md` records twice and that the supervisor had
+> written into that very round's commission (*"DO NOT EDIT assets/data/*.ron"*) **an hour before
+> editing it himself.**
+>
+> 🔴 **The original observation below is NOT explained by this.** It was logged at **23:15 UTC**,
+> and `game.ron` was written at **02:40 local**, i.e. afterwards. So there are **two causes of one
+> symptom**, one of them known and one still open, and the known one must not be allowed to
+> retire the unknown one. **Do not close this entry when the corpus is re-aimed.**
+>
+> **What the re-aim must not do:** loosen an assert. A 30.8 m drop now takes 1.39 s instead of
+> 1.76 s; the numbers move because the world got heavier, and the brackets get re-derived from
+> the new constant, not widened until green.
+
+### the original observation, still unexplained
+
 **Observed 2026-08-27 [offlinebot]** by an adversarial verifier who was measuring something else,
 and reported **because it touches evidence quality**, not because it can be attributed to any round.
 
