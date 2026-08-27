@@ -2774,3 +2774,111 @@ alternative — showing it a step early, *"you are about to be on the pad"* — 
 and at 0.1 m per tick it is wrong in exactly the cases that matter. **ASSUMPTION:** the flash is
 right, and if he wants a lasting confirmation it belongs to the deploy banner
 (`MissionPhase::Deploying`), not to this line; **rollback point:** nothing in `hub_prompt.rs`.
+
+### ⚠️ 2026-08-27, AMENDED AGAIN — the promise is gone, Q-060b is ANSWERED by measurement, and one new taste call
+
+**Both `ASSUMPTION`s above have been rolled back, and this time by a measurement and not by a
+preference.** Two independent adversaries broke the promise/pointer split on two distinct
+defects (`docs/FINDINGS.md` FIND-193):
+
+1. **The promise lied on every homecoming.** `hub::open_hub` sends the player home by writing
+   `WarpPlayer` in `StateTransition`; `player::apply_warps` applies it in `FixedUpdate`. Every
+   arrival renders at least one `Update` frame from the position the finished sortie left behind,
+   and the promise was computed from it — *"Deploy: … the sortie is starting"* with no deployment
+   behind it, 5/5, at all six pads. The claim this question's amendment rested on — *"the promise
+   is `deploy_on_contact`'s own test and it is what makes the element unable to lie"* — **was
+   false.**
+2. **`Q-060b` is answered, and the answer is no.** *"Is a pointer that names a door the walk does
+   not reach good enough?"* — measured over the yard: the bearing-first ranking named a pad that
+   was **not the nearest in 71.5 % of stances**, median 11.7 m farther; 9.3 % of the stances whose
+   line said *"in front of you"* open a **different** door and 47.7 % open **nothing** in 60 m;
+   and it points through walls. The rollback this question itself named — *"swap the `faced` half
+   for the nearest pad"* — is exactly what was done.
+
+**What is on screen now, and it is one sentence:**
+
+```
+Ashgate Breach / Recruit
+nearest amber pad: 13 m to your left
+Esc: Mission select
+```
+
+It names the **nearest known pad** — the door `deploy_on_contact` would fire if the player stood
+there — how far away it is in 3D, and in which direction. It contains no verb about walking
+(`hud::hub_prompt::INSTRUCTION_WORDS`), and it renders **nothing at all** until the first fixed
+step of a visit to the hub has actually put the player where the hub wants him.
+
+**Q-060c — the line no longer says what makes a sortie start, and nobody has decided whether it
+should.** A first-time player reads *"nearest amber pad: 13 m to your left"* and is told where a
+thing is, not that standing on it deploys. The obvious third line — *"stand on the pad to
+deploy"* — is a **true, unconditional statement of the game's rule** and not a prediction about
+this walk, so it does not repeat any of the four refuted mistakes; it was left out only because
+the acceptance criterion for this round said the wording must contain **no instruction**, and a
+mechanically checkable rule beat a judgement call.
+
+**ASSUMPTION:** the amber pad is its own affordance and the mission list behind `Esc` is the
+fallback, so no instruction is needed. **What to roll back if he disagrees:** the format string
+in `hud::hub_prompt::hub_prompt_text` (one line), the `"start"` entry in
+`hub_prompt::INSTRUCTION_WORDS`, and the three-line assertions in
+`tests/hud.rs::f177_the_line_stands_above_the_keep_out_box_and_never_beside_the_objective` — a
+fourth line does not fit the box the element is laid out in, so a third line that instructs has
+to replace `Esc: Mission select`, not join it.
+
+**And what may no longer be rolled back without a red test:** the pointer's ranking. *Nearest*
+is not a taste call any more; it is the only ranking under which the line and
+`mission::hub::deploy_on_contact` cannot name different doors, and
+`tests/hud.rs::f177_no_stance_in_the_hub_names_a_door_that_is_not_the_nearest` reports
+**6 802 164 wrong doors** the moment it is put back.
+
+## Q-061 — `scripts/f176-pull.txt` ACT 2 asserts `Speed < 2`, and §3D R1 says the opposite
+
+**Asked 2026-08-27**, by the agent that built `Q-058` (the `DistanceJoint` on a `Drive` rope).
+The run is **1 of 9 red** and this is the one red line. It is left red rather than repaired,
+because repairing it is a decision about what the requirement *is*.
+
+**The two sentences disagree.** `scripts/f176-pull.txt` ACT 2 encodes:
+
+> **R1 · on the ground, hooked, holding `S`, the player does not move.** — `assert speed < 2.0`
+
+`docs/NEXT.md` §3D R1 encodes the same user message as:
+
+> **`S` must not cancel the pull.** The pull is unconditional; `S` is the one input that is
+> allowed to fight it, and **even then it may only slow the approach, not reverse it into a
+> retreat.**
+
+The user's own words are *„wenn ich von seil weg gehe. also seil ist vorne und ich laufe zurück
+werde cih nicht ran gezogen. **sonst werde ich ranzeogen!**"* — a bug report saying the pull
+**should** survive walking backwards, not a request to be nailed to the floor.
+
+**What the build does now**, measured over one second of `S` from a taut 36.723 m rope
+(`tests/vector_rope.rs::f176_under_drive_walking_backwards_on_a_taut_rope_still_closes_on_the_anchor`):
+
+| | after one second |
+|---|---|
+| `Drive` (shipped) | **35.637 m** — slowed to a crawl and still closing |
+| `Pendulum` | 36.715 m — he stops dead; nothing pulls at all |
+| `Drive`, rope let go | 39.619 m — a man walking away, the control |
+
+So §3D R1 as `NEXT.md` states it is **met**, and the assert reads **7.630 m/s** and fails.
+🔴 **The assert cannot tell the two apart**: an escape at `run_speed_m_s` = 6 and a haul at
+`drive_idle_speed_m_s` = 12 are both "faster than 2". That is `CLAUDE.md` §6 rule 5's second
+half in a new key, and the script harness cannot be fixed into telling them apart — `rope` is
+the anchored **arm count**, not a length (`src/debug/script.rs`), so there is no distance metric
+to ask with.
+
+**ASSUMPTION the work continued under:** §3D R1 means what `docs/NEXT.md` says it means — the
+pull is unconditional and `S` only slows it — so the build is right and the assert is the thing
+that is out of date. **The line was NOT touched**, so nothing has to be rolled back if the
+answer is the other way; the run simply goes green the moment somebody re-aims it.
+
+**What has to change if he wants the other reading** (`S` = stand still on the ground): the
+always-on pull would need a ground gate, i.e. `player::locomotion::air_control`'s winch branch
+would have to stop firing for `MovementState::Grounded` — and that contradicts `FIND-172`
+(*„ich will dass es immer ranzieht. nicht nur wenn ich w drücke!"*), which is his instruction
+from 2026-08-26.
+
+**What settles it in ten seconds of play:** hook something in front of you, stand still, hold
+`S`. **If being drawn slowly toward it feels right, the assert goes; if being planted feels
+right, the pull needs a ground gate.**
+
+**Related:** `Q-058` · `FIND-172` · `FIND-192` · `docs/NEXT.md` §3D R1 · `F-005` `F-006`

@@ -12,6 +12,7 @@ linked or deleted — there is nothing in between ([`conventions.md`](convention
 |---|---|
 | *Where do we actually stand?* | [`STATUS.md`](STATUS.md) — the four stages, generated |
 | *What do I do first, right now?* | [`NEXT.md`](NEXT.md) — the queue the last session left, in order, with the reason for each |
+| [`PLAN.md`](PLAN.md) | **⭐ the complete survey, the build order and every open question** — written 2026-08-27 after seven rounds circled |
 | *What is next to do?* | [`TODO.md`](TODO.md) — open work in buildable order, generated |
 | *How does this project work?* | [`../CLAUDE.md`](../CLAUDE.md) — the index of the rules, under 150 lines |
 | *Which machine am I sitting on?* | [`environment.md`](environment.md) — **the first question of every session** |
