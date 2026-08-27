@@ -1596,3 +1596,36 @@ pins its own binary, and a data change under a live measurement has destroyed tw
 project. It has now destroyed a third, and the supervisor wrote the warning himself.
 
 **Related:** `docs/BUGS.md` B-012 · `Q-058` · `docs/NEXT.md` §3F · `F-006` `F-175` `F-177`
+
+## §4A — 🔴 THE MAP IS FLAT AND YOU CAN FALL OFF THE SIDE. The user, 2026-08-27:
+
+> *"es soll auch noch verschiedene höhen geben. aktuell sit alles flach von der map. und man kann
+> an der seite einfach runterfallen!"*
+
+**Two things, and the first one is already measured and was explicitly left to him.**
+
+**1 · The relief is below the threshold of visibility, and it always was.** `FIND-134` point 3
+measured it: `terrain.step_m` **1.50 m** over `cell_m` **42 m** is a **3.6 % grade** under 11.50 m
+houses. A retaining-wall/cap split was built to make the terraces read, measured at **5 of 921 600
+pixels** for **+255 blocks (+8.9 %)**, and reverted — *"the relief is not hidden by the renderer,
+it is below the threshold of visibility."* The finding closed with *"Ask him about `step_m` — 1.5 m
+over 42 m is his number and it is why the slope is invisible."*
+**He has now answered without being asked: make it vary.**
+⚠️ **The trade is known and was measured once already** (`FIND-091`): a steeper step reads from the
+air and costs walkability — *"a 0.36 m tread is a wall with a texture"*. So this is not one number,
+it is a number **plus** the stair asserts in `plan_terrain` that constrain it.
+⚠️ **And "verschiedene höhen" may not mean terrain at all.** A flat district with tall buildings
+and a flat district on a hillside are different fixes; so is *vertical* variety — roofs at
+different heights to swing between. **Ask which he means before touching `step_m`** — this is
+exactly the §3C mistake (redesigning the map on a guess) and it cost a round once.
+
+**2 · 🔴 THE MAP HAS NO EDGE. You can walk or fly off the side.** This is a plain defect and it is
+nobody's design decision. Ashgate is 700×700 m with a wall, and outside the wall there is
+apparently nothing to stop a player leaving. **No repro is on file yet** — write one before fixing
+(rule 5), because the honest answer differs by cause: no collider beyond the plate, a plate smaller
+than the playable area, or a kill-plane that does not exist.
+**Candidate answers, cheapest first:** an invisible boundary at the wall; a death/respawn plane far
+below; the world simply continuing (generated ground) so there is no edge to find.
+
+**Related:** `FIND-134` · `FIND-091` · `Q-070` (the town stays intact) · `docs/NEXT.md` §3C ·
+`F-003` `M-002`

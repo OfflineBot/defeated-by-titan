@@ -8,6 +8,39 @@ Updated: 2026-08-27 · Stage: 🟨 (a plan, not a result)
 > features stood unbuilt. Six parallel readers surveyed the whole repository; this is what they
 > found.
 
+
+---
+
+## 0 · ⭐ THE ANSWERS — the run-through of 2026-08-27, and what it changed
+
+**All 23 questions were put to him and answered in one sitting** (`docs/QUESTIONS.md`, batches
+1–6). **Three answers deleted work rather than creating it, and one of them was the thing this
+project had been failing at for four rounds.**
+
+**The three that made the project SMALLER:**
+
+1. **The anchor field is gone.** *„es soll auf jeglicher oberflqche einhaken. nicht an hardcoded
+   punkten etc!"* — `world::AnchorField` (787 lines, 1564 authored + 8108 generated points,
+   rebuilt every load) was **the wrong idea, not an unfinished one**. `F-024` is not built,
+   `F-026`/`F-027` lose their subject, and the raycast the game already uses is correct.
+   ⚠️ The **aim assist survives** — it sweeps the *ray* sideways for a surface and never used the
+   point list.
+2. **The hub prompt is retired, replaced by a board.** *„wenn man in der hub auf ein board drückt
+   (F) dann kommt man in eine mission übersciht"*. **Four refutation rounds were spent attacking a
+   predictive text line he never asked for.** A board you walk to and press `F` on needs no bearing
+   rule, no walk model, no ray — and the blank signpost is already standing in the hub.
+3. **Ashgate stays intact.** So `docs/gameplay/world.md` is the file that is wrong, not the map.
+
+**The one that made it bigger, knowingly:** progression gets **built out fully**, which overrides
+`docs/PLAN-GAME.md` §10. He is the gate and he chose.
+
+**And the gate itself is now real instead of impossible:** two gates, **him first**, then a softer
+one — and *„ich sag wenn es passt"*, so **no agent may ever declare it passed**.
+
+⚠️ **The build order in §4 below was written BEFORE these answers.** Ranks 6 and 7 are void (the
+hub-spawn turn and the anchor snap), rank 11 moves behind rank 8, and rank 14 is unlocked. Read §0
+first and §4 as history.
+
 ---
 
 ## 1 · What this game IS today

@@ -2882,3 +2882,227 @@ from 2026-08-26.
 right, the pull needs a ground gate.**
 
 **Related:** `Q-058` · `FIND-172` · `FIND-192` · `docs/NEXT.md` §3D R1 · `F-005` `F-006`
+
+---
+
+## ✅ ANSWERED 2026-08-27 — the interactive run-through, batch 1 of 6
+
+**Q-063 · gravity — „Erst spielen, dann entscheiden."**
+`-32` stays **provisionally**. The script corpus re-aim **waits for his verdict**, so it is not
+paid twice. ⚠️ **Consequence: `f-007-boost`, `f003-ashgate`, `f025-chain` and the other ~10 stay
+red until he has played.** That is deliberate, not neglect.
+
+**Q-064 · Shift/boost — „erinnere mich später beim play test."**
+Not decided. **But a play test of gravity is worthless while Shift nets +2 m/s²**, so `boost_m_s2`
+is restored to the *old net lift* as a **provisional** value — `34 − 20 = +14`, so `32 + 14 = 46` —
+and it is labelled provisional in `game.ron`. **The supervisor owes him this question at the play
+test.** → carried into `docs/NEXT.md` as a standing item.
+
+**Q-065 · Ctrl with two ropes — „Beide Seile bleiben, du hängst fest."**
+He chose the physically honest reading: two ropes that contradict each other **hold** you.
+⚠️ **That is NOT what the game does today, so this is still work.** Today one rope ends up
+**50.167 m past its own maximum** and the solver pins him at 0.000 m/s — a constraint *violation*,
+not a stand-off. His answer means: **the reel stops when the next step would be infeasible**
+(`L_left + L_right >= anchor_separation`), both maxima stay satisfied, and the player hangs between
+them. **He has accepted being stuck; he has not accepted a broken rope.**
+
+**Q-066 · hub spawn — „Lass es, ich dreh mich um."**
+The spawn facing stays. ⚠️ **This promotes the hub line from nice-to-have to load-bearing**: if the
+player is not turned toward a door, the only thing that can name one is the text. So `F-177`'s
+line — and `Q-059`, how long it stays up — is now on the critical path rather than beside it.
+`docs/NEXT.md` §3E is superseded by this answer; the two rewrite options there are **not** to be
+built.
+
+## ✅ ANSWERED 2026-08-27 — batch 2 of 6
+
+**Q-067 · the anchor field — 🔴 „es soll auf jeglicher oberflqche einhaken. nicht an hardcoded
+punkten etc!"**
+
+**This retires a whole subsystem, and the raycast the game already uses is the RIGHT design.**
+- `world::AnchorField` — 787 lines, **1564 authored `hook.*` points + 8108 generated**, rebuilt at
+  every load — is **the wrong idea**, not an unfinished one. Hooking is a property of *surfaces*,
+  not of a curated point list.
+- **`F-024` (snap to candidates) is not to be built.** `F-026`/`F-027` (the marker field) lose
+  their subject. `B-011` closes as *won't fix*: the `Q`/`E` letters were withdrawn for the right
+  reason and the rings should now follow them off the screen.
+- ⚠️ **What SURVIVES and must not be deleted with it:** the **aim assist**
+  (`assist_catch_pct` / `assist_strength_pct`, `vector::aim::probe_dirs`). That is a *sideways
+  sweep of the ray to find a surface* — it never used the authored points — and he asked for it
+  twice, including *„es soll in der ui angezeigt werden von wo bis wo gesearched wird"*. **The
+  search band stays. The point list goes.**
+- ⚠️ Check before deleting: `maps.ron`'s `hook.gesims_*` ladders and whatever else names
+  `hook.*`, plus `tests/world.rs`'s `best_of` caller. Deleting a Resource that scripts assert on
+  is its own round.
+
+**Q-069 · sound — „Ich liefere die Sounds."**
+He supplies the audio files; **the project builds the system and the trigger points only**. So the
+work is `src/sound/` (24 lines, empty `Plugin::build`), the `audio` cargo feature (already exists,
+needs `alsa` on machine B), and the events: gas, hook fire, hook bite, blade, footstep, cortex kill.
+**No agent chooses a sound.** ⚠️ Ask him for the files before building the loader, or it loads
+nothing and reports success (`prompts/init.md` §3: without `wav` a file plays silence and says
+nothing).
+
+**Q-047 · the nape — „Nur von hinten."**
+A cortex kill counts **only from behind**. That is the design's own pillar — movement is the
+combat — and it means the seven per-kind kill photographs must be taken against a rear-arc gate.
+**Build the gate before photographing**, not after.
+
+**Q-061 · `S` on the ground — „S spannt nur, bewegt nicht."**
+His original words, restored: *„mit s »spannt« man nur das seil"*. `S` moves the player **neither
+toward nor away** — it is tension, not thrust. That settles the one red line in
+`scripts/f176-pull.txt`.
+
+## ✅ ANSWERED 2026-08-27 — batch 3 of 6
+
+**Q-062 · the gate — 🔴 „mach 2 tore daraus. erst du danach ein weicheres tor. ich sag wenn es
+passt!"**
+
+**The gate becomes two, in sequence, and the design bible's ten-tester sentence is superseded.**
+- **Gate 1 — him, alone.** He plays and says yes or no in one sentence. That is the gate that
+  unlocks work.
+- **Gate 2 — a softer gate**, a few more people, after Gate 1 has passed.
+- **„ich sag wenn es passt"** — ⚠️ **the gate is never declared passed by an agent, and never
+  inferred from a green suite.** It is passed when he says the words, and only then. Whatever he
+  says gets written down here with a date.
+- This replaces `docs/gameplay/pillars.md`'s *"ten testers, blind, at least level with Attack on
+  Titan Revolution"* as the operative rule. The bible's sentence stays as the *ambition*; this is
+  the *procedure*.
+
+**Q-071 · the maps — „Karten kriegen Zeilen."**
+`M-001..M-012` get real feature rows so they enter `TODO.md` and `STATUS.md`. **He has authorised
+touching `gameplay/features.xlsx`**, which is his file and the generator source. ⚠️ Run
+`python3 tools/features.py --check` after, and regenerate — the ledger has not been regenerated in
+15 days, which is the root cause named by four of six readers.
+
+**Q-070 · Ashgate — „Intakte Stadt behalten."**
+The town stays intact and inhabited. ⚠️ **So `docs/gameplay/world.md` is now the thing that is
+wrong**, not the map: it says Ashgate has long since fallen and the Vanguard runs salvage into its
+own ruins. **The document gets adapted to the game, not the game to the document** — and that is a
+real edit somebody has to make, not a note. His 2026-08-18 *„das ist nicht die echte map!"* is
+hereby answered as *the map is right, the story was wrong*.
+⚠️ `docs/NEXT.md` §3C's queue item 1 (re-cut the wall so the ruin tile set can dress it) loses its
+reason. The **untextured** hand-placed geometry — the wall, the gates, the HQ, the gantries, 203
+blocks that are the whole silhouette — is a **separate** and still-open problem.
+
+**Q-051 · progression — „Ganz ausbauen."**
+Full build: the debrief shows what the sortie earned, levels and rank land somewhere visible, the
+loadout screen lets the ~200 earned gear points be spent, and the difficulty ladder becomes real
+(in 321 sorties only Recruit has ever been cleared).
+⚠️ **This deliberately overrides `docs/PLAN-GAME.md` §10**, which forbids all of `progress/` until
+the gate passes. **He is the gate now (`Q-062`) and he has chosen.** Recorded as an override with a
+date rather than a quiet exception. **`Q-072` is answered by this too** — the debrief shows the
+earnings.
+
+## ✅ ANSWERED 2026-08-27 — batch 4 of 6
+
+**§4A/1 · heights — „Das Gelände selbst — Hügel, Terrassen."**
+The **ground** gets real relief, not the silhouette. That means `terrain.step_m` (1.50 m) and/or
+`cell_m` (42 m) move, and `FIND-091`'s trade comes due: *a 0.36 m tread is a wall with a texture*.
+⚠️ **`plan_terrain`'s stair asserts constrain this** — the fix is a number **plus** those asserts,
+and `scripts/f003-ashgate.txt`'s 40 asserts are aimed at today's heights. **This lands with the
+corpus re-aim, not before it.**
+
+**§4A/2 · the map edge — 🔴 „unsichtbare wand + wenn man runterfällt wegen bug teleport man
+zurück!"**
+**Both, and they are two different mechanisms:**
+1. an **invisible wall** so you cannot leave in normal play;
+2. a **safety net** — if you end up below the world anyway (a bug, a seam, a bad warp), you are
+   **teleported back** rather than falling forever.
+⚠️ (2) is the one that must not be forgotten: it is a *recovery* rule, and it has to work even when
+(1) has already failed, otherwise it is the same wall twice. A kill-plane far below that respawns
+at the last safe grounded position.
+
+**Q-068 · Traversal Trial — „Später, nach dem Kampf."**
+Stays behind combat. Build order rank 11 moves after rank 8. ⚠️ **Consequence: Gate 1 (`Q-062`) is
+judged in a normal sortie, not in a time trial** — so there is no number to improve against when
+he judges the movement. Accepted; noted so nobody re-proposes it.
+
+**Q-046 · gas tank — „zum testen. später etwas runter. aber nicht soo viel."**
+`gas_tank: 15000` is a **test value**, not balance. It comes down **somewhat** later — explicitly
+**not** all the way. ⚠️ For scale: the reference measures ~400 s per tank at ordinary flight
+(`FIND-150`), and the pre-test value was 300. **"Etwas runter, aber nicht soo viel" is nowhere near
+300** — do not read this answer as a mandate to restore it. Ask him for the number when boost is
+working and flights are measurable again.
+
+## ✅ ANSWERED 2026-08-27 — batch 5 of 6
+
+**Q-073 · flying past an anchor — „Herumschwingen ist richtig."**
+The arc is the verb. **`Q-058`'s stated cost is hereby accepted knowingly**: a hard maximum length
+turns you at `L`, and that is different from the reference's pure drive (`FIND-149`). *A rope is a
+rope.* Carrying speed through the turn becomes the skill, which is exactly what `F-014`
+(momentum-chaining) has to measure.
+
+**Q-059 · the hub line — 🔴 SUPERSEDED. „wenn man in der hub auf ein board drückt (F) dann kommt
+man in eine mission übersciht in der man auswählen kann was man machen will!"**
+
+**He did not pick any of the four options — he replaced the feature.** The answer is a **mission
+board**: a physical object in the hub, `F` to use, which opens a mission overview where he chooses.
+
+⚠️ **This retires the thing that was refuted four times.** `src/hud/hub_prompt.rs` and the whole
+promise/pointer design exist to solve *"the player cannot find a door"* — and a board he walks up
+to and presses `F` on solves it **without any predictive text at all**. No bearing rule, no walk
+model, no 25 mm knife-edge, no ray. **The four refutations were all attacks on a mechanism he never
+asked for.**
+- ⭐ **And the object already exists**: the survey photographed *"a blank green signpost with no
+  writing on it"* standing in the hub, right of the spawn view. It has been waiting for a job.
+- **`Screen::Lobby` is the overview** — it is already built, lists `missions.templates`, has a
+  `Deploy` button and passing tests. The board is the **door to it that the hub never had**.
+- The six walk-on pads stay (they work, 35 asserts). The board is the *second* way in, and it is
+  the discoverable one.
+- ⚠️ **`F` is currently unbound in the script driver** (`debug::script::parse_key` knows
+  W A S D Q E C F F3 Space Shift Ctrl Tab — `F` is there, good) but **no script can press `Esc` or
+  click a menu**, so the board must be exercisable by `F` alone or its evidence dies the same way
+  (`FIND-189`).
+
+**Q-019 · the cortex — „nicht direkt sichtbar. man muss es wissen!"**
+**No marker.** The nape is not highlighted at any range; the player learns where it is. That
+settles `Q-026` with it, and it means the per-kind kill evidence is photographed against an
+*unmarked* target. ⚠️ It also raises the bar on the **titan silhouette**: if nothing points at the
+nape, the model has to read clearly enough that a player can find it. That is a modelling
+requirement nobody has written down.
+
+**Q-004 · Vessel Forms — „Spätere Version."**
+Nine features out of scope for this version. The Vector Gear must convince first; a second movement
+system beside it dilutes both.
+
+## ✅ ANSWERED 2026-08-27 — batch 6 of 6, the run-through is complete
+
+**Q-029 · the 26 invented numbers — „Später, beim Balancing."** Noted as open. They stay as they
+are and the project keeps stating that they are derived, not chosen.
+
+**Q-028 · the bellower — „Er soll vorkommen."** The 21 m kind gets unblocked and put into a
+mission. ⚠️ `assets/data/scale.ron: max_spawnable_class` is what forbids it, and it was set for a
+reason — check what that reason was before raising it. **21 m is a different fight**: you have to
+go *up*, and with `Q-047` (rear only) plus `Q-019` (no marker) that is a real design problem, not a
+spawn-table edit.
+
+**Q-075 · multiplayer — „Richtig bauen."** World-state replication gets built, so two people can
+actually fly together. The socket is input-only today. ⚠️ Rule 4 says the architecture has been
+kept multiplayer-ready since day 1 — **this is where that claim gets tested**, and it is a large
+piece of work. It does **not** go before the gate.
+
+**Q-074 · the hit marker — „Beides."** Closing speed *and* damage, side by side.
+
+---
+
+# 🔴 THE RUN-THROUGH IS COMPLETE — 23 questions, all answered 2026-08-27
+
+**What is now DECIDED and must not be re-opened by any round:**
+
+| | decision |
+|---|---|
+| the gate | **two gates: him first, then a softer one.** *„ich sag wenn es passt"* — **no agent ever declares it passed** |
+| the anchor field | **deleted.** *„auf jeglicher oberfläche einhaken. nicht an hardcoded punkten"* — `F-024` is not built |
+| finding a mission | **a board in the hub, `F`** — not a predictive HUD line. `hub_prompt` is retired |
+| the rope | hard maximum length, the arc is right, `A`/`D` tangential to the **anchor**, `S` tensions only |
+| the nape | **rear only, and never marked** — *„man muss es wissen"* |
+| the ground | **real relief** — hills and terraces, not a flatter grade |
+| the map edge | **invisible wall + a teleport back** if you fall through anyway |
+| Ashgate | **stays an intact town**; `docs/gameplay/world.md` is what gets corrected |
+| progression | **built out fully** — this overrides `PLAN-GAME.md` §10, knowingly |
+| sound | **he supplies the files**; the project builds the system and the triggers |
+| multiplayer | **built properly**, after the gate |
+| gravity · boost · gas | **decided at the play test.** He must be asked. |
+
+**Still open, deliberately:** `Q-063` gravity, `Q-064` Shift, `Q-046` gas tank — all three wait for
+him at the controller. `Q-029` the 26 numbers, at balancing.
