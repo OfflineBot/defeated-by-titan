@@ -768,7 +768,22 @@
         // decision and would overturn the user's answer to Q-017 as a side effect of adding a
         // verb — docs/QUESTIONS.md Q-052 records that and the assumption it runs under.
         gas_priority: [Boost, Steer, ReelIn, Dodge, Flip],
-        boost_m_s2: 34.0,
+        // 🔴 **PROVISIONAL, and it is the one number holding the play test up.**
+        // `gravity_m_s2` went -20 -> -32 on 2026-08-27 at the user's word; this key did NOT move
+        // with it, and Shift stopped being a verb. Measured before the fix, `scripts/f-007-boost.txt`:
+        //   `assert Height > 28.5` read **4.170** · `assert Speed > 27.5` read **3.679**
+        // because 34 against 32 is **+2 m/s^2 of net lift** where 34 against 20 was **+14**.
+        // A boost that used to carry 28 m carried 4.17.
+        //
+        // 46 restores the OLD NET LIFT exactly: 46 - 32 = 14 = 34 - 20. So Shift lifts you the
+        // way it did yesterday, over a world that now falls 60 % harder. **This is a placeholder
+        // for his judgement, not a tuning decision** — `Q-064` is open and he asked to be asked
+        // at the controller („erinnere mich später beim play test").
+        // ⚠️ The bound in `player.air_accel_m_s2`'s comment ("well below vector.boost_m_s2: 34")
+        // now reads against 46; `air_accel_m_s2` itself is still 10.0 and its own claim to be
+        // "half of -gravity_m_s2" is FALSE at -32 (10 is 31 %). That one is not fixed here
+        // because it changes what WASD alone can do, which is his call too.
+        boost_m_s2: 46.0,
         // How much of the boost DIRECTION comes from the rope instead of from the look
         // direction: 0.0 = pure look direction (the behaviour up to 2026-08-10), 1.0 = straight
         // at the anchor. The blend is a direction only — the STRENGTH stays boost_m_s2 at every

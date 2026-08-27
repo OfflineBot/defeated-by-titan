@@ -3153,3 +3153,44 @@ feel the mass with.
 
 **Rollback point:** the `apply_force` / `apply_linear_acceleration` call sites named in (3), plus
 the mass value itself. Reverting is mechanical; re-tuning afterwards is not.
+
+---
+
+## Q-077 — 🔴 „zu leicht" is STILL OPEN, and `Q-076` is not its answer
+
+**2026-08-27.** He was told, before any work started, that *real mass cannot fix "too light"*:
+`a = F/m`, so the resulting acceleration is velocity-independent whether the game applies a force
+or an acceleration. A 100 kg body and a 1 kg body change direction equally fast when the force
+scales with the mass. The measured pair in `src/vector/boost.rs:38` (10 kg → −7.68 m/s, 0.6 kg →
+−112.79) only says what happens if the **same number** is re-read as newtons instead of m/s² — an
+arbitrary rescale, not weight.
+
+**He chose real mass anyway, and explicitly as its own task:** *"auch wenn es das Gefühl nicht
+ändert — z.B. damit Titanen dich schubsen können und Kollisionen Gewicht haben. Dann aber als
+eigene Aufgabe, nicht als Lösung für 'zu leicht'."* So `Q-076` is now a **collision and
+push-back** feature and it is **not** the fix for the complaint.
+
+**Therefore the complaint is unresolved and stays on the books.** `src/player/locomotion.rs:701`
+already names the real cause and it is not mass:
+
+> `(v* − v)/τ` … **replaces the whole velocity in the same ~3τ however fast the player was
+> going. A body like that has no inertia.**
+
+The drives are **velocity chases**. `clamp_length_max` bought some of it back — measured, 15 ticks
+from rest to 90 % of drive speed but **27** to turn a flight around — and that is the only weight
+in the game today.
+
+**The three candidates that would actually produce weight**, none chosen:
+1. **Turning costs time in proportion to speed** — real inertia, and the one that matches the
+   complaint most directly. Straight-line response stays instant.
+2. **Drag**, a braking force growing with `v²` — makes high speed expensive to hold and gives the
+   gas an opponent.
+3. **Lower acceleration ceilings** — cheapest, but it makes everything sluggish, including the
+   small corrections `FIND-153` says must stay instant (*„man macht was und man merkt es direkt"*).
+
+**ASSUMPTION the work continues under:** nothing is built for this yet. The heavier world
+(`gravity_m_s2: -32`) and the restored Shift may already have changed how it feels, and asking him
+to judge a mechanism before he has flown the new numbers would waste the round.
+**He gets asked at the play test, with `Q-063`, `Q-064` and `Q-046`.**
+
+**Rollback point:** none — nothing was built.
