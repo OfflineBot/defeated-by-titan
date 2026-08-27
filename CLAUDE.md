@@ -103,6 +103,24 @@ went unseen.**
    comment — if a variable the code reads is not in the sweep, say why in that comment or add it.
    And **count what you skipped**: a sweep that reports `0 of N` must also report how many samples
    it never reached, or the `0` is arithmetic about the wrong set.
+   🔴 **And the axis is not always a number — measured 2026-08-27, the fourth instance: THE
+   PROVENANCE OF THE INPUT IS AN AXIS TOO.** A sweep of **9 447 840** stances stated in its own
+   comment *"what this fixture holds constant: nothing that the rule reads"* — and it was wrong,
+   because every stance was a `Vec3` **the test invented** and handed to the pure function, while
+   its oracle was a hand-copy of the shipping code **fed the same invented `Vec3`**. **Two
+   functions asked about the same invented point cannot disagree about which point it is**, so the
+   real defect — the HUD reading a *stale* position, one schedule ahead of the code it agreed
+   with — was unreachable by construction. The bug was never in the geometry; it was in **where
+   the number came from.**
+   **So when two pieces of code are supposed to agree, the test must make them agree about
+   something the GAME produced**, not about a literal the test wrote. Drive the real transition.
+   If nothing in your test file ever enters the state under test *the way the game enters it*,
+   your sweep is a unit test of arithmetic wearing an integration test's numbers.
+   ⚠️ **Corollary, and it is the cheaper rule: do not re-derive another domain's decision — read
+   it.** The HUD asked `deploy_on_contact`'s question a second time, in a different schedule, from
+   a different `Transform`. Two implementations of one question drift, and no amount of sweeping
+   finds it, because both implementations are yours. **One writer decides, everyone else reads
+   the answer.**
 6. **Nothing changes per frame, everything per second**, and nothing runs over all entities to
    answer a question about the ten meters in front of your nose.
    → [`docs/lessons/performance.md`](docs/lessons/performance.md)
