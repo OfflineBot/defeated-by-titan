@@ -26,7 +26,22 @@
     // 20 players in a 401-body city against a 4 ms budget.
     // NOT untuned — this number was measured. Whoever lowers it measures again.
     substeps: 24,
-    gravity_m_s2: -20.0,   // harder than 9.81: momentum play, not simulation
+    // 🔴 THE USER, 2026-08-27: „zudem ist gravitation immernoch zu niedrig!" — the SECOND time
+    // („es fühlt sich zu leicht an", 2026-08-24), so this is his number now and not a derivation.
+    //   9.81  real                    -- never used here
+    //  20.0   until 2026-08-27        -- „immernoch zu niedrig"
+    //  32.0   now                     -- 3.26x real, 1.6x the old value
+    // ⚠️ The one thing that had to move WITH it is `player.jump_speed_m_s`: an apex is
+    // `v^2 / 2g`, so keeping 6.5 would have cut the jump from 1.056 m to 0.660 m and made a
+    // hop useless. 8.2 restores it (8.2^2 / 64 = 1.051 m). He complained about WEIGHT, not
+    // about jumping, so the jump is held where it was and only the fall got heavier.
+    // ⚠️ AND IT MOVES EVERY FALL IN THE SCRIPT CORPUS. A 30.8 m drop takes 1.39 s instead of
+    // 1.76 s, so every `assert` timed against a fall is now aimed at the old number. That is
+    // expected and it is NOT a licence to loosen an assert — re-aim or mark red on purpose.
+    // ⚠️ NEXT STEP IF STILL TOO LIGHT: Roblox's default workspace gravity is 196.2 studs/s^2,
+    // and at Roblox's own 0.28 m/stud that is ~55 m/s^2. If the reference does not override it,
+    // the honest target is ~55 and not 32. Unverified — nobody has read it out of the game.
+    gravity_m_s2: -32.0,
 
     player: (
         // = scale.ron:reference.human_height_m. The user writes "check the capsule exactly!"
@@ -70,12 +85,17 @@
         // removed entity (shared::MovementState::Downed).
         health: 100.0,
         run_speed_m_s: 6.0,
-        // 6.5 m/s at g = −20 give 6.5²/(2·20) = **1.056 m of apex**. That is enough for
-        // neither a door (2.10 m; that would take 9.17 m/s) nor the eaves of the small
+        // 8.2 m/s at g = −32 give 8.2²/(2·32) = **1.051 m of apex** (it was 6.5 at −20 for
+        // 1.056 m until 2026-08-27; the pair moved together on purpose). That is enough for
+        // neither a door (2.10 m; that would now take 11.59 m/s) nor the eaves of the small
         // house (3.00 m). **Without gas you get on top of nothing in this city** — for a
         // Vector Gear game that is right, but it is a decision and not a side effect, and
         // that is why it stands here.
-        jump_speed_m_s: 6.5,
+        // ⚠️ MOVED WITH `gravity_m_s2` on 2026-08-27, and only to stand still: an apex is
+        // `v^2 / 2g`, so the user's -20 -> -32 would have cut the jump from 1.056 m to 0.660 m
+        // on its own. 8.2^2 / (2*32) = 1.051 m, i.e. the SAME hop over a heavier world.
+        // He asked for weight, not for a shorter jump — so the fall changed and this did not.
+        jump_speed_m_s: 8.2,
         // F-006 air control. ⚠️ UNTUNED. Stood in Rust as `-gravity_m_s2 / 2` until
         // 2026-08-12 (docs/FINDINGS.md FIND-051) — a derivation is still a game value, and §4
         // says a game value lives here. **10.0 is half of -gravity_m_s2, deliberately: WASD
@@ -799,9 +819,10 @@
         //   - a HUMAN double-tap is ~150-300 ms between presses, so much below ~12 ticks the
         //     move stops being reachable;
         //   - it MUST stay well under one jump, or bunny-hopping on the ground would fire an
-        //     expensive dodge by accident. jump_speed_m_s 6.5 against gravity_m_s2 -20 is
-        //     2*6.5/20 = 0.65 s of airtime = 39 ticks before Space can produce a second jump.
-        //     18 is 46 % of that, so a ground double-jump attempt can NEVER land inside the
+        //     expensive dodge by accident. jump_speed_m_s 8.2 against gravity_m_s2 -32 is
+        //     2*8.2/32 = 0.5125 s of airtime = 30.75 ticks before Space can produce a second
+        //     jump (it was 39 ticks at 6.5/-20 until 2026-08-27; both numbers moved together).
+        //     18 is 59 % of that, so a ground double-jump attempt can NEVER land inside the
         //     window. (In the air the second tap is exactly what this is for.)
         dodge_double_tap_window_ticks: 18,
         // Velocity clamp from day 1, not retrofitted (bible 6.4, risk of fling exploits)
@@ -864,8 +885,11 @@
         flip_impulse_m_s: 18.0,
         // Sideways only would drive a flip into the wall you are trying to leave: hugging a
         // facade, `A` throws you along it and gravity has you back on it in a third of a
-        // second. 6 m/s of lift is 1.8 m of rise at gravity_m_s2 -20, i.e. one body length —
-        // enough to clear a window ledge, far short of a jump (jump_speed_m_s 6.5).
+        // second. 6 m/s of lift is 0.5625 m of rise at gravity_m_s2 -32 (it was 1.8 m at -20
+        // until 2026-08-27) — barely a step now, and well short of a jump (jump_speed_m_s 8.2).
+        // ⚠️ UNTUNED AGAINST THE NEW GRAVITY: the sentence this number exists for was „enough
+        // to clear a window ledge", and 0.5625 m no longer clears one. Raising it is a
+        // candidate the moment anyone tests the wall flip.
         flip_up_m_s: 6.0,
         // 0.35 s = 21 ticks. The acceptance sentence is *„Flip vermeidet einen Titanengriff,
         // wenn im Fenster ausgeloest"* — so this is a WINDOW, and it has to be short enough

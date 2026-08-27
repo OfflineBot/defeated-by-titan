@@ -1503,3 +1503,51 @@ under a live measurement has already cost this project two matrices.
 player around only means he can see the paint. Both, in this order.
 
 **Related:** `FIND-187` · `FIND-178` · `FIND-173` · `docs/QUESTIONS.md` Q-058 · `F-177` `F-175`
+
+## §3F — 🔴 THE FRAME OF REFERENCE IS THE ANCHOR. The user, 2026-08-27, verbatim:
+
+> *"ok folgendes: wenn man a oder d drückt (relativ zum anker (DAS IST WICHTIG), immer alles
+> relativ zum anker gesehen) dann soll man zur seite gehen können. aber NICHT das seil
+> verlängern!!"*
+
+**This is the specification §3D was missing, and it answers `Q-058`.** Two statements, and the
+first one is a *coordinate system*, not a feature:
+
+**1 · EVERYTHING IS MEASURED FROM THE ANCHOR.** *„immer alles relativ zum anker gesehen"*, and he
+capitalised the parenthesis himself. `A`/`D` are **tangential** — a movement on the sphere around
+the anchor. They are **not** camera-right. That is precisely the defect `FIND-183` measured:
+`sideways = right * (lateral_m_s * move_x)` with `right = Vec3::new(cos, 0.0, -sin)`, the camera's
+yaw vector, **never made perpendicular to the rope**, so `A`/`D` could point straight away from the
+anchor.
+
+**2 · THE ROPE MAY NOT LENGTHEN.** *„aber NICHT das seil verlängern!!"*, two exclamation marks.
+Not "less", not "slower" — **not at all**. Combined with §3D R4 (*„wenn das seil shcon eingezogen
+wurde soll es erstmal nicht länger werden"*) this is a **hard maximum length**, and it is exactly
+what an avian `DistanceJoint` with `limits = (0, L)` does: it corrects **only** when the distance
+exceeds `L`, and the solver holds **all** of them at once.
+
+### What this settles
+
+**`Q-058` is ANSWERED — `Drive` gets a real rope.** The question was whether a hard maximum length
+is acceptable given `FIND-149` (*the reference drives and does not swing*). *„NICHT das seil
+verlängern"* **is** a hard maximum length. He has chosen the constraint, and being turned at `L`
+is the price he has accepted by asking for it.
+⚠️ **The rollback point stands** (`player::rope::attach_ropes`, the one branch that gives a `Drive`
+rope its joint) — if the arc turns out to feel wrong when he plays it, that is where it comes out.
+
+### And it kills both failed attempts at the root
+
+Both were refuted for the *same* reason: they tried to prove a geometric invariant **by hand, in a
+velocity target**, and could not do it for two arms. Attempt 1 bounded `unit(Σ r̂ᵢ)` — the **sum**
+of the distances instead of each. Attempt 2 tried to satisfy both per-arm floors by scaling, and
+**scaled to zero** on 25.8 % of ticks because the origin is in every constraint set (`FIND-186`).
+**Against a joint, neither failure is expressible**: the solver enforces per-arm maximum length
+simultaneously and by construction, and `shorten_ropes` — already the *single* writer of
+`limits.max` — already contains the ratchet (`B-004`'s take-up: *"never upward"*).
+
+**So the drive's whole job becomes a direction and a speed**, and it never has to prove anything
+about distance. `A`/`D` become tangential *because the joint makes the radial component
+impossible*, not because a projection removed it.
+
+**Related:** `Q-058` · `FIND-186` · `FIND-183` · `FIND-152` · `FIND-149` · `B-004` · `B-005` ·
+`docs/NEXT.md` §3D · `F-004` `F-005` `F-006`

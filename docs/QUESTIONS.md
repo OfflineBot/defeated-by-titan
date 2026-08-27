@@ -2579,7 +2579,19 @@ walk out of the rope. If it feels like the rope is *giving*, it is right; if it 
 
 ---
 
-## Q-058 — does `Drive` get a real rope? (the one decision attempt 3 must not make alone)
+## Q-058 — ✅ ANSWERED BY HIM, 2026-08-27: yes. `Drive` gets a real rope.
+
+> *"wenn man a oder d drückt (relativ zum anker (DAS IST WICHTIG), immer alles relativ zum anker
+> gesehen) dann soll man zur seite gehen können. **aber NICHT das seil verlängern!!**"*
+
+*„NICHT das seil verlängern"* **is** a hard maximum length, which is the whole of the question
+below. He also fixed the frame of reference — **everything is measured from the anchor**, so
+`A`/`D` are tangential and not camera-right (`docs/NEXT.md` §3F).
+**What must be rolled back if the arc feels wrong when he plays it:** `player::rope::attach_ropes`,
+the one branch that gives a `Drive` rope its joint. `rope_force_model: Pendulum` in `game.ron`
+remains the other escape hatch (`Q-049`).
+
+### the original question, answered
 
 **Asked 2026-08-26**, after `docs/NEXT.md` §3D was built twice and refuted 2/2 both times
 (`FIND-186`). **This is the interface question `CLAUDE.md` says must stand before the fan-out**, and
@@ -2636,3 +2648,129 @@ third design.
 
 **Related:** `FIND-186` · `FIND-152` · `FIND-149` · `B-004` · `B-005` · `Q-049` · `Q-057` ·
 `docs/NEXT.md` §3D · `F-004` `F-005` `F-006`
+
+## Q-059 — the hub line stands there for ever; should it step aside once you know it?
+
+**Context:** `F-177`, 2026-08-26. You wrote *„von der lobby aus muss man auch neue missionen
+starten koennen!"*, and the cause was not a missing door but a silent screen — six working pads,
+two working menu routes, and not one word about any of them (`docs/FINDINGS.md` FIND-187). The fix
+is three amber lines at the top of the hub, `docs/images/f177-hub.png`:
+
+```
+Deploy: Ashgate Skirmish / Recruit
+16 m ahead - walk onto the amber pad
+Esc: Mission select
+```
+
+**The open question is how long it should stay.** As built it is up the whole time you are in the
+hub — a permanent compass. The two alternatives are a **first-run hint** (up until the first sortie
+has been flown, then never again) and a **fade** (up for a few seconds after every entry into the
+hub). A permanent line is the most useful to somebody who has never played and the most
+patronising to somebody who has flown fifty sorties, and it is the one piece of chrome that stands
+over the place you walk in.
+
+**ASSUMPTION:** permanent, because the failure being fixed is *"there is no way to know"* and a
+hint that has already faded cannot fail safe. It costs nothing but three lines of screen in the one
+phase where nothing else is happening, and the objective counter owns that same rectangle the
+moment a sortie starts, so it is never in the way of a fight.
+
+**What has to be rolled back if you want it otherwise:** only
+`hud::hub_prompt::hub_prompt_text` and its caller. A fade needs one clock and one number
+(`missions.ron: hub.prompt_s`), a first-run hint needs `save::Profile` to say whether a sortie was
+ever flown — the element already returns `Option<String>` and hides itself on `None`, so both are
+an extra arm in one pure function, not a rework. Nothing else in the game reads it.
+
+**Why it matters today:** it is the first line of text this game has ever shown a player who is not
+in a fight, and whatever it does will read as the house style for every hint after it.
+
+---
+
+## Q-060 — what should the hub line say when it genuinely cannot tell you which door opens?
+
+**2026-08-27 · `src/hud/hub_prompt.rs` · decided under an ASSUMPTION, `FIND-188`**
+
+Closing `FIND-188` (the line named one door and the walk opened another) left one geometry with no
+true answer. A deployment pad whose chord along the walk is **shorter than one simulation step** —
+0.1 m, `game.ron: player.run_speed_m_s / simulation_hz` — may or may not be sampled by
+`mission::hub::deploy_on_contact`: it is a coin flip decided by where the player's acceleration
+happened to put the ticks. Naming that pad promises a sortie that may not start; naming the pad
+behind it promises a sortie the graze may steal.
+
+Measured over a ±20 m / 0.5 m / 1° grid of the hub floor: **33 of 918 719 stances that start a
+sortie (0.0036 %)**.
+
+**ASSUMPTION:** the line hedges rather than guesses, in three lines with **no metre count**,
+because a distance is a claim about where the sortie begins:
+
+```
+Deploy: Ashgate Breach / Recruit  or  Ashgate Skirmish / Elite
+the walk clips an edge - turn to pick a door
+Esc: Mission select
+```
+
+The alternatives, both rejected: *name the graze anyway* (it is the shape `FIND-178` and
+`FIND-188` are both about — a screen saying something the game does not do), and *name the door
+behind it* (same, with the sign flipped). A fourth option nobody has costed is making the pads
+overlap-free by construction so the case cannot arise, which is `missions.ron` level design and
+not this element's to decide.
+
+**What to roll back if he decides otherwise:** the `Ahead::Edge` arm of
+`hud::hub_prompt::hub_prompt_text` and the `grazed` branch of `pick_door` — one enum variant and
+one `if`. `pick_door` would go back to a single `Aim::Door`, and the sweep test's `hedged` counter
+and its `< 0.1 %` assertion come out with it. Nothing else in the game reads either.
+
+**Why it matters today:** it is the second sentence this game has ever shown a player outside a
+fight, and it is the first time the HUD admits it does not know something. Whether that reads as
+honest or as broken is a taste call, and it is his.
+
+### ⚠️ 2026-08-27, AMENDED — the hedge is gone, and so is the question it answered
+
+**The `ASSUMPTION` above has been rolled back, and the rollback is bigger than the question.**
+`FIND-190`: the rule the hedge belonged to — *name the pad the forward walk crosses first* — is
+not a rule that can be written. Its miss distance is three-dimensional, so it is a function of
+the player's `y`, and `hub::open_hub` warps every player to `y = 2.0` on arrival; walking bobs him
+36 mm, `Space` puts him 1.056 m up, the ray sees through 73 solid props and models a straight walk
+that `W`+`D` is not. And from the cold spawn, yaw 115 and yaw 116 render **byte-identical screens**
+while one of them deploys and the other walks 60 m into nothing — **2.5 cm apart**.
+
+So the line no longer predicts the walk, and the *"the walk clips an edge"* sentence — the thing
+this question asked him to judge — **cannot be produced any more**. `Ahead::Edge`, the `grazed`
+branch and `pick_door` are deleted. Nothing needs deciding here; the entry stays as the record of
+a wording that existed for one day.
+
+**What replaced it, and the one taste call that is left.** Two sentences:
+
+```
+Deploy: Ashgate Skirmish / Recruit          <- the PROMISE: a pad is under his feet, and
+on the pad - the sortie is starting            `deploy_on_contact` is starting it this tick
+Esc: Mission select
+
+Ashgate Skirmish / Veteran                  <- the POINTER: where a door IS. No verb, no
+25 m in front of you - amber pad               "walk onto", no "ahead", no claim at all
+Esc: Mission select
+```
+
+**Q-060b — is a pointer that names a door the walk does not reach good enough?** Standing at the
+hub's landing point at yaw 140 the pointer reads *Ashgate Skirmish / Veteran, 18 m in front of
+you*, and holding `W` lands him on **Ashgate Breach** — where the line then says
+`Deploy: Ashgate Breach / Recruit` on the tick the sortie starts. Nothing lies: the pointer
+promised nothing and the promise named what started. But a player may still feel pointed at the
+wrong door.
+
+**ASSUMPTION:** that is acceptable, because the alternative is the thing three rounds proved
+impossible — no sentence can carry 2.5 cm of ray geometry, and a screen that guesses is
+`FIND-178` again. **What to roll back if he disagrees:** only the pointer's *choice* of pad, which
+is the `faced` half of `hud::hub_prompt::aim` (smallest `|bearing|`, then nearer, then name) — swap
+it for "the nearest pad" or "the nearest pad within 45°" and nothing else in the file moves. The
+promise half may not be touched: it is `deploy_on_contact`'s own test and it is what makes the
+element unable to lie.
+
+**And one consequence of the promise being true by construction, so nobody discovers it by
+surprise: it is on screen for exactly one frame.** `deploy_on_contact` judges the same position on
+the same tick, so the instant the promise can be shown is the instant the sortie starts —
+**3946 amber px in the banner band at tick 335 of `scripts/f177-door.txt`, 0 at tick 336.** In
+practice a player reads the pointer for the whole walk and sees the promise as a flash. The
+alternative — showing it a step early, *"you are about to be on the pad"* — is a prediction again,
+and at 0.1 m per tick it is wrong in exactly the cases that matter. **ASSUMPTION:** the flash is
+right, and if he wants a lasting confirmation it belongs to the deploy banner
+(`MissionPhase::Deploying`), not to this line; **rollback point:** nothing in `hub_prompt.rs`.
