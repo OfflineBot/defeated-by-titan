@@ -292,12 +292,12 @@ before `Could` is the order, not a recommendation (prompts/init.md §2).
 | 🟨 | F-002 | Freies Zielen per Raycast (Ebene 1) | 1 | F-001 | needs F-001 |
 | 🟨 | F-004 | Pendelphysik bei Zwei-Haken-Zustand | 1 | F-001 | needs F-001 |
 | 🟨 | F-007 | Gas-Boost | 1 | F-001 | needs F-001 |
-| ⬜ | F-009 | Flips (seitlich) | 1 | F-001 | needs F-001 |
+| 🟨 | F-009 | Flips (seitlich) | 1 | F-001 | needs F-001 |
 | ⬜ | F-011 | Hook-Break (Notbremse) | 2 | F-001 | needs F-001 |
 | 🟨 | F-003 | Getaggte Ankerflaechen (Ebene 1) | 1 | F-002 | needs F-002 |
 | 🟨 | F-005 | Reel-In / Seilverkuerzung | 1 | F-004 | needs F-004 |
 | 🟨 | F-006 | Swerve-Steuerung | 1 | F-004 | needs F-004 |
-| ⬜ | F-008 | Boost-Dash | 1 | F-007 | needs F-007 |
+| 🟨 | F-008 | Boost-Dash | 1 | F-007 | needs F-007 |
 | ⬜ | F-012 | Velocity-Clamp gegen Fling | 1 | F-004 | needs F-004 |
 | ⬜ | F-013 | Kollisionsdaempfung | 1 | F-004 | needs F-004 |
 | ⬜ | F-014 | Momentum-Chaining | 1 | F-004 | needs F-004 |
@@ -308,10 +308,22 @@ before `Could` is the order, not a recommendation (prompts/init.md §2).
 | ⬜ | F-020 | Tragbarer Notvorrat | 3 | F-019 | needs F-019 |
 | ⬜ | F-016 | Ziel-Assist-Regler | 2 | F-024 | needs F-024 |
 
-## world (12 open)
+## world (24 open)
 
 | Stage | ID | Item | Prio | Depends on | Why here |
 |---|---|---|---|---|---|
+| ⬜ | M-001 | The Rookery (Hub) | 1 | — | Must, no prerequisite |
+| ⬜ | M-002 | Ashgate District | 1 | — | Must, no prerequisite |
+| ⬜ | M-003 | Brackwall | 1 | — | Must, no prerequisite |
+| ⬜ | M-004 | The Fallow | 1 | — | Must, no prerequisite |
+| ⬜ | M-005 | Titanwood | 1 | — | Must, no prerequisite |
+| ⬜ | M-011 | Trainingsgelaende | 1 | — | Must, no prerequisite |
+| ⬜ | M-006 | Hollowkeep | 2 | — | Should |
+| ⬜ | M-007 | Saltpier | 2 | — | Should |
+| ⬜ | M-008 | Highspire | 2 | — | Should |
+| ⬜ | M-009 | The Breach (Raid) | 2 | — | Should |
+| ⬜ | M-010 | The Hollow (Raid) | 2 | — | Should |
+| ⬜ | M-012 | Trade Hall | 3 | — | Could |
 | ⬜ | F-021 | Diskrete Ankerpunkte (Ebene 2) | 1 | F-003 | needs F-003 |
 | ⬜ | F-022 | Prozedurale Ankerpunkt-Erzeugung | 1 | F-021 | needs F-021 |
 | ⬜ | F-023 | Kandidatensuche mit Hemisphaeren-Aufteilung | 1 | F-021 | needs F-021 |

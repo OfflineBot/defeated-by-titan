@@ -401,6 +401,37 @@ def build_features(sheets: dict[str, Sheet]) -> list[dict]:
             "note": "",
         })
 
+    # 🔴 THE MAPS COME IN TOO, since 2026-08-27, and they had never been in the working list.
+    # `08_Maps` was read for `docs/backlog/maps.ron` and for nothing else, so twelve maps —
+    # including `M-001 The Rookery`, the hub the game actually starts in, and `M-002 Ashgate
+    # District`, 30 person-days marked Must — had **no row in docs/STATUS.md or docs/TODO.md and
+    # therefore no acceptance criterion and no stopping condition**. A survey on 2026-08-27 named
+    # that as one of the six mechanisms behind seven rounds of circling: work with no row on the
+    # ledger only ends when somebody gets tired of attacking it (docs/PLAN.md §3).
+    # The user authorised this on 2026-08-27 (`docs/QUESTIONS.md` Q-071, "Karten kriegen Zeilen").
+    # ⚠️ Map ids are `M-`, not `F-`, on purpose: they are places and not mechanics, and every
+    # consumer that greps for `F-` keeps working unchanged.
+    for no, record in records(sheets["08_Maps"]):
+        entries.append({
+            "id": record.get("id", ""),
+            "name": record.get("name", ""),
+            "domain": "world",
+            "system": "Maps",
+            "stage": Raw(STATUS_TO_STAGE.get(record.get("status", "Offen"), "Unbuilt")),
+            "description": record.get("description", ""),
+            # A map's acceptance is its own three columns: what it is for, how big it is, and
+            # how thick the anchors are. Written as a sentence so STATUS.md reads like the rest.
+            "acceptance": (
+                f'Modi: {record.get("modes", "?")} · Groesse: {record.get("size_studs", "?")} '
+                f'studs · Ankerdichte: {record.get("anchor_density", "?")}'),
+            "depends_on": [],
+            "prio": PRIO_TO_RANK.get(record.get("prio", "Could"), 3),
+            "effort_pd": Raw(record.get("effort_pd", "0")),
+            "source": f"features.xlsx!08_Maps!R{no}",
+            "evidence": "",
+            "note": "",
+        })
+
     # The tech backlog comes into the working list too: it carries exactly the rows the
     # setup is about (T-IDs), and without them docs/STATUS.md would have no row for the
     # window, the tools or the tests. A named deviation from the table in §2 — there,
