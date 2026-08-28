@@ -103,6 +103,13 @@ went unseen.**
    comment — if a variable the code reads is not in the sweep, say why in that comment or add it.
    And **count what you skipped**: a sweep that reports `0 of N` must also report how many samples
    it never reached, or the `0` is arithmetic about the wrong set.
+   ⚠️ **And the sharpest version of it, measured 2026-08-29: the sweep ASSERTED its own blind spot
+   was non-empty.** A fence test `continue`d past every sample lying exactly on the boundary,
+   named them `on_the_line`, justified the skip with the unmeasured sentence *"a body cannot rest
+   on a line"* — and then asserted `on_the_line > 0`, treating the exclusion as a feature. **Those
+   64 of 648 samples were the defect**, and a body put there rests for ten seconds. **A skip you
+   are proud of is still a skip.** When a sweep names a class it does not test, that class is the
+   first place to look, not the last.
    🔴 **And the axis is not always a number — measured 2026-08-27, the fourth instance: THE
    PROVENANCE OF THE INPUT IS AN AXIS TOO.** A sweep of **9 447 840** stances stated in its own
    comment *"what this fixture holds constant: nothing that the rule reads"* — and it was wrong,

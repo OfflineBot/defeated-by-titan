@@ -1663,7 +1663,7 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 
 ## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
 
-**NEXT FREE ID: FIND-201.** Claim it by bumping this line in the same `cat >>` that
+**NEXT FREE ID: FIND-205.** Claim it by bumping this line in the same `cat >>` that
 appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
 file separately and both read the same maximum. One line beats a 108 kB grep.
  — and append with `>>`, never with an edit tool
@@ -12358,3 +12358,380 @@ above is what covers `Pendulum`), the anchors' elevation (20°), pitch (0) and t
 excluded from any number above).
 
 **Related:** `FIND-191` · `FIND-195` · `FIND-186` · `B-013` · `Q-079` · `Q-058` · `F-004` `F-005`
+
+## FIND-199 — `Q-078` is built: the `F-003` tag is now a **switch**, and the guards that replaced it, measured
+
+**2026-08-28.** The user, 2026-08-27: *„es soll auf jeglicher oberflqche einhaken. nicht an
+hardcoded punkten etc!"* and, minutes later, *„spaeter soll man auch bestimmte sachen toggeln
+koennen. also an bestimmte sachen ran haken an andere nicht aber grundsetzlich erstmal ales!"*
+
+### 1 · What changed, in one line of behaviour and two files
+
+`vector::aim::cast` used to write `anchorable: body.mask.contains(BodyMask::ANCHORABLE)` — i.e.
+`F-003`, *"Kein Haken auf ungetaggten Parts moeglich"*. It now writes
+`anchorable: is_hookable(hookable, body)`, and the same predicate replaced the **second** reading
+of the same bit in `vector::hook::anchorable_beyond_reach`. New file: `src/vector/hookable.rs`
+(`SurfaceKind::{Tagged, Untagged}`, `HookableSurfaces`, `is_hookable`), registered as
+`app.init_resource::<HookableSurfaces>()` in `VectorPlugin`.
+
+**The data is not dead, it is the handle.** `maps.ron: anchorable` still decides
+`SurfaceKind::of`, and `HookableSurfaces::TAGGED_ONLY` restores `F-003` exactly — **one value, no
+code**. That is the rollback point Q-078 asked for, and it is tested rather than claimed
+(`tests/vector_aiming.rs::f003_the_tag_survives_as_a_switch_that_can_take_the_untagged_surfaces_back_out`
+drives the real cast on the real map, flips the resource, and flips it back).
+
+**Two implementations of one question became one.** `anchorable_beyond_reach` asked the
+`ANCHORABLE` bit itself. With a switch that would have drifted on the first flip: the miss word
+would have said *"out of reach"* about a surface the switch had turned off. Same shape as the
+`CLAUDE.md` rule-5 corollary — *one writer decides, everyone else reads the answer*.
+
+### 2 · The measurement that made this smaller than it looked
+
+`Ashgate` logs **`2901 blocks built (245 placed, 2656 generated), 2901 of them anchorable`**.
+There is **no untagged body on the shipped map**, so on Ashgate this change is provably a no-op:
+`is_hookable(EVERYTHING, tagged) == is_hookable(TAGGED_ONLY, tagged) == true`. Every script in the
+corpus behaves bit-identically before and after. The only map that can falsify anything is
+`graybox`, with **22** `anchorable: false` rows — the 400 m ground slab, the wall at `z = -33.5`
+and the aqueduct's twenty columns. The red test therefore lives there:
+**145 stances, 145 hits, 0 skipped, 81 of them on untagged rows, 79 refused a hook before the fix
+and 0 after.**
+
+### 3 · `F-003` existed to *"verhindert Physik-Exploits"*. What actually holds now — measured
+
+`scripts/q078-fling.txt`, **30 asserts, exit 0**, on Ashgate against `gravity_m_s2: -32`:
+
+| attempt | reading |
+|---|---|
+| hook the pavement **under your own feet**, at rest | anchored at `(168.19, 1.50, -50.32)`; 0.37 s later **21.3 m/s**, about **5.8 m/s more than free fall** — the pull points down because the anchor does. `Ctrl` for 3 s ends at **0.000 m/s standing on the street**: the thing you are pulled into is the floor |
+| hook the ground **while falling at 45.9 m/s** | 53.3 → **60.8 m/s**, rope slack the whole way (he falls *towards* his anchor). Arrives at rest |
+| free fall from 90 m | **exactly `75.000`** and stays there — `vector.max_speed_m_s` is a hard avian clip, not a soft target. **Nothing in any run exceeded it** |
+| drive into an anchor 8.3 m away at speed | **4.9 m/s** at the anchor; `min_rope_m` (3.0) plus the fade band ate it |
+| **a rope on a walking titan and a rope on a roof 46 m below** | `rope == 2` for **5.5 s**, speed **12.5 → 3.6 → 1.7 → 4.1 m/s**, height **50.278 → 50.347 → 50.308** — **7 cm of drift while one anchor walked.** No resonance, no fling, no broken joint |
+
+**So the existing guards hold for everything that was tried, and `F-012 Velocity-Clamp gegen Fling`
+is not urgent.** The one thing that behaves *badly enough to feel* is not a speed at all: a hook
+into the ground under your feet **adds to gravity**, which is a downward yank nobody has played
+yet. That is a feel question for the user, not a physics bug.
+
+### 4 · `F-029 Dynamische Ankerpunkte` arrived as a side effect, and it survives the joint
+
+A titan's root capsule already carried `SOLID | ANCHORABLE`, so nothing had to be built. What was
+**not** free is the physics: a rope anchored to a walking titan is a moving constraint against the
+`DistanceJoint` that landed the same day (`F-005`, `7bb61cd`). `scripts/f029-grapple.txt` ACT 1
+still holds (`rope == 1` across 2 s of walking), and the two-carrier row above is the harder case
+and it is stable. **ACT 2 of that script fails (`Rope == 0`, `Titans == 1`) and it is not this
+work:** the hook anchors correctly on the titan (`body 2903`), the *cortex cut* does not land —
+its own header warns the pass closes at 9.75 m/s against `blades.min_speed_m_s` 8.0, and that is a
+fall time, i.e. `docs/NEXT.md` §3G's gravity bucket.
+
+**Related:** `Q-078` · `FIND-200` · `F-003` `F-012` `F-029` `F-023` · `docs/NEXT.md` §3G
+
+## FIND-200 — the world fence is the ONE solid surface a hook cannot take, and it is invisible
+
+**2026-08-28**, found while sweeping the graybox for `Q-078`. `world::bounds::build_bounds`
+spawns four thick static `Collider::cuboid` panels around the map (`plan_fence`), and they carry
+**no `shared::Body`** — so `vector::aim::cast` resolves them to `body: None`, and
+`vector::hookable::is_hookable` refuses them by the rule that a hit with no hull and no `BodyId`
+cannot carry an anchor (`B-001`).
+
+**Measured:** a stance at `(212, 2, 0)` on the graybox — 12 m outside the 400 m ground slab —
+looking back at the map centre reports a hit at **exactly `(210.0, 1.976, 0.0)`, `body: None`,
+`hookable: false`**. That is the *outer* face of a fence panel whose inner face the log calls
+`+-(200.0, 200.0)`. Four of 145 sweep stances landed there before they were clamped inside.
+
+**Why it is not fixed here.** Outside the fence is a place the fence exists to prevent, so the
+finding is about the **inside** face: a player flying at the map edge meets an invisible wall that
+also refuses a rope, and *"everything is hookable"* now makes that a promise the world edge breaks.
+`src/world/` is not this round's territory. Two options for whoever takes it: give the panels a
+`Body` (then the edge is a climbable wall, which may be desirable), or leave them un-hookable and
+say so in the HUD — `MissReason::SurfaceHoldsNothing` already exists and would be the honest word.
+
+**ASSUMPTION the work continued under:** the fence stays un-hookable, because a rope on an
+invisible wall is worse than a rope that refuses.
+**Rollback point:** one line in `world::bounds::build_bounds` — add `Body { .. }` to the panel
+bundle. Nothing in `vector` changes either way.
+
+**Related:** `FIND-199` · `Q-078` · `B-001` · `F-003`
+
+---
+
+## FIND-201 — the mission board is the first hub door a SCRIPT can walk through, and that is why it survived where four rounds died
+
+**2026-08-28, `F-177`, `--headless` + `--offscreen` on offlinebot.**
+
+> *„wenn man in der hub auf ein board drueckt (F) dann kommt man in eine mission uebersciht in der
+> man auswaehlen kann was man machen will!"* — the user, 2026-08-27.
+
+### What was actually wrong with the four refuted rounds, and it was never the design
+
+`hud::hub_prompt` was refuted four times over `bearing`, `walk model`, `ray` and a sweep that held
+**height** constant. Underneath all four sits one structural fact, `FIND-189`: **`--headless` and
+`--offscreen` build no window, `menu` is gated on `With<PrimaryWindow>`, and no script verb can
+press `Esc` or click a plate.** Every one of those rounds put its feature behind something a run on
+this machine cannot reach, so its only evidence was a fixture arguing with itself — and a fixture
+arguing with itself is exactly what the four refutations found.
+
+**The board is not a screen.** It is a place in the world and one key on the keyboard, and both of
+those exist in all four launch modes. `scripts/f177-board.txt` therefore drives the whole loop with
+`look`, `W` and `F` and nothing else: **17 asserts held, 1623 ticks, exit 0.**
+
+### The three decisions that make it exercisable, and each one is load-bearing
+
+1. **`menu::board::work_the_board` is registered OUTSIDE `menu`'s window gate** — the only system
+   in the domain that is. It writes `Screen` **only where there is a window**: in a windowless run
+   `hud::hide_while_a_menu_is_up` would hide the whole HUD on a `Screen::Lobby` nobody can draw, so
+   moving the screen there would blank the one surface such a run has.
+2. **The hold is on `Time<Real>`.** With a window the overview is `Screen::Lobby`,
+   `menu::apply_screen` stops `Time<Virtual>`, and every `FixedUpdate` tick with it — a hold counted
+   in ticks would never finish in the run a player is actually looking at.
+3. **The board adds no prop.** `maps.ron: ashgate` has stood a signpost at (3.6, 1.8, −4.2) since
+   2026-08-26 and the survey photographed it; `missions.ron: hub.board` is a trigger volume on it.
+   `tests/mission.rs::f177_the_board_stands_on_the_signpost_that_is_already_in_the_yard` fails if
+   either file moves without the other.
+
+### The measurements
+
+| what | number |
+|---|---|
+| `scripts/f177-board.txt --headless --hub --ticks 2000` | 17 asserts held, 1623 ticks, **exit 0** |
+| amber (sRGB 255, 215, 89) in the panel rect, control frame at the spawn point (`--ticks 92`) | **0** — and 0 in the whole frame |
+| the same rect, standing at the board, board shut (`--ticks 129`) | **372** px, `x 52..220, y 191..239` |
+| the same rect, board open (`--ticks 154`) | **2 457** px, `x 52..346, y 191..511`, **13 sortie rows** = the 13 entries of `missions.ron` |
+| the cursor column `x 45..70`, open vs one more `F` (`--ticks 179`) | the one marked row moves `y 251..258` → `y 270..277`, **one line pitch**, nothing else in the column moves |
+| the 3D range sweep, `tests/menu.rs` | 2 × 15³ = **6 750** samples, **0** skipped, both answers present |
+| the panel's right edge against the `F-170` keep-out box | `x 346` against `x 512` |
+| the shot over two runs | bit-identical, `sha256 55132df4…` |
+
+### The one bug this round produced, and it is a shape worth keeping
+
+**The release has to be read BEFORE the hold accumulator.** The frame a key comes up in has
+`just_released` true and `pressed` false, so an accumulator block that ran first disarmed the press
+and the release then found nothing to step. Symptom: **every tap did exactly nothing** — twelve
+presses landed on one sortie — while the *hold* worked perfectly, so the feature looked half-built
+rather than mis-ordered. Four tests went red together and named it in one run.
+
+### And one honest correction to my own code, found by breaking it
+
+The comment on the opening press said `armed = None` was what stopped it deploying. **It is not.**
+Flipping only that line leaves every `f177` test green; the live guard is `spent = true`, and
+flipping *that* turns `f177_the_press_that_opens_chooses_nothing_and_the_next_tap_steps_one_on` red
+with `left: veteran, right: recruit`. The comment now says which of the two flags is the brace.
+**A guard you have not watched fail is a guess about your own code**, and this one was mine.
+
+### What a refuter should attack first
+
+1. **The panel is a second surface for one list.** It is `menu::lobby::entries` for the rows,
+   `menu::lobby::chosen` for the highlight and `shared::DeployRequest` for the deploy — one
+   mechanism, and with a window the panel hides itself because `Screen` leaves `Playing`. But
+   **nobody has ever seen the plate and the panel in one session**, because nobody has run this
+   game in a window on either machine. That claim is 🟨 and is written down as such.
+2. **`hold_s: 0.35` is untuned.** It was picked, not measured against a hand.
+3. **The keyboard route is the only one a script proves.** The mouse route through the plate is
+   held by `tests/menu.rs` with a hand-spawned window entity and by nothing else.
+
+**Related:** `FIND-189` · `FIND-178` · `FIND-181` · `FIND-190` · `Q-062` · `F-177`
+
+---
+
+## FIND-199 — the invisible wall is a collider, so it is visible to every ray: `fence_top_m` is a **test-driven** number, and two scripts already fly under the recovery plane
+
+**Round:** `F-012`, the map's edge, 2026-08-28. Three things were measured that a "put a box at
+the border" implementation would have got wrong, and each of them cost nothing to avoid **once
+measured** and would have cost a day to find afterwards.
+
+### 1. An invisible wall is invisible to the eye and not to a raycast
+
+The fence is a `Collider`. `vector::hook`'s probe is `space.cast_ray(..)` against **avian**, and
+`AIM_RAY_SEES` is `LayerMask::ALL & !LAYER_PLAYER` — a mask over *collision layers*, which every
+untagged collider is a member of. So a fence panel answers an aim ray whether or not anything
+draws it.
+
+`tests/vector_hooks.rs::f028_a_failed_pull_says_which_of_the_four_it_was` puts the player at
+**`(0, 400, 0)`** with a level aim and requires `MissReason::NothingInRange`, then spawns a real
+anchorable wall **900 m out on the same line** and requires `MissReason::OutOfReach`. A fence that
+went to the sky would have turned **both** into `SurfaceHoldsNothing`: the same shape as `B-010`,
+where a team mate in the line turned a rope into a miss.
+
+**So `bounds.fence_top_m` is 200.0 and not `f32::MAX`, and the reason is a test and not taste.**
+80 m above the 120 m wall, 200 m under the one ray in the repository that is fired from above it.
+⚠️ **Anything that raises the ceiling later has to move that test or accept the collision.**
+Written into `assets/data/maps.ron` beside the number.
+
+### 2. Hiding the fence from the ray is not free either — so it carries no `Body` instead
+
+The other half of the same problem: a rope that *reaches* the fence must not hold on to it. That
+could not be done with layers (membership `LAYER_PLAYER` would make the player pass through;
+anything else is in `AIM_RAY_SEES`), so it is done with the **absence of `shared::Body`**:
+`vector::hook` asks `bodies.get(hit.entity)` and answers `SurfaceHoldsNothing` when the query does
+not match. The same absence keeps the fence out of the `SpatialIndex` — and out of
+`tests/world.rs::t036a_every_body_gets_exactly_one_id`, which asserts
+`bodies_in_the_world == plan_blocks().len()` and would have gone red on four extra bodies.
+**A world collider that is not a body of the world is a supported shape; it just has to be
+chosen on purpose.**
+
+### 3. Two shipped scripts already fly **200 m under the world**, and one of them is 147 m from the plane
+
+`bounds.recovery_plane_y_m` cannot simply be "somewhere below". Measured over the whole script
+corpus, two scripts use the void outside the map as a test stage:
+
+| script | warps to | falls to, worst act |
+|---|---|---|
+| `scripts/f030-hitbox.txt` | `z = 600.231 … 1200.77`, `y = 13.3 … 22.1` | ≈ **-153 m** (lurker act, 3.31 s of fall) |
+| `scripts/f028-why.txt` | `(400, 0.05, 406)` — 50 m outside Ashgate, on purpose | ≈ **-23 m** (1.2 s) |
+
+A plane at −150 m would have **recovered the player in the middle of a hitbox measurement** and
+the failure would have looked like a titan bug. At −300 m, `f030-hitbox` clears it by 147 m; both
+scripts were run with the feature in and **neither produced a single `under the world` line**.
+Both were also run with `bounds::build_bounds` and `recover_the_fallen` unregistered and reported
+the identical verdicts (`8 of 8` and `2 of 6` — pre-existing reds from the provisional
+`gravity_m_s2 −32` / `boost_m_s2 46`, `docs/NEXT.md` 3G), so the feature is measured to change
+nothing about them.
+
+⚠️ **The general shape, and it is the one worth keeping:** a depth-triggered rule inherits every
+place the existing corpus already goes. Before choosing the depth, `grep '^warp' scripts/` and
+work out where each one *lands*, not where it starts — a warp is a position, and the number that
+matters is the one gravity turns it into.
+
+### 4. And the walk-off measurement itself: the cause was the boring one of four
+
+`docs/BUGS.md` B-015 lists four candidates (no collider past the plate · a plate smaller than the
+playable area · tunnelling at speed · nothing below). Measured: Ashgate's two ground slabs cover
+`x ∈ [-350, 350]`, `z ∈ [-350, 350]` — its declared `size_m` **exactly**. **One metre past the
+edge is already outside the world**, at every height, and 12 of 12 probe stances fell to `y = -44.0`
+in 2 s, which is free fall at `gravity_m_s2 = -32` with nothing hit. No seam, no tunnel, no
+undersized plate: there was simply never anything there.
+
+**Related:** `B-015` · `F-012` · `B-010` · `docs/QUESTIONS.md` Q-002 · `FIND-197`
+
+---
+
+## FIND-202 — the two ends of one rope use two different anchor positions, and only one of them is tested
+
+**2026-08-28 · [offlinebot] · found by an adversarial verifier, re-read and confirmed by the main head**
+
+Since `Q-078` every surface is hookable, **including titan bodies** — which was described as
+`F-029 Dynamische Ankerpunkte` *"arriving as a side effect"*. It did not arrive.
+
+**A rope's physics anchor cannot move.** `player::rope::attach_ropes` spawns a
+**`RigidBody::Static`** marker at the hit point (`src/player/rope.rs:~294`) and **nothing ever
+writes it again** — every other occurrence of `rope.anchor` in the repository is a read
+(`anchors.get`, `positions.get` at `:429`, `:434`, `:521`, `:767`, `:812`) or a `despawn_rope`.
+The file's own header says so in as many words (`:38`, `:143`): *"the rope's other end is
+`RigidBody::Static` and never had one"* and *"the anchor marker does not follow a moving carrier."*
+
+### 🔴 So one rope has two ends that disagree about where it is attached
+
+| | rides the carrier? | who reads it |
+|---|---|---|
+| `Hook::tip_m` | **yes** — `entry.center_m + local_m` (`src/vector/hook.rs:461`) | `player::locomotion::air_control` → `rope_drive`, `rope_winch` |
+| `DistanceJoint.limits.max` | **no** — enforced against the stale marker | the avian solver |
+
+**The arm follows the titan; the constraint holds the ground he was standing on.** And
+`hold_the_pair` (`B-013`) takes its anchor separation `d_a` from exactly those two static markers,
+**so the two-rope feasibility rule's inputs are constant no matter what a carrier does.**
+
+### And the test that claims otherwise measures the half that works
+
+`tests/titan.rs::f029_a_rope_bites_a_walking_titan_and_rides_him` (line ~2477) compares
+`tip_before` against `tip_after` **and never looks at the joint or at `Rope.anchor`.** So *"a rope
+rides a walking titan"* is **proven for the arm and unproven for the physics** — and the round that
+reported *"7 cm of drift while ONE ANCHOR WALKED"* was measuring a static pair. **The fixture held
+constant the one variable its own sentence named.** Sixth instance of that shape this week
+(`CLAUDE.md` rule 5).
+
+⚠️ **The ledger is right and the test name is wrong.** `F-029` is marked `Unbuilt`, correctly — but
+a test named `f029_..._rides_him` reads like evidence that it is built. **A test named after a
+feature is not a claim that the feature exists**, and this is the reverse of the 52 rows the tree
+names while the ledger says unbuilt (`docs/PLAN.md` §3).
+
+### What it costs, and why it is not fixed here
+
+Making the anchor follow a carrier is not a rename: a moving `RigidBody::Static` is a contradiction,
+so the marker has to become kinematic and be written every tick by whoever owns the carrier — which
+is a **second writer** on a `Transform` that `apply_warps` and avian already share (rule 3), and a
+moving constraint against the joint the rope only got yesterday (`Q-058`). **That is `F-029`'s whole
+difficulty and it is a round of its own.**
+
+**Until then, say it plainly:** you can hook a titan, the arm tracks him, and the rope pulls you
+toward where he *was*.
+
+**Related:** `Q-078` · `Q-058` · `B-013` · `FIND-191` · `F-029` `F-004` `F-005`
+
+---
+
+## FIND-203 — the gear has **no ceiling**: the climb is bounded by the tank, not by the sky, so no `fence_top_m` was ever going to be the mechanism
+
+**Measured 2026-08-28**, `W` + `ShiftLeft` held, look pitch 89, no hook and no warp, on the shipped
+`ashgate` and on `graybox`:
+
+| from a standing start | 1 s | 2 s | 3 s | 4 s | 5 s | 6 s | 7 s | 8 s |
+|---|---|---|---|---|---|---|---|---|
+| height | 12.2 | 49.9 | 54.6 | 71.7 | 114.5 | 182.5 | **259.3** | 336.3 m |
+
+Gas over the first six seconds: `15000.000 -> 14891.771` — **108.229 of a 15 000 tank, 0.72 %**.
+
+🔴 **And the 657.5 m "apex" the refutation round reported is not an apex.** It is where that
+script ran out of ticks. Flown to steady state the body simply sits at `vector.max_speed_m_s`
+going up: measured over a ten-second window after five seconds of spin-up,
+
+- **748.9 m climbed for 179.88 gas = 4.163 m per unit of gas** (74.89 m/s, i.e. the clamp),
+- one full tank of 15 000 therefore lifts the gear **62 508 m** on `graybox` and **62 580 m** on
+  `ashgate` — the difference is only the launch pad.
+
+So the sentence that justified `fence_top_m: 200.0` — *"far above anything the gear reaches on gas
+alone"* — was not merely 3.3x optimistic, it was the wrong **kind** of claim: **there is no height
+at which a fence stops being flyable-over**, and every candidate height brings its own standable
+ring on its top face (`B-016`, symptom 3).
+
+**The consequence, and it is the design decision:** the fence is a *horizontal* mechanism and is
+sized for normal play (80 m over Ashgate's 120 m wall, so walking and swinging along the coping
+meet a wall and not a teleport). What closes the world is
+`player::recovery::out_of_the_world` — **outside the map's own footprint is out of the world at any
+height.**
+
+**The measurement is now pinned in the data** rather than in a comment:
+`assets/data/maps.ron: bounds.gear_ceiling_m` (62 508 / 62 580) and
+`tests/player.rs::f012_the_gear_climbs_higher_than_the_fence_and_the_number_is_pinned`, which
+re-flies it on both maps from both the ground and the map's tallest standable block and holds it to
+5 %. Lower `vector.gas_tank` or raise `vector.boost_m_s2` and that test says so, with the new
+number in the failure message.
+
+**The habit this is an instance of:** the old comment argued a bound instead of measuring one, and
+the argument was cheap enough to check in ninety seconds of simulated flight. **A number in RON
+whose justification is a sentence about physics is a number nobody measured.**
+
+**Related:** `B-016` · `B-015` · `FIND-199` · `F-012` · `F-007`
+
+---
+
+## FIND-204 — foreign territory: three scripts use "outside the map" as an empty stage, and the footprint rule now recovers them on the next tick
+
+**Not fixed here** — `scripts/` outside `f012-edge.txt` was not this round's to touch. Recorded so
+it is not discovered as a mystery.
+
+Since `B-016`, `player::recovery::out_of_the_world` returns `PastTheEdge` for any body outside
+`map.size_m`, at any height, and `recover_the_fallen` warps him back on the next tick. **Three
+scripts deliberately `warp` out there** to get a titan alone against an empty sky (grep of all 71
+scripts, 9 warps in total):
+
+| script | line(s) | stance |
+|---|---|---|
+| `scripts/f028-why.txt` | 22 | `(400, 0.05, 406)` — 50 m outside Ashgate, on purpose |
+| `scripts/f030-hitbox.txt` | 94, 105, 117, 128, 153, 162 | `z = 400.55 .. 1200.77` |
+| `scripts/f032-swords.txt` | 125, 138 | `z = 450` and `z = 600` |
+
+None of the three carries a positional `assert` at those stances, so **none of them fails** — which
+is worse: they keep exiting 0 while measuring a player who has been teleported home. `f030-hitbox`
+is the expensive one; `FIND-199` already noted it falls to about -153 m during its longest act.
+
+**The repair is one coordinate per warp, and Ashgate has the room for it**: the open field inside
+the fence reaches `|x|, |z| <= 350`, and the district itself stops well short of that — `z = 300`
+with `x = 0` is as empty as `z = 600` was, at any of the heights those scripts use (13 .. 22 m).
+The alternative, `--sandbox` (*"empty field, one titan, infinite gas"*), is the stage those acts
+were reaching for in the first place.
+
+⚠️ **Do not "fix" this by weakening the footprint rule.** A carve-out for `warp` is a carve-out for
+the exact command the user's bug arrives through, and the grace it would need is a standable ring on
+top of the fence (`B-016`).
+
+**Related:** `B-016` · `FIND-199` · `F-012` · `F-028` `F-030` `F-032`
