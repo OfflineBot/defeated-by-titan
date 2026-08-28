@@ -1746,7 +1746,7 @@ fn f058_the_scuttler_travels_through_his_own_strike_and_the_husk_stands_still() 
     spawn_titan(&mut app, "scuttler", Vec3::new(2.0, 0.0, 0.0));
     spawn_titan(&mut app, "husk", Vec3::new(0.0, 0.0, 5.0));
 
-    let mut travelled = |app: &mut App, kind: &str, last: &mut Vec3| -> f32 {
+    let travelled = |app: &mut App, kind: &str, last: &mut Vec3| -> f32 {
         let (_, at, state) = one_body(app, kind);
         let step = if state == TitanState::Strike { at.distance(*last) } else { 0.0 };
         *last = at;

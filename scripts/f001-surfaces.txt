@@ -1,0 +1,168 @@
+# f001-surfaces — the rope bites the SURFACE it is pointed at, on five different kinds of
+# geometry, and at no authored point anywhere.
+#
+# > *„es soll auf jeglicher oberflqche einhaken. nicht an hardcoded punkten etc!"*
+# > — the user, 2026-08-27
+#
+# **This file is the evidence that the answer to that sentence is already the shipped one.**
+# `world::AnchorField` — 787 lines that generated a corner/edge/course point list per district
+# and adopted the models' `hook.*` empties on top — was deleted on 2026-08-28 together with the HUD
+# that drew them (`src/hud/anchor_marks.rs`). Nothing here changed when it went, because
+# nothing here ever read it: `vector::hook::fire` takes `vector::aim`'s resolved target, and
+# `vector::aim` casts a RAY and asks the collider it hits whether it carries
+# `shared::AnchorSurface` (`BodyMask::ANCHORABLE`). `docs/BUGS.md` B-011 (WONT FIX) ·
+# `docs/FINDINGS.md` FIND-197.
+#
+# ## What makes this a proof and not five hooks in a row
+#
+# Five legs on five geometrically different bodies, and — the part that matters — **every
+# anchor point below is an arbitrary point on a face**, not a corner, not an edge, not a rung,
+# not a named `hook.*` empty. The old field only ever put points on corners, on 12 m edge
+# spacings and on 15 m courses (`EDGE_SPACING_M`, `COURSE_RISE_M`); a rope that lands at
+# `y = 4.07` on a flat wall, or `18.32 m` up the side of a 120 m tower, is landing where NO
+# authored point stood. That is the claim, and each leg's `mark` line carries the measured
+# point so the next reader can check it against `maps.ron` by hand.
+#
+# Leg 6 is the control that costs nothing: pointed at open sky, the same trigger anchors
+# NOTHING. Without it `assert rope == 1` five times over is a test that cannot fail.
+#
+# ⚠️ **There is no untagged block to aim at on this map, and that is a measurement, not an
+# oversight.** `build_map` prints it on every run:
+#
+#   map "Ashgate": 2901 blocks built (245 placed, 2656 generated), 2901 of them anchorable
+#
+# All 245 hand-placed rows carry `anchorable: true` and the generated lots run at
+# `anchorable_fraction: 1.0`, so the shipped district already IS „jegliche oberflaeche".
+# The rule that an untagged body is a hit but not an anchor still exists in code
+# (`src/vector/hook.rs`, `vector::aim`'s `anchorable` bit) and `maps.ron: graybox` still has
+# unanchorable rows to exercise it — but on `current: "ashgate"` there is nothing to point at,
+# so leg 6 (open sky) is the negative half this file can honestly run.
+#
+# ## What it measured, 2026-08-28 [offlinebot], 14 asserts held, 950 ticks
+#
+# | leg | surface | body | the rope bit at |
+# |---|---|---|---|
+# | 1 | a wall's flat vertical face | 150 | `(51.00,  4.12,  -1.00)` — 4 m up a blank 11.5 m face |
+# | 2 | the same building's ROOF, top face | 150 | `(51.00, 11.50,  -8.32)` — the roof centre |
+# | 3 | a 120 m gate tower, high on its side | 70 | `(24.00, 20.57, -92.50)` — 20 m up, 100 m of stone above it |
+# | 4 | a house the SEED built, not a hand | 1526 | `(-150.00, 10.06, -6.28)` — far past the 245 placed rows, and no `maps.ron` row is within 10 m of that x |
+# | 5 | the pavement, straight down | 11 | `(51.00,  0.05,  10.23)` — the ground plate's top face |
+# | 6 | open sky — the CONTROL | — | `found no anchor: NothingInRange` |
+#
+# Not one of those six is a corner, an edge, a 12 m spacing, a 15 m course or a named `hook.*`
+# empty — i.e. **not one of them is a place the deleted `AnchorField` would have offered.**
+#
+# ## Running it
+#
+#   cargo build
+#   ./target/debug/defeated_by_titan --headless --script scripts/f001-surfaces.txt --ticks 1000 \
+#       2>&1 | grep -E 'MARK|assert|script run finished|anchored on body|found no anchor'
+#   # the exit code needs its OWN run — a pipeline's $? is the last command's:
+#   ./target/debug/defeated_by_titan --headless --script scripts/f001-surfaces.txt \
+#       --ticks 1000 >/dev/null 2>&1; echo $?
+
+wait 1.5                # world, camera, meshes and the render pipelines come up
+
+# ── leg 1 · A WALL, on its flat vertical face ────────────────────────────────────────────
+#
+# The market-square church nave: `maps.ron: ashgate`, centre (51, 5.75, -8), 26 x 11.5 x 14,
+# so its near face is the plane z = -1 and it spans y = 0..11.5, x = 38..64.
+# Standing 14 m in front of it at eye height, looking 10 degrees up, the ray meets that plane
+# at roughly y = 4.1 — the MIDDLE of a blank face, 4 m above the nearest corner and 7 m below
+# the roof line. No authored point could ever have been there.
+warp 51 0 13
+look 0 10
+wait 0.5
+assert height > -0.5
+assert height < 0.5
+assert speed < 0.5
+assert rope == 0                # the baseline: nothing anchored before the trigger
+hook right 1.5
+wait 0.5
+mark f001-wall
+assert rope == 1                # the wall face holds it
+wait 1.5                        # ⚠️ let the trigger come back UP before the next leg — a
+                                # `hook right` while the button is still down is no EDGE at
+                                # all and fires nothing (measured: legs 3 and 4 silently did
+                                # nothing on the first run of this file, no log line either)
+
+# ── leg 2 · A ROOF, on its flat horizontal top face ──────────────────────────────────────
+#
+# The same nave from above: roof plane y = 11.5, x = 38..64, z = -15..-1. Straight down from
+# 30 m up over its centre, so the ray hits the top face at (51, 11.5, -8) — the roof CENTRE,
+# which is the one place the old field explicitly refused to put a point
+# (`f003_no_anchorable_block_has_another_block_sitting_on_its_roof_centre`).
+warp 51 30 -8
+look 0 -90
+wait 0.3
+hook left 1.5
+wait 0.5
+mark f001-roof
+assert rope == 1                # the roof holds it too
+wait 1.5
+
+# ── leg 3 · A TOWER, high up its side, far from any corner ───────────────────────────────
+#
+# The east gate tower of the inner wall: centre (24, 60, -120), 20 x 120 x 55 — x = 14..34,
+# y = 0..120, z = -147.5..-92.5. Standing 42 m out on the tower's own centre line and looking
+# 24 degrees up puts the ray on the face z = -92.5 at about y = 18.3: a hundred metres of
+# unbroken stone above it and eighteen below.
+warp 24 0 -50
+look 0 24
+wait 0.5
+assert speed < 1.0
+assert rope == 0                # and the last leg's rope really did let go
+hook right 1.5
+wait 0.5
+mark f001-tower
+assert rope == 1                # 18 m up a blank 120 m face
+wait 1.5
+
+# ── leg 4 · A GENERATED HOUSE — geometry no hand wrote at all ────────────────────────────
+#
+# The legs above are all hand-placed rows of `maps.ron`. This one is not: the residential lots
+# are laid out from the map's SEED (`plan_blocks`, `anchorable_fraction: 1.0`), so the wall the
+# rope bites here exists only because an RNG put it there. A rule that lived in authored data
+# could not reach it; a rule that lives on the surface does.
+warp -150 0 60
+look 0 6
+wait 0.5
+assert rope == 0
+hook left 1.5
+wait 0.5
+mark f001-generated
+assert rope == 1
+wait 1.5
+
+# ── leg 5 · THE PAVEMENT — the ground is a surface like any other ────────────────────────
+#
+# Standing on the market square and pointing 30 degrees DOWN: the ray leaves the eye at 1.6 m
+# and meets the pavement slab 2.8 m ahead, at `(51.00, 0.05, 10.23)` — the top face of
+# `maps.ron`'s 0.2 m sand-brown ground plate, which is `anchorable: true` like everything else
+# in this district. A rope into the floor is not useful, and that is not the point: the point
+# is that NOTHING decides it except the surface the ray met.
+warp 51 0 13
+look 0 -30
+wait 0.5
+assert rope == 0
+hook right 1.5
+wait 0.5
+mark f001-pavement
+assert rope == 1
+wait 1.5
+
+# ── leg 6 · THE CONTROL — open sky, and the same trigger catches NOTHING ─────────────────
+#
+# ⚠️ Without this leg the five `assert rope > 0` above are a test that cannot go red: a build
+# in which every trigger anchored on a phantom would pass all of them. Here the ray leaves the
+# world, `vector::aim` resolves no target, and `vector::hook` logs `found no anchor`.
+warp 200 200 200
+look 0 89
+wait 0.3
+hook left 1.0
+wait 0.3
+mark f001-sky-control
+assert rope == 0                # nothing overhead — and nothing invented one
+
+wait 1
+end

@@ -479,13 +479,12 @@ fn f170_nothing_covers_the_middle_of_the_screen() {
     // `f016_the_band_keeps_the_sight_core_clear`, over the whole slider — this test would let
     // the band through, and that is exactly why the other one exists.
     //
-    // **The `F-026` anchor marks are the third case of the FIRST exception, and they are
-    // skipped here by name.** Every one of them carries a *place* — an anchor point, or the
-    // point a rope is on — which is exactly the class that exception names, so they are held
-    // out of `arm_aim::SIGHT_CORE_PX` and not out of the 20 % box. Skipping them here is not a
-    // hole: `f026_no_anchor_mark_ever_touches_the_sight_core` measures them over 24 looks and
-    // `f026_every_anchor_mark_stands_on_its_own_projected_pixel` holds each one to 0.6 px of
-    // its own projection, which is a stricter rule than this test could ever be.
+    // **There is no third exception, and there is no longer a skip list here.** The `F-026`
+    // anchor marks used to be one — twelve rings on points out of `world::anchor::AnchorField`,
+    // skipped by the `hud_anchor_` name their spawner gave them. The field was deleted on
+    // 2026-08-28 (the user, 2026-08-27: *„es soll auf jeglicher oberflqche einhaken. nicht an
+    // hardcoded punkten etc!"*), so every node this test now sees is under the full box rule
+    // with no exception at all.
     let mut app = app();
     attach_screen(&mut app);
     let player = local_player(&mut app);
@@ -533,11 +532,6 @@ fn f170_nothing_covers_the_middle_of_the_screen() {
         .query_filtered::<(&Name, &Node, &ComputedNode, &UiGlobalTransform), With<HudElement>>();
     for (name, node, computed, at) in q.iter(app.world()) {
         if node.display == Display::None {
-            continue;
-        }
-        // The `F-026` field — see the header of this test. Skipped by the name its own spawner
-        // gives it, so a node that stops being an anchor mark stops being skipped.
-        if name.as_str().starts_with("hud_anchor_") {
             continue;
         }
         let (min_x, min_y, max_x, max_y) = rect(computed, at);
@@ -3114,618 +3108,31 @@ fn f016_the_band_keeps_the_sight_core_clear() {
     assert!(seen >= 100, "only {seen} band nodes were looked at over the whole slider");
 }
 
-// ---------------------------------------------------------------------------------------
-// F-026 + F-027 + F-030a — the anchor field on screen
-//
-// **What these tests exist against has a name and a number.** `docs/FINDINGS.md` FIND-160:
-// 1520 authored `hook.*` points loaded, and `grep` for a reader of `AnchorField` outside
-// `src/world/` came back empty — a whole anchor system with no caller. The first failure mode
-// of giving it one is therefore not "the marker is wrong", it is **"the marker is not there and
-// the test passed anyway"** (FIND-152). So every test below counts what it looked at and falls
-// over on a count that is too small, and the two that matter most compare the drawn rectangle
-// against a world point projected by hand — the only comparison that can see FIND-129's class
-// of lie.
-// ---------------------------------------------------------------------------------------
-
-/// Forces the 10 Hz set-refresh, so that "the set was searched again after I moved" is a fact
-/// and not a coincidence.
-///
-/// ⚠️ **It is needed for determinism, not because time stands still.** `First` never runs in
-/// these tests, so `Time`'s delta is frozen at whatever the last real `app.update()` left in it
-/// — which is a good fraction of a second while the world is being built, i.e. usually *more*
-/// than the 10 Hz period. Whether a plain `run_hud` refreshes the set therefore depends on the
-/// machine's mood, which is exactly what a test may not depend on. Where a test needs the
-/// opposite — the set **held** across a frame — the delta has to be set to zero explicitly, see
-/// `f030a_the_set_refreshes_at_ten_hertz_and_the_pixel_every_frame`.
-fn force_mark_refresh(app: &mut App) {
-    use defeated_by_titan::hud::anchor_marks::MarkClock;
-    let mut clock = app.world_mut().resource_mut::<MarkClock>();
-    clock.since_s = 10.0;
-}
-
-/// Every anchor mark that is really laid out: `(slot, state, world point, screen rect)`.
-fn anchor_marks(
-    app: &mut App,
-) -> Vec<(usize, defeated_by_titan::hud::anchor_marks::MarkState, Vec3, (f32, f32, f32, f32))> {
-    use defeated_by_titan::hud::anchor_marks::{AnchorMark, MarkAt, MarkState};
-    let mut out = Vec::new();
-    let mut q = app
-        .world_mut()
-        .query::<(&AnchorMark, &MarkState, &MarkAt, &Node, &ComputedNode, &UiGlobalTransform)>();
-    for (mark, state, at, node, computed, ui_at) in q.iter(app.world()) {
-        if node.display == Display::None || *state == MarkState::Off {
-            continue;
-        }
-        let Some(point_m) = at.point_m else { continue };
-        out.push((mark.slot, *state, point_m, rect(computed, ui_at)));
-    }
-    out.sort_by_key(|(slot, ..)| *slot);
-    out
-}
-
-/// Puts the player on a roof in the middle of the district and looks somewhere — the same
-/// helper the arm-marker sweep uses, plus the refresh the field needs.
-fn stand_look_and_mark(app: &mut App, at_m: Vec3, yaw_deg: f32, pitch_deg: f32) {
-    stand_and_look(app, at_m, yaw_deg, pitch_deg);
-    force_mark_refresh(app);
-    run_hud(app);
-}
-
-#[test]
-fn f026_the_drawn_states_differ_in_form_not_only_in_colour() {
-    // `F-026` verbatim: *„Vier Zustaende, jeweils durch FORM UND Farbe unterschieden
-    // (Farbenblindheit)"*. A table with two rows that read the same is a table that explains
-    // nothing, and it is exactly what a colour-blind player is left holding.
-    //
-    // ⚠️ **Two rows, where the spec names four.** `BestLeft` and `BestRight` were withdrawn on
-    // 2026-08-26 because they carried `Q` and `E` for a key that does not obey them (`F-024`
-    // unbuilt — `src/hud/anchor_marks.rs` header, `docs/BUGS.md` B-011). The parenthesis the
-    // spec cares about is *still* satisfied, and with more room than before: the two survivors
-    // differ in size, in filled-vs-hollow AND in the tether, so three independent
-    // non-colour channels tell them apart.
-    use defeated_by_titan::hud::anchor_marks::{form_of, MarkState};
-
-    for a in MarkState::DRAWN {
-        assert!(form_of(a).size_px > 0.0, "{a:?} has no size — it cannot be seen at all");
-        for b in MarkState::DRAWN {
-            if a == b {
-                continue;
-            }
-            assert_ne!(
-                form_of(a),
-                form_of(b),
-                "{a:?} and {b:?} are drawn as the same rectangle. Then the only thing telling \
-                 them apart is colour, and `F-026`'s parenthesis says that is not allowed"
-            );
-        }
-    }
-    // And the differences are the ones `F-026` names, not two arbitrary sizes: one small
-    // hollow ring, one FILLED symbol with a rope connection.
-    assert_eq!(MarkState::DRAWN.len(), 2, "the drawn states are the candidate and the rope");
-    assert!(form_of(MarkState::Anchored).tether, "`F-026`: „gefuelltes Symbol mit Seilverbindung\"");
-    assert_eq!(
-        form_of(MarkState::Anchored).border_px,
-        0.0,
-        "the anchored symbol is FILLED — a border makes it a ring like the other three"
-    );
-    assert!(form_of(MarkState::Candidate).border_px > 0.0, "`F-026`: „Kandidat (kleiner Ring)\"");
-    assert!(
-        !form_of(MarkState::Candidate).tether,
-        "only the rope has a rope connection — a candidate with a tether claims a rope"
-    );
-}
-
-#[test]
-fn f026_every_anchor_mark_stands_on_its_own_projected_pixel() {
-    // ★ **The promise the user asked for twice, for the new element.** FIND-098, FIND-099,
-    // FIND-127 and FIND-129 were four separate cases of a HUD drawing a thing where the thing
-    // is not. `arm_aim` allows itself 20 px of vertical dodge around the sight core; this
-    // element allows **zero** — a mark stands on its projection or it is not drawn.
-    //
-    // The comparison straddles the layout, which is the only place the lie can live: the
-    // world point comes off the mark's own `MarkAt`, it is projected here by hand through the
-    // camera, and it is compared against the rectangle `ComputedNode` + `UiGlobalTransform`
-    // actually laid out.
-    let mut app = app();
-    attach_screen(&mut app);
-
-    let stands = [Vec3::new(0.0, 12.0, 0.0), Vec3::new(40.0, 30.0, -25.0), Vec3::new(-60.0, 8.0, 55.0)];
-    let looks = [(0.0_f32, 0.0_f32), (90.0, -10.0), (200.0, 20.0), (300.0, -30.0)];
-
-    let mut checked = 0;
-    let mut worst = 0.0_f32;
-    for stand in stands {
-        for (yaw_deg, pitch_deg) in looks {
-            stand_look_and_mark(&mut app, stand, yaw_deg, pitch_deg);
-            let (camera, camera_at) = camera_of(&mut app);
-            for (slot, state, point_m, (min_x, min_y, max_x, max_y)) in anchor_marks(&mut app) {
-                let want = camera
-                    .world_to_viewport(&camera_at, point_m)
-                    .expect("a mark is only drawn for a point the camera can project");
-                let drew = Vec2::new((min_x + max_x) * 0.5, (min_y + max_y) * 0.5);
-                let off = (drew - want).abs();
-                worst = worst.max(off.max_element());
-                checked += 1;
-                // **Half a pixel per axis, and that is the UI's rounding and not this
-                // element's.** `place_anchor_marks` writes `Camera::world_to_viewport`'s answer
-                // unmodified; taffy then rounds every laid-out edge to a whole pixel, and every
-                // mark's width is already an integer, so the centre can only be off by the
-                // rounding of its left/top edge. Measured worst case over the sweep: 0.5 px.
-                // Anything above that is the element moving a mark, which it may not do.
-                assert!(
-                    off.x <= 0.51 && off.y <= 0.51,
-                    "slot {slot} ({state:?}) marks {point_m:?}, which projects to {want:?}, and \
-                     the ring was laid out centred on {drew:?} — {off:?} px away, and the UI's \
-                     own rounding can only account for 0.5. This element has no licence to move \
-                     a mark at all (FIND-129); if it cannot be drawn on its own pixel it may \
-                     only not be drawn"
-                );
-            }
-        }
-    }
-    assert!(
-        checked >= 24,
-        "only {checked} marks were looked at over 12 stand/look pairs — the field found almost \
-         nothing and this test just measured an empty screen (FIND-152)"
-    );
-    println!("f026 projection: {checked} marks checked, worst offset {worst:.3} px");
-}
-
-#[test]
-fn f026_no_anchor_mark_ever_touches_the_sight_core() {
-    // `F-170`'s box, resolved the way `src/hud/mod.rs` says: a mark carries a *place*, so it is
-    // held out of `arm_aim::SIGHT_CORE_PX` — the pixels the player is cutting — and it gives
-    // that up by **standing down**, never by stepping aside. So the rectangle of every drawn
-    // mark has to miss the core, and the check below is the whole reason the element is allowed
-    // inside the 20 % box at all.
-    use defeated_by_titan::hud::arm_aim::SIGHT_CORE_PX;
-    let mut app = app();
-    attach_screen(&mut app);
-    let (w, h) = screen(&mut app);
-    let core = Vec2::new(w * 0.5, h * 0.5);
-
-    let mut checked = 0;
-    let mut nearest = f32::INFINITY;
-    for yaw_deg in [0.0_f32, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0] {
-        for pitch_deg in [-25.0_f32, -5.0, 10.0] {
-            stand_look_and_mark(&mut app, Vec3::new(0.0, 12.0, 0.0), yaw_deg, pitch_deg);
-            for (slot, state, _, (min_x, min_y, max_x, max_y)) in anchor_marks(&mut app) {
-                checked += 1;
-                let over = min_x < core.x + SIGHT_CORE_PX
-                    && max_x > core.x - SIGHT_CORE_PX
-                    && min_y < core.y + SIGHT_CORE_PX
-                    && max_y > core.y - SIGHT_CORE_PX;
-                let dx = (core.x - (min_x + max_x) * 0.5).abs() - (max_x - min_x) * 0.5;
-                let dy = (core.y - (min_y + max_y) * 0.5).abs() - (max_y - min_y) * 0.5;
-                nearest = nearest.min(dx.max(dy));
-                assert!(
-                    !over,
-                    "at yaw {yaw_deg} pitch {pitch_deg}, slot {slot} ({state:?}) covers the \
-                     sight core: ({min_x:.1}, {min_y:.1})..({max_x:.1}, {max_y:.1}) against a \
-                     core of {SIGHT_CORE_PX} px around {core:?}"
-                );
-            }
-        }
-    }
-    assert!(checked >= 48, "only {checked} marks were looked at over 24 looks (FIND-152)");
-    println!("f026 sight core: {checked} marks checked, nearest edge {nearest:.1} px out");
-}
-
-#[test]
-fn f026_the_field_marks_name_no_key() {
-    // 🔴 **The structural half of the rule the app-level test measures on screen.**
-    //
-    // This element used to letter its two best rings `Q` and `E`. `F-024` — the feature that
-    // makes the hook fire at `AnchorField`'s best candidate — is unbuilt, so `vector::hook`
-    // took `vector::aim`'s raycast and the letters captioned a point the key never flew to.
-    // Measured before they came off: the game's log put the fired anchor at `(51.00, 1.65,
-    // -1.00)`, which projects to `(640.00, 357.77)`, and this element drew its `Q` at
-    // `(445.93, 352.07)` — **194.15 px, 17.30 deg away** — while `arm_aim`'s `Q`, the one the
-    // key obeys, was within 0.5 px in x.
-    //
-    // **Never draw a promise the game does not keep; a disclosed lie is still a lie on
-    // screen.** The header disclosed this one and shipped it, which is why the guard is a test
-    // and not a paragraph.
-    //
-    // It reads the source because that is the only place a letter can be re-introduced without
-    // a running app noticing on the day it happens — the same technique
-    // `f171_the_marker_letters_are_the_keys_that_fire_the_arms` uses on `src/net/local.rs`.
-    let source = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/hud/anchor_marks.rs"),
-    )
-    .expect("src/hud/anchor_marks.rs must be readable");
-    let code: String = source
-        .lines()
-        .filter(|l| !l.trim_start().starts_with("//"))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    for side in Side::ALL {
-        let letter = arm_aim::key_label(side);
-        assert!(
-            !code.contains(&format!("\"{letter}\"")),
-            "`src/hud/anchor_marks.rs` spells the string \"{letter}\" — that is the key label \
-             for the {side:?} arm. The anchor field may say \"there is an anchor here\"; it may \
-             not say \"{letter} goes here\", because until `F-024` lands it does not. \
-             `docs/BUGS.md` B-011"
-        );
-    }
-    // And the state table has no room for one either: a `glyph` field is how the letters got
-    // on screen the first time.
-    assert!(
-        !code.contains("glyph"),
-        "`src/hud/anchor_marks.rs` has a glyph again — the field marks caption no key"
-    );
-}
-
-#[test]
-fn f026_an_anchored_arm_marks_its_rope_with_a_filled_symbol_and_a_tether() {
-    // `F-026`'s fourth state, and it is the one that does **not** come out of the field: an
-    // anchor you are hanging on is worth drawing whether or not it is still a candidate, and
-    // after half a swing it usually is not.
-    use defeated_by_titan::hud::anchor_marks::{AnchorMarkTether, MarkState};
-    let mut app = app();
-    attach_screen(&mut app);
-
-    // A point that is really in front of the player, so it projects.
-    let anchor_m = Vec3::new(0.0, 18.0, -30.0);
-    stand_and_look(&mut app, Vec3::new(0.0, 12.0, 0.0), 0.0, 0.0);
-    anchor_arm_at(&mut app, Side::Left, anchor_m);
-    force_mark_refresh(&mut app);
-    run_hud(&mut app);
-
-    let marks = anchor_marks(&mut app);
-    let anchored: Vec<_> = marks.iter().filter(|(_, s, ..)| *s == MarkState::Anchored).collect();
-    assert_eq!(
-        anchored.len(),
-        1,
-        "one arm is anchored, so exactly one mark says so — found {} in {marks:?}",
-        anchored.len()
-    );
-    assert_eq!(
-        anchored[0].2, anchor_m,
-        "the anchored mark has to sit on the rope's own anchor and nowhere else"
-    );
-    // Nothing else may claim the same point: a weak ring under its own disc would be the field
-    // saying the point is free while the rope is on it.
-    assert_eq!(
-        marks.iter().filter(|(_, _, p, _)| *p == anchor_m).count(),
-        1,
-        "the anchored point is marked twice"
-    );
-    // And the *Seilverbindung* is really laid out — the half of `F-026`'s fourth state that a
-    // state enum alone cannot promise.
-    let mut q = app.world_mut().query::<(&AnchorMarkTether, &Node)>();
-    let shown = q.iter(app.world()).filter(|(_, node)| node.display != Display::None).count();
-    assert_eq!(shown, 1, "the anchored mark's rope connection is not drawn");
-}
-
-#[test]
-fn f027_the_marks_are_capped_thinned_and_stay_far_under_a_seventh_of_the_screen() {
-    // `F-027`'s acceptance, verbatim: *„In der dichtesten Map ueberdecken Marker nie mehr als
-    // 15 Prozent der Bildflaeche"* — plus the cap („maximal 12") and the thinning
-    // („bei hoher Punktdichte ausgeduennt"), all three measured on the real map.
-    //
-    // The area is summed over bounding boxes **without** subtracting overlaps, i.e. an upper
-    // bound: if the sum is under the limit the union certainly is.
-    let data_max = {
-        let data = app().world().resource::<GameData>().clone();
-        data.game.hud.marker_max as usize
-    };
-    assert_eq!(data_max, 12, "`F-027` says twelve — `game.ron: game.hud.marker_max` says {data_max}");
-
-    let mut app = app();
-    attach_screen(&mut app);
-    let (w, h) = screen(&mut app);
-    let gap_px = app.world().resource::<GameData>().game.hud.marker_min_gap_px;
-
-    let mut worst_pct = 0.0_f32;
-    let mut worst_count = 0usize;
-    let mut looks = 0;
-    for yaw_deg in [0.0_f32, 40.0, 80.0, 120.0, 160.0, 200.0, 240.0, 280.0, 320.0] {
-        for pitch_deg in [-30.0_f32, -10.0, 5.0] {
-            stand_look_and_mark(&mut app, Vec3::new(0.0, 14.0, 0.0), yaw_deg, pitch_deg);
-            let marks = anchor_marks(&mut app);
-            looks += 1;
-            // **The cap has to be asked where it is applied, not where it happens to hold.**
-            // Counting the drawn nodes cannot see it at all: `spawn_anchor_marks` puts down
-            // exactly `marker_max` slots, so the screen is under the cap even with the cap
-            // deleted — measured 2026-08-26 by deleting it and watching this test stay green
-            // (`CLAUDE.md` rule 5: delete the thing you are measuring and check the number
-            // moves). So `pick` is called here directly, on the real field and the real camera.
-            {
-                use defeated_by_titan::hud::anchor_marks::pick;
-                use defeated_by_titan::world::anchor::AnchorField;
-                let (camera, camera_at) = camera_of(&mut app);
-                let data = app.world().resource::<GameData>().clone();
-                let field = app.world().resource::<AnchorField>().clone();
-                let eye = camera_at.translation();
-                let candidates = field.candidates(
-                    eye,
-                    camera_at.forward().as_vec3(),
-                    camera_at.up().as_vec3(),
-                    data.game.vector.hook_range_m,
-                    data.game.hud.marker_cone_h_deg,
-                    data.game.hud.marker_cone_v_deg,
-                );
-                let picks = pick(&field, &candidates, [None, None], eye, &data.game.hud, |p| {
-                    camera.world_to_viewport(&camera_at, p).ok()
-                });
-                assert!(
-                    picks.len() <= data_max,
-                    "at yaw {yaw_deg} pitch {pitch_deg} the selection returned {} picks out of                      {} candidates — `F-027`'s cap is {data_max}",
-                    picks.len(),
-                    candidates.len()
-                );
-            }
-            assert!(
-                marks.len() <= data_max,
-                "at yaw {yaw_deg} pitch {pitch_deg} {} marks are on screen — the cap is \
-                 {data_max} (`F-027`)",
-                marks.len()
-            );
-            let area: f32 = marks
-                .iter()
-                .map(|(_, _, _, (a, b, c, d))| (c - a).max(0.0) * (d - b).max(0.0))
-                .sum();
-            let pct = 100.0 * area / (w * h);
-            worst_pct = worst_pct.max(pct);
-            worst_count = worst_count.max(marks.len());
-            assert!(
-                pct <= 15.0,
-                "at yaw {yaw_deg} pitch {pitch_deg} the marks cover {pct:.2} % of the screen — \
-                 `F-027` allows 15 %"
-            );
-            // The thinning, measured rather than assumed: no two marks are closer than the gap
-            // the file names. Two rings one on top of the other is the clutter this exists
-            // against, and a cap alone does not prevent it.
-            for i in 0..marks.len() {
-                for j in (i + 1)..marks.len() {
-                    let (_, _, _, a) = marks[i];
-                    let (_, _, _, b) = marks[j];
-                    let ca = Vec2::new((a.0 + a.2) * 0.5, (a.1 + a.3) * 0.5);
-                    let cb = Vec2::new((b.0 + b.2) * 0.5, (b.1 + b.3) * 0.5);
-                    assert!(
-                        ca.distance(cb) >= gap_px - 1.0,
-                        "at yaw {yaw_deg} pitch {pitch_deg} two marks stand {:.1} px apart, \
-                         under the {gap_px} px `game.ron: game.hud.marker_min_gap_px` promises: \
-                         {:?} and {:?}",
-                        ca.distance(cb),
-                        marks[i],
-                        marks[j]
-                    );
-                }
-            }
-        }
-    }
-    assert!(
-        worst_count >= 4 && looks == 27,
-        "the densest look produced only {worst_count} marks over {looks} looks — this test \
-         measured an almost empty screen and would have passed on any cap (FIND-152)"
-    );
-    println!(
-        "f027: worst {worst_count} marks, {worst_pct:.2} % of {w}x{h} covered over {looks} looks"
-    );
-}
-
-#[test]
-fn f027_switching_the_markers_off_draws_nothing_and_searches_nothing() {
-    // `F-027`: *„inklusive vollstaendiger Abschaltung"*. Two halves, and the second is the one
-    // that is easy to fake: an element that still runs the search and only hides the rings
-    // gives the player back nothing at all. So this asserts the clock never even ticks.
-    use defeated_by_titan::hud::anchor_marks::{AnchorMark, MarkClock, MarkState};
-    let mut app = app();
-    attach_screen(&mut app);
-
-    stand_look_and_mark(&mut app, Vec3::new(0.0, 14.0, 0.0), 0.0, -10.0);
-    let on = anchor_marks(&mut app).len();
-    assert!(on > 0, "with the element on there has to be something to switch off (FIND-152)");
-
-    {
-        let mut data = app.world_mut().resource_mut::<GameData>();
-        data.game.hud.marker_max = 0;
-    }
-    app.world_mut().resource_mut::<MarkClock>().refreshes = 0;
-    let before = app.world().resource::<MarkClock>().refreshes;
-    force_mark_refresh(&mut app);
-    run_hud(&mut app);
-
-    assert_eq!(anchor_marks(&mut app).len(), 0, "{on} marks were on screen and the switch is off");
-    assert_eq!(
-        app.world().resource::<MarkClock>().refreshes,
-        before,
-        "the search ran although the element is switched off — then the switch costs the \
-         player his rings and gives him back no frame time"
-    );
-    // And the states really went back to `Off`, not just the nodes to `Display::None`: a mark
-    // that keeps its state is a mark that comes back the moment anything else touches a node.
-    let mut q = app.world_mut().query_filtered::<&MarkState, With<AnchorMark>>();
-    let live = q.iter(app.world()).filter(|s| **s != MarkState::Off).count();
-    assert_eq!(live, 0, "{live} slots still hold a state with the element off");
-
-    // The control this whole test needs (`CLAUDE.md` rule 5): put the switch back and check the
-    // number moves. Without it, "0 marks" is also what a broken search prints.
-    {
-        let mut data = app.world_mut().resource_mut::<GameData>();
-        data.game.hud.marker_max = 12;
-    }
-    force_mark_refresh(&mut app);
-    run_hud(&mut app);
-    assert!(
-        anchor_marks(&mut app).len() > 0,
-        "switching the element back on produced nothing — then the `0` above measured a broken \
-         search and not a working switch"
-    );
-    assert!(
-        app.world().resource::<MarkClock>().refreshes > before,
-        "the clock never ticked even with the element on"
-    );
-}
-
-#[test]
-fn f030a_the_set_refreshes_at_ten_hertz_and_the_pixel_every_frame() {
-    // `F-030a` verbatim: *„mit 10 Hz Aktualisierungsrate und Interpolation der
-    // Markerpositionen dazwischen"*. Read literally the second half asks for an interpolated
-    // screen position, which is the FIND-129 lie with a new name on it. It is implemented on
-    // the reading that costs nothing and lies about nothing — the SET is refreshed at 10 Hz,
-    // the PROJECTION of every chosen point is recomputed every frame — and this is the test
-    // that pins both halves apart.
-    use defeated_by_titan::hud::anchor_marks::MarkClock;
-    let mut app = app();
-    attach_screen(&mut app);
-
-    // Half of the whole claim: the cadence itself, as arithmetic, without a wall clock.
-    let mut clock = MarkClock::default();
-    assert!(clock.due(0.0, 10.0), "the first frame always searches");
-    let mut ticks = 0;
-    for _ in 0..60 {
-        if clock.due(1.0 / 60.0, 10.0) {
-            ticks += 1;
-        }
-    }
-    assert_eq!(ticks, 10, "one second of 60 fps has to produce exactly ten searches, not {ticks}");
-
-    // The other half, in the running HUD: turn the camera **without** letting the set refresh.
-    // Every mark keeps its world point and every ring still lands on that point's new pixel.
-    stand_look_and_mark(&mut app, Vec3::new(0.0, 14.0, 0.0), 0.0, -10.0);
-    let before = anchor_marks(&mut app);
-    assert!(before.len() >= 3, "only {} marks to follow (FIND-152)", before.len());
-    let refreshes = app.world().resource::<MarkClock>().refreshes;
-
-    stand_and_look(&mut app, Vec3::new(0.0, 14.0, 0.0), 6.0, -10.0);
-    // **No time passes.** `First` is never run in these tests, so `Time`'s delta is frozen at
-    // whatever the last real `app.update()` left in it — which is a good fraction of a second
-    // while the world is being built, enough to roll the 10 Hz gate over on its own. Setting it
-    // to zero is the only way to ask the question this test is asking: *the set stayed put, and
-    // the pixels still followed*.
-    app.world_mut().resource_mut::<Time>().advance_by(std::time::Duration::ZERO);
-    run_hud(&mut app); // no `force_mark_refresh`: the SET must stay put
-    assert_eq!(
-        app.world().resource::<MarkClock>().refreshes,
-        refreshes,
-        "the set refreshed although no time passed — then the 10 Hz gate is not a gate"
-    );
-
-    let after = anchor_marks(&mut app);
-    let (camera, camera_at) = camera_of(&mut app);
-    let mut moved = 0;
-    for (slot, _, point_m, (min_x, min_y, max_x, max_y)) in &after {
-        assert!(
-            before.iter().any(|(s, _, p, _)| s == slot && p == point_m),
-            "slot {slot} changed its point without a refresh"
-        );
-        let want = camera.world_to_viewport(&camera_at, *point_m).expect("still projectable");
-        let drew = Vec2::new((min_x + max_x) * 0.5, (min_y + max_y) * 0.5);
-        assert!(
-            (drew - want).abs().max_element() <= 0.51,
-            "slot {slot} did not follow its own point across 6 deg of yaw: drawn at {drew:?}, \
-             the point projects to {want:?}"
-        );
-        if let Some((_, _, _, old)) = before.iter().find(|(s, ..)| s == slot) {
-            if ((min_x + max_x) * 0.5 - (old.0 + old.2) * 0.5).abs() > 2.0 {
-                moved += 1;
-            }
-        }
-    }
-    // The control: if nothing moved, the paragraph above proved nothing at all.
-    assert!(
-        moved >= 3,
-        "only {moved} marks moved over 6 deg of yaw — the camera did not really turn and this \
-         test compared a frame with itself"
-    );
-}
-
-#[test]
-fn f030a_the_candidate_search_stays_inside_its_frame_budget() {
-    // `F-030a`'s acceptance: *„Die Suche kostet unter 0,8 ms pro Frame … auch bei 4000
-    // Ankerpunkten in der Map."* Measured against the real field of the real map, through the
-    // real function, and at the real cone the HUD asks for.
-    use defeated_by_titan::hud::anchor_marks::pick;
-    use defeated_by_titan::world::anchor::AnchorField;
-
-    let mut app = app();
-    attach_screen(&mut app);
-    stand_and_look(&mut app, Vec3::new(0.0, 14.0, 0.0), 0.0, -10.0);
-    run_hud(&mut app);
-
-    let (camera, camera_at) = camera_of(&mut app);
-    let data = app.world().resource::<GameData>().clone();
-    let field = app.world().resource::<AnchorField>().clone();
-    assert!(
-        field.len() >= 1000,
-        "the field holds only {} points — a budget measured against an empty map is not a \
-         budget (FIND-152)",
-        field.len()
-    );
-
-    let eye = camera_at.translation();
-    let forward = camera_at.forward().as_vec3();
-    let up = camera_at.up().as_vec3();
-    let tuning = &data.game.hud;
-
-    let runs = 200;
-    let started = std::time::Instant::now();
-    let mut total = 0usize;
-    for _ in 0..runs {
-        let candidates = field.candidates(
-            eye,
-            forward,
-            up,
-            data.game.vector.hook_range_m,
-            tuning.marker_cone_h_deg,
-            tuning.marker_cone_v_deg,
-        );
-        let picks = pick(&field, &candidates, [None, None], eye, tuning, |p| {
-            camera.world_to_viewport(&camera_at, p).ok()
-        });
-        total += picks.len();
-    }
-    let per_search_ms = started.elapsed().as_secs_f64() * 1000.0 / runs as f64;
-    // The search runs at `marker_refresh_hz`, not per frame — that is what the 10 Hz gate buys
-    // — so the per-FRAME cost at 60 fps is what `F-030a` is about.
-    let per_frame_ms = per_search_ms * (tuning.marker_refresh_hz as f64 / 60.0);
-    println!(
-        "f030a: {} points, {:.0} picks/search, {per_search_ms:.3} ms per search, \
-         {per_frame_ms:.3} ms per frame at 60 fps",
-        field.len(),
-        total as f64 / runs as f64
-    );
-    assert!(
-        total > 0,
-        "the search found nothing over {runs} runs — then the timing below measured an early \
-         return and not a search"
-    );
-    assert!(
-        per_frame_ms < 0.8,
-        "the candidate search costs {per_frame_ms:.3} ms per frame ({per_search_ms:.3} ms per \
-         search at {} Hz) — `F-030a` allows 0.8 ms",
-        tuning.marker_refresh_hz
-    );
-}
-
-/// 🔴 **The one the round of 2026-08-26 shipped a lie against.**
+/// 🔴 **The one the round of 2026-08-26 shipped a lie against, and the reason the field is
+/// gone.**
 ///
 /// `F-026`'s two best rings carried the letters `Q` and `E`, and `F-024` — the feature that
-/// makes `Q` fire at [`AnchorField`](defeated_by_titan::world::anchor::AnchorField)'s best
-/// candidate — is **unbuilt**. `vector::hook::fire` takes `vector::aim`'s raycast target, which
-/// has never heard of the field. So the screen carried **two** `Q` glyphs on two different
-/// points, 194.15 px apart at the element's own stand, and only one of them was the point the
-/// key obeys.
+/// would have made `Q` fire at `world::anchor::AnchorField`'s best candidate — was **unbuilt**.
+/// `vector::hook::fire` takes `vector::aim`'s raycast target, which had never heard of the
+/// field. So the screen carried **two** `Q` glyphs on two different points, 194.15 px apart at
+/// the element's own stand, and only one of them was the point the key obeys.
 ///
-/// The rule this test is the guard for, in the words it deserves: **never draw a promise the
-/// game does not keep; a disclosed lie is still a lie on screen.** The lie was written down in
-/// the module header and shipped anyway, which is what makes it a rule rather than an accident.
+/// **`F-024` is now not to be built at all** and the whole field was deleted on 2026-08-28 —
+/// the user, 2026-08-27: *„es soll auf jeglicher oberflqche einhaken. nicht an hardcoded
+/// punkten etc!"* (`docs/BUGS.md` B-011 WONT FIX). So the second `Q` cannot come back the way
+/// it came, and this test guards the rule that outlives the element: **never draw a promise
+/// the game does not keep; a disclosed lie is still a lie on screen.**
 ///
 /// So: **one `Q` and one `E` on the whole screen**, and they are `arm_aim`'s — the marker that
-/// is measured at 0.0 px against the point the rope flies to (`FIND-129`). The field element
-/// may say *"there is an anchor here"*; it may not say *"Q goes here"*.
+/// is measured at 0.0 px against the point the rope flies to (`FIND-129`). Nothing else on the
+/// HUD may wear a key label, whatever it is drawing.
 #[test]
 fn f026_exactly_one_q_and_one_e_are_on_the_screen_and_they_are_the_arms() {
     let mut app = app();
     attach_screen(&mut app);
 
-    let mut most_marks = 0usize;
     let mut looks = 0usize;
+    let mut letters_seen = 0usize;
     for (at_m, yaw_deg, pitch_deg) in [
         (Vec3::new(0.0, 12.0, 0.0), 0.0_f32, -8.0_f32),
         (Vec3::new(0.0, 12.0, 0.0), 75.0, -8.0),
@@ -3733,9 +3140,8 @@ fn f026_exactly_one_q_and_one_e_are_on_the_screen_and_they_are_the_arms() {
         (Vec3::new(0.0, 60.0, 0.0), 35.0, -25.0),
         (Vec3::new(51.0, 2.0, 13.0), 0.0, 0.0),
     ] {
-        stand_look_and_mark(&mut app, at_m, yaw_deg, pitch_deg);
-        let marks = anchor_marks(&mut app);
-        most_marks = most_marks.max(marks.len());
+        stand_and_look(&mut app, at_m, yaw_deg, pitch_deg);
+        run_hud(&mut app);
         looks += 1;
 
         // Every VISIBLE node on the whole HUD whose text is one of the two key labels — no
@@ -3761,10 +3167,8 @@ fn f026_exactly_one_q_and_one_e_are_on_the_screen_and_they_are_the_arms() {
             let owner = app.world().get::<ArmMarkerLabel>(entity).map(|l| l.0);
             letters.push((body, at, owner));
         }
-        println!(
-            "f026 letters: yaw {yaw_deg} pitch {pitch_deg} — {} marks, letters {letters:?}",
-            marks.len()
-        );
+        letters_seen += letters.len();
+        println!("f026 letters: yaw {yaw_deg} pitch {pitch_deg} — letters {letters:?}");
 
         for side in Side::ALL {
             let want = arm_aim::key_label(side);
@@ -3791,9 +3195,16 @@ fn f026_exactly_one_q_and_one_e_are_on_the_screen_and_they_are_the_arms() {
             );
         }
     }
-    assert!(
-        most_marks >= 3 && looks == 5,
-        "the anchor field drew at most {most_marks} marks over {looks} looks — this test \
-         watched an element that was not running (FIND-152)"
+    // ⚠️ **The count that keeps this from passing on an empty screen (FIND-152).** The two arm
+    // markers are the things under test, so the floor is on THEM and not on some other element
+    // that happened to be laid out: five looks, and every one of them found exactly one `Q` and
+    // one `E` above, so `letters_seen` has to be `2 * looks`. A HUD that drew nothing at all
+    // would satisfy every `assert_eq!(drawn.len(), 1)` above by vacuity and fail here.
+    assert_eq!(
+        (looks, letters_seen),
+        (5, 10),
+        "{letters_seen} key labels over {looks} looks — with two arm markers always on screen \
+         there have to be exactly two per look, so this test watched an element that was not \
+         running (FIND-152)"
     );
 }

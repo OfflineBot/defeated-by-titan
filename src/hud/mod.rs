@@ -64,14 +64,14 @@
 //! on it. It gives up [`arm_aim::SIGHT_CORE_PX`] instead, and it gives it up by **not drawing**:
 //! a tick stands on its ray or it is absent, never moved.
 //!
-//! **And the third case is not a third argument** — it is the first one, applied to more markers
-//! of the same kind: [`anchor_marks`], the `F-026` field. Every one of its marks carries a
-//! *place* (an anchor point, or the point a rope is on), which is precisely the class the first
-//! exception names, so it is held out of [`arm_aim::SIGHT_CORE_PX`] and not out of the box. It
-//! gives up **more** than `arm_aim` does on both halves: `arm_aim` steps a marker out of the
-//! core, this one **does not draw** it, and where `arm_aim` allows itself a 20 px dodge this
-//! allows 0.0 px — `tests/hud.rs::f026_every_anchor_mark_stands_on_its_own_projected_pixel`
-//! measures the offset over a sweep of stands and looks and finds it exactly zero.
+//! **There is no third case.** There used to be: `anchor_marks`, the `F-026` field, twelve rings
+//! standing on points out of `world::anchor::AnchorField`. It was deleted on 2026-08-28 — the
+//! user, 2026-08-27: *„es soll auf jeglicher oberflqche einhaken. nicht an hardcoded punkten
+//! etc!"*. A HUD that marks *authored places* is a HUD for a mechanic this game does not have,
+//! so the element lost its subject rather than its polish (`docs/BUGS.md` B-011 WONT FIX,
+//! `docs/PLAN.md` §0). What survives is the thing the player actually aims with: the two
+//! [`arm_aim`] markers, which stand on the point `vector::aim`'s **ray** found, and the
+//! [`catch_band`], which draws how far sideways that ray sweeps.
 //!
 //! Everything else — bars, pips, banner, letters, the crosshair, and a marker with **no** point
 //! of its own to be honest about — still obeys the full box.
@@ -92,7 +92,6 @@
 //! | **`F-043`, the kill** — `KILL  21.0 m/s` in amber over the husk whose nape was just cut | `scripts/f032-swords.txt --ticks 162` → `docs/images/f043-hit-mark-kill.png` |
 //! | the same run's **body cut**, smaller and crimson | `… --ticks 331` → `docs/images/f043-hit-mark-cut.png` |
 //! | and the same band 43 ticks after the kill — **empty** | `… --ticks 200` → `docs/images/f043-hit-mark-gone.png` |
-//! | **`F-026`/`F-027`, the anchor field** — twelve 9x9 candidate rings at two point densities, thinned to `marker_min_gap_px` and faded past the reach. **No best ring and no `Q`/`E` letter**: the field says *there is an anchor here* and nothing about a key, because `F-024` does not exist yet and `vector::hook` never reads this field (`FIND-178`, `B-011`) | `scripts/f026-marks.txt --ticks 184 / 276` → `docs/images/f026-marks-square.png`, `docs/images/f026-marks-roofs.png` |
 //! | **`F-016`, the search band at three settings** — no band, 88 px, 227 px, one stand, one look | `scripts/f016-band.txt --ticks 150 / 240 / 330` → `docs/images/f016-band-0.png`, `-40.png`, `-100.png` |
 //!
 //! The hit mark was decoded out of the three frames above rather than against a control run:
@@ -151,7 +150,6 @@
 //! frame. The three crosshair crops measure 302 × 178, 326 × 202 and 356 × 212 px — the same
 //! three tuples `tests/hud.rs` asserts, to the pixel.
 
-pub mod anchor_marks;
 pub mod arm_aim;
 pub mod blade_pips;
 pub mod catch_band;
@@ -170,8 +168,7 @@ pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<anchor_marks::MarkClock>()
-        .add_systems(
+        app.add_systems(
             Startup,
             (
                 gas_bar::spawn_gas_bar,
@@ -181,7 +178,6 @@ impl Plugin for HudPlugin {
                 crosshair::spawn_crosshair,
                 arm_aim::spawn_arm_aim,
                 catch_band::spawn_catch_band,
-                anchor_marks::spawn_anchor_marks,
                 hit_mark::spawn_hit_mark,
             ),
         )
@@ -235,19 +231,6 @@ impl Plugin for HudPlugin {
             (
                 arm_aim::place_arm_aim,
                 catch_band::place_catch_band,
-                // `F-026`/`F-027`: **sense, shape, paint, place, in that order and chained.**
-                // The search needs the camera's `GlobalTransform` *and* its projection (it
-                // thins in screen space), so it cannot live in `Update` where every other
-                // `sense_*` of this domain lives — and the three that follow it have to see
-                // the state it just wrote in the same frame, or the field would be one frame
-                // behind the image exactly while the player is swinging.
-                (
-                    anchor_marks::sense_anchor_marks,
-                    anchor_marks::shape_anchor_marks,
-                    anchor_marks::paint_anchor_marks,
-                    anchor_marks::place_anchor_marks,
-                )
-                    .chain(),
             )
                 .after(bevy::transform::TransformSystems::Propagate)
                 .after(bevy::camera::CameraUpdateSystems)
