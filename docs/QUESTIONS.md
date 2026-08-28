@@ -3194,3 +3194,123 @@ to judge a mechanism before he has flown the new numbers would waste the round.
 **He gets asked at the play test, with `Q-063`, `Q-064` and `Q-046`.**
 
 **Rollback point:** none — nothing was built.
+
+---
+
+## Q-078 — ✅ ANSWERED 2026-08-27: **everything is hookable.** The tag system goes too.
+
+He was asked how far *„es soll auf jeglicher oberflqche einhaken"* reaches, given that
+`F-003 Getaggte Ankerflaechen` is a feature in his own spreadsheet whose stated purpose is
+*"Verhindert Physik-Exploits, macht Leveldesign steuerbar und definiert ueber die Flaechendichte
+die Traversal-Schwierigkeit einer Map"*, and whose acceptance is *"Kein Haken auf ungetaggten
+Parts moeglich"*. He chose **"Wirklich ALLES hakbar"**.
+
+**So this cancels `F-003` as well as `F-021`–`F-025`.** Hooking becomes a property of *existing*,
+not of *tagging*.
+
+### What that touches — check every one before calling it done
+
+| | |
+|---|---|
+| `maps.ron: anchorable` | becomes **dead data** on every block. Main head's file |
+| `tests/vector_aiming.rs::f002_an_untagged_wall_in_front_of_a_roof_is_not_hookable_and_not_transparent` | **inverts** — the wall must now hold a hook. Its *other* half (the wall is not transparent) stays |
+| the cast filter in `vector::aim` | the `anchorable` predicate comes out; the mask keeps only what is physically solid |
+| `F-003`'s acceptance sentence | cancelled. Its 63-tagged-surface evidence becomes historical |
+| **titan bodies** | now hookable **for free** — which is `F-029 Dynamische Ankerpunkte`, and it arrives as a side effect rather than as a feature. ⚠️ A rope anchored to a walking titan is a moving constraint; that is not free at all, it is `F-029`'s whole difficulty |
+| the ground | hookable. A hook into the street under your feet is now legal and nobody has felt it |
+
+### 🔴 The reason `F-003` existed does not disappear because the feature does
+
+*"Verhindert Physik-Exploits"* — the tag was the guard. With everything hookable, the guards that
+remain are `vector.max_speed_m_s` (75, an avian `MaxLinearSpeed`), `min_rope_m` (3.0) and the
+joint's own limits. **Nobody has checked whether those are sufficient on their own**, and
+`F-012 Velocity-Clamp gegen Fling` is still marked Unbuilt in the ledger while being the exact
+feature that would cover this. **That row should be re-checked against the tree before anyone
+relies on it.**
+
+**ASSUMPTION the work continues under:** the existing speed clamp and rope floor are the whole
+guard, and no new one is added until something is measured flinging a player.
+**Rollback point:** the `anchorable` predicate in `vector::aim`'s cast — one condition. Restoring
+it brings the tag rule back; the RON data is not deleted, only ignored, so it stays reversible.
+
+### 🔴 AND HE ADDED THE PART THAT DECIDES THE ARCHITECTURE, minutes later:
+
+> *„später soll man auch bestimmte sachen toggeln könenn. also an bestimmte sachen ran haken an
+> andere nicht aber grundsetzlich erstmal ales!"*
+
+**So the tag data is NOT dead and must NOT be deleted.** It becomes a **filter he can switch**,
+and today every switch is on. That changes the shape of the work from *remove a condition* to
+*replace one boolean with a set of categories, all enabled*:
+
+- **`maps.ron: anchorable` stays**, and whatever category vocabulary the blocks already carry
+  (class, palette, model) is what a future toggle will select on. **Deleting it would destroy the
+  thing the toggle needs.**
+- The cast predicate becomes *"is this category currently hookable?"* with every answer `true`,
+  rather than *"is this block tagged?"*.
+- ⚠️ **Do not build the toggle UI now.** He said *„später"* and *„grundsätzlich erstmal alles"* —
+  the requirement today is that the future toggle is **cheap**, not that it exists. A single
+  predicate with one call site is enough; a settings screen is not asked for.
+
+**This also rescues the reason `F-003` existed.** Level design keeps its lever — it is simply
+*off by default* instead of *on by default*, which is the inversion the third option in the
+question described. He picked "everything" and then described the third option himself.
+
+---
+
+## Q-078 — how much play must two ropes keep over the straight line between their anchors?
+
+**Asked 2026-08-28 · `player::rope::hold_the_pair` · decided under an `ASSUMPTION`, work continued**
+
+`B-013`/`FIND-191` is fixed: the reel may no longer ask for a pair of maxima no position in space
+satisfies. The rule is exact and needs no taste — `L_left + L_right >= d_anchors` is the necessary
+and sufficient condition for two spheres to meet. **The open part is one term on top of it.**
+
+**At exactly `L_l + L_r = d_a` the two spheres are tangent and the feasible set is a single
+point.** The player stands on the straight line between his two anchors, both constraint gradients
+point along that line, and gravity pulls at a right angle to both — so nothing in the pair carries
+his weight and the solver leaves the difference as sag. Measured over 84 cells, `Ctrl` held,
+10 080 ticks (`tests/vector_rope.rs::f004_two_far_apart_anchors_…`):
+
+| the reel is stopped at | worst arm past its own maximum | pinned ticks |
+|---|---|---|
+| `L_l + L_r = d_a` — the exact rule | **0.2810 m** (1.04 % of that arm) | 9 |
+| `L_l + L_r = d_a + vector.min_rope_m` — as shipped | **0.0092 m** (0.11 %) | 3 |
+| for scale: the `Ctrl`-free 288-cell matrix, a plain swing | 0.0050 m | — |
+
+**ASSUMPTION the work continues under:** the margin is **`vector.min_rope_m` = 3.0 m**. It is a
+stand-in. The honest home for the number is a key of its own — **`vector.two_rope_slack_m`** — and
+`src/player/` does not own `assets/data/game.ron`. `min_rope_m` was taken because it is the
+closest thing the file already says: *the shortest rope this game has*, so the rule reads *"two
+ropes together always keep one short rope's worth of play over the straight-line span"*, which is
+a sentence in units the file already speaks. Physically it is also the right shape — two real
+ropes spanning a gap hang in a **V**, they do not stand as a horizontal line, and the margin is
+exactly the slack that lets the V exist.
+
+**What the user actually gets to decide**, and it is a feel question no test can settle: with a
+3 m margin over a 56 m span the player sags roughly 9 m below the line between his anchors and can
+swing in that bowl (3 pinned ticks in 10 080 — he keeps moving). With no margin he is frozen on
+the line. He chose *„Beide Seile bleiben, du haengst fest — zwei Seile die sich widersprechen
+halten dich."* **Both readings are „festhängen"; only one of them is „eingefroren".**
+
+**Rollback point — ONE line**, `src/player/rope.rs::hold_the_pair`:
+
+```rust
+let allowed_m = (wanted[i].cur_m + wanted[j].cur_m - separation_m - min_rope_m).max(0.0);
+//                                                                ^^^^^^^^^^^^ delete for the
+//                                                                exact rule, restore for a key
+```
+
+**The diff `assets/data/game.ron` would need** (a main-head file; not made here) — in the
+`vector` block, next to `min_rope_m`:
+
+```ron
+        // The play two ropes keep over the straight line between their anchors. At 0.0 the pair
+        // can be pulled tangent, the feasible set collapses to one point, and the solver leaves
+        // 0.2810 m of sag instead of 0.0092 m (`docs/QUESTIONS.md` Q-078, `docs/BUGS.md` B-013).
+        two_rope_slack_m: 3.0,
+```
+
+and `hold_the_pair` then reads `data.game.vector.two_rope_slack_m` instead of `min_rope_m`. No
+allow-list line is needed: `player -> data` already exists.
+
+**Related:** `B-013` · `FIND-191` · `FIND-195` · `Q-058` · `F-004` · `F-005`
