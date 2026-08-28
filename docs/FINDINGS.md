@@ -1663,7 +1663,7 @@ Related: [`docs/BUGS.md`](BUGS.md) (our own bugs) · [`docs/QUESTIONS.md`](QUEST
 
 ## ⬇️ APPEND NEW FINDINGS BELOW THIS LINE
 
-**NEXT FREE ID: FIND-197.** Claim it by bumping this line in the same `cat >>` that
+**NEXT FREE ID: FIND-201.** Claim it by bumping this line in the same `cat >>` that
 appends your entry — two agents collided on ids twice on 2026-08-12/13 because each grepped the
 file separately and both read the same maximum. One line beats a 108 kB grep.
  — and append with `>>`, never with an edit tool
@@ -11789,6 +11789,15 @@ laid-out node (`f177_the_line_stands_above_the_keep_out_box_and_never_beside_the
 
 ## FIND-191 — the reel can ask for two lengths no position in space satisfies, and it is older than the joint on `Drive`
 
+> ✅ **FIXED 2026-08-28 — `docs/BUGS.md` B-013, and the boundary it left behind is `FIND-198`.**
+> `player::rope::hold_the_pair` stops the reel before `L_l + L_r` falls under the anchor
+> separation. Over 84 cells with `Ctrl` held: worst arm **51.7104 m → 0.0092 m** past its own
+> maximum, **7 920 → 0** infeasible ticks, **5 208 → 0** ticks pinned by a violation. The guard
+> named below was **inverted rather than deleted** and is now
+> `b013_the_two_rope_hold_reaches_both_force_models_because_the_reel_is_one_system`; the metres
+> live in `f004_two_far_apart_anchors_hold_the_player_instead_of_dragging_him_past_a_maximum`
+> and in `scripts/f012-tworopes.txt`. Everything below is the state as measured on 2026-08-27.
+
 **2026-08-27 · [offlinebot] · found by the acceptance matrix of `Q-058`, not by a bug report**
 
 Two anchors **170° apart**, both ropes 30 m, `Ctrl` held. `player::rope::shorten_ropes` takes
@@ -12045,6 +12054,14 @@ head's call.
 
 ## FIND-195 — with the ratchet held, 64.4 % of ticks ask for two rope maxima no position satisfies, and a cross-model differential is NOT a control for it
 
+> ✅ **FIXED 2026-08-28 — `docs/BUGS.md` B-013 · `FIND-198` · `Q-079`.** `player::rope::hold_the_pair`
+> stops the reel before `L_l + L_r` falls under the anchor separation, so the 64.4 % becomes **0**.
+> Re-measured on a wider sweep of its own (3 heights x 4 length pairs x 7 separations, `Ctrl` held,
+> 10 080 ticks): **7 920 → 0** infeasible ticks, worst arm **51.7104 m → 0.0092 m** past its own
+> maximum, **5 208 → 0** ticks pinned by a violation. This entry's second half — *a cross-model
+> differential is not a control for it* — is untouched and still true; the absolute bound is now
+> `tests/vector_rope.rs::f004_two_far_apart_anchors_hold_the_player_instead_of_dragging_him_past_a_maximum`.
+
 **Measured 2026-08-27 [offlinebot]**, `tests/vector_rope.rs`, four 288-cell matrices (4 anchor
 separations × 2 elevations × 4 yaws × 9 key combos × 90 ticks), built as `Q-058`'s acceptance
 criterion: *two anchors, all nine key combos, the full composition, and no individual arm distance
@@ -12147,3 +12164,197 @@ provisional until he has flown them. **Filed with its number so the next round s
 measurement instead of from the proxy.**
 
 **Related:** `Q-061` · `Q-063` · `Q-064` · `FIND-172` · `FIND-103` · `F-005` `F-006`
+
+---
+
+## FIND-197 — the anchor field is deleted: 2 528 lines, six RON keys and one allow-list edge for a system the hook never called
+
+**Measured 2026-08-28 [offlinebot], on the instruction of the user, 2026-08-27:**
+
+> *„es soll auf jeglicher oberflqche einhaken. nicht an hardcoded punkten etc!"*
+
+### What went, and what it cost to keep
+
+`world::AnchorField` generated a discrete point list per district — corners inset 0.5 m,
+edge points every 12 m, wall courses every 15 m, capped at 48 per block, bucketed into 32 m
+cells — and adopted every `hook.*` empty out of the loaded models on top. `hud::anchor_marks`
+drew twelve rings on the best of them. Removed today, exactly:
+
+| file | lines |
+|---|---|
+| `src/world/anchor.rs` | **787** |
+| `src/hud/anchor_marks.rs` | **666** |
+| `tests/world.rs` — the `F-021`/`F-022`/`F-023`/`F-031a` block, 7 tests | **407** |
+| `tests/hud.rs` — the `F-026`/`F-027`/`F-030a` block, 9 tests + 3 fixtures | **589** |
+| `scripts/f026-marks.txt` (+ 2 frames, 1.7 MB) | **84** |
+| plugin registrations, `AnchorBlock`, `log_field`, headers | **~95** |
+| | **2 641 deleted / 113 added / net −2 528** |
+
+`--lib` did not move (271 → 271): **neither deleted source file carried a single `#[test]`.**
+Every line of proof it had lived in the two integration binaries.
+
+### 🔴 The finding that outlives the deletion: NOTHING WAS BROKEN, AND THAT WAS THE PROBLEM
+
+`FIND-160` had already recorded that `grep AnchorField src/` outside `src/world/` came back
+empty, and `FIND-178`/`B-011` recorded what happened when it was finally given a consumer: the
+HUD lettered `Q` on a point 194.15 px away from the point `Q` actually flies at. The repair
+that round chose was to take the **letters** off and keep the field. That was the wrong half.
+
+**A system that can only be wired up by making the game lie about itself is not unfinished —
+it is a second answer to a question that already had one.** The first answer was there the
+whole time and it is three words: `vector::aim` casts a **ray**, and asks what it hits whether
+it carries `shared::AnchorSurface`. The field was a parallel model of the same world, built
+from the same `maps.ron` plan, and any consumer of it would have had to agree with the ray or
+contradict it. That is the shape `CLAUDE.md` rule 5's corollary already names — *do not
+re-derive another domain's decision, read it* — arriving as 1 453 lines of source instead of
+as one stale `Transform`.
+
+### The evidence that the shipped rule is the right one: `scripts/f001-surfaces.txt`
+
+Five surfaces of five different kinds, one run, 14 asserts held, exit 0:
+
+| leg | surface | body | the rope bit at |
+|---|---|---|---|
+| 1 | a wall's flat vertical face | 150 | `(51.00,  4.12,  −1.00)` |
+| 2 | the same building's ROOF, top face | 150 | `(51.00, 11.50,  −8.32)` |
+| 3 | a 120 m gate tower, high on its side | 70 | `(24.00, 20.57, −92.50)` |
+| 4 | a house the SEED built, not a hand | 1526 | `(−150.00, 10.06, −6.28)` |
+| 5 | the pavement, 30° down | 11 | `(51.00,  0.05,  10.23)` |
+| 6 | **open sky — the control** | — | `found no anchor: NothingInRange` |
+
+**Not one of those points is a corner, an edge, a 12 m spacing, a 15 m course or a named
+`hook.*` empty** — i.e. not one is a place the deleted field would have offered. Leg 6 is what
+makes the other five falsifiable: the same trigger, pointed at nothing, anchors nothing.
+
+### And the number that says the request is already satisfied
+
+`build_map` prints it on every single run and nobody had read it:
+
+```
+map "Ashgate": 2901 blocks built (245 placed, 2656 generated), 2901 of them anchorable
+```
+
+**All 2 901.** Every hand-placed row carries `anchorable: true` and the generated lots run at
+`anchorable_fraction: 1.0`. There is no untagged block on the shipped map to aim at — so the
+"hook on any surface" the user asked for is not a feature to build, it is a feature to **stop
+covering up**. (The F-003 rule that an untagged body is a hit but not an anchor is still in
+`src/vector/hook.rs`; `maps.ron: graybox` still has unanchorable rows if it ever needs a red.)
+
+### 🔴 What survives, and cutting it would have been the failure
+
+**The aim assist is not the anchor field and never touched it.** `vector::aim::probe_dirs` /
+`pick_best` / `score_candidate` / `required_margin` sweep the **ray** sideways off the
+crosshair's own screen row and score what the probes *hit*; `AimCandidate` is built from
+`hook::anchor_target(&probe)`, a raycast result. `shared::PlayerSettings::assist_catch_pct` /
+`assist_strength_pct` and `hud::catch_band` are its user-facing half — the user asked for the
+band twice, including *„es soll in der ui angezeigt werden von wo bis wo gesearched wird"*.
+
+Verified after the deletion, `scripts/f016-band.txt`, 9 asserts held, exit 0, and decoded
+offscreen at one stand: the catch-0 and catch-100 frames differ in **632 px**, all of them in
+`y 352..368`, **`x 412..867` on the crosshair's own row 360** — 228 px left and 227 px right of
+centre, which is the same extent `src/hud/mod.rs` recorded before the field existed.
+
+### What is now dead but NOT deleted, because it is not this job's to delete
+
+**1 564 `hook.*` empties, across 831 model instances, are still parsed into
+`shared::ModelAnchors` on every single run and nothing reads one of them.** Counted from the
+loader's own log:
+
+```
+./target/debug/defeated_by_titan --headless --script scripts/f001-surfaces.txt --ticks 300 2>&1   | grep -oE '[0-9]+ of them hook\.\* rope' | awk '{s+=$1; n++} END{print n, s}'
+  -> 831 1564
+```
+
+`AnchorField::adopt_named` was their only consumer. `shared::anchors::HOOK_PREFIX` and the
+`is_anchor_name` branch that keeps them (`src/render/model.rs`) are `shared`/`render`
+territory. ⚠️ **Do not delete them reflexively:** `ANCHOR_NAMES` is a closed list whose
+whole argument (in `src/shared/anchors.rs`) is that a Blender typo must show as a *missing*
+anchor, and dropping the open `hook.` family changes what the loader keeps for every future
+consumer. It is a decision, not a cleanup.
+
+**Six `game.ron: game.hud` keys are dead data with no reader** — `marker_max`,
+`marker_cone_h_deg`, `marker_cone_v_deg`, `marker_refresh_hz`, `marker_far_opacity`,
+`marker_min_gap_px`. 🔴 **They cannot be removed from Rust alone.** This project has no
+`serde(default)` and `HudTuning` is `deny_unknown_fields`, so dropping the struct while the
+RON block stands makes the game refuse to load — and dropping the RON block first does the
+same. **The `assets/data/game.ron` edit and the `src/data/mod.rs` edit have to be in one
+commit.** `HudTuning` is left in place and marked, not deleted, because `assets/data/*.ron`
+belongs to the main head.
+
+**And one survey claim that was wrong, checked before acting on it:** `assets/data/maps.ron`
+does **not** carry authored `hook.gesims_*` ladders. `grep -rn 'hook\.' assets/data/*.ron`
+outside comments returns **nothing**; the two hits in `maps.ron` are English sentences ending
+in the word "hook", and `hook.gesims_15..105` appears once, in a **comment** in `art.ron`. The
+real `hook.*` names live inside the `.glb` files. **No `maps.ron` key becomes dead, and
+`scripts/f003-ashgate.txt`'s 40 asserts are untouched by this round.**
+
+**Related:** `B-011` (closed WONT FIX) · `FIND-160` · `FIND-178` · `Q-067` ·
+`docs/PLAN.md` §0 · `F-024` (not to be built) `F-026` `F-027` (subject removed)
+
+---
+
+## FIND-198 — the two-rope stand-off has a boundary, and the boundary is a tightrope: the exact rule leaves 30x more sag than the same rule with one `min_rope_m` in hand
+
+**2026-08-28 · [offlinebot] · `player::rope::hold_the_pair` · the fix for `FIND-191`, and the one
+number in it that is not derivable**
+
+`FIND-191`/`B-013` is fixed and the rule needed no taste: two `DistanceJoint`s with maxima
+`L_l`, `L_r` on anchors `d_a` apart have a common solution **iff `L_l + L_r >= d_a`**. That is the
+triangle inequality, it is necessary *and* sufficient, and the player's position is not in it.
+**It is explicitly NOT the `FIND-186` mistake** — attempt 1 there bounded the *sum* of two
+distances as a stand-in for bounding each of them, which is a heuristic and false at `n = 2`.
+
+**What is not derivable is what happens AT the boundary.** At exactly `L_l + L_r = d_a` the two
+spheres are **tangent**: the feasible set is a single point, the player stands on the straight
+line between his two anchors, both constraint gradients lie along that line, and gravity pulls at
+a right angle to both. Nothing in the pair carries his weight, and 24 XPBD substeps leave the
+difference as sag. Measured over the same 84 cells (3 heights x 4 length pairs x 7 separations,
+`Ctrl` held, 10 080 ticks,
+`tests/vector_rope.rs::f004_two_far_apart_anchors_hold_the_player_instead_of_dragging_him_past_a_maximum`):
+
+| the reel is stopped at | worst arm past its own maximum | as % of that arm | infeasible ticks | pinned ticks |
+|---|---|---|---|---|
+| nothing at all — the shipped build until today | **51.7104 m** | 1 724 % | 7 920 (78.6 %) | 5 208, **all by a violation** |
+| `L_l + L_r = d_a` — the exact rule | 0.2810 m | 1.04 % | 0 | 9 |
+| `L_l + L_r = d_a + vector.min_rope_m` — as shipped | **0.0092 m** | 0.11 % | 0 | 3 |
+| for scale: the `Ctrl`-free 288-cell matrix, a plain swing | 0.0050 m | 0.017 % | — | — |
+
+**184x from the rule, and another 30x from one term on top of it.** The margin is not a fudge:
+two real ropes spanning a gap hang in a **V**; they do not stand as a horizontal line, because a
+horizontal line needs infinite tension. The margin is exactly the slack the V is made of. Which
+number it should be is `Q-079` — the honest home is `vector.two_rope_slack_m`, and `min_rope_m`
+is the stand-in this round shipped under, with the rollback point named.
+
+### Three things the round measured that are not the headline
+
+1. **The residual scales with the span, not with the tick.** At the tangent boundary the sag was
+   0.281 m on a 54.5 m span, 0.257 on 56.4, 0.245 on 48.8, 0.163 on 39.9 — **0.41 % to 0.52 % of
+   `d_a` in every cell.** That is a compliance signature, not a solver hiccup, which is what says
+   the tangency and not the reel is the cause.
+2. **The fix could have been "turn the reel off", and only a control catches that.**
+   `scripts/f012-tworopes.txt` ACT 3 is the same three seconds of `Ctrl` on **one** rope from the
+   same tile: **y 49.511 -> 54.022, +4.5 m**, `F-005`'s own acceptance sentence. ACT 2, two ropes,
+   reads y 48.291 -> 47.734 and 6.696 m/s. **Both acts hold in the shipped build; against a
+   binary with the fix's one line deleted, ACT 2 reads `assert Speed > 2 — measured 0.001` and
+   ACT 3 still passes** — so the control is doing its job in both directions.
+3. **The old tripwire had to be INVERTED, and it said so itself.**
+   `find191_the_reel_can_make_two_maxima_impossible_and_that_is_older_than_the_drive_s_joint`
+   asserted `drive > 10.0` with the message *"`FIND-191` is either fixed or no longer reproduced
+   by this fixture, and it must not stay written as if it were still true"*. It is now
+   `b013_the_two_rope_hold_reaches_both_force_models_because_the_reel_is_one_system`, it keeps the
+   cross-model differential unchanged (`Drive` **0.0093 m** · `Pendulum` **0.0093 m**, identical),
+   and it asserts the repair instead of the defect. **A test that names a defect is a liability
+   the day the defect dies; the one that names the CONTROL survives the fix.**
+
+### What the sweep holds constant, said out loud
+
+Every fixture in this project that hid a defect hid it in an axis it held constant (`CLAUDE.md`
+§6 rule 5, four instances). This one varies separation, both rope lengths **against each other**,
+and the player's height along **one column of the map** so nothing but `y` changes; it holds
+**yaw** (0°, one value), the key combo (`Ctrl` only), the force model (`Drive`; the differential
+above is what covers `Pendulum`), the anchors' elevation (20°), pitch (0) and the gas (full).
+**There is no `continue` in the per-tick loop** — a cell that loses a rope is counted in
+`ticks_with_one_rope` and asserted on (it read 0 of 10 080 before and after, so no cell was
+excluded from any number above).
+
+**Related:** `FIND-191` · `FIND-195` · `FIND-186` · `B-013` · `Q-079` · `Q-058` · `F-004` `F-005`

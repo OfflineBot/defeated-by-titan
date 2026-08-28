@@ -950,7 +950,35 @@ camera. Only the hook ray was asked and only the hook ray was answered.
 **Evidence:** `tests/vector_aiming.rs` 22/22 · `src/shared/layers.rs::
 a_hook_ray_sees_the_world_and_a_titan_but_never_a_player` · `docs/FINDINGS.md` FIND-131
 
-## B-011 — the anchor field lettered `Q` and `E` for a key that goes somewhere else — 🟧 FIXED 2026-08-26 (the letters withdrawn; `F-024` still owes the snap)
+## B-011 — the anchor field lettered `Q` and `E` for a key that goes somewhere else — ✅ CLOSED 2026-08-28, **WONT FIX**: the field itself is deleted
+
+> 🔴 **CLOSED BY DELETING THE SUBJECT, 2026-08-28.** The open half below — *"what earns the
+> letters back: `F-024`, wire `vector::hook::fire` to `AnchorField::best_of(..)"* — **is not
+> going to be built, and it was the wrong idea rather than an unfinished one.** The user,
+> 2026-08-27:
+>
+> > *„es soll auf jeglicher oberflqche einhaken. nicht an hardcoded punkten etc!"*
+>
+> Hooking is a property of a **surface** (`shared::AnchorSurface` / `BodyMask::ANCHORABLE`),
+> and where the rope bites is `vector::hook`'s raycast — which is what the game already did
+> and what the letters `Q`/`E` already obeyed. So the disagreement this entry recorded is
+> resolved in favour of the ray: `src/world/anchor.rs` (787 lines) and
+> `src/hud/anchor_marks.rs` (666 lines) are **deleted**, together with `scripts/f026-marks.txt`
+> and its two frames. `F-024` is not to be built; `F-026`/`F-027` lose their subject.
+> Recorded in `docs/QUESTIONS.md` Q-067 and `docs/PLAN.md` §0; the deletion is
+> `docs/FINDINGS.md` FIND-197.
+>
+> **What survives, and it is not the same thing:** the **aim assist** — `vector::aim`'s
+> sideways sweep of the ray (`probe_dirs`, `pick_best`, `score_candidate`, `required_margin`)
+> and the two settings `assist_catch_pct` / `assist_strength_pct`, drawn as the search band by
+> `hud::catch_band`. That layer never read the point list; it searches **surfaces** off the
+> crosshair's own row, which is exactly what the user asked for twice.
+>
+> **The guard that survives too**, rewritten to stand without the field:
+> `tests/hud.rs::f026_exactly_one_q_and_one_e_are_on_the_screen_and_they_are_the_arms` — five
+> looks, ten key labels, every one of them owned by an arm. The rule it exists for outlives
+> both features: **never draw a promise the game does not keep.**
+
 
 **Reported by** the refutation round of 2026-08-26, against `F-026`'s own acceptance sentence:
 *„Ein Testspieler kann jederzeit ohne Nachdenken sagen, wohin Q und E ihn bringen wuerden."*
@@ -962,7 +990,8 @@ takes `vector::aim`'s raycast target, a probe sweep over colliders that has neve
 `AnchorField` (`grep AnchorField src/` outside `src/world/` finds only the HUD file). So the
 letter and the rope named two different points, and both were on screen at once.
 
-**Repro** (pinned binary, the element's own stand, `scripts/f026-marks.txt` leg 1):
+**Repro** (pinned binary, the element's own stand, `scripts/f026-marks.txt` leg 1 — the
+script is deleted with the feature; the stand is `warp 51 0 13` / `look 0 0`):
 
 ```
 the game's log:  hook Left anchored on body 980 at (51.00, 1.65, -1.00), 14 m dead ahead
@@ -1003,7 +1032,8 @@ and nothing about a key.
 same stand, same data, pinned old binary vs new: **exactly two clusters differ, each 20x32 px**
 (a `BEST_PX` ring plus its `LABEL_PX` letter), 0.058 % of the frame, and the removed `Q`
 cluster's centre `(446.5, 345.5)` lands within 1 px of the ring measured above.
-`docs/images/f026-marks-square.png` · `docs/FINDINGS.md` FIND-178
+`docs/images/f026-marks-square.png` (deleted with the feature, 2026-08-28) ·
+`docs/FINDINGS.md` FIND-178
 
 ---
 
@@ -1088,3 +1118,120 @@ done | grep -v ':0$'          # anything printed is a reproduction
 a rebuild underneath a 40-run loop has destroyed two measurement series in this project already.
 
 **Related:** `docs/lessons/environment.md` (the shared machine) · `F-175` `F-177` · `FIND-188`
+
+---
+
+## B-013 — holding `Ctrl` with two hooks drags you onto one anchor and leaves the other rope 50 m past its own maximum — 🟧 FIXED 2026-08-28
+
+**Filed 2026-08-28. It was found on 2026-08-27 and it has lived only inside `docs/FINDINGS.md`
+(`FIND-191`) since — a 108 kB file this project's own rules forbid opening whole, so nobody could
+act on it. `grep -n 'FIND-191' docs/QUESTIONS.md docs/BUGS.md docs/NEXT.md` returned nothing for a
+day. A finding that is not promoted into a queue file has not been found** (`docs/PLAN.md` §6,
+cause 5). This entry is that promotion, and the fix landed with it.
+
+### The symptom
+
+Two hooks on far-apart anchors, `Ctrl` held: the player is dragged onto ONE anchor, sits there at
+**0.000 m/s**, and the OTHER rope is **50.167 m past its own maximum**. Both ropes are still
+attached and neither is released, so nothing in the game says a word.
+
+### The cause, and it is one sentence
+
+`player::rope::shorten_ropes` walked **both** `limits.max` toward `vector.min_rope_m` = 3 m at
+`vector.reel_speed_m_s` = 28 m/s per arm, while the two anchors stayed where they were. **Two
+maxima have a common solution only where `L_left + L_right >= d_anchors`** — the triangle
+inequality. Below it no point in space honours both, so avian keeps one arm and abandons the
+other. With two anchors 56 m apart both maxima reach 3 m within one second.
+
+**It predates the joint on `Drive`** — `Pendulum` has carried a `DistanceJoint` since `F-004` and
+agrees to three decimals — but since `Q-058` shipped `rope_force_model: Drive` with a real joint,
+a player walks into it with **one key**.
+
+### The repro
+
+```bash
+# the running game, and it is one line that goes red (ACT 2, `assert speed > 2`):
+./target/debug/defeated_by_titan --headless --script scripts/f012-tworopes.txt --ticks 1400 \
+  2>&1 | grep -E 'MARK|measured|script run finished' | tail -8
+./target/debug/defeated_by_titan --headless --script scripts/f012-tworopes.txt --ticks 1400 \
+  >/dev/null 2>&1; echo $?
+# and the 84-cell measurement, which is where the metres are (the harness has no length metric):
+nice -n 15 cargo test --test vector_rope -j 3 f004_two_far_apart_anchors -- --nocapture \
+  --test-threads=1 2>&1 | grep -E '^test result|panicked|totals|^ *an arm'
+```
+
+Against a binary with the fix's one line deleted, ACT 2 reads **`assert Speed > 2 — measured
+0.001`** and the run exits **1**; ACT 3, the one-rope control, still holds.
+
+### The fix — `player::rope::hold_the_pair`, inside the one writer of `limits.max`
+
+The reel may not take a step that puts `L_left + L_right` below the anchor separation. The
+give-back is proportional to what each arm asked for, and `vector.min_rope_m` is re-applied after
+it, so the per-arm floor still wins where it applies. `shorten_ropes` stays the **single writer**
+of `limits.max` (`docs/architecture.md`, authority table; §6 rule 3) — no second system was added.
+
+| over 84 cells, `Ctrl` held, 10 080 ticks | before | after |
+|---|---|---|
+| worst arm past its own maximum | **51.7104 m** | **0.0092 m** |
+| ticks where no position satisfies both maxima | 7 920 (78.6 %) | **0** |
+| ticks pinned under 0.05 m/s **by a violation** | 5 208 | **0** |
+| ticks pinned at all (what the user chose) | 5 208 | 3 |
+
+⚠️ **The rule keeps one `vector.min_rope_m` of play in hand on top of the separation, and that
+term is an `ASSUMPTION`** — see `docs/QUESTIONS.md` Q-079. At exactly `L_l + L_r = d_a` the two
+spheres are tangent, the feasible set is a **single point**, gravity pulls at a right angle to
+both constraint gradients, and the solver leaves 0.2810 m of sag. The margin turns the point into
+a small lens — a hanging V instead of a tightrope — and takes the sag to 0.0092 m.
+
+**Guards:** `tests/vector_rope.rs::f004_two_far_apart_anchors_hold_the_player_instead_of_dragging_him_past_a_maximum`
+· `scripts/f012-tworopes.txt` (ACT 2 the claim, ACT 3 the control).
+
+**Related:** `FIND-191` · `FIND-195` · `FIND-186` · `Q-058` · `Q-079` · `F-004` · `F-005`
+
+---
+
+## B-014 — `Ctrl` is billed for rope the pair rule refuses to give: **59.766 gas for 0.4985 m**
+
+**2026-08-27 · [offlinebot] · found by an adversarial verifier, self-controlled in one table**
+
+`B-013`'s fix (`hold_the_pair`) stops the reel taking a step that would make two rope maxima
+geometrically impossible. **It does not tell the gas ledger.**
+
+`src/vector/gas.rs` gates the reel's cost on
+
+```rust
+intent.pressed(Buttons::REEL_IN) && to_anchors_m[..anchored].iter().any(|a| a.length() > min_rope_m)
+```
+
+— it asks about the **distance to the anchors**, which stays true forever in a stand-off, and it
+has no idea `hold_the_pair` refused the step. And since `Q-058`, `Ctrl` acts **only** through
+`limits.max` (`rope_winch`'s own header: *"Ctrl does not come through here any more"*), so a
+refused step is **literally no effect at all**.
+
+**Measured**, 600 ticks = 10 s of held `Ctrl`, `gas_reel_per_s: 6.0`:
+
+| | anchors apart | ropes | rope taken | gas | rate |
+|---|---|---|---|---|---|
+| **the defect** | 57.709 m | 12 / 48 m | **0.4985 m** | **59.766** | **119.9 gas/m** |
+| control, same table | 2.459 m | 30 / 30 m | 55.1684 m | 40.939 | 0.74 gas/m |
+
+**The 0.4985 m was already taken at tick 180** — so **seven further seconds of billing moved
+nothing at all.** The control shows the existing `Q-050` guard works when both arms reach
+`min_rope_m`: billing stops. It simply does not fire for the *pair* case, because the pair case is
+new.
+
+⚠️ **This is a movement-killer in a movement game with a gas economy**: a player who holds `Ctrl`
+in a geometry the rule refuses drains his tank for nothing and cannot see why — `RopeLength` is
+**not drawn, not logged and not a script metric** (`grep -rn RopeLength src/hud/ src/debug/`
+returns nothing), so the screen says the same thing whether the rope is moving or not.
+
+**The fix is one predicate, and it must ask the question the reel actually answers:** bill only
+when `shorten_ropes` *took* rope. `Q-050`'s guard already has the right shape; it is asking about
+distance where it should be asking about progress. ⚠️ **One writer** — `shorten_ropes` decides,
+`gas` reads the answer, never re-derives it (`CLAUDE.md` rule 5's corollary, and `FIND-190` is what
+happens when two places answer one question).
+
+**No repro script yet.** Write one before fixing: the metric the driver would need is *rope taken
+per second*, which does not exist — so this bug is currently invisible to the whole script corpus.
+
+**Related:** `B-013` · `Q-050` · `Q-058` · `FIND-191` · `F-005` `F-018`

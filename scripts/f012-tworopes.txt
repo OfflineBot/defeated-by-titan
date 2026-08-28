@@ -1,0 +1,126 @@
+# f012-tworopes — TWO ROPES MUST HOLD YOU, NOT BREAK. `B-006` / `FIND-191` in the running game.
+#
+# ⚠️ **THE FILE NAME IS WRONG AND IT IS DELIBERATE.** The commission named this file; `F-012` is
+# "Velocity-Clamp gegen Fling" (`docs/features.ron:17`) and has nothing to do with it. The row
+# this run belongs to is **`F-004`** ("Pendelphysik bei Zwei-Haken-Zustand"), whose own note has
+# said *"Two ropes at once is unmeasured"* since 2026-08-09, together with **`F-005`** (the reel
+# that does the asking). Renaming a script is a main-head call — `docs/BUGS.md` B-006 says so too.
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/f012-tworopes.txt --ticks 1400
+#
+# and, as a SEPARATE run, the one that returns a usable exit code (a pipeline's `$?` is the LAST
+# command's):
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/f012-tworopes.txt --ticks 1400 >/dev/null 2>&1; echo $?
+#
+# ## The sentence being tested
+#
+# The user was asked what should happen when both hooks sit on far-apart anchors and he holds
+# `Ctrl`, and he chose, verbatim:
+#
+#   „Beide Seile bleiben, du haengst fest — zwei Seile die sich widersprechen halten dich."
+#
+# 🔴 **He accepted being STUCK. He did not accept a BROKEN ROPE.** What the game did before
+# 2026-08-28 was neither: `player::rope::shorten_ropes` walked BOTH `limits.max` toward
+# `vector.min_rope_m` = 3 m while the anchors stayed tens of metres apart, and two maxima have a
+# common solution only where `L_left + L_right >= anchor separation`. Below that avian keeps one
+# arm and abandons the other: the player is dragged onto ONE anchor and sits there at
+# **0.000 m/s** with the other rope **50.167 m past its own maximum** (`FIND-191`).
+#
+# ## What THIS run can measure, and what it cannot
+#
+# ⚠️ The script harness has no anchor-distance metric (`speed`, `height`, `gas`, `titans`,
+# `tick`, `health`, `kills`, `phase`, `rope`, `blades`, `sharpness` — `src/debug/script.rs`;
+# `rope` is the anchored ARM COUNT, not a length), and the defect IS a length. **So the 84-cell
+# acceptance is a test**, and it is
+# `tests/vector_rope.rs::f004_two_far_apart_anchors_hold_the_player_instead_of_dragging_him_past_a_maximum`
+# — 3 heights x 4 length pairs x 7 separations, `Ctrl` held in every cell:
+#
+#   worst arm past its own maximum   51.7104 m  ->  0.0092 m
+#   ticks with no possible position   7 920 / 10 080  ->  0
+#   ticks pinned BY a violation       5 208  ->  0
+#
+# What a SPEED and a HEIGHT can see is the half this run is for, and the two acts are one claim:
+#
+#   ACT 2  two ropes 180 deg apart + `Ctrl` -> he is HELD (6.696 m/s, y 48.291 -> 47.734)
+#   ACT 3  ONE rope, the SAME spot, the SAME 3 s of `Ctrl` -> he is HAULED (y 49.511 -> 54.022)
+#
+# 🔴 **ACT 3 is the control and without it ACT 2 is worthless.** The cheap way to "fix" a reel
+# that asks for the impossible is to stop the reel, and a stopped reel also reads "he is still
+# moving". ACT 3 is `F-005`'s own acceptance sentence — *„Spieler kann aus dem Tiefpunkt Hoehe
+# gewinnen"* — in the same run, on the same tile, one arm instead of two: **+4.5 m of height in
+# three seconds.** If the feasibility rule ever costs the one-anchor player his reel, this act
+# goes red and ACT 2's number stops meaning anything.
+#
+# Measured 2026-08-28 [offlinebot], debug build, and the pre-fix numbers come from the same
+# script run against a binary with the one line `hold_the_pair(&mut wanted, i, j, min_rope_m);`
+# deleted.
+#
+# ## The stance, and why it is this one
+#
+# The gantry lane of `maps.ron: current` = "ashgate": ten stations at a 35 m pitch along the main
+# street, crossbeam y 56..60, from z = 227.5 down to z = -87.5 (`scripts/f025-chain.txt`, which
+# measured it). Standing on the lane at (0, 58, 150) there is a beam **ahead** (yaw 0 = -Z) and a
+# beam **behind** (yaw 180 = +Z), so two shots from one tile put the two anchors on opposite
+# sides of the player — the 180 deg cell of the matrix, in the real map, with real geometry.
+# A graybox-coordinate script fails on this map (`FIND-059`) and this one will fail the day the
+# lane moves, which is the point of it.
+
+wait 1.5                      # world, camera, meshes and the render pipelines come up
+settings assist_catch 100     # the same full assist `scripts/f025-chain.txt` ACT 1 uses
+settings assist_strength 100
+
+# ---- ACT 1 · two hooks, two anchors, opposite sides ----------------------------------------
+# ⚠️ **The hold durations are the act plan.** The `hook` command's second number is how long the
+# trigger stays down, and an arm outlives nothing: right is held 4.5 s and left 4.0 s so that
+# BOTH are still on at ACT 2's mark (+4.0 s) and BOTH are gone before ACT 3 asks (+5.5 s).
+warp 0 58 150
+look 0 0
+wait 0.3
+hook right 4.5
+wait 0.3
+mark f012-right-hooked
+assert rope == 1              # the beam ahead, down the lane
+
+look 180 0
+wait 0.1
+hook left 4.0
+wait 0.3
+mark f012-both-hooked
+assert rope == 2              # ★ two arms, two anchors, and they are behind and ahead of him
+assert height < 50.0          # 48.291 — the height ACT 2's is measured against
+
+# ---- ACT 2 · THE ACCEPTANCE · „zwei Seile die sich widersprechen halten dich" ---------------
+# Three seconds of `Ctrl` is 84 m of rope the reel would take off each arm if nothing stopped
+# it — the two maxima would be at `vector.min_rope_m` = 3 m within one second while the anchors
+# stayed where they are.
+key Ctrl 3.0
+wait 3.0
+mark f012-both-ropes-under-ctrl
+assert rope == 2              # ★ BEIDE SEILE BLEIBEN. Nothing was released and nothing tore.
+assert speed > 2.0            # ★ 6.696. Pre-fix this is 0.000: dragged onto the right anchor
+                              #   and pinned there with the left rope 50 m past its maximum.
+assert height > 40.0          # 47.734 — he is held between the two beams, not on the pavement
+
+# ---- ACT 3 · THE CONTROL · the same three seconds of `Ctrl` on ONE rope ----------------------
+# The thing ACT 2's number is supposed to be measuring is now deleted: one arm instead of two,
+# so the pair rule cannot apply at all and the reel is free. `F-005`'s acceptance sentence.
+wait 1.5                      # both holds have run out
+mark f012-let-go
+assert rope == 0              # the control really is a control: nothing is holding him
+
+warp 0 58 150
+look 0 0
+wait 0.4
+hook right 4.5
+wait 0.3
+mark f012-one-rope-hooked
+assert rope == 1
+assert height < 51.0          # 49.511 — the height the haul below is measured against
+
+key Ctrl 3.0
+wait 3.0
+mark f012-one-rope-under-ctrl
+assert rope == 1
+assert height > 52.0          # ★ 54.022. +4.5 m in three seconds — the reel is untouched by
+                              #   the pair rule, which is the whole risk of fixing it this way.

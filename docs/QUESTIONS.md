@@ -3257,7 +3257,7 @@ question described. He picked "everything" and then described the third option h
 
 ---
 
-## Q-078 — how much play must two ropes keep over the straight line between their anchors?
+## Q-079 — how much play must two ropes keep over the straight line between their anchors?
 
 **Asked 2026-08-28 · `player::rope::hold_the_pair` · decided under an `ASSUMPTION`, work continued**
 
@@ -3306,7 +3306,7 @@ let allowed_m = (wanted[i].cur_m + wanted[j].cur_m - separation_m - min_rope_m).
 ```ron
         // The play two ropes keep over the straight line between their anchors. At 0.0 the pair
         // can be pulled tangent, the feasible set collapses to one point, and the solver leaves
-        // 0.2810 m of sag instead of 0.0092 m (`docs/QUESTIONS.md` Q-078, `docs/BUGS.md` B-013).
+        // 0.2810 m of sag instead of 0.0092 m (`docs/QUESTIONS.md` Q-079, `docs/BUGS.md` B-013).
         two_rope_slack_m: 3.0,
 ```
 
@@ -3314,3 +3314,44 @@ and `hold_the_pair` then reads `data.game.vector.two_rope_slack_m` instead of `m
 allow-list line is needed: `player -> data` already exists.
 
 **Related:** `B-013` · `FIND-191` · `FIND-195` · `Q-058` · `F-004` · `F-005`
+
+---
+
+## Q-080 — you chose „beide Seile halten dich", and the shipped model does not deliver it
+
+**2026-08-27**, raised by the adversary who verified `B-013`, and it is a **design-fidelity**
+question, not a defect.
+
+You were asked what should happen when both hooks are planted on far-apart anchors and you hold
+`Ctrl`, and you chose *„Beide Seile bleiben, du hängst fest — zwei Seile die sich widersprechen
+halten dich."* The fix delivers the first half exactly: **no arm ever exceeds its own maximum**
+(384 cells / 98 640 ticks, worst excess **0.0244 m**, zero violations, zero lengthening).
+
+**But the second half — actually hanging — is delivered by the model that is not shipped.**
+Measured, two anchors 56.4–57.7 m apart, `Ctrl` held, 300 ticks:
+
+| model | ticks pinned at 0.000 m/s |
+|---|---|
+| `Drive` — **what ships** | **0 – 3** |
+| `Pendulum` — not shipped | 166 – 300 |
+
+Under `Drive` the free always-on idle winch and gravity keep moving you whatever `Ctrl` does, so in
+practice **you are essentially never stuck**. Both ropes stay and nothing tears — the ropes *hold* —
+but the sensation you picked is a `Pendulum` sensation.
+
+**ASSUMPTION the work continues under:** this is **fine and probably better**. Being pinned at
+0.000 m/s in a movement game is the thing `FIND-191` was filed about; what you asked for was that
+the ropes not break, and they do not. **No further work is done to make you stick.**
+
+**What settles it in ten seconds of play:** plant both hooks on two far-apart anchors — two gantry
+beams, or opposite roof edges — and hold `Ctrl`. If you expected to hang and instead keep drifting,
+say so and the idle winch gets a stand-down in that geometry. If drifting feels right, this closes.
+
+⚠️ **You cannot currently see which of the two states you are in.** Rope length is not drawn, not
+logged, and not a script metric, so a stand-off and a violation look identical from the outside —
+which is exactly why `FIND-191` lived undetected. **A rope-length readout would pay for itself**
+and is not built.
+
+**Rollback point:** the `in_the_air` arm of the idle winch in `player::locomotion` — one condition.
+
+**Related:** `B-013` · `B-014` · `FIND-191` · `Q-058` · `Q-050` · `F-005` `F-006`

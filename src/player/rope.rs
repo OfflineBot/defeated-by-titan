@@ -20,7 +20,7 @@
 //! [`attach_ropes`], and everything below — the ratchet, `B-003`, `B-004` — was already written
 //! for a joint and did not move.
 //!
-//! ## The five decisions in this file
+//! ## The six decisions in this file
 //!
 //! 1. **Reeling in happens per SUBSTEP, never per tick.** Measured with 24 substeps, `v0 50`:
 //!    per tick the shortening injects `rate x SubstepCount` and the player reaches
@@ -69,6 +69,19 @@
 //!    the small: over 16 approaches the peak speed equals `v0` in **every** row with the
 //!    take-up on and with it off — there is no whip for the ratchet to eat, while the
 //!    overshoot goes from 50.000 m to 3.000 m (`vector.min_rope_m`).
+//!
+//! 6. **TWO MAXIMA MUST STAY SIMULTANEOUSLY SATISFIABLE** (`B-013` / `FIND-191`, 2026-08-28).
+//!    The reel walked BOTH `limits.max` toward `min_rope_m` while the anchors stayed where they
+//!    were, and a pair of maxima has a solution only where `L_l + L_r >= d_a`. Below that no
+//!    point in space honours both: avian keeps one arm and abandons the other, the player sits
+//!    on one anchor at 0.000 m/s and the other rope is **50.167 m past its own maximum**. The
+//!    rule lives inside [`shorten_ropes`] — [`hold_the_pair`], one give-back after both arms
+//!    have asked — because `limits.max` has exactly one writer and a second system would be a
+//!    second writer of one field inside a schedule that runs 24 times per tick. Measured over
+//!    84 cells with `Ctrl` held: **worst arm 51.7104 m → 0.0092 m past its maximum, 7 920 of
+//!    10 080 infeasible ticks → 0, 5 208 ticks pinned by a violation → 0.**
+//!    The user chose the outcome himself: *„Beide Seile bleiben, du haengst fest — zwei Seile
+//!    die sich widersprechen halten dich."*
 //!
 //! ## `B-003` — a teleport lets go of every rope, and says so
 //!
@@ -490,14 +503,22 @@ pub fn shorten_ropes(
     data: Res<GameData>,
     players: Query<(&PlayerId, &ReelSpeed, Has<HitStop>)>,
     positions: Query<&Position>,
-    mut ropes: Query<(&Rope, &mut DistanceJoint)>,
+    mut ropes: Query<(Entity, &Rope, &mut DistanceJoint)>,
+    mut wanted: Local<Vec<Wanted>>,
 ) {
     let min_rope_m = data.game.vector.min_rope_m;
     let dt = time.delta_secs();
 
-    for (rope, mut joint) in &mut ropes {
-        let mut next_m = joint.limits.max;
+    // **Pass 1 — what each arm asks for on its own.** Unchanged, to the line, from the one-pass
+    // version this replaced: the reel, then the take-up, then the floor. A `Local` and not a
+    // fresh `Vec`: this runs 24 times per tick and a warm `Local` allocates nothing (§11). At
+    // most two ropes per player, so it holds `2 x players` entries.
+    wanted.clear();
+    for (entity, rope, joint) in &ropes {
+        let cur_m = joint.limits.max;
+        let mut next_m = cur_m;
         let player = players.iter().find(|(id, _, _)| **id == rope.player);
+        let anchor_m = positions.get(rope.anchor).ok().map(|p| p.0);
 
         // 0. `B-004`, second face — **a frozen player does not spool rope.**
         //
@@ -509,6 +530,7 @@ pub fn shorten_ropes(
         // the shortening are skipped, the reel included: the reel is not paid for either
         // (`vector::gas` debits per tick, and a frozen tick reels nothing).
         if player.is_some_and(|(_, _, frozen)| frozen) {
+            wanted.push(Wanted { entity, player: rope.player, anchor_m, cur_m, next_m: cur_m });
             continue;
         }
 
@@ -528,10 +550,8 @@ pub fn shorten_ropes(
         // local anchors are `Vec3::ZERO` (see `attach_ropes`). A missing `Position` means the
         // anchor marker has not been through avian's prepare stage yet — then there is nothing
         // to measure and the length stays where it is, which is the safe direction.
-        if let (Ok(anchor), Ok(body)) =
-            (positions.get(rope.anchor), positions.get(rope.body_entity))
-        {
-            let distance_m = (anchor.0 - body.0).length();
+        if let (Some(anchor_m), Ok(body)) = (anchor_m, positions.get(rope.body_entity)) {
+            let distance_m = (anchor_m - body.0).length();
             // A non-finite distance reads as "the player has vanished" (§9d) and must not be
             // allowed to set a length — `min` with a NaN would take the NaN.
             if distance_m.is_finite() {
@@ -539,14 +559,164 @@ pub fn shorten_ropes(
             }
         }
 
-        let next_m = next_m.max(min_rope_m);
-        // Only on a real change: at the floor the value stops moving, and a joint marked
-        // changed in every one of the 24 substeps is 24 lies per tick in every `Changed`
-        // filter that comes after it (§11).
-        if next_m != joint.limits.max {
-            joint.limits.max = next_m;
+        wanted.push(Wanted {
+            entity,
+            player: rope.player,
+            anchor_m,
+            cur_m,
+            next_m: next_m.max(min_rope_m),
+        });
+    }
+
+    // **Pass 2 — the two arms are one player, and the rule is about the PAIR.** At most two
+    // ropes exist per player, so the inner scan finds the partner and stops; the loop is bounded
+    // by `2 x players` and not by "all entities" (§11).
+    for i in 0..wanted.len() {
+        for j in i + 1..wanted.len() {
+            if wanted[i].player == wanted[j].player {
+                hold_the_pair(&mut wanted, i, j, min_rope_m);
+                break;
+            }
         }
     }
+
+    // **Pass 3 — the write, and it is still the only one.** Only on a real change: at the floor
+    // the value stops moving, and a joint marked changed in every one of the 24 substeps is 24
+    // lies per tick in every `Changed` filter that comes after it (§11).
+    for (entity, _, mut joint) in &mut ropes {
+        let Some(w) = wanted.iter().find(|w| w.entity == entity) else {
+            continue;
+        };
+        if w.next_m != joint.limits.max {
+            joint.limits.max = w.next_m;
+        }
+    }
+}
+
+/// What one arm asked for before the other arm was consulted — [`shorten_ropes`]' scratch pad.
+///
+/// It exists because the feasibility rule is a statement about **two** joints and a Bevy query
+/// hands out one `&mut` at a time. Nothing outside [`shorten_ropes`] writes it: `limits.max` has
+/// exactly one writer and this is the inside of that one.
+#[derive(Clone, Copy, Debug)]
+pub struct Wanted {
+    entity: Entity,
+    player: PlayerId,
+    /// `None` = the anchor marker has not been through avian's prepare stage yet. Then the pair
+    /// cannot be judged and the arm keeps what pass 1 gave it — the safe direction.
+    anchor_m: Option<Vec3>,
+    /// `limits.max` as this substep found it.
+    cur_m: f32,
+    /// `limits.max` as this substep would like to leave it.
+    next_m: f32,
+}
+
+/// 🔴 **TWO MAXIMA MUST STAY SIMULTANEOUSLY SATISFIABLE — the rule `FIND-191` needed, and it is
+/// the triangle inequality and nothing else.**
+///
+/// Two `DistanceJoint`s with maxima `L_l` and `L_r` on anchors `d_a` apart have a solution iff
+/// **`L_l + L_r >= d_a`** — two balls intersect exactly when the sum of their radii reaches the
+/// distance between their centres. (The rule as shipped keeps one `vector.min_rope_m` in hand on
+/// top of that; the section on the boundary below is the measurement that bought the term.) Below that no point in space honours both, avian keeps one
+/// arm and abandons the other, and the player sits on one anchor at 0.000 m/s with the other
+/// rope **50.167 m past its own maximum** (`FIND-191`, `docs/BUGS.md` B-013). Measured over the
+/// 84-cell sweep in `tests/vector_rope.rs`: **7 920 of 10 080 ticks (78.6 %) infeasible, worst
+/// arm 51.7104 m past its maximum, every one of the 5 208 pinned ticks pinned BY a violation.**
+///
+/// ⚠️ **This is NOT the hand-rolled multi-arm reasoning `FIND-186` records as refuted 4/4**, and
+/// the difference is the one that matters: attempt 1 there bounded the **sum** of two distances
+/// as a stand-in for bounding each of them, which is a heuristic and false at `n = 2`. The sum
+/// here is not a stand-in — `L_l + L_r >= d_a` is the exact, necessary and sufficient condition
+/// for the pair to have any solution at all, and the player's position is not in it.
+///
+/// # What the user chose, and what happens at the boundary
+///
+/// Asked what should happen when both hooks sit on far-apart anchors and `Ctrl` is held, he
+/// chose *„Beide Seile bleiben, du haengst fest — zwei Seile die sich widersprechen halten
+/// dich."* So the **reel** is stopped, never the rope: both maxima stay honoured and the player
+/// is held between them.
+///
+/// # 🔴 The boundary is a TIGHTROPE, and that is why the rule keeps `vector.min_rope_m` back
+///
+/// **At exactly `L_l + L_r = d_a` the two spheres are tangent and the feasible set is a single
+/// point.** The player is on the straight line between his two anchors, both constraint
+/// gradients point along that line, and gravity pulls at a right angle to both of them — so
+/// there is nothing in the pair that can carry his weight, and an XPBD solver with 24 substeps
+/// leaves the difference as **sag**. Measured over the same 84 cells, worst arm past its own
+/// maximum:
+///
+/// | the reel is stopped at | worst excess | worst as % of that arm | pinned ticks |
+/// |---|---|---|---|
+/// | `L_l + L_r = d_a` (tangent) | **0.2810 m** | 1.04 % | 9 |
+/// | `L_l + L_r = d_a + min_rope_m` | **0.0092 m** | 0.11 % | 3 |
+/// | for scale: the `Ctrl`-free 288-cell matrix on a plain swing | 0.0050 m | 0.017 % | — |
+///
+/// A 30x difference for one term, and it is not a fudge: two real ropes spanning a gap hang in
+/// a **V**, they do not stand as a horizontal line, and the margin is exactly the slack that
+/// lets the V exist. With it the feasible set is a small lens instead of a point, the player
+/// sags into the bottom of it, both maxima are honoured to the solver's own error, and he is
+/// still held — 3 pinned ticks in 10 080 means he keeps swinging in the bowl rather than
+/// freezing, which is *„du haengst fest"* without being *„du bist eingefroren"*.
+///
+/// ⚠️ **`vector.min_rope_m` is a STAND-IN and it is an `ASSUMPTION`** (`docs/QUESTIONS.md`
+/// Q-079). The honest home for this number is a key of its own — `vector.two_rope_slack_m` —
+/// and this domain does not own `assets/data/game.ron`. `min_rope_m` is the closest thing the
+/// file already has: it is *the shortest rope this game has*, so *"two ropes together always
+/// keep one short rope's worth of play over the straight-line span"* is a sentence in the units
+/// the file already speaks. **The rollback point is this one line** (`allowed_m`), and the pure
+/// rule the task named is what stands without the `- min_rope_m` term.
+///
+/// **The hold is a stop, not an oscillation**, at the boundary and at the margin alike, and
+/// that is structural rather than measured: this function never hands an arm back more than it
+/// was about to take (`keep <= 1`), so the length is monotone non-increasing and once the budget
+/// is spent nothing moves it again.
+///
+/// # How it meets `vector.min_rope_m`
+///
+/// The floor is per **arm** and it wins where it applies, before this rule and after it: pass 1
+/// applies it, and the give-back below can only make a length **longer**, which cannot break a
+/// lower bound. It is re-applied at the end anyway, because the give-back is proportional and an
+/// arm whose `next_m` pass 1 had *raised* to the floor would otherwise be scaled back under it.
+/// **The two never fight**: `min_rope_m` is a lower bound on each arm, this is a lower bound on
+/// their sum, and both are met by taking the larger demand — which is what `.max()` does.
+///
+/// # The `n = 1` case in disguise
+///
+/// Two arms on the **same** anchor give `d_a = 0`, so `allowed_m` is the whole budget less one
+/// `min_rope_m`, and since each arm's floor is already `min_rope_m` the pair can never ask for
+/// more than that — this never binds. **There is no division by the separation anywhere**: the scale factor divides by
+/// what the two arms asked for, and it is computed only where that is strictly greater than
+/// `allowed_m >= 0`, i.e. strictly positive. The sweep asserts that a player whose two arms hang
+/// on one point still reels all the way down to `vector.min_rope_m`.
+fn hold_the_pair(wanted: &mut [Wanted], i: usize, j: usize, min_rope_m: f32) {
+    let (Some(a_i), Some(a_j)) = (wanted[i].anchor_m, wanted[j].anchor_m) else {
+        return;
+    };
+    let separation_m = (a_i - a_j).length();
+    if !separation_m.is_finite() {
+        return;
+    }
+    let take_i = wanted[i].cur_m - wanted[i].next_m;
+    let take_j = wanted[j].cur_m - wanted[j].next_m;
+    let asked_m = take_i + take_j;
+    // What the pair may still give up before the two maxima stop having a common solution, less
+    // the one `min_rope_m` of play that keeps the solution a LENS and not a single point — see
+    // the tightrope section above, and `docs/QUESTIONS.md` Q-079 for why that term is this
+    // number. **This line is the rollback point for both decisions.**
+    // `.max(0.0)` is for the pair that is **already** at or past the boundary — a rope that has
+    // just been re-attached, or a floor that has moved: then nothing at all may be taken, which
+    // is the one direction that cannot make it worse.
+    let allowed_m = (wanted[i].cur_m + wanted[j].cur_m - separation_m - min_rope_m).max(0.0);
+    // `>` and not `>=`, so a NaN on either side leaves both arms alone. It is also false when
+    // nothing is being asked for, which is the common case and costs one comparison.
+    if !(asked_m > allowed_m) {
+        return;
+    }
+    // `asked_m > allowed_m >= 0`, so this divides by something strictly positive. Proportional,
+    // so an arm that is reeling and an arm that is only taking up slack each keep their share.
+    let keep = allowed_m / asked_m;
+    wanted[i].next_m = (wanted[i].cur_m - take_i * keep).max(min_rope_m);
+    wanted[j].next_m = (wanted[j].cur_m - take_j * keep).max(min_rope_m);
 }
 
 /// Publishes the joint state as [`RopeLength`] — **the only writer of that component.**
