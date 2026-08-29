@@ -5,10 +5,24 @@
 #
 # 1. Straight up from 400 m: nothing within `vector.hook_range_m` on that line, and the probe
 #    finds nothing beyond it either. NothingInRange — "turn".
-# 2. Six metres in front of a husk, out on the open ground east of Ashgate so that HE is the
-#    only thing the ray can end on. B-007 exactly: a titan carries no `shared::Body`, so the
-#    ray ends on a surface that holds nothing — and he hides whatever is behind him.
-#    SurfaceHoldsNothing — "aim past him".
+# 2. Six metres in front of a husk, on the **boulevard** `(0, -0.1, -83.75) x (700, 0.3, 27.5)`
+#    — a cleared paved strip across the full width of the district — so that HE is the first and
+#    therefore the only thing the ray can end on. B-007 exactly: a titan carries no
+#    `shared::Body`, so the ray ends on a surface that holds nothing — and he hides whatever is
+#    behind him. SurfaceHoldsNothing — "aim past him".
+#
+# 🔴 **Act 2 stood at `(400, 0.05, 406)` until 2026-08-29, which is 50 m OUTSIDE a 700 x 700 m
+# map.** `F-012`'s recovery teleported the player home on the next tick, and this file has no
+# positional assert, so it exited 0 while measuring something else entirely: the run of
+# 2026-08-29 read `hook Left ... anchored on body 25 at 0.00 88.37 -103.35` — a 134.91 m pull
+# onto Ashgate's WALL, fired from the spawn point, with the husk 560 m away and irrelevant.
+# The verdict it exists to measure, `SurfaceHoldsNothing`, was never reached.
+#
+# The husk now stands at `(0, 0, -89.75)` and the player at `(0, 0.05, -83.75)`, 6 m apart on
+# the same yaw-0 line, both on the boulevard (probed: resting height 0.050 m). At pitch 40 the
+# ray is 5.0 m up when it reaches him — inside his body capsule — and the nearest other thing
+# is the boulevard's own edge 13.75 m away, where the ray is already 11.5 m up. He is the first
+# hit, which is the whole claim.
 wait 1.5
 warp 17.5 400 0
 look 0 60
@@ -17,9 +31,9 @@ mark f028-sky
 hook left 0.2
 wait 0.6
 
-spawn titan husk 400 0 400
+spawn titan husk 0 0 -89.75
 wait 0.6
-warp 400 0.05 406
+warp 0 0.05 -83.75
 look 0 40
 wait 0.4
 mark f028-titan

@@ -1,0 +1,211 @@
+# f012-edge — THE MAP HAS AN EDGE NOW. Both halves of it, and the control that says the
+# second half cannot fire on a legitimate 121 m dive.
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/f012-edge.txt --ticks 6000
+#   ./target/debug/defeated_by_titan --headless --script scripts/f012-edge.txt --ticks 6000 >/dev/null 2>&1; echo $?
+#
+# The user, 2026-08-27: *„und man kann an der seite einfach runterfallen!"* — and asked what
+# should be there he named BOTH mechanisms:
+# *„unsichtbare wand + wenn man runterfaellt wegen bug teleport man zurueck!"*
+# They are two mechanisms. Acts 1-3 are the fence, act 5 is the recovery **with the fence
+# already behind him**, and act 4 is the control that keeps the two apart.
+#
+# 🔴 **ACTS 6 AND 7 WERE ADDED 2026-08-28, AND THEY ARE WHY THIS SCRIPT MISSED THE BUG.**
+# Its three fence acts stand at y = 3, 122 and 190 — **all below `fence_top_m` 200**, all on
+# yaw -90. The height was the axis the whole feature depended on and the axis every fixture
+# held constant. Act 6 stands on the top face of the fence itself; act 7 flies over it on two
+# held keys from the spawn point, which is what the player will actually do.
+#
+# ## `height` is the only position this vocabulary has, so every act is built to be decided
+# ## by it — and three of them are decided by WHERE HE WOULD BE BROUGHT BACK TO
+#
+# `assert height` cannot see an `x`. What it can see is that the player is standing on the
+# **120 m wall** rather than on the ground, and the recovery puts him back on the last ground
+# he stood on. So an act that starts on the coping and ends on the ground reads 0, and the same
+# act with a leaking fence reads 120 — the recovery would have carried him back up. That turns
+# the missing metric into the discriminator instead of a hole (`CLAUDE.md` rule 5: an assertion
+# an empty screen satisfies is not an assertion).
+#
+# ## The numbers this depends on, all out of `assets/data/maps.ron: ashgate`
+#
+#   fence at +-350 m, y = -50 .. 200      recovery plane y = -300 m
+#   the wall coping (0, 119, -120) x (700, 2, 28) — it runs the FULL width of the map, which
+#   is what makes act 2 possible at all: a walkway straight into the fence, 120 m up.
+#
+# ⚠️ It does **not** depend on `gravity_m_s2` or `boost_m_s2` (both provisional 2026-08-28):
+# the one speed assert is against the `vector.max_speed_m_s` clamp, which gravity alone
+# reaches from any of these heights, and everything else is a height at rest.
+#
+# ## What this script is NOT the evidence for
+#
+# That the fence holds a body moving at exactly `max_speed_m_s` **into** it from every
+# direction. A script cannot set a velocity. That is
+# `tests/player.rs::f012_flying_at_the_edge_at_top_speed_does_not_tunnel_through_it`, which
+# launches eight times at 75.000 m/s and asserts the position; four of the eight escaped
+# before the fence existed.
+
+wait 1.0
+
+# ── ACT 1 · walking into the fence at ground level — his report, literally ──────────────
+# The boulevard `(0, -0.1, -83.75)` x `(700, 0.3, 27.5)` is a cleared strip across the whole
+# width, so no house between here and the edge can do the fence's work for it. 50 m at
+# 6 m/s is 8.4 s; 10 s is held. Before the fence the same walk read **-62.96 m**
+# (`docs/BUGS.md` B-015).
+warp 300 3 -83.75
+wait 1.0
+mark f012-walk-start
+assert height > -1
+look -90 0
+key W 10.0
+wait 10.5
+mark f012-walked-into-the-fence
+assert height > -3
+
+# ── ACT 2 · the same walk 120 m up, along the coping of the wall ────────────────────────
+# A second axis, and the one a ground-level act cannot see: the fence has to stand at every
+# height, not only where the ground is. If it leaks here he steps off the coping at x = 350
+# and there is nothing at all under him — after the 4 s of settling below he would read
+# roughly **50 m** and falling.
+warp 300 122 -120
+wait 2.0
+mark f012-on-the-coping
+assert height > 118
+look -90 0
+key W 10.0
+wait 14.0
+mark f012-walked-into-the-fence-at-120m
+assert height > 118
+
+# ── ACT 3 · flying at the fence at the top-speed clamp ──────────────────────────────────
+# 190 m up, 50 m in, and aimed almost level (`-3`) so that the thrust goes into the horizontal
+# and the fall only feeds the clamp. He is at **75.000 m/s** — `vector.max_speed_m_s` to the
+# digit — 2.5 s in, and still 50 m short of the edge.
+#
+# ⚠️ The last assert of this act is the one that goes red: with `bounds::build_bounds` taken
+# out of `world::WorldPlugin` this same run measured **-272.111 m** here, because he crossed
+# the edge at 75 m/s and there was nothing at all under him.
+warp 300 190 -83.75
+wait 0.3
+look -90 -3
+key W 8.0
+wait 2.5
+mark f012-at-the-fence-at-speed
+assert speed > 70
+wait 6.0
+mark f012-fence-held-at-speed
+assert height > -3
+assert height < 15
+
+# ── ACT 4 · THE CONTROL · a 121 m dive is not a fall out of the world ───────────────────
+# ⚠️ This act is why the feature is two mechanisms and not one thing twice. It was green
+# BEFORE the recovery existed and has to stay green after it — a control that only passes with
+# the feature installed is a second copy of the feature.
+warp 0 122 -120
+wait 2.0
+mark f012-on-the-wall
+assert height > 118
+# Off into open air 60 m outside the wall, over the plain slab at y = 0.
+warp 0 121 -180
+wait 7.0
+mark f012-dive-from-the-wall-landed
+# THE DISCRIMINATOR: a recovery would have put him back on the coping at 120 m.
+assert height < 15
+assert height > -3
+
+# ── ACT 5 · the recovery, with the fence already defeated ───────────────────────────────
+warp 0 122 -120
+wait 2.0
+mark f012-standing-on-the-wall-again
+assert height > 118
+# Under the world, the way a bad warp or a seam does it. No fence in any position answers
+# this — only the plane can.
+warp 0 -400 0
+wait 1.0
+mark f012-recovered
+# Back on the WALL. At the origin this would read ~0, at the spawn point ~2 — so this is what
+# says the RECORDED ground is used and not a fixed respawn point.
+assert height > 118
+assert height < 122
+
+# ── ACT 6 · THE 200 m RING · the top face of the fence is not a floor ──────────────────
+# ⚠️ **The repro of the third hole.** A body at (355, 210, 0) — 5 m past the 350 m edge, 10 m
+# over `fence_top_m` — came to rest at exactly **y = 200.000** and was still there 14 s later:
+# he is outside the footprint so nothing records him, and 500 m above the plane so nothing
+# recovers him. Parked outside the world on a 10 m wide invisible ledge, for good.
+#
+# The discriminator is the height again, and it is a clean one: he starts on the WALL, so a
+# working recovery reads ~120 and the ledge reads exactly 200.
+warp 0 122 -120
+wait 2.0
+mark f012-on-the-wall-before-the-ring
+assert height > 118
+warp 355 210 0
+wait 4.0
+mark f012-off-the-ring
+assert height > 118
+assert height < 122
+
+# ── ACT 7 · THE KEYBOARD-ONLY ESCAPE · over the fence on two held keys ──────────────────
+# ⚠️ **The repro of the first two holes, and no warp except onto the wall.** Measured
+# 2026-08-28: 7 s of W+Shift at pitch 89 reached **243.1 m** — over a 200 m fence — for 0.72 %
+# of one tank; then 9 s at pitch 20 put him at **284.2 m and outside the map**; then roughly
+# **ten seconds of falling through nothing** before the plane at -300 m caught him at -300.6.
+#
+# Same discriminator: he leaves from the coping, so the ground he is owed is 120 m up. With the
+# footprint rule he is back on it; without it he is hundreds of metres down and still falling.
+warp 0 122 -120
+wait 2.0
+mark f012-on-the-wall-before-the-climb
+assert height > 118
+look 0 89
+key W 16.0
+key Shift 16.0
+wait 7.0
+mark f012-over-the-fence-on-two-keys
+# Over `fence_top_m` 200 in seven seconds. If this ever reads under 200 the gear was retuned —
+# `tests/player.rs::f012_the_gear_climbs_higher_than_the_fence_and_the_number_is_pinned` is
+# where that gets decided, not here.
+assert height > 200
+look -90 20
+wait 9.5
+mark f012-flew-out-over-the-top
+# He crossed the edge during those nine seconds and was put back on the coping — so he is on
+# the wall or on the ground under it, and NOT on the 200 m ring and NOT falling. Without the
+# footprint rule this act read **-233 m and still falling** in the reported run, and **200.000
+# m — parked on the ring** in this fixture's own control run of 2026-08-28.
+assert height > -3
+assert height < 122
+
+# ── ACT 8 · THE INNER LIP · |x| = 350.000 EXACTLY, and it is one character wide ────────
+# 🔴 **The repro of the fourth hole, and of the loop.** `out_of_the_world` tests `|x| > hx` —
+# STRICTLY — and `maps.ron` shipped `fence_margin_m: 0.0`, so the fence's inner lip stood
+# exactly ON `hx`. Measured on the shipped binary 2026-08-29:
+#
+#   warp 350 201 0  -> rests at 200.000 after 3 s, still 200.000 after 10 s, and six seconds
+#   of held W did not move him. All four sides and a corner the same. warp 349.999 201 0 ->
+#   199.965, a millimetre inside. `record_safe_ground` then made the ring home — "back to
+#   Vec3(350.0, 200.49994, 0.0), the ground he stood on at tick 426" — and one nudge outward
+#   warped him 1501 times in 25.0 s, one per tick, every one to the same place.
+#
+# ACT 6 above cannot see it: it stands 5 m OUT, where the rule fires correctly. The distance
+# from the boundary is the axis, and every fixture this feature had held it away from zero.
+#
+# Same discriminator as ACT 6: he leaves from the coping, so a working world reads ~120 or the
+# ground under it, and the ledge reads exactly 200.000.
+warp 0 122 -120
+wait 2.0
+mark f012-on-the-wall-before-the-lip
+assert height > 118
+warp 350 201 0
+# `look -90` puts W on +X (see ACT 1), i.e. pressed OUTWARD — which is what turned the ledge
+# into a warp-per-tick loop, and what has to produce no warp at all now.
+look -90 0
+key W 8.0
+wait 8.5
+mark f012-off-the-lip
+assert height < 122
+assert height > -3
+
+wait 3.0
+mark f012-done
+end

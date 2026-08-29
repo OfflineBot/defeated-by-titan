@@ -110,6 +110,21 @@ determinism = ["avian3d/enhanced-determinism"]
 # (prompts/init.md §3).
 [profile.dev]
 opt-level = 1
+# 🔴 DEBUG INFO IS WHY THE MACHINE SWAPPED, and it was never a decision — it is the `dev`
+# default. Measured 2026-08-29 [offlinebot], while the user reported his editor stuttering:
+# 10 GB in swap, under 1 GB free, the CPU 80 % IDLE, and `target/` at **91 GB**. Full debug
+# info over every dependency built at `opt-level = 3` (below) is an enormous amount of data
+# for the linker to hold and write, and nobody ever asked for it.
+#
+# `line-tables-only` keeps what this project actually uses debug info FOR — a file and a line
+# in a panic message, which is what every `assert!` in `tests/` prints — and drops the type
+# and variable descriptions a step debugger would want. Nothing in this repo runs a step
+# debugger; the evidence is scripts, asserts and screenshots.
+# ⚠️ `opt-level` is NOT touched: it is the difference between 20 and 200 fps and it is the
+# reason this profile exists at all.
+debug = "line-tables-only"
+# Keeps the debug data out of the binary and out of the linker's working set.
+split-debuginfo = "unpacked" 
 
 [profile.dev.package."*"]
 opt-level = 3

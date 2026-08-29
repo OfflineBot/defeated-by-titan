@@ -29,14 +29,17 @@ use defeated_by_titan::hud::crosshair::{
     self, CrosshairPart, CrosshairShape, CrosshairState,
 };
 use defeated_by_titan::hud::arm_aim::{self, ArmAimState, ArmMarker, ArmMarkerLabel};
+use defeated_by_titan::hud::board;
 use defeated_by_titan::hud::gas_bar::GasBar;
 use defeated_by_titan::hud::health_bar::{HealthBar, HealthTrack};
 use defeated_by_titan::hud::hit_mark::{HitFlash, HitMark};
 use defeated_by_titan::hud::objective::ObjectiveLine;
 use defeated_by_titan::hud::{HudElement, KEEP_OUT_HIGH_PCT, KEEP_OUT_LOW_PCT};
+use defeated_by_titan::menu::board::Board;
+use defeated_by_titan::menu::lobby::{chosen, entries, LobbyChoice};
 use defeated_by_titan::mission::{KillTally, MissionPhase};
 use defeated_by_titan::shared::{
-    BodyId, Blades, Cli, Gas, Health, HitZone, Hook, HookReleased, HookState, LocalPlayer,
+    ArmAim, BodyId, Blades, Cli, Gas, Health, HitZone, Hook, HookReleased, HookState, LocalPlayer,
     MissReason, PlayerId, PlayerSettings, ReleaseReason, Side, TitanHit, TitanId,
 };
 
@@ -506,6 +509,25 @@ fn f170_nothing_covers_the_middle_of_the_screen() {
             node.display = Display::Flex;
         }
     }
+    // ⭐ `F-177`, and the same argument as the objective above: this app has no hub and no
+    // board, so the panel would sit at `display: None` and this test would be blind to the one
+    // element that draws a whole column of text. So it is shown here in its **widest** state —
+    // the real list out of `missions.ron`, which is what the open board says — rather than
+    // being skipped as a hidden node. An assertion satisfied by an empty screen is not an
+    // assertion.
+    {
+        let data = app.world().resource::<GameData>().clone();
+        let list = entries(&data);
+        let widest = board::board_text(true, true, &list, list.first())
+            .expect("in range and open has to say something");
+        let mut q = app
+            .world_mut()
+            .query_filtered::<(&mut Text, &mut Node), With<board::BoardPanel>>();
+        for (mut text, mut node) in q.iter_mut(app.world_mut()) {
+            text.0 = widest.clone();
+            node.display = Display::Flex;
+        }
+    }
     set_crosshair(&mut app, CrosshairState::Cortex);
     app.world_mut()
         .run_system_once(crosshair::shape_crosshair)
@@ -526,6 +548,11 @@ fn f170_nothing_covers_the_middle_of_the_screen() {
     let box_min_y = h * KEEP_OUT_LOW_PCT / 100.0;
     let box_max_y = h * KEEP_OUT_HIGH_PCT / 100.0;
 
+    // Which arms carry a place THIS frame — read once, before the borrow below.
+    let placed = [
+        arm_carries_a_place(&mut app, Side::Left),
+        arm_carries_a_place(&mut app, Side::Right),
+    ];
     let mut seen = 0;
     let mut q = app
         .world_mut()
@@ -539,6 +566,21 @@ fn f170_nothing_covers_the_middle_of_the_screen() {
             continue;
         }
         seen += 1;
+        // A marker that CARRIES A PLACE is exempt from the box and owes `SIGHT_CORE_PX` instead
+        // (`FIND-129`, and the user's instruction of 2026-08-19). Asking that here rather than
+        // skipping it means the placed case is now covered by an assertion instead of by luck.
+        if let Some(side) = arm_side_of(name.as_str())
+            && placed[side.index()]
+        {
+            assert!(
+                clears_the_sight_core(w, h, (min_x, min_y, max_x, max_y)),
+                "`{name}` carries a place, so it may stand inside the central box — but it must \
+                 still keep the blade's own {core} px clear, and it stands at \
+                 ({min_x:.1}, {min_y:.1})..({max_x:.1}, {max_y:.1}) on a {w} x {h} screen",
+                core = arm_aim::SIGHT_CORE_PX
+            );
+            continue;
+        }
         let overlaps = min_x < box_max_x && max_x > box_min_x && min_y < box_max_y && max_y > box_min_y;
         assert!(
             !overlaps,
@@ -552,6 +594,19 @@ fn f170_nothing_covers_the_middle_of_the_screen() {
         seen >= 12,
         "only {seen} HUD nodes were laid out — with five elements and an eight-node crosshair \
          there have to be more, so this test just checked almost nothing"
+    );
+    // And the board panel really was one of them, laid out with real pixels. Without this the
+    // block above could have been shown into a zero-width node and skipped by the `<= 0.0`
+    // guard, and the whole `F-177` half of this test would be arithmetic about nothing.
+    let mut q = app
+        .world_mut()
+        .query_filtered::<(&Node, &ComputedNode), With<board::BoardPanel>>();
+    let (node, computed) = q.iter(app.world()).next().expect("the board panel is spawned");
+    assert_eq!(node.display, Display::Flex, "the board panel was not shown for this test");
+    assert!(
+        computed.size().x > 1.0 && computed.size().y > 1.0,
+        "the board panel laid out into {:?} — the keep-out check above never saw it",
+        computed.size()
     );
 }
 
@@ -864,6 +919,48 @@ const ARM_STATES: [ArmAimState; 4] = [
     ArmAimState::Anchored,
 ];
 
+/// 🔴 **Does this arm carry a place?** — the one question `F-170`'s keep-out rule turns on, and
+/// until 2026-08-29 no test asked it.
+///
+/// `src/hud/arm_aim.rs` §"why a marker that carries a place is exempt from it" (`FIND-098`,
+/// `FIND-129`) settles this, and it is the user's own instruction of 2026-08-19:
+///
+/// > *„wichtig wäre nur dass diese auch genau da sind visuell wo das seil auch landen würde!"*
+///
+/// So a marker with a projected point **stands on that point's own pixel** and owes only
+/// [`arm_aim::SIGHT_CORE_PX`]; a marker with **no** point is the one node here that is still
+/// chrome, parks in its side slot, and owes the full box. The place a player aims at *is* the
+/// middle of his screen by construction — measured, applying the full box to a placed marker
+/// drew **400 of 469 world-bearing samples somewhere the rope does not go**.
+///
+/// ⚠️ **Both `f170_*` tests passed for eighteen days without this, by accident**: their fixtures
+/// never gave an arm a point, so every marker was chrome and the exemption never came up. The
+/// moment a round laid the markers out for real they went red — and the honest reading is not
+/// that the markers moved, it is that **the tests had never exercised the placed case at all.**
+fn arm_carries_a_place(app: &mut App, side: Side) -> bool {
+    let mut q = app.world_mut().query::<&ArmAim>();
+    q.iter(app.world()).any(|a| a.side(side).point_m.is_some())
+}
+
+/// The pixels the blade is aimed at — what a *placed* marker keeps clear instead of the full box.
+fn clears_the_sight_core(w: f32, h: f32, r: (f32, f32, f32, f32)) -> bool {
+    let (min_x, min_y, max_x, max_y) = r;
+    let (cx, cy) = (w * 0.5, h * 0.5);
+    let c = arm_aim::SIGHT_CORE_PX;
+    !(min_x < cx + c && max_x > cx - c && min_y < cy + c && max_y > cy - c)
+}
+
+/// Which arm a HUD node belongs to, or `None` if it is not one of the arm nodes.
+fn arm_side_of(name: &str) -> Option<Side> {
+    if name.ends_with("_Left") && name.starts_with("hud_arm_") {
+        Some(Side::Left)
+    } else if name.ends_with("_Right") && name.starts_with("hud_arm_") {
+        Some(Side::Right)
+    } else {
+        None
+    }
+}
+
 fn set_arm_state(app: &mut App, state: ArmAimState) {
     let mut q = app
         .world_mut()
@@ -1077,6 +1174,10 @@ fn f170_the_arm_markers_stay_out_of_the_middle_in_every_state() {
         app.world_mut().run_schedule(PostUpdate);
         app.world_mut().run_schedule(PostUpdate);
 
+        let placed = [
+            arm_carries_a_place(&mut app, Side::Left),
+            arm_carries_a_place(&mut app, Side::Right),
+        ];
         let mut q = app
             .world_mut()
             .query_filtered::<(&Name, &Node, &ComputedNode, &UiGlobalTransform), Or<(With<ArmMarker>, With<ArmMarkerLabel>)>>();
@@ -1090,6 +1191,22 @@ fn f170_the_arm_markers_stay_out_of_the_middle_in_every_state() {
                 continue;
             }
             seen += 1;
+            // Same question as the general test, and the scope note above is exactly it: this is
+            // the BADGE claim. If an arm turns out to carry a place, the badge claim does not
+            // apply to it and `SIGHT_CORE_PX` does — asserted rather than skipped, so the placed
+            // case stops being covered by the fixture's silence (`FIND-129`).
+            if let Some(side) = arm_side_of(name.as_str())
+                && placed[side.index()]
+            {
+                assert!(
+                    clears_the_sight_core(w, h, (min_x, min_y, max_x, max_y)),
+                    "in {state:?} `{name}` carries a place, so the box does not bind it — but it \
+                     must keep the blade's own {core} px clear, and it stands at \
+                     ({min_x:.1}, {min_y:.1})..({max_x:.1}, {max_y:.1})",
+                    core = arm_aim::SIGHT_CORE_PX
+                );
+                continue;
+            }
             let overlaps =
                 min_x < box_max_x && max_x > box_min_x && min_y < box_max_y && max_y > box_min_y;
             assert!(
@@ -3206,5 +3323,166 @@ fn f026_exactly_one_q_and_one_e_are_on_the_screen_and_they_are_the_arms() {
         "{letters_seen} key labels over {looks} looks — with two arm markers always on screen \
          there have to be exactly two per look, so this test watched an element that was not \
          running (FIND-152)"
+    );
+}
+
+// ===========================================================================================
+// F-177 — the board's panel says what the file says, and nothing it made up
+// ===========================================================================================
+
+/// ★ **The panel is `missions.ron`, not a list this file wrote.**
+///
+/// It drives the real game: `--hub`, stand at the board, press `F` through the real
+/// `KeyboardInput` path, and read the `Text` back out. Every sortie in the file has to be on
+/// it, the cursor has to stand on the one `menu::lobby::chosen` names, and nothing may be on
+/// it that the file does not have.
+///
+/// ⚠️ **The provenance is the game's**: the highlight is compared against `chosen()`'s answer
+/// for the resource the game holds, not against a pair this test invented — and the "which
+/// sortie" question is asked exactly once, in `menu::lobby`, which is the corollary that cost
+/// this project a round (`CLAUDE.md` rule 5).
+#[test]
+fn f177_the_board_panel_lists_exactly_what_missions_ron_offers() {
+    use bevy::input::keyboard::{Key, KeyboardInput};
+    use bevy::input::ButtonState;
+
+    let mut app = defeated_by_titan::app(Cli { headless: true, hub: true, ..default() });
+    let fake_window = app.world_mut().spawn_empty().id();
+    for _ in 0..4 {
+        app.update();
+    }
+
+    // Stand at the board — one metre inside its circle.
+    let (centre, radius) = {
+        let post = &app.world().resource::<GameData>().missions.hub.board;
+        (Vec3::from(post.center_m), post.radius_m)
+    };
+    {
+        let mut q = app.world_mut().query_filtered::<&mut Transform, With<LocalPlayer>>();
+        for mut t in q.iter_mut(app.world_mut()) {
+            t.translation = centre + Vec3::new(0.0, 0.2, radius - 1.0);
+        }
+    }
+    app.update();
+
+    let panel = |app: &mut App| -> String {
+        let mut q = app.world_mut().query_filtered::<&Text, With<board::BoardPanel>>();
+        q.iter(app.world()).next().expect("the board panel is spawned").0.clone()
+    };
+
+    // Shut: the prompt, and no sortie names on it.
+    assert!(app.world().resource::<Board>().in_range, "the fixture is not at the board");
+    let shut = panel(&mut app);
+    assert!(shut.contains(board::HEADING), "the prompt does not name the board: {shut:?}");
+
+    // Open it the way a player does.
+    for state in [ButtonState::Pressed, ButtonState::Released] {
+        app.world_mut().write_message(KeyboardInput {
+            key_code: KeyCode::KeyF,
+            logical_key: Key::Character("f".into()),
+            state,
+            text: None,
+            repeat: false,
+            window: fake_window,
+        });
+        app.update();
+    }
+    assert!(app.world().resource::<Board>().open, "F did not open the board");
+
+    let data = app.world().resource::<GameData>().clone();
+    let list = entries(&data);
+    let said = panel(&mut app);
+    assert!(list.len() >= 5, "missions.ron offers only {} sorties", list.len());
+
+    // Every sortie in the file is on the panel, as its own line.
+    let lines: Vec<&str> = said.lines().collect();
+    let mut counted = 0usize;
+    for entry in &list {
+        let want = match &entry.1 {
+            Some(level) => format!("{}  {level}", entry.0),
+            None => entry.0.clone(),
+        };
+        let hits = lines.iter().filter(|l| l.trim_start_matches("> ").trim() == want).count();
+        assert_eq!(hits, 1, "{want:?} appears {hits} times on the panel:\n{said}");
+        counted += 1;
+    }
+    assert_eq!(counted, list.len(), "sorties were skipped, and a skip is invisible");
+
+    // And nothing is on it that the file does not have: as many sortie rows as entries.
+    let rows = lines
+        .iter()
+        .filter(|l| l.starts_with(board::CURSOR) || l.starts_with(board::NO_CURSOR))
+        .count();
+    assert_eq!(
+        rows,
+        list.len(),
+        "the panel draws {rows} sortie rows against {} in missions.ron:\n{said}",
+        list.len()
+    );
+
+    // The cursor stands on the one that would actually fly — `menu::lobby::chosen`'s answer,
+    // asked once and read here rather than re-derived.
+    let picked = chosen(&data, app.world().resource::<LobbyChoice>()).expect("a sortie");
+    let marked: Vec<&&str> = lines.iter().filter(|l| l.starts_with(board::CURSOR)).collect();
+    assert_eq!(marked.len(), 1, "the panel marks {} sorties:\n{said}", marked.len());
+    let want = match &picked.1 {
+        Some(level) => format!("{}  {level}", picked.0),
+        None => picked.0.clone(),
+    };
+    assert_eq!(
+        marked[0].trim_start_matches("> ").trim(),
+        want,
+        "the cursor stands on a sortie that is not the one a hold would deploy"
+    );
+}
+
+/// ★ **The panel keeps out of the middle of the screen, on its own.**
+///
+/// `f170_nothing_covers_the_middle_of_the_screen` covers every element at once and is the
+/// standing guard — but it panics on the first offender, so an element added today can hide
+/// behind one that is already red (it is, `docs/FINDINGS.md`: `hud_arm_marker_Left` stands in
+/// the box in the tree this landed in, and it is not this element's doing). This one asks the
+/// question about `F-177` alone and cannot be masked by anybody else's node.
+#[test]
+fn f177_the_board_panel_stays_out_of_the_middle_of_the_screen() {
+    let mut app = app();
+    attach_screen(&mut app);
+    app.world_mut().run_schedule(Update);
+
+    // The widest thing it can ever say: the whole file, open, with a cursor on it.
+    {
+        let data = app.world().resource::<GameData>().clone();
+        let list = entries(&data);
+        let widest = board::board_text(true, true, &list, list.first()).expect("open says something");
+        let mut q = app
+            .world_mut()
+            .query_filtered::<(&mut Text, &mut Node), With<board::BoardPanel>>();
+        for (mut text, mut node) in q.iter_mut(app.world_mut()) {
+            text.0 = widest.clone();
+            node.display = Display::Flex;
+        }
+    }
+    app.world_mut().run_schedule(PostUpdate);
+    app.world_mut().run_schedule(PostUpdate);
+
+    let (w, h) = screen(&mut app);
+    assert!(w > 0.0 && h > 0.0, "the UI laid out into {w} x {h} — nothing below is measured");
+    let (box_min_x, box_max_x) = (w * KEEP_OUT_LOW_PCT / 100.0, w * KEEP_OUT_HIGH_PCT / 100.0);
+    let (box_min_y, box_max_y) = (h * KEEP_OUT_LOW_PCT / 100.0, h * KEEP_OUT_HIGH_PCT / 100.0);
+
+    let mut q = app
+        .world_mut()
+        .query_filtered::<(&ComputedNode, &UiGlobalTransform), With<board::BoardPanel>>();
+    let (computed, at) = q.iter(app.world()).next().expect("the board panel is spawned");
+    let (min_x, min_y, max_x, max_y) = rect(computed, at);
+    assert!(
+        max_x - min_x > 1.0 && max_y - min_y > 1.0,
+        "the panel laid out into ({min_x}, {min_y})..({max_x}, {max_y}) — an assertion \
+         satisfied by an empty rectangle is not an assertion"
+    );
+    assert!(
+        !(min_x < box_max_x && max_x > box_min_x && min_y < box_max_y && max_y > box_min_y),
+        "the board panel covers the middle: ({min_x:.1}, {min_y:.1})..({max_x:.1}, {max_y:.1}) \
+         against a box of ({box_min_x:.1}, {box_min_y:.1})..({box_max_x:.1}, {box_max_y:.1})"
     );
 }

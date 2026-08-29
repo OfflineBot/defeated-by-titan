@@ -445,11 +445,12 @@ use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::hud::catch_band::{CatchTick, END_H_PX};
 use defeated_by_titan::hud::{HudElement, ShowWhileTuning};
-use defeated_by_titan::menu::lobby::{LobbyAction, LobbyChoice};
+use defeated_by_titan::menu::board::Board;
+use defeated_by_titan::menu::lobby::{chosen, entries, LobbyAction, LobbyChoice};
 use defeated_by_titan::menu::settings::{Nudge, SettingsAction};
 use defeated_by_titan::mission::{MissionPhase, Sortie};
 use defeated_by_titan::net::local::MouseSinceTick;
-use defeated_by_titan::shared::{Intent, LocalPlayer, PlayerSettings};
+use defeated_by_titan::shared::{Intent, LocalPlayer, LookOverride, PlayerSettings};
 
 /// A run that went straight into a fight, the way `--mission tutorial` does.
 fn app_in_a_sortie() -> (App, Entity) {
@@ -2197,4 +2198,595 @@ fn f175_redeploy_flies_the_same_sortie_again_and_through_the_hub() {
         "two kill counters are running — the finished mission was never cleared, so Redeploy \
          went over the top of the hub instead of through it"
     );
+}
+
+// ===========================================================================================
+// F-177 — THE MISSION BOARD. The signpost in the muster yard is a door into the overview.
+// ===========================================================================================
+//
+// > *„wenn man in der hub auf ein board drueckt (F) dann kommt man in eine mission uebersciht
+// > in der man auswaehlen kann was man machen will!"* — the user, 2026-08-27 (`Q-059`).
+//
+// The RED test. It uses **only API that exists before the feature** — an app in the hub, the
+// player's `Transform`, a real `KeyboardInput` for `F`, and `menu::Screen` — so that the first
+// run of it measures the game and not a compile error.
+
+/// Presses and releases one key through the real message path, exactly as `press_esc` does.
+/// `window` may be any entity: `bevy_input::keyboard_input_system` never looks at it.
+fn tap_key(app: &mut App, window: Entity, code: KeyCode, key: Key) {
+    for state in [ButtonState::Pressed, ButtonState::Released] {
+        app.world_mut().write_message(KeyboardInput {
+            key_code: code,
+            logical_key: key.clone(),
+            state,
+            text: None,
+            repeat: false,
+            window,
+        });
+        app.update();
+    }
+}
+
+/// Puts the local player exactly there. A test may write a `Transform` the game normally warps.
+fn stand_at(app: &mut App, at: Vec3) {
+    let mut q = app.world_mut().query_filtered::<&mut Transform, With<LocalPlayer>>();
+    for mut t in q.iter_mut(app.world_mut()) {
+        t.translation = at;
+    }
+}
+
+/// The real app in the hub with **no window at all** — `--headless`, which is how every run
+/// on this machine goes and the only mode a script can drive. The returned entity is a bare
+/// id for [`KeyboardInput::window`]; `bevy_input::keyboard_input_system` never looks at it.
+fn in_the_hub_no_window() -> (App, Entity) {
+    let mut app = defeated_by_titan::app(Cli { headless: true, hub: true, ..default() });
+    let fake = app.world_mut().spawn_empty().id();
+    for _ in 0..4 {
+        app.update();
+    }
+    (app, fake)
+}
+
+/// Holds a key down for `secs` of **real** time, updating the app all the while — the hold the
+/// board measures is on `Time<Real>`, so a test that faked the clock would not be measuring it.
+fn hold_key(app: &mut App, window: Entity, code: KeyCode, key: Key, secs: f32) {
+    app.world_mut().write_message(KeyboardInput {
+        key_code: code,
+        logical_key: key.clone(),
+        state: ButtonState::Pressed,
+        text: None,
+        repeat: false,
+        window,
+    });
+    app.update();
+    let start = std::time::Instant::now();
+    while start.elapsed().as_secs_f32() < secs {
+        app.update();
+    }
+    app.world_mut().write_message(KeyboardInput {
+        key_code: code,
+        logical_key: key,
+        state: ButtonState::Released,
+        text: None,
+        repeat: false,
+        window,
+    });
+    app.update();
+}
+
+fn tap_f(app: &mut App, window: Entity) {
+    tap_key(app, window, KeyCode::KeyF, Key::Character("f".into()));
+}
+
+fn hold_f(app: &mut App, window: Entity, secs: f32) {
+    hold_key(app, window, KeyCode::KeyF, Key::Character("f".into()), secs);
+}
+
+/// Where the board stands and how far it reaches, out of the loaded file.
+fn board_post(app: &App) -> (Vec3, f32, f32) {
+    let post = &app.world().resource::<GameData>().missions.hub.board;
+    (Vec3::from(post.center_m), post.radius_m, post.hold_s)
+}
+
+/// Puts the player at the board, one metre inside its circle on the +Z side.
+fn stand_at_the_board(app: &mut App) {
+    let (centre, radius, _) = board_post(app);
+    stand_at(app, centre + Vec3::new(0.0, 0.2, radius - 1.0));
+    app.update();
+}
+
+#[test]
+fn f177_f_at_the_board_opens_the_mission_overview() {
+    // The signpost of `maps.ron: ashgate`, the one the survey photographed standing right of
+    // the spawn view. A literal here **on purpose**: this is the red test, and it may not
+    // depend on the file field the fix is going to add.
+    let signpost = Vec3::new(3.6, 1.8, -4.2);
+
+    let (mut app, window) = windowed(Cli { headless: true, hub: true, ..default() });
+    stand_at(&mut app, signpost + Vec3::new(0.0, 0.2, 2.0));
+    app.update();
+
+    tap_key(&mut app, window, KeyCode::KeyF, Key::Character("f".into()));
+
+    assert_eq!(
+        *app.world().resource::<Screen>(),
+        Screen::Lobby,
+        "F at the mission board did not open the mission overview"
+    );
+}
+
+/// ⭐ **The provenance leg: the position under test is one the GAME produced.**
+///
+/// `docs/FINDINGS.md` FIND-190's shape — *two functions asked about the same invented point
+/// cannot disagree about which point it is* — is why this test does not warp anybody. It sets
+/// the look direction, holds `W`, and lets `net::local` → `player` walk the capsule out of the
+/// hub's own spawn point until the board says it is in reach. Nothing here writes a
+/// `Transform`.
+#[test]
+fn f177_he_walks_to_the_board_from_the_spawn_point_and_it_comes_into_reach() {
+    let (mut app, window) = in_the_hub_no_window();
+    // One simulation tick per `app.update()`. Without it a test frame advances the game by the
+    // microseconds it took to run, and four seconds of held `W` move the player 0.2 mm.
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(
+        std::time::Duration::from_nanos(16_666_667),
+    ));
+    let (centre, radius, _) = board_post(&app);
+    let spawn = Vec3::from(app.world().resource::<GameData>().missions.hub.spawn_m);
+
+    let far = spawn.distance(centre);
+    assert!(
+        far > radius,
+        "the board is inside the spawn circle ({far:.2} m against {radius:.2} m) — nobody \
+         would ever have to walk to it, and this test would pass on tick 1"
+    );
+    assert!(!app.world().resource::<Board>().in_range, "in reach before he moved");
+
+    // The bearing from the spawn point to the signpost. `look 0` faces -Z and `look 90` faces
+    // -X (`scripts/f070-hub.txt` ACT 1 walks the hall that way), i.e. forward is
+    // (-sin yaw, ., -cos yaw).
+    // ⚠️ **Radians.** `net::local::read_input` keeps `Look` in radians and the `--script`
+    // driver converts `look <deg>` on the way in; a degree number here walks him 194° off.
+    let to = centre - spawn;
+    let yaw = (-to.x).atan2(-to.z);
+    app.world_mut().insert_resource(LookOverride(Some((yaw, 0.0))));
+    app.world_mut().write_message(KeyboardInput {
+        key_code: KeyCode::KeyW,
+        logical_key: Key::Character("w".into()),
+        state: ButtonState::Pressed,
+        text: None,
+        repeat: false,
+        window,
+    });
+
+    let mut arrived = None;
+    for frame in 0..240 {
+        app.update();
+        if app.world().resource::<Board>().in_range {
+            arrived = Some(frame);
+            break;
+        }
+    }
+    let frame = arrived.expect(
+        "he held W straight at the signpost for four seconds and the board never came into \
+         reach — the trigger is not on the prop, or the prop is not walkable to",
+    );
+
+    // And the answer agrees with where the game actually put him — read out of the world, not
+    // out of anything this test wrote.
+    let mut q = app.world_mut().query_filtered::<&Transform, With<LocalPlayer>>();
+    let at = q.iter(app.world()).next().expect("a local player").translation;
+    assert!(
+        at.distance(centre) <= radius,
+        "the board says in reach at frame {frame}, but the player the game is drawing stands \
+         {:.2} m from it against a radius of {radius:.2}",
+        at.distance(centre)
+    );
+    assert!(at.distance(spawn) > 0.5, "he never actually walked: {at:?}");
+}
+
+/// ★ **F away from the board does nothing at all** — it stays the left blade, and the mission
+/// list stays shut. This is the half the user will notice first if it is wrong.
+#[test]
+fn f177_f_away_from_the_board_does_nothing_at_all() {
+    let (mut app, window) = windowed(Cli { headless: true, hub: true, ..default() });
+    let (centre, radius, hold_s) = board_post(&app);
+    // Just outside, and then far outside: the near miss is the one a wrong comparison passes.
+    for out in [radius + 0.05, radius + 30.0] {
+        stand_at(&mut app, centre + Vec3::new(0.0, 0.0, out));
+        app.update();
+        let before = app.world().resource::<LobbyChoice>().clone();
+
+        tap_f(&mut app, window);
+        tap_f(&mut app, window);
+        hold_f(&mut app, window, hold_s * 2.0);
+
+        assert_eq!(
+            *app.world().resource::<Screen>(),
+            Screen::Playing,
+            "{out:.2} m from the board and F opened something"
+        );
+        let board = *app.world().resource::<Board>();
+        assert!(!board.open, "{out:.2} m from the board and the overview is open");
+        assert!(!board.in_range, "{out:.2} m from the board and it says in reach");
+        assert_eq!(
+            *app.world().resource::<LobbyChoice>(),
+            before,
+            "{out:.2} m from the board and F moved the choice"
+        );
+        assert_eq!(
+            *app.world().resource::<State<MissionPhase>>().get(),
+            MissionPhase::Hub,
+            "{out:.2} m from the board and a hold on F deployed a sortie"
+        );
+    }
+}
+
+/// ★ **F during a sortie opens nothing**, and it opens nothing because the board is not there:
+/// `DespawnOnExit(MissionPhase::Hub)` is the whole mechanism, held by
+/// `tests/mission.rs::f177_the_board_is_a_hub_thing_and_does_not_follow_you_into_a_sortie`.
+#[test]
+fn f177_f_inside_a_sortie_opens_nothing() {
+    let (mut app, window) = windowed(Cli { headless: true, hub: true, ..default() });
+    let (centre, _, hold_s) = board_post(&app);
+
+    // Deploy through the door that already existed, so this test cannot be passed by breaking
+    // the board's own deploy.
+    press_esc(&mut app, window);
+    press(&mut app, &PauseAction::Lobby);
+    app.update();
+    press(&mut app, &LobbyAction::Deploy);
+    for _ in 0..30 {
+        app.update();
+    }
+    assert!(
+        app.world().resource::<State<MissionPhase>>().get().is_running(),
+        "the fixture never got into a sortie"
+    );
+
+    // Standing exactly where the board would be, if there were one.
+    stand_at(&mut app, centre);
+    app.update();
+    tap_f(&mut app, window);
+    hold_f(&mut app, window, hold_s * 2.0);
+
+    let board = *app.world().resource::<Board>();
+    assert!(!board.in_range, "the board is in reach in the middle of a fight");
+    assert!(!board.open, "F opened the mission list in the middle of a fight");
+    assert_eq!(
+        *app.world().resource::<Screen>(),
+        Screen::Playing,
+        "F put a menu over a running sortie"
+    );
+}
+
+/// The press that opens may not also choose, and the next one must.
+#[test]
+fn f177_the_press_that_opens_chooses_nothing_and_the_next_tap_steps_one_on() {
+    let (mut app, window) = in_the_hub_no_window();
+    stand_at_the_board(&mut app);
+
+    let list = entries(app.world().resource::<GameData>());
+    assert!(list.len() >= 3, "missions.ron offers {} sorties — too few to step", list.len());
+    let start = chosen(
+        app.world().resource::<GameData>(),
+        app.world().resource::<LobbyChoice>(),
+    )
+    .expect("a default sortie");
+
+    tap_f(&mut app, window);
+    assert!(app.world().resource::<Board>().open, "the first F did not open the board");
+    let after_open = chosen(
+        app.world().resource::<GameData>(),
+        app.world().resource::<LobbyChoice>(),
+    )
+    .expect("a sortie");
+    assert_eq!(after_open, start, "the press that opens the board also moved the choice");
+
+    tap_f(&mut app, window);
+    let after_step = chosen(
+        app.world().resource::<GameData>(),
+        app.world().resource::<LobbyChoice>(),
+    )
+    .expect("a sortie");
+    let at = list.iter().position(|e| *e == start).expect("the default is in the list");
+    assert_eq!(
+        after_step,
+        list[(at + 1) % list.len()],
+        "a tap did not step to the next sortie in missions.ron's own order"
+    );
+}
+
+/// ⭐ **THE SWEEP — every sortie in the file, and back to where it started.**
+///
+/// ## What the code under test reads (`menu::board::step`, `menu::lobby::{entries, chosen}`)
+///
+/// `missions.ron: templates` (every key and every difficulty key, in file order),
+/// `missions.ron: hub.deployments` (the default door `chosen` falls back to), and
+/// `LobbyChoice { mission, difficulty }`.
+///
+/// ## What this sweep varies
+///
+/// **The whole choice space**: every one of the `entries()` positions, reached by pressing `F`
+/// the way a player reaches it, one press at a time, twice round the list. Nothing else in the
+/// list above is held constant that the rule depends on — the file is the file, and the
+/// fallback door is exercised by the first lap starting from the default.
+///
+/// ## What it skips: **nothing.** `stepped` is counted and asserted against `2 * len`, so a
+/// press that quietly did nothing shows up as a short lap rather than as a passing `0 of N`.
+#[test]
+fn f177_the_board_walks_every_sortie_in_the_file_and_comes_back() {
+    let (mut app, window) = in_the_hub_no_window();
+    stand_at_the_board(&mut app);
+
+    let list = entries(app.world().resource::<GameData>());
+    let laps = 2;
+    tap_f(&mut app, window); // open, and this press chooses nothing
+
+    let mut seen: Vec<(String, Option<String>)> = Vec::new();
+    let mut stepped = 0usize;
+    for _ in 0..(list.len() * laps) {
+        tap_f(&mut app, window);
+        stepped += 1;
+        seen.push(
+            chosen(app.world().resource::<GameData>(), app.world().resource::<LobbyChoice>())
+                .expect("a sortie after every press"),
+        );
+    }
+    assert_eq!(stepped, list.len() * laps, "presses were skipped, and a skip is invisible");
+
+    let one_lap: Vec<(String, Option<String>)> = seen[..list.len()].to_vec();
+    let mut sorted = one_lap.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(
+        sorted.len(),
+        list.len(),
+        "one lap of {} presses landed on {} distinct sorties — the cycle repeats or skips: {:?}",
+        list.len(),
+        sorted.len(),
+        one_lap
+    );
+    let mut want = list.clone();
+    want.sort();
+    assert_eq!(sorted, want, "the board does not offer exactly what missions.ron does");
+    assert_eq!(
+        seen[list.len()..].to_vec(),
+        one_lap,
+        "the second lap is not the first one — the cycle does not wrap the same way twice"
+    );
+}
+
+/// ★★ **The claim the board exists for: a hold deploys the sortie it is showing, and it is a
+/// sortie the default would NOT have flown.**
+#[test]
+fn f177_a_hold_deploys_the_sortie_the_board_is_showing() {
+    let (mut app, window) = in_the_hub_no_window();
+    stand_at_the_board(&mut app);
+    let (_, _, hold_s) = board_post(&app);
+
+    let default_door = chosen(
+        app.world().resource::<GameData>(),
+        app.world().resource::<LobbyChoice>(),
+    )
+    .expect("a default sortie");
+
+    tap_f(&mut app, window); // open
+    tap_f(&mut app, window); // step off the default, so the assert below cannot pass on it
+    let showing = chosen(
+        app.world().resource::<GameData>(),
+        app.world().resource::<LobbyChoice>(),
+    )
+    .expect("a sortie");
+    assert_ne!(showing, default_door, "the fixture never left the default door");
+
+    hold_f(&mut app, window, hold_s + 0.15);
+    for _ in 0..8 {
+        app.update();
+    }
+
+    let order = app
+        .world()
+        .resource::<Sortie>()
+        .0
+        .clone()
+        .expect("holding F at the board started no sortie");
+    assert_eq!(order.template, showing.0, "the board flew a mission it was not showing");
+    assert_eq!(order.difficulty, showing.1, "the board flew a level it was not showing");
+    assert!(order.from_hub, "a sortie out of the board has to find its way back to the hub");
+    assert!(
+        app.world().resource::<State<MissionPhase>>().get().is_running(),
+        "the order was written but nothing started — the phase is {:?}",
+        app.world().resource::<State<MissionPhase>>().get()
+    );
+    assert!(!app.world().resource::<Board>().open, "the board stayed open over the sortie");
+}
+
+/// A hold that is **too short** is a tap: it steps, it does not fly. The two halves of one key
+/// have to be told apart by the length of the press and by nothing else.
+#[test]
+fn f177_a_press_shorter_than_the_hold_steps_and_never_deploys() {
+    let (mut app, window) = in_the_hub_no_window();
+    stand_at_the_board(&mut app);
+    let (_, _, hold_s) = board_post(&app);
+
+    tap_f(&mut app, window); // open
+    let before = chosen(
+        app.world().resource::<GameData>(),
+        app.world().resource::<LobbyChoice>(),
+    );
+    hold_f(&mut app, window, hold_s * 0.4);
+    for _ in 0..8 {
+        app.update();
+    }
+
+    assert!(
+        app.world().resource::<Sortie>().0.is_none(),
+        "a press of {:.2} s against a hold of {hold_s:.2} s deployed a sortie",
+        hold_s * 0.4
+    );
+    assert_eq!(
+        *app.world().resource::<State<MissionPhase>>().get(),
+        MissionPhase::Hub,
+        "a short press left the hub"
+    );
+    assert_ne!(
+        chosen(app.world().resource::<GameData>(), app.world().resource::<LobbyChoice>()),
+        before,
+        "a short press did not step the choice either — it did nothing at all"
+    );
+}
+
+/// Walking away shuts the overview. Only a run with no window can do it — with one, the plate
+/// stops the clock and he is not walking anywhere — and it is what keeps the board a place
+/// instead of a modal you are stuck in.
+#[test]
+fn f177_walking_away_from_the_board_shuts_it() {
+    let (mut app, window) = in_the_hub_no_window();
+    stand_at_the_board(&mut app);
+    tap_f(&mut app, window);
+    assert!(app.world().resource::<Board>().open);
+
+    let (centre, radius, _) = board_post(&app);
+    stand_at(&mut app, centre + Vec3::new(0.0, 0.0, radius + 6.0));
+    app.update();
+    app.update();
+    let board = *app.world().resource::<Board>();
+    assert!(!board.in_range, "still in reach six metres outside the circle");
+    assert!(!board.open, "he walked away and the mission overview followed him");
+}
+
+/// With a window the board **is** `Screen::Lobby`, so `Esc` and *Back* shut it — and the board
+/// has to notice, or the next `F` would open something that is already open.
+#[test]
+fn f177_esc_shuts_the_plate_and_the_board_follows_it() {
+    let (mut app, window) = windowed(Cli { headless: true, hub: true, ..default() });
+    stand_at_the_board(&mut app);
+    tap_f(&mut app, window);
+    assert_eq!(*app.world().resource::<Screen>(), Screen::Lobby);
+    assert!(app.world().resource::<Board>().open);
+
+    press_esc(&mut app, window);
+    app.update();
+    assert_eq!(*app.world().resource::<Screen>(), Screen::Playing, "Esc did not shut the plate");
+    assert!(
+        !app.world().resource::<Board>().open,
+        "the plate is gone and the board still thinks it is open — the next F would do nothing"
+    );
+
+    // And it opens again, which is the half a stuck flag would fail.
+    tap_f(&mut app, window);
+    assert_eq!(*app.world().resource::<Screen>(), Screen::Lobby, "the board would not reopen");
+}
+
+/// ⭐⭐ **THE SWEEP THAT HAS TO BE THREE-DIMENSIONAL.**
+///
+/// `f177_no_stance_in_the_hub_names_a_door_and_opens_another` swept **2 361 960** stances and
+/// reported **0** lies while the shipped game lied at `(0, 2, 0)` yaw 140, photographed. It
+/// varied `x`, `z` and `yaw` and took its **height** from one `stand()` call — and height was
+/// the one axis the rule depended on. A million samples of the wrong slice measure the slice.
+///
+/// ## Every variable `menu::board::work_the_board` reads to answer *"is he in reach"*
+///
+/// 1. every `LocalPlayer`'s `Transform.translation` — **x, y and z**
+/// 2. every `MissionBoard`'s `Transform.translation` — x, y, z
+/// 3. that board's `radius_m`
+/// 4. how many boards there are, and how many local players
+///
+/// It reads **nothing else** for this question: no yaw, no pitch, no velocity, no camera, no
+/// ray, no walk model. That is the whole difference between this element and the retired
+/// `hud::hub_prompt`, and it is why the list above is four lines long.
+///
+/// ## What this sweep varies
+///
+/// 1. `x`, **`y`** and `z` of the player, over a 3D grid centred on the board and reaching
+///    twice its radius on every axis — **`y` at the same resolution as the other two**, which
+///    is the correction FIND-181 bought
+/// 2. the board's own centre and radius: read out of the world, never assumed
+/// 3. window / no window (both, in the outer loop) — the one axis that decides whether
+///    `Screen` is written at all
+///
+/// Held constant, and named because a variable the code reads that the sweep does not vary is
+/// the bug: **the number of boards (1) and of local players (1)**. Both are what the hub has;
+/// the two-board case is `mission::hub`'s "nearest wins" rule and has no second board to be
+/// wrong about yet, and a second *local* player cannot exist — there is one keyboard.
+///
+/// ## What it skips
+///
+/// **Nothing, and the count is asserted.** There is no `continue` in the loop: every sample is
+/// judged and `checked` has to come out at exactly `sides * n^3`. A `0 of N` whose N is
+/// arithmetic about the wrong set is what this assertion exists against.
+///
+/// ## Where the position comes from
+///
+/// The oracle is computed from the `Transform` **the world holds after the frame** and not from
+/// the vector this test wrote: the fixed step runs before `Update`, so a sample is judged
+/// against the position `work_the_board` actually saw. That is FIND-190's correction — the
+/// defect it missed was a *stale* position, and a test that asks the oracle about its own
+/// literal cannot see one. The fully game-driven leg is
+/// `f177_he_walks_to_the_board_from_the_spawn_point_and_it_comes_into_reach` and
+/// `scripts/f177-board.txt`, which walk there with `W`.
+#[test]
+fn f177_the_board_reaches_the_same_distance_on_every_axis_including_height() {
+    // 15 steps per axis over ±2 radius, and the same 15 on the vertical.
+    const STEPS: i32 = 15;
+    let mut checked = 0usize;
+    let mut in_reach = 0usize;
+
+    for windowed_run in [false, true] {
+        let mut app = if windowed_run {
+            windowed(Cli { headless: true, hub: true, ..default() }).0
+        } else {
+            in_the_hub_no_window().0
+        };
+        let (centre, radius, _) = board_post(&app);
+        // Read out of the world, not out of the file: if the spawn ever stops copying the
+        // file's number onto the component, this sweep measures the component.
+        let (post_at, post_radius) = {
+            let mut q = app
+                .world_mut()
+                .query::<(&defeated_by_titan::mission::hub::MissionBoard, &Transform)>();
+            let (post, at) = q.iter(app.world()).next().expect("a mission board in the hub");
+            (at.translation, post.radius_m)
+        };
+        assert_eq!(post_at, centre);
+        assert_eq!(post_radius, radius);
+
+        let span = radius * 2.0;
+        for ix in 0..STEPS {
+            for iy in 0..STEPS {
+                for iz in 0..STEPS {
+                    let f = |i: i32| -span + 2.0 * span * (i as f32) / ((STEPS - 1) as f32);
+                    stand_at(&mut app, post_at + Vec3::new(f(ix), f(iy), f(iz)));
+                    app.update();
+
+                    // The position the game holds — which is the one the system read, because
+                    // the fixed step runs before `Update` and nothing moves him after it.
+                    let at = {
+                        let mut q =
+                            app.world_mut().query_filtered::<&Transform, With<LocalPlayer>>();
+                        q.iter(app.world()).next().expect("a local player").translation
+                    };
+                    let want = at.distance(post_at) <= post_radius;
+                    let said = app.world().resource::<Board>().in_range;
+                    checked += 1;
+                    if want {
+                        in_reach += 1;
+                    }
+                    assert_eq!(
+                        said, want,
+                        "windowed = {windowed_run}, standing at {at:?}: {:.3} m from a board \
+                         that reaches {post_radius:.3} m, and the board says in_range = {said}",
+                        at.distance(post_at)
+                    );
+                }
+            }
+        }
+    }
+
+    let want = 2 * (STEPS as usize).pow(3);
+    assert_eq!(checked, want, "the sweep skipped samples, and a skip is invisible in a 0 of N");
+    // A sweep that never reached the inside of the circle would pass every assert above by
+    // agreeing that nothing is ever in reach. Both answers have to occur.
+    assert!(in_reach > 0, "not one sample of {checked} was inside the board's circle");
+    assert!(in_reach < checked, "every sample of {checked} was inside — the grid is too small");
 }

@@ -747,6 +747,16 @@ pub struct Map {
     /// and costs the exterior its shadows 1:1, and the boxes in the room stay flat
     /// rectangles because nothing gives them a lit face and a dark one.
     pub lights: Vec<MapLight>,
+    /// `F-012` — **where the map ends, and what happens to somebody who is under it anyway.**
+    ///
+    /// The user, 2026-08-27: *„und man kann an der seite einfach runterfallen!"* and, asked
+    /// what should be there: *„unsichtbare wand + wenn man runterfaellt wegen bug teleport man
+    /// zurueck!"* — both, and they are two different mechanisms (see [`Bounds`]).
+    ///
+    /// **Explicit, never defaulted** (§4): a map that forgets the key fails to load. There is
+    /// no such thing as a map without an edge, so unlike `lights: []` there is no empty
+    /// statement to write here — every map says where its fence stands.
+    pub bounds: Bounds,
     /// `F-019` — **the refuel points that stand out in the field**, placed by hand exactly
     /// like a [`MapBlock`] and a [`MapLight`].
     ///
@@ -755,6 +765,121 @@ pub struct Map {
     /// that, because it is the fixture a dozen tests reason about at `y = 0` and a station is
     /// a thing in the world.
     pub supply_stations: Vec<SupplyPoint>,
+}
+
+/// `F-012` — **the fence around a map, and the plane under it.** Two mechanisms, and the
+/// second one is the one that gets forgotten.
+///
+/// 1. The **fence** is four invisible static boxes at the map's own edge. It is what stops
+///    normal play from leaving: you walk into it, you fly into it at `max_speed_m_s`, and the
+///    solver holds you. It carries no [`Block`](crate::shared::Block), so `render` draws
+///    nothing, and it is **not** anchorable, so a hook that reaches it finds nothing to hold.
+/// 2. The **recovery plane** is a depth. Below it a player is not falling, he is *out of the
+///    world*, and `player::recovery` sends him back to the last ground he stood on. It exists
+///    **for the case where the fence has already failed** — a warp, a seam, a tunnel — and it
+///    therefore may not depend on the fence in any way.
+///
+/// ⚠️ **What tells a fall out of the world from a legitimate 120 m dive is the DEPTH, not the
+/// fall distance and not the speed.** [`Self::recovery_plane_y_m`] lies far below the deepest
+/// block any map has; a dive off the wall ends on the ground, hundreds of metres above it.
+/// `tests/world.rs::f012_the_recovery_plane_lies_under_everything_a_map_can_be_stood_on` is
+/// the guard, and it measures the plane against the planned geometry instead of trusting this
+/// comment.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Bounds {
+    /// How far outside `Map::size_m / 2` the fence's **inner face** stands — and it is
+    /// **derived, bracketed by two measurements, and it may not be zero.**
+    ///
+    /// 🔴 It shipped as `0.0` until 2026-08-29, i.e. the fence's inner face stood exactly ON
+    /// the map's edge — and [`crate::player::recovery::out_of_the_world`] tests `|x| > hx`,
+    /// **strictly**. So the fence's own top face, the widest floor in the district, began at a
+    /// coordinate the rule called *in the world*: `warp 350 201 0` rested at 200.000 m after
+    /// 3 s, after 10 s and after six seconds of held `W`, `record_safe_ground` made it home,
+    /// and every later recovery of the session delivered the player onto that ledge.
+    ///
+    /// The obvious fix — "stand the fence outside the footprint and the strict `>` covers all
+    /// of it" — is **wrong**, and the measurement is why: a capsule does not rest on the point
+    /// under its origin, it rests on its bottom sphere, and that sphere reaches over the lip.
+    /// So the number is bracketed:
+    ///
+    /// ```text
+    ///   fence_rest_reach_m  <  fence_margin_m  <  player.radius_m
+    ///        0.10 m                                    0.35 m
+    /// ```
+    ///
+    /// - **below**, by [`Self::fence_rest_reach_m`]: anything less and a body can PARK on the
+    ///   top face with his origin still inside the footprint — the ring again, narrower;
+    /// - **above**, by `game.ron: player.radius_m`: a body pressed against the fence's inner
+    ///   face has his origin exactly `radius_m` inside it (measured `-0.3500 m` at
+    ///   `vector.max_speed_m_s`, to four decimals), and that has to stay inside the map or
+    ///   legitimate play gets recovered.
+    ///
+    /// `tests/data.rs::f012_the_fence_stands_within_one_body_radius_of_the_map_edge` is the
+    /// guard for the whole chain, and `tests/player.rs::f012_nothing_that_can_rest_on_the_fence_
+    /// rests_inside_the_map` is where the lower bound is re-measured against the solver.
+    pub fence_margin_m: f32,
+    /// **A BUDGET carried by a measurement** — how far back over the fence's inner lip a body
+    /// may **park** (rest on the top face and still be there ten seconds later) before
+    /// [`Self::fence_margin_m`] stops covering it, in metres.
+    ///
+    /// Where a capsule of `player.radius_m` stops is avian's friction and not arithmetic, so it
+    /// is measured: **0.0000 m** on 2026-08-29 over 44 stances — past the lip the contact normal
+    /// tilts too far for friction and every body slid off into the map. Held at 0.10 as budget,
+    /// because the number is not ours, and because a 0.0892 m reading earlier the same day was a
+    /// fixture measuring a **corner** instead of a flat (`f32::signum(0.0)` is `1.0`, so a
+    /// naively built bearing vector comes out diagonal).
+    ///
+    /// It exists so that the day somebody changes `player.radius_m`, the capsule's shape or the
+    /// solver's friction, the margin above is re-derived **in a test** and not in the sky:
+    /// `tests/player.rs::f012_nothing_that_can_rest_on_the_fence_rests_inside_the_map` builds a
+    /// fence deliberately 50 m INSIDE the map — where the recovery cannot reach the bodies and
+    /// therefore cannot flatter the measurement — and re-measures. When it goes red, re-measure
+    /// and write the new number here; that is the whole ritual.
+    pub fence_rest_reach_m: f32,
+    /// How thick the four boxes are. Thickness is the tunnelling budget: at
+    /// `vector.max_speed_m_s` a body advances `v / (simulation_hz * substeps)` per substep,
+    /// and a fence thicker than that cannot be stepped over. `tests/world.rs` does that
+    /// arithmetic instead of leaving it in this sentence.
+    pub fence_thickness_m: f32,
+    /// Underside of the fence. Below the deepest ground of the map, so nobody slips out
+    /// **under** the edge.
+    pub fence_bottom_m: f32,
+    /// Top edge of the fence, and **it is not a ceiling and was never going to be one.**
+    ///
+    /// 🔴 It stood at 200 m under the sentence *"above anything the gear reaches under its own
+    /// power"*, and that sentence was **wrong by 3.3x**: measured 2026-08-28, `W` + `Shift`
+    /// from a standing start reaches **657 m**, and 901 m from the coping of Ashgate's wall,
+    /// for 0.72 % of one tank ([`Self::gear_ceiling_m`] carries the measurement per map).
+    /// Raising this number is not the fix either: a taller fence still has a top face to stand
+    /// on, and any height is a height somebody beats. What closes it is
+    /// [`crate::player::recovery::out_of_the_world`] — outside the map's footprint is out of
+    /// the world **at any height** — and that leaves this number free to be exactly what it
+    /// should be: **as tall as normal play needs and no taller.**
+    ///
+    /// So: above the tallest thing in the map you can stand on and jump off, and deliberately
+    /// **not** infinite — a wall to the sky would answer every aim ray fired out over the
+    /// district, and `tests/vector_hooks.rs` fires one from 400 m up.
+    pub fence_top_m: f32,
+    /// **A MEASUREMENT, not a choice** — the highest a player has been seen to reach in this
+    /// map on gas alone: `W` + `ShiftLeft` held, looking straight up, from the most favourable
+    /// standing start the map offers, no hook and no warp.
+    ///
+    /// It is here so the next person who lowers `vector.gas_tank` or raises `vector.boost_m_s2`
+    /// finds out **in a test** rather than in the sky.
+    /// `tests/player.rs::f012_the_gear_climbs_higher_than_the_fence_and_the_number_is_pinned`
+    /// flies it and compares; when it goes red, re-fly it and write the new number here — that
+    /// is the whole ritual, and the number is allowed to be above [`Self::fence_top_m`],
+    /// because since 2026-08-28 the fence is not what holds the world together.
+    pub gear_ceiling_m: f32,
+    /// Below this height a player is out of the world and gets sent back. **Not** a fall
+    /// distance and **not** a speed: a depth, and it has to lie under every surface in the
+    /// map or a legitimate dive would trip it.
+    pub recovery_plane_y_m: f32,
+    /// How far above the recorded safe ground he is set down again. Small — the recorded
+    /// point is where his feet were, and a body put back exactly into the floor is a body the
+    /// solver has to push out.
+    pub recovery_lift_m: f32,
 }
 
 /// One `F-019` refuel point — **a place, and a number of reloads.**
@@ -2131,6 +2256,33 @@ pub struct HubLayout {
     /// Where gas comes back. The **only** thing in the game that ever refills a tank
     /// (`docs/QUESTIONS.md` Q-033).
     pub refuel_stations: Vec<StationPad>,
+    /// ⭐ **The mission board** — the second way into the mission overview, and the one the
+    /// user asked for (*„wenn man in der hub auf ein board drueckt (F) dann kommt man in eine
+    /// mission uebersciht"*, 2026-08-27, `docs/QUESTIONS.md` Q-059).
+    ///
+    /// A **place**, exactly like [`Self::deployments`] and [`Self::refuel_stations`] — the hub
+    /// has three kinds of furniture now and all three are coordinates in this file.
+    pub board: BoardPost,
+}
+
+/// **Where the mission board stands, and what it costs to use it.**
+///
+/// It draws nothing. The board *is* the signpost `maps.ron: ashgate` already places in the
+/// muster yard — *"a signpost at the spawn, the first thing you see when you turn round"* — so
+/// this is a trigger volume standing on a prop that is in the world already, not a second prop.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BoardPost {
+    /// The centre of the signpost box in `maps.ron`. Two files, one place: if the prop moves,
+    /// this number moves with it, and `tests/mission.rs` is what says the two still agree.
+    pub center_m: (f32, f32, f32),
+    /// How close you have to stand for `F` to mean the board. 3D, like every other trigger in
+    /// the hub — a player 40 m over the yard is not standing at a signpost.
+    pub radius_m: f32,
+    /// How long `F` has to stay down before the highlighted sortie is deployed. A **hold** and
+    /// not a double-tap: it has a floor and no ceiling, so it is not a timing window anybody
+    /// can miss (`src/net/local.rs` makes the same argument the other way for the dodge).
+    pub hold_s: f32,
 }
 
 /// One door: which mission at which difficulty, and the circle you have to stand in.

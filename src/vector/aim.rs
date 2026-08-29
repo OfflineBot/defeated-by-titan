@@ -45,11 +45,12 @@ use bevy::prelude::*;
 
 use crate::data::{GameData, VectorTuning};
 use crate::shared::{
-    AimPoint, ArmAim, Body, BodyId, BodyMask, Hook, HookState, Intent, LocalPlayer,
+    AimPoint, ArmAim, Body, BodyId, Hook, HookState, Intent, LocalPlayer,
     PlayerSettings, Side, Velocity, AIM_RAY_SEES,
 };
 
 use super::hook::anchor_target;
+use super::hookable::{is_hookable, HookableSurfaces};
 
 // ===========================================================================================
 // `F-025` Bewertungsfunktion / `F-024` Snap auf Q und E — **layer 2**, and it never replaces
@@ -331,6 +332,11 @@ pub fn pick_best(
 pub fn aim(
     data: Res<GameData>,
     settings: Option<Res<PlayerSettings>>,
+    // `Q-078`'s switch. `Res` and not `Option<Res>`: `VectorPlugin` inits it, and unlike
+    // `PlayerSettings` it is not a preference a test app may sensibly run without — a missing
+    // one would silently mean "hookable by default" and hide the day somebody forgets to
+    // register it.
+    hookable: Res<HookableSurfaces>,
     space: SpatialQuery,
     bodies: Query<(&Body, Option<&BodyId>)>,
     mut players: Query<(
@@ -361,7 +367,8 @@ pub fn aim(
         //
         // One `cast_ray` per player per tick: measured 0.21 us against 4000 blocks (module
         // header). It is a BVH walk, not an iteration over the world (§11).
-        let centre = cast(&space, &bodies, player, eye_m, intent.look_dir(), range_m);
+        let centre =
+            cast(&space, &bodies, *hookable, player, eye_m, intent.look_dir(), range_m);
 
         // **`F-016` / `F-024`: the two knobs, read here and nowhere else.**
         //
@@ -409,7 +416,8 @@ pub fn aim(
                     Vec::with_capacity(2 * v.assist_probe_steps as usize);
                 for side in Side::ALL {
                     for dir in probe_dirs(basis, ctx.catch_rad, v.assist_probe_steps, side) {
-                        let probe = cast(&space, &bodies, player, eye_m, dir, range_m);
+                        let probe =
+                            cast(&space, &bodies, *hookable, player, eye_m, dir, range_m);
                         if let Some((point_m, body)) = anchor_target(&probe) {
                             candidates.push(AimCandidate {
                                 point_m,
@@ -470,6 +478,7 @@ pub fn eye(translation_m: Vec3, eye_height_m: f32) -> Vec3 {
 fn cast(
     space: &SpatialQuery,
     bodies: &Query<(&Body, Option<&BodyId>)>,
+    hookable: HookableSurfaces,
     player: Entity,
     eye_m: Vec3,
     look: Vec3,
@@ -504,10 +513,15 @@ fn cast(
         Err(_) => (None, None),
     };
 
+    // **`Q-078`: the category is asked, not the tag.** Until 2026-08-27 this line read
+    // `body.is_some_and(|b| b.mask.contains(BodyMask::ANCHORABLE))` — i.e. `F-003`, "no hook
+    // on an untagged part". The user cancelled that rule and asked for the switch instead
+    // (`vector::hookable`), so the field keeps its meaning — *may a hook take this* — and only
+    // the answer changed. Every kind says yes today.
     AimPoint {
         point_m: Some(eye_m + direction * hit.distance),
         body: id,
-        anchorable: body.is_some_and(|b| b.mask.contains(BodyMask::ANCHORABLE)),
+        anchorable: is_hookable(hookable, body),
     }
 }
 

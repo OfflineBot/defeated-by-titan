@@ -111,7 +111,18 @@ fn flier(app: &mut App, x_m: f32) -> Entity {
     let data = world.resource::<GameData>().clone();
     let mut ids = world.resource::<IdCounter>().to_owned();
     let mut commands = world.commands();
-    let e = spawn_player(&mut commands, &mut ids, &data, Vec3::new(x_m, 200.0, 0.0), false);
+    // 🔴 THE HEIGHT IS DERIVED, and it had to be: it was a flat `200.0` and gravity broke it.
+    // The longest window any test in this file holds is 240 ticks = 4 s, and a free fall of 4 s
+    // covers `0.5 * g * t^2` — **160 m at the old `gravity_m_s2` of −20, but 256 m at −32**. So
+    // the flier used to stay airborne for the whole measurement and now lands part-way through
+    // it, and `f007_the_boost_does_not_outrun_the_top_speed` read 45.4791 m/s where it wanted
+    // the 75 m/s clamp: it was measuring a man on the ground.
+    // Deriving it from the file means the next gravity change moves the fixture with the game
+    // instead of quietly turning a flight test into a landing test. The 1.5 factor is headroom
+    // for the boost's own downward component when a test aims one.
+    let longest_s = 4.0_f32;
+    let fall_m = 0.5 * data.game.gravity_m_s2.abs() * longest_s * longest_s;
+    let e = spawn_player(&mut commands, &mut ids, &data, Vec3::new(x_m, fall_m * 1.5, 0.0), false);
     *world.resource_mut::<IdCounter>() = ids;
     app.update();
     e
@@ -264,15 +275,26 @@ fn f007_a_heavy_player_boosts_exactly_as_fast_as_a_light_one() {
 
 #[test]
 fn f007_the_boost_does_not_outrun_the_top_speed() {
-    // 34 m/s^2 alongside 20 m/s^2 of gravity reach 75 m/s after 1.9 s. Four seconds are far
-    // past that, and still below the 5.5 s of gas a full tank pays for — so this measures the
-    // clamp and not an empty tank.
+    // 🔴 THIS BOOSTS STRAIGHT DOWN, and that changed on 2026-08-29 for a reason worth reading.
+    // It used to boost HORIZONTALLY (yaw 0, pitch 0), which at the clamp covers 75 m/s x 4 s =
+    // **300 m** — and this test runs on the **Graybox** map, which is 400 x 400 m. Since `F-012`
+    // gave the world an edge, leaving the footprint is no longer free: the run logged
+    // `player 2 was at Vec3(0.0, 243.1, -200.7) m, outside the map footprint ... back to
+    // Vec3(0.0, 384.5, 0.0)` and the recovery took his whole velocity with it. The test then
+    // read **3.7357 m/s** and blamed the boost.
+    //
+    // Down is the honest direction for a CLAMP test anyway: gravity ADDS to the boost instead of
+    // fighting it (`46 + 32 = 78 m/s^2`), so the clamp is reached in about a second rather than
+    // barely at all, and x/z never move, so the footprint rule cannot interfere. What the test
+    // claims — the boost does not outrun `max_speed_m_s` — is direction-independent, and this is
+    // its strongest case rather than its weakest.
+    // The fall: 4 s at the clamp is 300 m, and `flier` starts at `1.5 x 0.5 g t^2` = 384 m.
     let mut app = app();
     let d = data(&app);
     let max = d.game.vector.max_speed_m_s;
     let e = flier(&mut app, 0.0);
 
-    boost(&mut app, e, 0.0, 0.0);
+    boost(&mut app, e, 0.0, -90.0);
     ticks(&mut app, 240); // 4 s
 
     let speed = velocity(&app, e).length();

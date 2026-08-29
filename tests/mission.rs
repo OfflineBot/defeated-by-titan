@@ -41,7 +41,8 @@ use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::mission::{KillTally, Mission, MissionClock, MissionPhase, WaveSchedule};
 use defeated_by_titan::shared::{
-    Cli, Health, HitZone, PlayerId, SimulationSystems, SpawnTitan, Tick, TitanHit, TitanId,
+    Block, Cli, Health, HitZone, LocalPlayer, PlayerId, SimulationSystems, SpawnTitan, Tick,
+    TitanHit, TitanId,
 };
 
 // ---------------------------------------------------------------------------
@@ -2606,4 +2607,103 @@ fn f073_the_cart_on_its_last_waypoint_wins_the_sortie() {
     assert!(haul_of(&mut app).arrived(), "the cart never got home");
     assert_eq!(phase(&app), MissionPhase::Won);
     assert_eq!(tally(&mut app).total(), 0, "and it was not won by kills");
+}
+
+// ===========================================================================================
+// F-177 — THE MISSION BOARD stands on the signpost that was already in the yard
+// ===========================================================================================
+
+/// ★ **The board adds no prop, and that is checkable in two files.**
+///
+/// The survey of 2026-08-27 photographed *"a blank green signpost with no writing on it"*
+/// standing in the hub, right of the spawn view. `maps.ron: ashgate` is what places it. This
+/// test says the trigger `missions.ron: hub.board` describes stands **exactly** on that box —
+/// so the object the player walks up to is the object that is already there, and moving the
+/// prop without moving the trigger is a red test rather than an invisible mystery.
+///
+/// It goes red three ways: move the board in `missions.ron`, move or resize the signpost in
+/// `maps.ron`, or spawn a second board.
+#[test]
+fn f177_the_board_stands_on_the_signpost_that_is_already_in_the_yard() {
+    use defeated_by_titan::mission::hub::MissionBoard;
+
+    let mut app = in_the_hub();
+    let data = data(&app);
+
+    let posts: Vec<(MissionBoard, Vec3)> = {
+        let mut q = app.world_mut().query::<(&MissionBoard, &Transform)>();
+        q.iter(app.world()).map(|(b, t)| (*b, t.translation)).collect()
+    };
+    assert_eq!(posts.len(), 1, "the hub has to stand exactly one mission board, not {}", posts.len());
+
+    let want = Vec3::from(data.missions.hub.board.center_m);
+    assert_eq!(posts[0].1, want, "the board is not where missions.ron puts it");
+    assert_eq!(posts[0].0.radius_m, data.missions.hub.board.radius_m);
+    assert_eq!(posts[0].0.hold_s, data.missions.hub.board.hold_s);
+
+    // ⭐ The half that makes this more than a copy of the file back to itself: a **placed
+    // block** of the signpost's own measured extent (`world::map::PLACED_DRESSING`, the
+    // `a-088-wegweiser` row) stands at exactly that centre.
+    let map = &data.maps.maps[&data.maps.current];
+    let signpost = map.blocks.iter().find(|b| Vec3::from(b.center_m) == want).unwrap_or_else(|| {
+        panic!(
+            "no placed block stands at {want:?} — the mission board is a trigger volume on a \
+             prop that is supposed to be in the world already, and there is nothing there. \
+             Either maps.ron moved the signpost or missions.ron: hub.board points at air."
+        )
+    });
+    assert_eq!(
+        signpost.size_m,
+        (2.26, 3.6, 1.63),
+        "the block under the board is not the signpost — a-088-wegweiser measures 2.26 x 3.60 \
+         x 1.63 m and this one is {:?}",
+        signpost.size_m
+    );
+
+    // And the board itself draws nothing: no second box on top of the first one.
+    let mut q = app.world_mut().query::<(&MissionBoard, Option<&Block>)>();
+    for (_, block) in q.iter(app.world()) {
+        assert!(
+            block.is_none(),
+            "the mission board spawned a Block of its own — two objects in one place, and the \
+             signpost is already there"
+        );
+    }
+}
+
+/// The board is hub furniture and dies with the hub, exactly as the pads and the stations do.
+/// The whole "F does nothing during a sortie" claim rests on this and on nothing else.
+#[test]
+fn f177_the_board_is_a_hub_thing_and_does_not_follow_you_into_a_sortie() {
+    use defeated_by_titan::mission::hub::MissionBoard;
+
+    let mut app = in_the_hub();
+    {
+        let mut q = app.world_mut().query::<&MissionBoard>();
+        assert_eq!(q.iter(app.world()).count(), 1, "no board in the hub to begin with");
+    }
+
+    // Onto the first pad, the way `f175-loop.txt` deploys.
+    let pad = data(&app).missions.hub.deployments[0].center_m;
+    {
+        let mut q = app.world_mut().query_filtered::<&mut Transform, With<LocalPlayer>>();
+        for mut t in q.iter_mut(app.world_mut()) {
+            t.translation = Vec3::from(pad);
+        }
+    }
+    for _ in 0..40 {
+        app.update();
+        if phase(&app) != MissionPhase::Hub {
+            break;
+        }
+    }
+    assert_ne!(phase(&app), MissionPhase::Hub, "the pad never deployed — the fixture is wrong");
+
+    let mut q = app.world_mut().query::<&MissionBoard>();
+    assert_eq!(
+        q.iter(app.world()).count(),
+        0,
+        "the mission board followed the player into the sortie — F would open a mission list \
+         in the middle of a fight"
+    );
 }

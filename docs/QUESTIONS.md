@@ -3355,3 +3355,166 @@ and is not built.
 **Rollback point:** the `in_the_air` arm of the idle winch in `player::locomotion` — one condition.
 
 **Related:** `B-013` · `B-014` · `FIND-191` · `Q-058` · `Q-050` · `F-005` `F-006`
+
+## Q-078 (addendum) — ✅ BUILT 2026-08-28. The rollback point moved: it is a **value**, not a condition
+
+The answer above ended with *"Rollback point: the `anchorable` predicate in `vector::aim`'s cast —
+one condition."* That is no longer where it lives, and whoever needs to undo this has to know:
+
+**The rollback is now `HookableSurfaces::TAGGED_ONLY` instead of `HookableSurfaces::default()`** —
+one value in `src/vector/hookable.rs`, no code change, and `maps.ron: anchorable` still carries
+every bit `F-003` needs. It is exercised by a test rather than argued about
+(`tests/vector_aiming.rs::f003_the_tag_survives_as_a_switch_that_can_take_the_untagged_surfaces_back_out`
+drives the real cast on the real map, flips the resource, and flips it back).
+
+**What was built:** `src/vector/hookable.rs` — `SurfaceKind::{Tagged, Untagged}`,
+`HookableSurfaces` (a bit set, `EVERYTHING = u32::MAX` so a kind added later arrives hookable),
+and `is_hookable`, called from the **two** places that used to read the `ANCHORABLE` bit
+separately. **No settings screen** — he said *„später"*, and the requirement today was that the
+toggle is cheap.
+
+**The two categories are the reach, not the ambition.** *Titan bodies* and *the ground* are the
+switches he will most likely want, and neither can be told apart at the cast site today: a titan's
+root capsule and a house both arrive as a `shared::Body` with `SOLID | ANCHORABLE`, and `vector`
+has no allow-list edge to `titan`. Adding either is one variant plus one line in `SurfaceKind::of`
+— but it needs a marker in `shared` or an edge with a reason first.
+
+**The guard question in the answer above is now measured, not open:** `scripts/q078-fling.txt`,
+30 asserts, exit 0. `max_speed_m_s` (75) is a hard clip that nothing reached from below;
+`min_rope_m` plus the fade band held a drive into an anchor to 4.9 m/s; a rope on a walking titan
+against a rope on a static roof held for 5.5 s with **7 cm** of height drift. Full table in
+`docs/FINDINGS.md` FIND-199. **`F-012 Velocity-Clamp gegen Fling` is not urgent.**
+
+⚠️ **The one thing that needs HIM and not a test:** a hook into the pavement under your own feet
+now **adds to gravity** — 21.3 m/s where free fall gives 15.5 — because the pull points at the
+anchor and the anchor is straight down. It terminates on the floor and it is not an exploit; it is
+a yank nobody has played. **ASSUMPTION:** it stays as it is until he says it feels wrong.
+**Rollback point:** none needed — no code was written for it; it falls out of the rope pull.
+
+**Related:** `FIND-199` · `FIND-200` · `F-003` `F-012` `F-029`
+
+---
+
+## Q-062 — the board is built; `hold F` is my choice and not yours, and `Q-059`/`Q-060` are now moot (2026-08-28)
+
+> *„wenn man in der hub auf ein board drueckt (F) dann kommt man in eine mission uebersciht in der
+> man auswaehlen kann was man machen will!"* — you, 2026-08-27.
+
+Built and measured (`docs/FINDINGS.md` FIND-201, `scripts/f177-board.txt`: 17 asserts, exit 0). Walk
+to the signpost right of the spawn view — you already said *„Lass es, ich dreh mich um."*, so
+nothing turns you round and this is the door you find — and:
+
+| you press | it does |
+|---|---|
+| `F`, standing at the signpost | the mission overview opens |
+| `F` again, a quick tap | one sortie on, through all 13 of `missions.ron` |
+| `F` **held** (0.35 s) | deploys the one it is showing |
+| `F` anywhere else | **nothing.** It stays the left blade |
+| `F` in a sortie | **nothing.** The board only exists in the hub |
+
+With a window that overview is the mission plate you can also click; the keyboard route above works
+either way, and walking away shuts it.
+
+### ⚠️ The one thing that is yours and not mine: **the deploy key**
+
+I gave `F` two meanings — **tap = next, hold = fly** — because you named exactly one key and a
+sortie needs two verbs. A hold is not a double-tap: it has a floor and no ceiling, so there is no
+timing window to miss (`src/net/local.rs` refuses gestures for the dodge on that argument, and this
+is the other side of it). But it is still one key doing two things, and if it feels wrong the
+alternatives are cheap: a second key for deploy, or `Deploy` as the last row of the cycle.
+
+**ASSUMPTION the work continued under:** tap steps, hold deploys, `hold_s = 0.35`.
+**Rollback point:** `assets/data/missions.ron: hub.board.hold_s` for the feel, and the
+`just_released` / accumulator branch in `src/menu/board::work_the_board` for the scheme. Nothing
+outside that function and that one file field decides it — `menu::lobby`, the plate, the six pads
+and `shared::DeployRequest` are untouched by either answer.
+
+### ⛔ And `Q-059` and `Q-060` no longer have a subject
+
+Both ask what the **hub line** should say — should it step aside once you know it, and what should
+it say when it cannot tell which door opens. That line was `hud::hub_prompt`, it was refuted four
+times, and it is deleted. **The board answers neither question and does not need to:** it says what
+one key does while you stand in one circle, so it has nothing to predict and nothing to be wrong
+about. Nothing is being rolled back for them; they are simply about a thing that is gone.
+
+**Related:** `FIND-201` · `FIND-189` · `Q-059` · `Q-060` · `F-177`
+
+---
+
+## Q-081 — being put back is a **teleport**, and I chose it over a wall you cannot fly over (2026-08-28)
+
+You asked for both: *„unsichtbare wand + wenn man runterfaellt wegen bug teleport man zurueck!"*.
+The wall is built and it holds sideways. What `B-016` measured is that it does **nothing** upward:
+you clear its 200 m in under seven seconds on `W` + `Shift` for 0.72 % of a tank, and the climb has
+no apex at all — one tank is worth 62 km (`FIND-203`). Raising the number does not help, because
+every fence height has a solid invisible ring on its top face that you can stand on outside the map.
+
+**ASSUMPTION:** the world is closed by the *recovery*, not by the wall — **outside the map's
+footprint is out of the world at any height, and you are put straight back on the last ground you
+stood on.** So if you fly up over the edge and drift outward, you get **teleported**, one tick after
+you cross, with a `warn!` in the log. Normal play never touches it: the fence still stops walking,
+swinging and a 75 m/s arrival, and the eleven legitimate falls and swings measured in
+`tests/player.rs::f012_a_legitimate_fall_inside_the_map_is_never_recovered_at_any_height` (a 121 m
+tower dive, a courtyard fall, three 60 m hook drops, five swings along the outside of the wall and
+the far edge) send **zero** warps.
+
+**What you might not like:** the teleport is instant and silent apart from the log. Flying straight
+up 600 m over the middle of the district is still allowed and always will be — you are over the
+world there, and you come down. It is only *outward* that ends the flight.
+
+**The two alternatives I did not take, and why:**
+
+1. **A taller fence.** 62 km of climb per tank says no height is enough, and each one adds its own
+   standable ring at the top.
+2. **A lid over the district.** It would end high flight, which is the movement this whole game is
+   about, and the aim ray in `tests/vector_hooks.rs` fires level from 400 m up and needs open sky.
+
+**If you want it different, the rollback points are small and named:**
+
+- *"do not teleport me, just stop me"* → the fence needs a **top face that slopes**, or the panels
+  need to become a closed dome; `src/world/bounds.rs::plan_fence` is the only file, and
+  `player::recovery::out_of_the_world` keeps its `PastTheEdge` arm as the backstop.
+- *"give me a moment before the teleport"* → a grace in **time**, not in space, in
+  `recover_the_fallen`: N ticks outside before the warp fires. It must not become a grace in
+  **metres** — that is a standable ring exactly that wide (`B-016`).
+- *"put me somewhere else"* → `SafeGround` is the last ground you stood on; a fixed respawn point
+  would be one line in `recovery::recover_the_fallen`.
+
+**Related:** `B-016` · `B-015` · `FIND-203` · `FIND-204` · `F-012`
+
+---
+
+## Q-082 — a recovery that fails twice **gives up and leaves you standing outside the world**, and you see one red line and nothing else (2026-08-29)
+
+**What happened.** The recovery of `F-012` teleported the player **1501 times in 25 s**, one per
+tick, always to the same place, with sixty `warn!` lines a second behind it (`B-017`). The
+destination was the fence's top face, so it never held; warping to it again was not a fix.
+
+**ASSUMPTION (the work continued under it):** the recovery gets **two** attempts per episode and
+then stops.
+
+1. the ground he last stood on;
+2. still out of the world one tick later, in the same place? Then that ground is not to be
+   trusted, whatever recorded it — **his spawn point**, which nothing in play can poison;
+3. still out after that? **Stop.** One `error!` line naming both attempts, then silence until he
+   is back in the world.
+
+**So what the player sees when it happens:** at worst two teleports inside two ticks (33 ms) and
+then, if both failed, **he stands still, where he is, outside the world, with no HUD message at
+all.** He can still move, look and hook; nothing else happens to him.
+
+**Why I chose it over the alternatives.** A player standing still outside the world is a bug he
+can see and report; a player teleported sixty times a second is a bug hiding behind its own
+noise, and that is exactly what shipped. Step 3 should also be unreachable — the spawn point is
+inside the world by construction — so the visible behaviour is "two ticks and you are home".
+
+**What you might want instead, and it is yours to say:**
+
+- a HUD line — *"recovered"*, or *"the world let go of you, tell someone"*;
+- a hard respawn at the spawn point with the run reset, rather than leaving him standing;
+- a kick to the hub.
+
+**Rollback point if you disagree:** `src/player/recovery.rs::recover_the_fallen`, the
+`if attempt > 2` arm, and `recovery::Recoveries`. The bound itself (two per episode) is what
+`tests/player.rs::f012_a_recovery_whose_destination_does_not_hold_is_not_repeated_every_tick`
+asserts; changing what happens *after* the bound does not touch the bound.

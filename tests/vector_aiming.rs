@@ -54,6 +54,7 @@ use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::net::Inbox;
 use defeated_by_titan::player::spawn_player;
+use defeated_by_titan::vector::hookable::HookableSurfaces;
 use defeated_by_titan::shared::{
     AimPoint, AnchorSurface, ArmAim, Body, BodyId, BodyMask, Buttons, Cli, Hook, HookState,
     IdCounter, Intent, PlayerId, Side, Tick, WarpPlayer,
@@ -215,13 +216,20 @@ fn f002_the_aim_point_is_the_whole_coordinate_and_not_just_the_plane() {
 // ---------------------------------------------------------------------------------------
 
 #[test]
-fn f002_an_untagged_wall_in_front_of_a_roof_is_not_hookable_and_not_transparent() {
+fn f002_an_untagged_wall_in_front_of_a_roof_is_hookable_and_not_transparent() {
+    // 🔴 **INVERTED on 2026-08-28** (`docs/QUESTIONS.md` Q-078). The user: *„es soll auf
+    // jeglicher oberflqche einhaken. nicht an hardcoded punkten etc!"* — so the wall now HOLDS
+    // a hook, and the half of this test that asserted it does not is gone.
+    //
+    // **The other half is the one that always mattered and it is untouched:** the ray must not
+    // travel THROUGH the wall to the roof behind it (`F-023`, "line-of-sight check prevents
+    // hooking through walls"). That failure is invisible in a screenshot, because the rope end
+    // lies inside the building — and it is exactly what a ray *filtered* for anchorable bodies
+    // would do. `vector::aim::cast` still casts unfiltered and still asks the category
+    // afterwards; what changed is only the answer.
+    //
     // `maps.ron` keeps this pair for exactly this criterion: an untagged wall at z = -33.5
     // and, 7.5 m behind it, the anchorable brick-red house whose near face is z = -41.
-    //
-    // A ray filtered for anchorable bodies reports the house: same direction, 21 m instead
-    // of 13.5 m, `anchorable: true`. That is "hooking through a wall" (`F-023`), and it is
-    // invisible in a screenshot because the rope end lies inside the building.
     let mut app = app();
     let (e, id) = test_player(&mut app, Vec3::new(-30.0, 0.0, -20.0));
     ticks(&mut app, 60);
@@ -237,8 +245,14 @@ fn f002_an_untagged_wall_in_front_of_a_roof_is_not_hookable_and_not_transparent(
         hit.z
     );
     assert!(
-        !a.anchorable,
-        "the untagged wall reports itself as anchorable — then `AnchorSurface` decides nothing"
+        a.anchorable,
+        "the untagged wall at z = -33.5 refuses a hook. Q-078: everything is hookable, and \
+         `maps.ron: anchorable` is a switch that is ON, not a licence"
+    );
+    assert!(
+        a.body.is_some(),
+        "the wall is hookable but names no carrier — `anchor_target` needs both, and a hook \
+         cannot hang on an entity without a stable id (`B-001`)"
     );
 
     // And the roof behind it really is reachable when the line of sight is clear —
@@ -466,9 +480,15 @@ fn f002_beyond_the_hook_range_from_the_file_there_is_no_hit() {
         "the ray landed at y = {} instead of on the ground slab at y = 0",
         hit.y
     );
+    // 🔴 **INVERTED on 2026-08-28** (`Q-078`). It used to read `!near.anchorable`, with the
+    // reason `maps.ron` still carries beside the row: *"the ground. Not anchorable: otherwise
+    // you hook into the ground slabs."* The user overruled it — *„es soll auf jeglicher
+    // oberflqche einhaken"* — and named this case himself: a hook into the street under your
+    // feet is now legal. This test is about the RANGE either way; the line stays only so that
+    // a cast which starts filtering again is caught here too.
     assert!(
-        !near.anchorable,
-        "the ground is `anchorable: false` in maps.ron — otherwise you hook into the pavement"
+        near.anchorable,
+        "the pavement one metre inside the range refuses a hook — Q-078: everything is hookable"
     );
 }
 
@@ -687,19 +707,27 @@ fn f002_the_aim_names_the_body_it_hit() {
     );
 
     // And the converse, so that the field is a statement and not a shortcut through
-    // `anchorable`: an **untagged** body has to be named too, with `anchorable: false` beside
-    // it. "There is something there, but you cannot hook it" is a state and not a missing hit
-    // (`F-023`) — and a `body` that is only filled in when the hit is anchorable would pass
-    // everything above and still be wrong here.
+    // `anchorable`: a body that CANNOT be hooked has to be named too, with `anchorable: false`
+    // beside it. "There is something there, but you cannot hook it" is a state and not a
+    // missing hit (`F-023`) — and a `body` that is only filled in when the hit is hookable
+    // would pass everything above and still be wrong here.
     //
-    // The target is the untagged wall `maps.ron` keeps for exactly this: centre (-30, 5, -34),
-    // near face z = -33.5. It is the same shot as test 1.
+    // 🔴 **The source of the refusal changed on 2026-08-28** (`Q-078`), the criterion did not.
+    // It used to be the map's own `anchorable: false` on the wall at (-30, 5, -34); everything
+    // is hookable now, so the refusal is produced with the switch that replaced the tag
+    // (`vector::hookable::HookableSurfaces::TAGGED_ONLY` — `F-003` as it stood until
+    // yesterday). Same wall, same shot as test 1, same question: is `body` filled in on a hit
+    // the player may not use?
     warp(&mut app, id, Vec3::new(-30.0, 0.0, -20.0));
+    app.insert_resource(HookableSurfaces::TAGGED_ONLY);
     look(&mut app, id, 0.0, 0.0);
     let wall = aim_of(&app, e);
     let hit = wall.point_m.expect("the untagged wall stands 13.5 m in front of him");
     assert!((hit.z + 33.5).abs() < 0.05, "that is not the wall at z = -33.5 but {:?}", hit);
-    assert!(!wall.anchorable, "the wall is `anchorable: false` in maps.ron");
+    assert!(
+        !wall.anchorable,
+        "with `TAGGED_ONLY` the untagged wall must refuse the hook — otherwise this half of          the test measures nothing, because every other surface holds one"
+    );
     let named = wall
         .body
         .expect("an untagged body is a body — it has to be named, or `F-023` cannot be seen");
@@ -837,4 +865,258 @@ fn b008_a_shot_aimed_straight_down_lands_on_what_the_crosshair_stands_on() {
             arm.body, centre.body
         );
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// 11. `Q-078` — everything is hookable, and the tag became a switch
+// ---------------------------------------------------------------------------------------
+
+/// The yaw/pitch pair whose [`Intent::look_dir`] is `dir`.
+///
+/// `look_dir` is `(-sin yaw * cos pitch, sin pitch, -cos yaw * cos pitch)` — inverted here in
+/// the test's own arithmetic and **not** read back out of `shared`, so a sign that flips in
+/// `Intent` shows up as a miss instead of being followed silently.
+fn yaw_pitch_deg(dir: Vec3) -> (f32, f32) {
+    let d = dir.normalize();
+    let pitch = d.y.clamp(-1.0, 1.0).asin();
+    let yaw = (-d.x).atan2(-d.z);
+    (yaw.to_degrees(), pitch.to_degrees())
+}
+
+#[test]
+fn f003_every_solid_surface_of_the_graybox_holds_a_hook_whatever_its_tag_says() {
+    // The user, 2026-08-27: *„es soll auf jeglicher oberflqche einhaken. nicht an hardcoded
+    // punkten etc!"* (`docs/QUESTIONS.md` Q-078). `maps.ron: graybox` is the only map left in
+    // the repository that still carries `anchorable: false` rows — **22 of them**, the ground
+    // slab and the aqueduct columns among them — so it is the only place where this rule can
+    // be driven against data that disagrees with it. Ashgate is 2901 of 2901 anchorable and
+    // therefore cannot falsify anything here.
+    //
+    // ## A SWEEP'S SIZE IS NOT ITS COVERAGE — both lists, as `CLAUDE.md` rule 5 demands
+    //
+    // **What `vector::aim::cast` + `vector::hookable::is_hookable` read**, every one of them:
+    //   1. `eye_m`          — the player's `Transform` + `player.eye_height_m`
+    //   2. `look`           — the direction out of `Intent`
+    //   3. `range_m`        — `vector.hook_range_m`
+    //   4. the hit entity's `Body.mask` (the `ANCHORABLE` bit — i.e. `maps.ron: anchorable`)
+    //   5. the hit entity's `BodyId` (present or not)
+    //   6. the excluded entity (the caster's own collider) and `shared::AIM_RAY_SEES`
+    //   7. `HookableSurfaces` — the new switch
+    //
+    // **What this sweep varies:** 1 (a viewpoint per block per side, 36 blocks x 4 sides plus
+    // one straight-down shot = 145 stances), 2 (each look is computed towards that block's
+    // centre, so pitch and yaw both move — the down-shot is -90 deg, the widest there is),
+    // 4 (**by construction: 22 of the 36 rows are `anchorable: false` and 14 are `true`**, so
+    // the bit under test really takes both values), 5 (asserted, never assumed).
+    //
+    // **What it holds constant, and why each one is admissible:**
+    //   - 3 `range_m` = 500 m from `game.ron`. Every stance below stands between 4 m and
+    //     ~230 m from what it looks at, i.e. strictly inside it; a sweep at the range boundary
+    //     is `f002_beyond_the_hook_range_from_the_file_there_is_no_hit`'s job and it exists.
+    //   - 6 one player, so the caster-exclusion and the player mask never change. A second
+    //     player in the line is `B-010` and `tests/multiplayer.rs` owns it.
+    //   - 7 the switch stays at its default. It is varied by
+    //     `f003_the_tag_survives_as_a_switch_that_can_take_the_untagged_surfaces_back_out`,
+    //     which is the other half of this pair and the reason the data must not be deleted.
+    //
+    // **What it skips, counted and printed:** a stance whose ray ends on nothing at all. That
+    // is a real exclusion — it would silently shrink the denominator — so it is counted, it is
+    // printed, and the assertion below puts a floor under the number of stances that DID hit.
+    let mut app = app();
+    let map = data(&app).current_map().expect("graybox is in maps.ron").clone();
+    let (e, id) = test_player(&mut app, Vec3::new(0.0, 40.0, 60.0));
+    ticks(&mut app, 30);
+
+    let solid: Vec<_> = map.blocks.iter().filter(|b| b.solid).collect();
+    let untagged = solid.iter().filter(|b| !b.anchorable).count();
+    assert!(
+        untagged >= 20,
+        "only {untagged} untagged solid rows left in the graybox — this sweep measures the \
+         difference between a tagged and an untagged surface, and with the untagged ones gone \
+         it measures nothing. maps.ron is somebody else's file; if they went on purpose, this \
+         test has to move to a fixture of its own"
+    );
+
+    let mut stances = 0_u32;
+    let mut hits = 0_u32;
+    let mut nothing_hit = 0_u32;
+    let mut hit_untagged = 0_u32;
+    let mut clamped = 0_u32;
+    let mut refused: Vec<String> = Vec::new();
+
+    // 36 blocks x 4 horizontal approaches. The eye stands `stand_off` clear of the block's
+    // hull on one axis and looks at its centre; the height is the block's own centre, lifted
+    // to at least 2 m so that the ground slab (centre y = -0.1) is not looked at from below it.
+    let stand_off = 12.0_f32;
+    for b in &solid {
+        let centre = Vec3::from(b.center_m);
+        let half = Vec3::from(b.size_m) * 0.5;
+        for axis in [Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z] {
+            let reach = (half * axis.abs()).length() + stand_off;
+            let mut eye_m = centre + axis * reach;
+            eye_m.y = eye_m.y.max(2.0);
+            // 🔴 **Clamped inside the fence, and the clamp is counted.** `world::bounds` puts
+            // four thick static panels around the map; on the graybox their outer faces sit at
+            // +-210 m. The ground slab is 400 m wide, so `stand_off` alone put four of these
+            // stances at +-212 m — **outside the world**, where the ray comes back and lands
+            // on the *outside* of a fence panel at exactly 210.0 m. That panel carries no
+            // `shared::Body`, so it refuses a hook and the sweep reported four failures about
+            // a stance the game cannot produce: the fence exists precisely so that no player
+            // is ever there. It is a real exclusion all the same, so it is counted below and
+            // printed — and the fence itself is written up in `docs/FINDINGS.md` FIND-200.
+            let fence_x = map.size_m.0 * 0.5 - 5.0;
+            let fence_z = map.size_m.1 * 0.5 - 5.0;
+            let inside = Vec3::new(
+                eye_m.x.clamp(-fence_x, fence_x),
+                eye_m.y,
+                eye_m.z.clamp(-fence_z, fence_z),
+            );
+            if inside != eye_m {
+                clamped += 1;
+            }
+            eye_m = inside;
+            let (yaw, pitch) = yaw_pitch_deg(centre - eye_m);
+            let eye_height_m = data(&app).game.player.eye_height_m;
+            warp(&mut app, id, eye_m - Vec3::Y * eye_height_m);
+            look(&mut app, id, yaw, pitch);
+
+            stances += 1;
+            let a = aim_of(&app, e);
+            match a.point_m {
+                None => nothing_hit += 1,
+                Some(p) => {
+                    hits += 1;
+                    // Which body was hit is NOT asserted — another block may stand in the
+                    // line, and that is fine: the claim is about every surface in this world,
+                    // so whatever answered has to hold a hook too. What is asserted is that
+                    // the answer is usable: hookable AND carried.
+                    if !a.anchorable || a.body.is_none() {
+                        refused.push(format!(
+                            "{p:?} (body {:?}, hookable {}) — looked at {centre:?} from \
+                             {eye_m:?}",
+                            a.body, a.anchorable
+                        ));
+                    }
+                    if !b.anchorable {
+                        hit_untagged += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // The ground slab, looked at the way the player will actually meet it: straight down at
+    // his own feet. Q-078 names it as the case nobody has felt — *„a hook into the street
+    // under your feet is now legal"* — and the four horizontal approaches above never produce
+    // a downward ray onto it.
+    warp(&mut app, id, Vec3::new(6.0, 30.0, 30.0));
+    look(&mut app, id, 0.0, -90.0);
+    stances += 1;
+    let down = aim_of(&app, e);
+    match down.point_m {
+        None => nothing_hit += 1,
+        Some(p) => {
+            hits += 1;
+            hit_untagged += 1;
+            assert!(
+                (p.y - 0.0).abs() < 0.2,
+                "straight down from 30 m landed at {p:?} — the graybox ground slab spans \
+                 y = -0.2 .. 0.0 and nothing else stands at (6, *, 30)"
+            );
+            if !down.anchorable || down.body.is_none() {
+                // Q-078 names this one by itself — *„the ground. hookable. A hook into the
+                // street under your feet is now legal and nobody has felt it"* — so it is
+                // spelled out rather than folded into the loop's message.
+                refused.push(format!(
+                    "THE GROUND at {p:?} (body {:?}, hookable {}) — straight down from 30 m",
+                    down.body, down.anchorable
+                ));
+            }
+        }
+    }
+
+    println!(
+        "Q-078 sweep: {stances} stances, {hits} hit something, {nothing_hit} hit nothing \
+         (skipped), {clamped} pulled back inside the world fence, {hit_untagged} of the hits \
+         landed on a row that maps.ron tags `anchorable: false`, {} refused a hook",
+        refused.len()
+    );
+    assert!(
+        clamped <= 4,
+        "{clamped} of {stances} stances had to be pulled back inside the fence. Four is the \
+         ground slab's four sides and nothing else; more than that means the stand-off has \
+         grown and the sweep is measuring a different set of viewpoints than it says it does"
+    );
+    assert_eq!(
+        nothing_hit, 0,
+        "{nothing_hit} of {stances} stances ended on nothing at all. Every one of them is a \
+         sample this sweep never took — an assertion satisfied by an empty screen is not an \
+         assertion"
+    );
+    assert!(
+        hit_untagged >= 20,
+        "only {hit_untagged} of {hits} hits landed on an `anchorable: false` row. The sweep \
+         then measures the tagged surfaces, which were hookable before this change too — it \
+         cannot tell the old rule from the new one"
+    );
+    assert!(
+        refused.is_empty(),
+        "{} of {hits} surfaces refused a hook:\n  {}",
+        refused.len(),
+        refused.join("\n  ")
+    );
+}
+
+#[test]
+fn f003_the_tag_survives_as_a_switch_that_can_take_the_untagged_surfaces_back_out() {
+    // The other half of `Q-078`, and the reason `maps.ron: anchorable` must not be deleted:
+    //
+    // > *„spaeter soll man auch bestimmte sachen toggeln koennen. also an bestimmte sachen ran
+    // > haken an andere nicht aber grundsetzlich erstmal ales!"*
+    //
+    // Today every switch is on. This test flips one and drives **the real cast on the real
+    // map** — same player, same stance, same look, one resource different — so the claim
+    // "the toggle is cheap" is measured and not asserted about a pure function. It is also
+    // the proof that the data still carries the distinction: with the tag gone from `maps.ron`
+    // both stances below would come back identical and this test, not the sweep, goes red.
+    //
+    // ⚠️ **The stance is driven twice through the app, not computed twice** — `FIND` on the
+    // provenance of an input (`CLAUDE.md` rule 5, the fourth shape): a test that hands the
+    // predicate two `Body` literals it invented cannot see the cast at all.
+    //
+    // What varies: `HookableSurfaces` — and nothing else. What is held constant, on purpose:
+    // the stance, the look, the map, the player. That is the whole point: two runs that differ
+    // in one resource.
+    let mut app = app();
+    let (e, id) = test_player(&mut app, Vec3::new(-30.0, 0.0, -20.0));
+    ticks(&mut app, 60);
+    look(&mut app, id, 0.0, 0.0);
+
+    let wall = aim_of(&app, e);
+    let hit = wall.point_m.expect("the untagged wall stands 13.5 m ahead");
+    assert!((hit.z + 33.5).abs() < 0.02, "not the wall at z = -33.5 but {hit:?}");
+    assert!(wall.anchorable, "everything is hookable today — that is the sweep's claim");
+
+    // `F-003` restored: one value, no code. This is the rollback point `docs/QUESTIONS.md`
+    // Q-078 names, and it has to still work or the rollback is a claim about a deleted branch.
+    app.insert_resource(HookableSurfaces::TAGGED_ONLY);
+    look(&mut app, id, 0.0, 0.0);
+    let refused = aim_of(&app, e);
+    assert_eq!(
+        refused.point_m.map(|p| p.z).map(|z| (z + 33.5).abs() < 0.02),
+        Some(true),
+        "the wall stopped being HIT, not just hookable ({:?}) — the switch must filter the \
+         answer, never the ray. A cast that filters is `F-023`'s hook-through-a-wall",
+        refused.point_m
+    );
+    assert!(
+        !refused.anchorable,
+        "`TAGGED_ONLY` still holds the untagged wall — then the switch is not wired to the \
+         cast and `maps.ron: anchorable` has become unreachable data"
+    );
+
+    // And back on again, so the test cannot pass by the switch being stuck.
+    app.insert_resource(HookableSurfaces::default());
+    look(&mut app, id, 0.0, 0.0);
+    assert!(aim_of(&app, e).anchorable, "the switch does not switch back");
 }

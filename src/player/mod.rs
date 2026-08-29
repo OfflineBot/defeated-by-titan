@@ -39,6 +39,7 @@
 
 pub mod integrator;
 pub mod locomotion;
+pub mod recovery;
 pub mod rope;
 
 use avian3d::prelude::{
@@ -104,6 +105,16 @@ impl Plugin for PlayerPlugin {
             .add_systems(
                 FixedUpdate,
                 locomotion::air_control.in_set(SimulationSystems::Drive),
+            )
+            // `F-012` — the recovery. In `PostStep`, exactly where `world::supply` and
+            // `mission::hub` judge a position, so the height it reads is the one this tick's
+            // integration produced and not the one before it. `.chain()` because the record
+            // has to be this tick's before the check asks whether to use it.
+            .add_systems(
+                FixedUpdate,
+                (recovery::record_safe_ground, recovery::recover_the_fallen)
+                    .chain()
+                    .in_set(SimulationSystems::PostStep),
             );
         // The per-substep reel-in. Its own function because it hangs in avian's
         // `SubstepSchedule` and not in `FixedUpdate` — see `rope.rs`, decision 1.
@@ -177,6 +188,16 @@ pub fn spawn_player_with_id(
             // `F-010`. `until_tick: 0` is "not sliding", and `started_at_tick: None` is the one
             // state in which the slide cooldown cannot refuse.
             Slide::default(),
+            // `F-012` — where he gets put back to if he ends up under the world. Present from
+            // tick 1 like everything above it, and started at the spawn point: a player who
+            // falls before he has ever landed still has somewhere to go
+            // (`recovery::SafeGround`).
+            recovery::SafeGround::at_spawn(pos),
+            // `F-012` — how the recovery itself is going, and the destination of last resort.
+            // The spawn point is the one place in the map nothing in play can poison, which is
+            // exactly what a recovery whose first destination did not hold needs
+            // (`recovery::Recoveries`).
+            recovery::Recoveries::at_spawn(pos),
         ),
         // The physics body. See the module header for why each of these is here.
         (

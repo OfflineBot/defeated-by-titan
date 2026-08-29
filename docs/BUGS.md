@@ -1235,3 +1235,246 @@ happens when two places answer one question).
 per second*, which does not exist — so this bug is currently invisible to the whole script corpus.
 
 **Related:** `B-013` · `Q-050` · `Q-058` · `FIND-191` · `F-005` `F-018`
+
+---
+
+## B-015 — the map has no edge: past the plate there is **nothing**, and you fall forever — 🟧 FIXED 2026-08-28
+
+**Reported by the user, 2026-08-27:** *„und man kann an der seite einfach runterfallen!"* — and,
+asked what should be there, he named **both** mechanisms:
+*„unsichtbare wand + wenn man runterfaellt wegen bug teleport man zurueck!"*
+
+### The cause, and it is the first of the four candidates and not the interesting one
+
+Ashgate's ground is two slabs, `x ∈ [-350, -85]` and `x ∈ [-55, 350]`, `z ∈ [-350, 350]`
+(`assets/data/maps.ron`). They cover the declared `size_m: (700.0, 700.0)` **exactly** — the plate
+is not too small, it is not a seam, and nothing tunnels. Past `|x| = 350` / `|z| = 350` there is
+simply **no collider of any kind**, at any height, and nothing under it either. The deepest block
+in the whole map is the channel floor with its underside at **-4.20 m**; below that the world is
+empty down to `-inf`.
+
+### The repro — `tests/player.rs::f012_the_ground_ends_at_the_map_edge_and_nothing_holds_you_past_it`
+
+Built on `maps.ron: current`, the district that ships. Twelve stances: four directions
+(`+x -x +z -z`) x three distances past the edge (`1, 5, 25 m`), each dropped from `y = 20` and
+given 2 s. **12 of 12 fell clean through**, every one of them to `y = -44.0` — i.e. free fall at
+`gravity_m_s2 = -32`, nothing hit:
+
+```
++x +1 m -> y = -44.0    -x +1 m -> y = -44.0    +z +1 m -> y = -44.0    -z +1 m -> y = -44.0
++x +5 m -> y = -44.0    -x +5 m -> y = -44.0    +z +5 m -> y = -44.0    -z +5 m -> y = -44.0
++x +25 m -> y = -44.0   -x +25 m -> y = -44.0   +z +25 m -> y = -44.0   -z +25 m -> y = -44.0
+```
+
+**One metre past the edge is already outside the world.** There is no gradual boundary and no
+warning.
+
+### And the two speeds, because they fail differently
+
+* **Walking**, `run_speed_m_s = 6.0`, held `D` for 4 s from 12 m inside the `+x` edge:
+  `y = -62.96`. `tests/player.rs::f012_walking_at_the_edge_of_the_map_does_not_walk_you_off_it`.
+* **`vector.max_speed_m_s = 75`**, launched level from 60 m inside the edge:
+  **4 of 8 launches ended 362.82 m out** — 12.82 m past the half-extent, still at `y = 24.45`,
+  i.e. already flying over open nothing.
+  `tests/player.rs::f012_flying_at_the_edge_at_top_speed_does_not_tunnel_through_it`.
+
+### And the half that gets forgotten
+
+`tests/player.rs::f012_a_player_below_the_world_comes_back_to_where_he_last_stood` puts the body
+2 m and 90 m below the recovery depth **by hand** — the way a bad warp or a seam does, with the
+fence already defeated. Before the fix: *"dropped 2 m under the recovery plane (-300 m) he came
+back to `Vec3(0.0, -302.28595, 0.0)`, not to the ground he last stood on
+(`Vec3(0.0, 0.049950004, 0.0)`)"*. **Nothing in the game brought him back**, and no test in the
+repository had ever asked.
+
+### The fix
+
+Both, and they are two mechanisms:
+
+1. `world::bounds::build_bounds` — four invisible static boxes at the map's own edge, out of
+   `maps.ron: bounds`. No `Block`, so `render` draws nothing; no `AnchorSurface`, so a hook that
+   reaches one finds nothing to hold.
+2. `player::recovery` — `SafeGround` on the player records the last tick he was `Grounded`;
+   below `bounds.recovery_plane_y_m` he is sent back with a `WarpPlayer`, through the one existing
+   writer of a player's `Transform`.
+
+**What tells a fall out of the world from a legitimate 120 m dive is the DEPTH**, not the fall
+distance and not the speed — the plane lies 295.8 m below the deepest block in the map.
+The control is `tests/player.rs::f012_a_dive_from_the_top_of_the_wall_is_not_a_fall_out_of_the_world`,
+and it was **green before the fix as well** — which is what makes it a control and not a second
+copy of the feature.
+
+**Evidence:** `scripts/f012-edge.txt` · `tests/player.rs::f012_*` (5) · `tests/world.rs::f012_*` (3)
+**Related:** `F-012` · `docs/FINDINGS.md` FIND-199
+
+---
+
+## B-016 — the map edge was closed sideways and left open **upward**: you fly over the fence in seven seconds, and its top face is a standable ring outside the world — 🟧 FIXED 2026-08-28
+
+`B-015` was closed with two mechanisms, a fence and a recovery plane, and both of them work. The
+feature was still wrong, because **the recovery asked only about depth, and leaving is not only
+downward.** Three symptoms, one hole.
+
+**1 · You simply fly over it.** `fence_top_m` is 200 m. Height ladder from a standing start at
+`(0, 2, 0)`, look straight up, holding only `W` + `Shift`:
+
+| 1 s | 2 s | 3 s | 4 s | 5 s | 6 s | 7 s | 8 s |
+|---|---|---|---|---|---|---|---|
+| 12.2 | 49.9 | 54.6 | 71.7 | 114.5 | 182.5 | **259.3** | 336.3 m |
+
+Gas for the first six seconds: `15000.000 -> 14891.771`, **0.72 % of one tank**. And there is no
+apex to quote: held long enough the body sits at `vector.max_speed_m_s` going up — measured
+**748.9 m per 10 s for 179.88 gas**, i.e. 4.163 m per unit, **62 580 m on one tank**. The sentence
+written into `assets/data/maps.ron` for the 200 — *"far above anything the gear reaches on gas
+alone"* — was wrong by 3.3x in seven seconds and by 313x on a tank.
+
+**2 · The keyboard-only escape.** Two held keys from the spawn point, no warp except onto the
+spawn: 7 s of `W`+`Shift` at pitch 89 -> **243.143 m**; `look -90 20` and 9 s -> **284.175 m and
+outside the map**; 8 s later -> **-233.201 m, still falling through nothing**; the plane finally
+fired at -300.6 m. That is **roughly ten seconds of falling out of the world**, which is the user's
+original complaint (*„und man kann an der seite einfach runterfallen!"*) intact, upward.
+
+**3 · The fence's top face is a solid, invisible, standable ring outside the map.** A body at
+`(355, 210, 0)` comes to rest at **exactly y = 200.000** and is still there 14 s later; the same at
+the corner `(355, 210, 355)`; 8 s of `W` along it leaves him at 200.000. He is outside the
+footprint, so `record_safe_ground` correctly refuses to record him, and he is 500 m above
+`recovery_plane_y_m`, so `recover_the_fallen` never fires. **Parked outside the world indefinitely,
+on a 10 m wide invisible ledge running the whole way round the district at 200 m.**
+
+**4 · And one latent, one RON number away.** `record_safe_ground` gated the footprint on
+`map.size_m * 0.5 + bounds.fence_margin_m` — the **fence's** footprint, not the map's — inside a
+file whose own header says it knows nothing about `world::bounds`. With `fence_margin_m = 0` they
+coincide; with `500` the recovery returned the player to `(350.10, 120.50, -120.0)`, 0.1 m past the
+end of the coping with nothing under it, and he fell out again and had to be recovered twice.
+
+### The cause, in one sentence
+
+**A player outside the map's footprint is out of the world whatever his height**, and the recovery
+only knew how to ask "how far down".
+
+### The fix
+
+`player::recovery::out_of_the_world(map, p)` — **one pure function, called by both systems**, so the
+question is asked once and cannot drift (`CLAUDE.md` rule 5's corollary). It answers `UnderThePlane`
+below `recovery_plane_y_m` and `PastTheEdge` outside `map.size_m` **at any height**, and it reads
+`size_m` **alone**, which closes 4 as well.
+
+**The grace at the edge is zero, and the zero is derived, not chosen:** any grace of `g` metres is a
+standable ring `g` metres wide on the fence's top face, so the width of the grace is the width of
+the bug. It is affordable because the tolerance is on the inside — the fence's inner face stands
+`fence_margin_m` outside the map edge and the solver keeps a capsule's origin `player.radius_m`
+away from any solid face. Measured, not argued: a body flown into the fence at 75.000 m/s at six
+heights got no closer than **0.30 m inside** the boundary
+(`tests/player.rs::f012_a_body_driven_into_the_fence_at_top_speed_is_never_recovered`), and
+`tests/data.rs::f012_the_fence_stands_within_one_body_radius_of_the_map_edge` keeps the inequality
+true when somebody edits `maps.ron`.
+
+**`fence_top_m` stays 200**, and that is the answer and not an omission: a taller fence still has a
+top face, and the gear reaches 62 km, so every number is a number somebody beats. The fence's job is
+horizontal — it is what normal play runs into — and the footprint rule catches everything over it.
+The measurement now lives in `maps.ron: bounds.gear_ceiling_m` and
+`tests/player.rs::f012_the_gear_climbs_higher_than_the_fence_and_the_number_is_pinned` re-flies it,
+so the next person who lowers gas or raises boost finds out in a test rather than in the sky.
+
+### Where the fixtures hid it — the height was the axis every one of them held constant
+
+| fixture | what it pinned |
+|---|---|
+| `f012_flying_at_the_edge_at_top_speed_does_not_tunnel_through_it` | "the launch height (40 m)" |
+| `f012_walking_at_the_edge_of_the_map_does_not_walk_you_off_it` | `y = 2.0` for all four edges |
+| `f012_a_body_dropped_past_the_edge...` | drop height held at 20 m |
+| `scripts/f012-edge.txt` | three fence acts at y = 3, 122 and 190 — **all below 200** |
+
+Nothing anywhere compared `fence_top_m` against a measured ceiling of the gear. The new fixtures
+sweep **11 heights** from `fence_bottom_m + 5` to 902 m, and both new script acts stand above 200.
+
+**Repro (red before, green after):**
+`./target/debug/defeated_by_titan --headless --offscreen --script scripts/f012-edge.txt --ticks 5100`
+— with the footprint clause of `out_of_the_world` replaced by `false`, act 6 reads
+`assert Height < 122 — measured 200.000` (the ring) and act 7 reads `measured 556.326` (still out
+and climbing), exit **1**. With it, **20 asserts held**, exit **0**.
+
+**Evidence:** `scripts/f012-edge.txt` acts 6-7 · `tests/player.rs::f012_*` (13) ·
+`tests/world.rs::f012_*` (5) · `tests/data.rs::f012_*` (2) · `--lib` 281 · `--test world` 48 ·
+`--test data` 58 · `--test player` 70, all exit 0
+**Related:** `B-015` · `F-012` · `docs/FINDINGS.md` FIND-203, FIND-204 · `docs/QUESTIONS.md` Q-081
+
+---
+
+## B-017 — the fence's inner lip stands **exactly on the map's edge**, `|x| > hx` is strict, so the line |x| = 350.000 is a solid standable floor the world calls *in the world* — 🟧 FIXED 2026-08-29
+
+**The user, 2026-08-27:** *„unsichtbare wand + wenn man runterfaellt wegen bug teleport man
+zurueck!"* — this is the third defect in the second half of that sentence, and it was one
+character wide.
+
+### The repro, on the shipped binary and shipped Ashgate
+
+```bash
+./target/debug/defeated_by_titan --headless --script scripts/f012-edge.txt --ticks 6000
+# ACT 8 is the repro; it did not exist before 2026-08-29 and every fixture the feature had
+# held its one axis — the distance from the boundary — away from zero.
+```
+
+| stance | measured before |
+|---|---|
+| `warp 350 201 0` | rests at **200.000** after 3 s, **200.000** after 10 s |
+| all four sides and a corner | **200.000** |
+| `warp 349.999 201 0` | 199.965 — a millimetre inside |
+| 6 s of held `W` from (350, 201, 0) | still **200.000**. He can walk on it. |
+
+`src/player/recovery.rs::out_of_the_world` tests `p_m.x.abs() > hx` — **strictly** — and
+`assets/data/maps.ron` shipped `fence_margin_m: 0.0`, so the fence's inner face stood exactly on
+`hx`. The inner lip of its top face, the widest floor in the district, was therefore a
+coordinate the rule called *in the world*.
+
+### And it poisons the home, for the rest of the session
+
+`record_safe_ground` used the same predicate, so it **recorded the ring**. Park at (350, 201, 0)
+for 4 s, then fall from anywhere, and the game logs
+
+```
+back to Vec3(350.0, 200.49994, 0.0), the ground he stood on at tick 426
+```
+
+and every later recovery from any cause delivers the player onto the ledge. That falsifies
+`recovery.rs`'s own header — *"the place you get sent back to can never itself be a place you get
+sent back from"*. Reproduced under `--hub` as well.
+
+### And it loops, non-terminating
+
+From the ring, any lateral input nudges `x` from 350.000 to 350.1, `PastTheEdge` fires, the warp
+puts him at `safe + lift` = (350.0, 200.49994, 0) — **back on the lip** — he drops the half metre
+onto it and drifts out again. Counted in one run: **1501 warp lines, one per tick, 25.0 s of wall
+clock**, every one with the identical destination, plus 60 `warn!` lines per second.
+
+### The fix is three things, because the geometry alone is not enough
+
+1. **`fence_margin_m: 0.0 -> 0.18`** in both maps, bracketed by two measurements and not chosen:
+   `fence_rest_reach_m 0.10 < fence_margin_m 0.18 < player.radius_m 0.35`. ⚠️ **"Stand the fence
+   outside the footprint and the strict `>` covers all of it" is false** — a capsule rests on its
+   bottom sphere, which reaches `radius_m` over the lip, so a body a millimetre inside the map
+   still rested on the face at 349.938. What has to be cleared is how far back over the lip a
+   body can **park**, measured at **0.0000 m** over 44 stances (past the lip friction cannot hold
+   the tilted normal and every body slides off into the map), budgeted at 0.10.
+2. **`record_safe_ground` judges the destination and the whole body.** It asks
+   `out_of_the_world(recovery_destination(map, p) + body_reach)` — the point the recovery will
+   actually warp to, at the far corner of the capsule's own footprint. Without the body half a
+   body grounded on the lip was recorded at `(349.920, 199.950, 0)` — 200 m up with nothing
+   under it — in **4 of 20** stances at the smallest margin `tests/data.rs` allows.
+   ⚠️ A third condition, *"and he was not falling past it"* (`|vy| > gravity_m_s2 /
+   simulation_hz`), was written and then **removed**: the control run could not make it go red
+   in any legal configuration, and a fix without a failing test is a guess.
+3. **`recovery::Recoveries` bounds the loop at two warps.** Recorded ground, then the spawn
+   point, then one `error!` and silence until he is in the world again. What moves him down the
+   ladder is *whether the last recovery held* — out of the world again, within a second, still
+   within one body height of where the warp put him — and never a clock, because a fall 400 m
+   away eight ticks later is a different fall.
+
+**Evidence:** `tests/world.rs::f012_the_whole_top_face_of_the_fence_lies_outside_the_map_and_is_recovered_from`
+(**64 of 648** samples red, exactly the class the old fixture `continue`d past) ·
+`tests/player.rs::f012_the_top_of_the_fence_is_not_a_ring_you_can_stand_on_outside_the_map`
+(24 -> 64 samples, now including 0, ±1 ULP and ±1 mm) ·
+`f012_the_ground_he_is_sent_back_to_is_never_ground_he_can_be_sent_back_from` (**48 of 48** red) ·
+`f012_a_recovery_whose_destination_does_not_hold_is_not_repeated_every_tick` (300 warps -> 2) ·
+`f012_nothing_that_can_rest_on_the_fence_rests_inside_the_map` (the parking measurement) ·
+`tests/data.rs::f012_the_fence_stands_within_one_body_radius_of_the_map_edge` (the bracket).

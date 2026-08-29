@@ -152,6 +152,7 @@
 
 pub mod arm_aim;
 pub mod blade_pips;
+pub mod board;
 pub mod catch_band;
 pub mod crosshair;
 pub mod gas_bar;
@@ -175,6 +176,7 @@ impl Plugin for HudPlugin {
                 blade_pips::spawn_blade_pips,
                 health_bar::spawn_health_bar,
                 objective::spawn_objective,
+                board::spawn_board_panel,
                 crosshair::spawn_crosshair,
                 arm_aim::spawn_arm_aim,
                 catch_band::spawn_catch_band,
@@ -188,6 +190,11 @@ impl Plugin for HudPlugin {
                 blade_pips::update_blade_pips,
                 health_bar::update_health_bar,
                 objective::update_objective,
+                // `F-177`. It reads two answers other people already gave — `menu::board::Board`
+                // for "is he at the board" and `menu::lobby::chosen` for "which sortie" — and
+                // measures nothing itself. That is the corollary of rule 5 and it is the whole
+                // reason this element is four lines of decision and no geometry.
+                board::update_board_panel,
                 // `F-043`: sense, then show — the same two-step split the crosshair and the
                 // arm markers use, and for the same reason. What a hit *is* (word, size,
                 // colour) is then testable against a `HitFlash` set by hand, without a titan,

@@ -5,3 +5,26 @@
 play = "run --features wayland,audio"
 # Maschine A (debian, ohne Grafiksitzung): eine Skriptfahrt ohne Fenster
 drive = "run -- --headless --script"
+
+# ---------------------------------------------------------------------------------------
+# 🔴 THE MACHINE WAS SWAPPING, NOT BUSY — measured 2026-08-29 [offlinebot]
+# ---------------------------------------------------------------------------------------
+# The user: *„der pc ist nicht wirklich ausgleastet. dennoch ist vim am ruckeln."* He was
+# right, and the supervisor had been throttling the wrong resource for two days:
+#
+#   %Cpu(s): 10,3 us · 80,8 id · 5,7 wa      <- the CPU is IDLE
+#   swpd 10 274 052 KB  free 923 352 KB      <- 10 GB in swap, under 1 GB free
+#   si 39 628 KB/s                           <- and actively paging back IN
+#
+# `nice` orders CPU time and does nothing about memory or disk, so every `nice -n 15` in
+# this project was answering a question nobody had asked. What actually stutters an editor
+# on this box is its pages being evicted to make room for a linker.
+#
+# The linker is the memory hog: `[profile.dev]` builds every dependency at `opt-level = 3`
+# (deliberately — without it the game runs at 20 fps, see Cargo.toml) and the default `dev`
+# profile then asks for FULL debug info on all of it. `target/` had grown to **91 GB**.
+[target.x86_64-unknown-linux-gnu]
+# mold was installed on this machine and unused. Linking was the wall: six `rust-lld`
+# processes at 37-53 % CPU each were measured during one build.
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]

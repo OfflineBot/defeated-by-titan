@@ -77,10 +77,12 @@ use bevy::prelude::*;
 
 use crate::data::GameData;
 use crate::shared::{
-    AimPoint, ArmAim, Body, BodyGone, BodyId, BodyMask, Buttons, Hook, HookAnchored, HookArm,
+    AimPoint, ArmAim, Body, BodyGone, BodyId, Buttons, Hook, HookAnchored, HookArm,
     HookReleased, HookState, Intent, MissReason, PlayerId, PrevButtons, ReleaseReason, RopeLength,
     Side, SpatialIndex, Tick, AIM_RAY_SEES,
 };
+
+use super::hookable::{is_hookable, HookableSurfaces};
 
 /// Which button belongs to which arm. One place, so that left and right cannot drift apart.
 pub fn button(side: Side) -> Buttons {
@@ -162,6 +164,7 @@ pub fn miss_reason(aim: &AimPoint, anchorable_beyond_reach: bool) -> MissReason 
 fn anchorable_beyond_reach(
     space: &SpatialQuery,
     bodies: &Query<(&Body, Option<&BodyId>)>,
+    hookable: HookableSurfaces,
     player: Entity,
     from_m: Vec3,
     look: Vec3,
@@ -180,10 +183,17 @@ fn anchorable_beyond_reach(
     let Some(hit) = space.cast_ray(from_m, direction, reach_m, true, &filter) else {
         return false;
     };
-    // Anchorable **and** carried: exactly what `anchor_target` would have accepted, so the
+    // Hookable **and** carried: exactly what `anchor_target` would have accepted, so the
     // word "out of reach" is only ever said about a point that reach alone was in the way of.
+    //
+    // ⚠️ **The same predicate as `vector::aim::cast`, deliberately** (`Q-078`). This used to
+    // read the `ANCHORABLE` bit itself, which made it a second implementation of "may a hook
+    // take this" — and the corollary in `CLAUDE.md` rule 5 is about exactly that shape: two
+    // implementations of one question drift, and no sweep finds it because both are yours.
+    // With the switch it would have drifted on the first flip: the reason word would say
+    // "out of reach" about a surface the switch had turned off.
     match bodies.get(hit.entity) {
-        Ok((body, Some(_))) => body.mask.contains(BodyMask::ANCHORABLE),
+        Ok((body, Some(_))) => is_hookable(hookable, Some(body)),
         _ => false,
     }
 }
@@ -243,6 +253,10 @@ pub fn update_hooks(
     tick: Res<Tick>,
     time: Res<Time<Fixed>>,
     data: Res<GameData>,
+    // `Q-078`'s switch, read for the miss-reason probe below and for nothing else — the fire
+    // path itself re-casts nothing (decision 6) and takes the answer `vector::aim` already
+    // published in `ArmAim`.
+    hookable: Res<HookableSurfaces>,
     index: Res<SpatialIndex>,
     space: SpatialQuery,
     bodies: Query<(&Body, Option<&BodyId>)>,
@@ -313,6 +327,7 @@ pub fn update_hooks(
                                 && anchorable_beyond_reach(
                                     &space,
                                     &bodies,
+                                    *hookable,
                                     entity,
                                     hand_m,
                                     intent.look_dir(),
@@ -472,6 +487,7 @@ pub fn update_hooks(
                                     && anchorable_beyond_reach(
                                         &space,
                                         &bodies,
+                                        *hookable,
                                         entity,
                                         hand_m,
                                         intent.look_dir(),

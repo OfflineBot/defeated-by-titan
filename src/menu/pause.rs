@@ -32,9 +32,12 @@ use crate::shared::AbandonSortie;
 /// spelling the words a second time.
 ///
 /// Anything that tells the player where the mission list is quotes this constant rather than
-/// spelling the words a second time — today that is the pause column itself, and next it will be
-/// the **mission board in the hub** the user asked for on 2026-08-27 (*„wenn man in der hub auf
-/// ein board drückt (F) dann kommt man in eine mission übersciht"*, `Q-059`).
+/// spelling the words a second time — the pause column itself, and since 2026-08-28 the
+/// **mission board in the hub** the user asked for on 2026-08-27 (*„wenn man in der hub auf ein
+/// board drückt (F) dann kommt man in eine mission übersciht"*, `Q-062`): `hud::board` draws this
+/// exact string while you stand at the signpost, so a renamed row renames the prompt with it.
+/// ⚠️ This paragraph pointed at `Q-059` until then, which is about the **retired hub line** and
+/// not about the board — `F-177`'s question is `Q-062`.
 ///
 /// A screen that carries its own copy of a label is exactly how a renamed button ends up being
 /// promised somewhere it no longer exists — `FIND-178`, where the HUD lettered `Q`/`E` on a snap

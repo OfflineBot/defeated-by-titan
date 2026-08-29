@@ -158,6 +158,36 @@ pub struct SortieOrder {
     pub from_hub: bool,
 }
 
+/// **The mission board** — the signpost you press `F` at, and the second door into a sortie.
+///
+/// > *„wenn man in der hub auf ein board drueckt (F) dann kommt man in eine mission uebersciht
+/// > in der man auswaehlen kann was man machen will!"* — the user, 2026-08-27 (`Q-059`).
+///
+/// Three things about it are decisions and not details:
+///
+/// - **It draws nothing.** Every other trigger in this file spawns a [`Block`] to mark itself;
+///   this one does not, because the thing it marks is **already in the world**: `maps.ron:
+///   ashgate` places a 2.26 × 3.60 × 1.63 m signpost at the board's centre and calls it *"the
+///   first thing you see when you turn round"*. A second prop on top of it would be two objects
+///   in one place, and the survey that photographed *"a blank green signpost with no writing on
+///   it"* would have been photographing the wrong one.
+///   `tests/mission.rs::f177_the_board_stands_on_the_signpost_that_is_already_in_the_yard`
+///   is what keeps the two files pointing at the same spot.
+/// - **It is a `mission` component that `menu` reads**, and the key is `menu`'s. The board is a
+///   piece of hub furniture — it lives and dies with [`MissionPhase::Hub`] like the pads — but
+///   what it *opens* is a screen, and screens, the choice and every key that is not gameplay
+///   belong to `menu` (`menu::board`). So this struct carries only *where* and *how long*, and
+///   holds no idea of what a mission list is.
+/// - **`radius_m` is 3D**, exactly like [`DeploymentPoint`]'s: a player 40 m over the yard is
+///   not standing at a signpost.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct MissionBoard {
+    pub radius_m: f32,
+    /// How long `F` has to stay down before the highlighted sortie is deployed. Copied off
+    /// `missions.ron: hub.board` at spawn, the same way [`RefuelStation`] copies its rate.
+    pub hold_s: f32,
+}
+
 /// Half the height of a pad slab. It is flush with the ground on purpose: a pad you can trip
 /// over is a pad that changes how the hub walks.
 const PAD_HALF_HEIGHT_M: f32 = 0.1;
@@ -226,6 +256,17 @@ pub fn open_hub(
             DespawnOnExit(MissionPhase::Hub),
         ));
     }
+
+    // **The board — no `Block`, and that is the whole point of it.** The signpost is already
+    // standing here (`maps.ron: ashgate`, 2.26 x 3.60 x 1.63 m at this centre); what is missing
+    // is that pressing `F` at it does anything. So this spawns the trigger and nothing else.
+    let post = &hub.board;
+    commands.spawn((
+        Name::new("mission_board"),
+        MissionBoard { radius_m: post.radius_m, hold_s: post.hold_s },
+        Transform::from_translation(Vec3::from(post.center_m)),
+        DespawnOnExit(MissionPhase::Hub),
+    ));
 
     // Everybody lands at the hub's spawn point. Through `WarpPlayer` and not by writing the
     // `Transform` here: `player` is the writer of a player's position, the message is the seam

@@ -46,6 +46,7 @@
 //! What gets spawned is **data**, not meshes: `render` turns it into triangles without
 //! knowing this domain (`shared::Block`).
 
+pub mod bounds;
 pub mod index;
 pub mod map;
 pub mod supply;
@@ -69,7 +70,10 @@ impl Plugin for WorldPlugin {
         // The observer instead of `RemovedComponents` — reasoning in `world::index`.
         app.add_observer(index::on_body_removed);
 
-        app.add_systems(Startup, (map::build_map, supply::build_stations))
+        // `F-012` — the fence. Beside `build_map` and not inside it: it is not a block of the
+        // district, it is the district's limit, and it deliberately carries neither `Block`
+        // nor `Body` (`src/world/bounds.rs`).
+        app.add_systems(Startup, (map::build_map, supply::build_stations, bounds::build_bounds))
             .add_systems(
                 FixedUpdate,
                 (

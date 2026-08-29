@@ -148,6 +148,40 @@
             (center_m: (-42.0, 0.15, -2.0)),
             (center_m: (-42.0, 0.15,  2.0)),
         ],
+
+        // ---- The board — the second way in, and the only one that is a KEY ---------------
+        //
+        // „wenn man in der hub auf ein board drueckt (F) dann kommt man in eine mission
+        // uebersciht in der man auswaehlen kann was man machen will!" — the user, 2026-08-27
+        // (`docs/QUESTIONS.md` Q-059). The six pads above stay; this is the door for the
+        // player who does not want to walk to one, and it is the door he FINDS, because he
+        // said of the pads behind his back: „Lass es, ich dreh mich um."
+        //
+        // ⚠️ **These three numbers are a COPY of a box in `maps.ron`, and that is deliberate.**
+        // `maps.ron: ashgate` already places a signpost at (3.6, 1.8, -4.2), 2.26 x 3.60 x
+        // 1.63 m — „a signpost at the spawn (the first thing you see when you turn round)".
+        // The board adds no prop and no block: it is a trigger volume standing on the object
+        // that is already there, which is why the survey could photograph it before this line
+        // existed. The two files are held together by
+        // `tests/mission.rs::f177_the_board_stands_on_the_signpost_that_is_already_in_the_yard`
+        // — a placed block of exactly that size and colour has to be at exactly this centre,
+        // so moving the prop without moving this line is a red test and not a mystery.
+        //
+        // ⚠️ **radius 4.0 and not more**, and it is measured against the four scripted walking
+        // lanes of `maps.ron` (x = 0 z = 0..20, z = 0 x = 0..-47, and the two diagonals to
+        // (-10, 0, ±8)): the nearest of them passes 5.53 m from this centre, so a player
+        // holding `W` down one of them never enters the board's reach by accident. It is also
+        // more than the spawn point's own distance of 5.53 m, so the board is something you
+        // WALK to — one second of `W` — and not something you are standing in at t = 0.
+        //
+        // ⚠️ **hold_s 0.35** is what separates a tap from a hold. A tap steps the overview on
+        // by one, a hold deploys what it is showing. Both are the same key because that is the
+        // key he named, and a hold has no upper bound — it is a floor, not a timing window.
+        board: (
+            center_m: (3.6, 1.8, -4.2),
+            radius_m: 4.0,
+            hold_s: 0.35,
+        ),
     ),
 
     templates: {

@@ -71,6 +71,7 @@
 //! and leave again — and the walk-in pads keep working with no knowledge of it
 //! (`scripts/f070-hub.txt`, 35 asserts, untouched).
 
+pub mod board;
 pub mod debrief;
 pub mod lobby;
 pub mod pause;
@@ -97,6 +98,7 @@ impl Plugin for MenuPlugin {
             // the mouse sensitivity in **every** run, window or not.
             .init_resource::<PlayerSettings>()
             .init_resource::<lobby::LobbyChoice>()
+            .init_resource::<board::Board>()
             .init_resource::<SettingsFrom>()
             // **Says out loud which door this run came through**, once, at startup — and
             // outside the window gate on purpose. A `--headless` run draws no menu and can
@@ -118,6 +120,18 @@ impl Plugin for MenuPlugin {
                 OnExit(MissionPhase::Debrief),
                 debrief::close_the_debrief_screen.run_if(there_is_a_window),
             )
+            // ⭐ **The mission board, and it is the one system in this domain that runs with
+            // no window.** `--headless` and `--offscreen` have no window entity, so the whole
+            // chain below never runs there and no script can press a button on a plate that
+            // was never built (`FIND-189`). The board is a place in the world and a key on the
+            // keyboard, and both of those exist in every launch mode — which is why this is the
+            // only door into the mission overview a script can walk through. It writes `Screen`
+            // only where there is a window (`board::work_the_board`).
+            //
+            // `.before(toggle_screen)`: opening the board and the plate coming up belong in the
+            // same frame. The other direction — the plate going away taking the board with it —
+            // is allowed to be a frame late, and that is written down on the check itself.
+            .add_systems(Update, board::work_the_board.before(toggle_screen))
             .add_systems(
                 Update,
                 (

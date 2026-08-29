@@ -36,7 +36,7 @@
 //! `ReleaseReason::NoAnchor` — with all six tests above green. The four `t036a_*` tests at the
 //! bottom measure the index itself: id, count, mask, and the removal report.
 
-use avian3d::prelude::Collider;
+use avian3d::prelude::{Collider, RigidBody};
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
@@ -3256,4 +3256,304 @@ fn f156_no_dressing_row_can_be_mistaken_for_another_one() {
              catalogue answers {got:?} — the rows are not telling each other apart"
         );
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// F-012 — the fence, and the plane under it. The user, 2026-08-27:
+// *„und man kann an der seite einfach runterfallen!"* -> *„unsichtbare wand + wenn man
+// runterfaellt wegen bug teleport man zurueck!"*
+//
+// `tests/player.rs::f012_*` measures what happens to a body. What is measured here is the
+// SHAPE: that every map is closed on all four sides and in its corners, that the plane lies
+// under everything anybody can stand on, and that the fence is thick enough for the fastest
+// body the game allows. All three are properties of `assets/data/maps.ron`, so all three run
+// over **every map in the file** and not over `current` alone.
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn f012_every_map_is_fenced_on_all_four_sides_and_the_corners_are_closed() {
+    use defeated_by_titan::world::bounds::plan_fence;
+
+    // ## The variables, both lists, because a sweep's size is not its coverage
+    //
+    // What `plan_fence` reads: `Map::size_m` (both axes), `bounds.fence_margin_m`,
+    // `fence_thickness_m`, `fence_bottom_m`, `fence_top_m`.
+    // What this sweep varies: **every map in `maps.ron`** (so both `size_m` axes and every
+    // `bounds` block in the file), 40 compass bearings around the map (so both signs of both
+    // axes AND the four corners, which is where a 45-degree arrival meets the seam between two
+    // panels), 3 distances past the edge, and 5 heights spanning `fence_bottom_m` to
+    // `fence_top_m` — the axis a fence can be wrong about without any of the others noticing.
+    // What it holds constant: nothing that `plan_fence` reads. The probe geometry is derived
+    // from each map's own numbers, never typed.
+    // What it skips: nothing. `checked` is counted and asserted, so a `continue` that quietly
+    // emptied the sweep would show up as a number and not as a green run.
+    let d = data();
+    assert!(d.maps.maps.len() >= 2, "only {} map(s) — a sweep of one map is a sweep of one \
+             map's numbers", d.maps.maps.len());
+
+    let mut checked = 0usize;
+    let mut open: Vec<String> = Vec::new();
+
+    for (key, map) in &d.maps.maps {
+        let panels = plan_fence(map);
+        let b = &map.bounds;
+        let hx = map.size_m.0 * 0.5 + b.fence_margin_m;
+        let hz = map.size_m.1 * 0.5 + b.fence_margin_m;
+
+        for i in 0..40 {
+            let a = std::f32::consts::TAU * i as f32 / 40.0;
+            let (sx, sz) = (a.cos(), a.sin());
+            // The point on the rectangle's own outline in this bearing — not on a circle: a
+            // circle through the corners misses the flats and one through the flats misses the
+            // corners, and the corner is the case.
+            let scale = (hx / sx.abs().max(1e-6)).min(hz / sz.abs().max(1e-6));
+            let on_edge = Vec3::new(sx * scale, 0.0, sz * scale);
+            let dir = Vec3::new(sx, 0.0, sz).normalize();
+
+            for past_m in [0.5_f32, b.fence_thickness_m * 0.5, b.fence_thickness_m - 0.5] {
+                for k in 0..5 {
+                    let y = b.fence_bottom_m
+                        + (b.fence_top_m - b.fence_bottom_m) * (k as f32 + 0.5) / 5.0;
+                    let p = Vec3::new(on_edge.x, y, on_edge.z) + dir * past_m;
+                    checked += 1;
+                    let inside = panels.iter().any(|panel| {
+                        let h = panel.size_m * 0.5;
+                        (p - panel.center_m).abs().cmple(h).all()
+                    });
+                    if !inside {
+                        open.push(format!("{key}: {p:?} is past the edge and inside no panel"));
+                    }
+                }
+            }
+        }
+    }
+
+    assert_eq!(checked, d.maps.maps.len() * 40 * 3 * 5, "the sweep skipped samples");
+    assert!(
+        open.is_empty(),
+        "{} of {checked} probe points outside the map are in no fence panel — first three: \
+         {:?}",
+        open.len(),
+        &open[..open.len().min(3)]
+    );
+}
+
+#[test]
+fn f012_the_recovery_plane_lies_under_everything_a_map_can_be_stood_on() {
+    // ## THE DISCRIMINATOR, and it is the whole reason a legitimate 120 m dive is safe.
+    //
+    // A fall out of the world is told from a dive by **depth**. That only works while no
+    // surface in the map reaches down to the plane — otherwise somebody standing on the
+    // deepest thing in the district would be recovered off it, and the day that happens the
+    // symptom is "the game teleports me for no reason".
+    //
+    // What the answer depends on: `bounds.recovery_plane_y_m`, `fence_bottom_m`, and the
+    // underside of **every** block `world::map::plan_blocks` produces — placed and generated.
+    // What this varies: every map in the file, and every block in each of them.
+    // What it holds constant: nothing. The margin is stated as a number and not as a feeling.
+    const MARGIN_M: f32 = 100.0;
+
+    let d = data();
+    let mut counted = 0usize;
+    for (key, map) in &d.maps.maps {
+        let plan = plan_blocks(&d, map);
+        assert!(plan.len() > 10, "{key}: {} blocks — an empty plan proves nothing", plan.len());
+        let deepest = plan
+            .iter()
+            .map(|p| p.center_m.y - p.size_m.y * 0.5)
+            .fold(f32::INFINITY, f32::min);
+        counted += plan.len();
+
+        assert!(
+            map.bounds.recovery_plane_y_m < deepest - MARGIN_M,
+            "{key}: the recovery plane is at {} m and the deepest block underside at \
+             {deepest:.2} m. A plane within {MARGIN_M} m of the world's own floor stops being \
+             a statement about being OUT of the world",
+            map.bounds.recovery_plane_y_m
+        );
+        // And the fence has to reach below that floor, or a body can leave under the edge
+        // instead of over it.
+        assert!(
+            map.bounds.fence_bottom_m < deepest,
+            "{key}: the fence starts at {} m, above the deepest block underside {deepest:.2} m \
+             — there is a gap under the edge",
+            map.bounds.fence_bottom_m
+        );
+        // The plane is under the fence's own foot as well: a body between the two is outside
+        // the world sideways, and only the plane can bring it back.
+        assert!(
+            map.bounds.recovery_plane_y_m < map.bounds.fence_bottom_m,
+            "{key}: the recovery plane {} m is not below the fence foot {} m",
+            map.bounds.recovery_plane_y_m,
+            map.bounds.fence_bottom_m
+        );
+    }
+    assert!(counted > 100, "only {counted} blocks over all maps — the sweep is empty");
+}
+
+#[test]
+fn f012_the_fence_is_thicker_than_the_fastest_body_can_step_over() {
+    // Tunnelling, as arithmetic and not as a hope. `MaxLinearSpeed(vector.max_speed_m_s)` on
+    // the player is the hard ceiling (`f012_the_top_speed_is_clamped_and_not_merely_documented`
+    // in `tests/player.rs` measures it at exactly 75.0000 m/s), and avian advances a body by
+    // `v / (simulation_hz * substeps)` per substep.
+    //
+    // What the answer depends on: `vector.max_speed_m_s`, `simulation_hz`, `substeps`, and
+    // `bounds.fence_thickness_m` per map. What this varies: every map. Held constant: nothing
+    // — all four numbers are read out of the files.
+    let d = data();
+    let per_substep_m =
+        d.game.vector.max_speed_m_s / (d.game.simulation_hz as f32 * d.game.substeps as f32);
+    assert!(per_substep_m > 0.0, "the step budget came out as {per_substep_m} — nothing is \
+             being measured here");
+
+    for (key, map) in &d.maps.maps {
+        assert!(
+            map.bounds.fence_thickness_m > per_substep_m * 10.0,
+            "{key}: a fence {} m thick against {per_substep_m:.4} m per substep at \
+             {} m/s — fewer than ten substeps inside the wall is a wall a body can be \
+             solved through",
+            map.bounds.fence_thickness_m,
+            d.game.vector.max_speed_m_s
+        );
+    }
+}
+
+#[test]
+fn f012_the_fence_is_invisible_and_holds_nothing() {
+    // The three things that make it a *fence* and not a wall, all of which are the absence of
+    // a component and therefore all of which are invisible in a screenshot:
+    //
+    //   no `Block`         -> `render` never draws it (that is the whole of "invisible")
+    //   no `Body`          -> it never enters the `SpatialIndex`, gets no `BodyId`, and so can
+    //                         never be an anchor. `vector::hook` asks `bodies.get(hit.entity)`.
+    //   no `AnchorSurface` -> the same statement in the form `world::map` writes it
+    //
+    // And two that make it real: a `Collider` and a `RigidBody`.
+    let mut app = built_world();
+    let mut q = app
+        .world_mut()
+        .query::<(&Name, Option<&Block>, Option<&Body>, Option<&AnchorSurface>, Option<&Collider>, Option<&RigidBody>)>();
+    let panels: Vec<(String, bool, bool, bool, bool, bool)> = q
+        .iter(app.world())
+        .filter(|(n, ..)| n.as_str().starts_with("fence_"))
+        .map(|(n, block, body, anchor, collider, rigid)| {
+            (
+                n.to_string(),
+                block.is_some(),
+                body.is_some(),
+                anchor.is_some(),
+                collider.is_some(),
+                rigid.is_some(),
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        panels.len(),
+        4,
+        "{} fence panel(s) in the built world, not 4 — {panels:?}",
+        panels.len()
+    );
+    for (name, block, body, anchor, collider, rigid) in &panels {
+        assert!(!block, "{name} carries a `Block` — `render` would draw the invisible wall");
+        assert!(!body, "{name} carries a `Body` — it would enter the index and answer hooks");
+        assert!(!anchor, "{name} carries `AnchorSurface` — a rope would hold on nothing");
+        assert!(collider, "{name} has no `Collider` — the fence would not stop anybody");
+        assert!(rigid, "{name} has no `RigidBody` (see t007_every_world_collider_carries_one)");
+    }
+}
+
+#[test]
+fn f012_the_whole_top_face_of_the_fence_lies_outside_the_map_and_is_recovered_from() {
+    use defeated_by_titan::player::recovery::{OutOfWorld, out_of_the_world};
+    use defeated_by_titan::world::bounds::plan_fence;
+
+    // ## The shape behind the bug of 2026-08-28, and the ONE SAMPLE this fixture skipped.
+    //
+    // The fence's top face is a solid, invisible, **standable** ring `fence_thickness_m` wide
+    // at `fence_top_m`, running the whole way round the district. `out_of_the_world` is what
+    // closes it, and it tests `|x| > hx` — STRICTly.
+    //
+    // 🔴 Until 2026-08-29 this sweep `continue`d past every sample that landed on the inner
+    // line `|coord| == size_m / 2`, called them `on_the_line`, counted **64 of 648 (9.9 %)**,
+    // and justified the skip with an unmeasured sentence: *"A body cannot rest on a line."*
+    // **Those 64 were the defect.** `maps.ron` shipped `fence_margin_m: 0.0`, so the inner lip
+    // stood exactly on `hx`; `warp 350 201 0` on the shipped binary rested at 200.000 m after
+    // 3 s, after 10 s and after six seconds of held `W`, and `record_safe_ground` recorded it
+    // as home. The fixture even asserted `on_the_line > 0` as if reaching the defect and
+    // stepping over it were a good thing.
+    //
+    // The fix is geometry: `fence_margin_m > 0` stands the whole fence strictly outside the
+    // footprint, so the strict `>` already recovers from every point of it. This test is the
+    // guard, and it now judges **every** sample.
+    //
+    // What `plan_fence` reads: `Map::size_m`, `bounds.fence_margin_m`, `fence_thickness_m`,
+    // `fence_bottom_m`, `fence_top_m`. What `out_of_the_world` reads: `Map::size_m` and
+    // `bounds.recovery_plane_y_m`.
+    // What this sweep varies: every map in `maps.ron`, all four panels, and a 9 x 9 grid over
+    // each panel's top face — so both ends of every panel (the corners, where two panels
+    // overlap) and the full width **from the inner lip to the outer**, the lip included.
+    // What it holds constant: the height, at `fence_top_m` — that IS the face; the height axis
+    // over the whole map is `tests/player.rs::f012_the_map_footprint_is_the_world_at_every_height`.
+    // What it skips: **nothing.** There is no `continue` in this function any more, and
+    // `checked` is asserted against the sweep's own size so a skipped class cannot hide.
+    let d = data();
+    let mut standable = Vec::new();
+    let mut checked = 0usize;
+
+    for (key, map) in &d.maps.maps {
+        let (hx, hz) = (map.size_m.0 * 0.5, map.size_m.1 * 0.5);
+        // The lip has to clear the boundary by more than the float grid it is computed on:
+        // `plan_fence` builds it as `center -/+ size/2`, two roundings, and one ULP at 350 m
+        // is 2^-15 m. A margin of a few ULPs is a margin that does not exist.
+        let ulp = f32::from_bits(hx.to_bits() + 1) - hx;
+        assert!(
+            map.bounds.fence_margin_m > 4.0 * ulp,
+            "{key}: fence_margin_m is {} m and one ULP at the map's own edge ({hx} m) is \
+             {ulp:e} m. The fence's inner lip is computed as `center - size/2` — two roundings \
+             — so a margin of a few ULPs cannot be relied on to land outside `hx`, and the lip \
+             is then a standable floor the whole way round the district.",
+            map.bounds.fence_margin_m
+        );
+
+        for panel in plan_fence(map) {
+            let h = panel.size_m * 0.5;
+            let top_y = panel.center_m.y + h.y;
+            for i in 0..9 {
+                for j in 0..9 {
+                    let fx = i as f32 / 8.0 - 0.5;
+                    let fz = j as f32 / 8.0 - 0.5;
+                    let p = Vec3::new(
+                        panel.center_m.x + fx * panel.size_m.x,
+                        top_y,
+                        panel.center_m.z + fz * panel.size_m.z,
+                    );
+                    checked += 1;
+                    if out_of_the_world(map, p) != Some(OutOfWorld::PastTheEdge) {
+                        standable.push(format!(
+                            "{key}: {} at {p:?} — {:.6} m of clearance on x, {:.6} m on z",
+                            panel.name,
+                            p.x.abs() - hx,
+                            p.z.abs() - hz
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    assert_eq!(
+        checked,
+        d.maps.maps.len() * 4 * 81,
+        "the sweep lost samples: {checked} judged, and nothing in this function may skip one"
+    );
+    assert!(
+        standable.is_empty(),
+        "{} of {checked} points on the top face of a fence panel are NOT out of the world — a \
+         body that lands there is recorded by nothing and recovered by nothing, which is the \
+         200 m ring of 2026-08-28 and the inner lip of 2026-08-29: {:?}",
+        standable.len(),
+        &standable[..standable.len().min(3)]
+    );
 }

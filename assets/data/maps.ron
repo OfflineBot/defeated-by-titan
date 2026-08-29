@@ -367,6 +367,108 @@
             // `tests/player.rs` reason about `y = 0` on it, and a station is a thing in the
             // world with a trigger circle around it. It gets none. The stations stand in
             // `ashgate`, which is `current` and which is what a sortie is flown in.
+            // ---- F-012: where this map ENDS -----------------------------------------
+            // The user, 2026-08-27: *„und man kann an der seite einfach runterfallen!"*, and
+            // asked what should be there he named both halves:
+            // *„unsichtbare wand + wenn man runterfaellt wegen bug teleport man zurueck!"*
+            //
+            // They are two mechanisms and not one thing twice. The fence is what normal play
+            // runs into. The recovery plane is what catches somebody the fence has ALREADY
+            // failed to hold — a warp, a seam, a body that got put somewhere by hand. Written
+            // as "the wall, and then the wall again" this feature does nothing for the case it
+            // was actually asked for.
+            //
+            // ## fence_thickness_m 10.0 — a tunnelling budget, not a taste
+            //
+            // At `vector.max_speed_m_s` 75, `simulation_hz` 60 and `game.ron: substeps` 24, a
+            // body advances 75 / (60 * 24) = **0.0521 m per substep**. Ten metres is 192 of
+            // those, and `MaxLinearSpeed` on the player makes 75 a hard ceiling, so there is no
+            // faster case to budget for. `tests/world.rs` does this arithmetic rather than
+            // trusting this paragraph.
+            //
+            // ## fence_top_m 200.0 — and it is NOT a ceiling, because there is no such thing
+            //
+            // 🔴 It stood here under the sentence *"far above anything the gear reaches on gas
+            // alone"*, and that sentence was **false**. Measured 2026-08-28, `W` + `Shift` held
+            // from a standing start at (0, 2, 0), looking straight up:
+            //
+            //   1 s 12.2 · 2 s 49.9 · 3 s 54.6 · 4 s 71.7 · 5 s 114.5 · 6 s 182.5 ·
+            //   7 s 259.3 · 8 s 336.3 m — over this fence in **under seven seconds**
+            //
+            // and the gas for the first six of those seconds was 15000.000 -> 14891.771:
+            // **0.72 % of one tank.** Worse, there is no apex to quote: held long enough the
+            // body simply sits at `vector.max_speed_m_s` going up. Ten seconds of steady climb
+            // measured **748.9 m for 179.88 gas**, i.e. 4.163 m per unit of gas — so one full
+            // tank is worth **62 508 m** here (`gear_ceiling_m` below, and
+            // `tests/player.rs::f012_the_gear_climbs_higher_than_the_fence_and_the_number_is_pinned`
+            // re-flies it every run). The 200 here is beaten by a factor of **313**.
+            //
+            // ⚠️ **And raising it is not the fix, which is why it did not get raised.** A taller
+            // fence still has a top face, and that top face is a solid, invisible, standable
+            // ring `fence_thickness_m` wide OUTSIDE the map: a body put on it at 200 m rested
+            // there indefinitely, recorded by nothing and recovered by nothing. Every height is
+            // a height somebody beats, and each one brings its own ledge.
+            //
+            // What closes it is `player::recovery::out_of_the_world`: **outside the map's own
+            // footprint is out of the world at any height.** That leaves this number free to be
+            // what it should have been all along — as tall as normal play needs and no taller,
+            // which on a 400 x 400 m graybox whose tallest box is 60 m means five times the skyline and
+            // nothing more.
+            //
+            // It stops where it does for a second reason that is measured and not aesthetic:
+            // the fence is a collider, so an aim ray sees it, and
+            // `tests/vector_hooks.rs::f028_a_failed_pull_says_which_of_the_four_it_was` fires
+            // a level ray from **400 m** up and needs the answer "open sky" and then "out of
+            // reach" from a wall 900 m out. A fence to infinity turns both of those into
+            // "the surface holds nothing" — the feature would have broken the test that
+            // exists to keep the four miss reasons apart.
+            //
+            // ## recovery_plane_y_m — a DEPTH, and that is the whole discriminator
+            //
+            // Not a fall distance and not a speed: a player diving off the 120 m wall is not
+            // falling out of the world, and the only thing that separates the two honestly is
+            // how far down he gets. The plane sits under the deepest block this map has (see
+            // the per-map number below), so no surface in the game can be reached from below
+            // it, and `tests/world.rs` asserts exactly that against the planned geometry.
+            //
+            // Graybox is 400 x 400 m: the ground slab ends at +-200 and its underside is at
+            // -0.2 m. The plane is 300 m down, ~1500x the deepest thing here.
+            bounds: (
+                // ## fence_margin_m 0.18 — DERIVED, bracketed by two measurements, and 0.0 was
+                // ## a shipped bug for two days
+                //
+                // 🔴 It was 0.0, i.e. the fence's inner face stood exactly ON the map's edge —
+                // and `player::recovery::out_of_the_world` tests `|x| > hx`, STRICTly. The
+                // fence's top face is the widest floor in the district and it began at a
+                // coordinate the rule called *in the world*: `warp 350 201 0` rested at
+                // **200.000 m** after 3 s, after 10 s and after six seconds of held `W`,
+                // `record_safe_ground` made it home ("back to Vec3(350.0, 200.49994, 0.0)"),
+                // and from then on every recovery of the session delivered the player onto
+                // that ledge. From it, one nudge outward warped him **1501 times in 25 s**.
+                //
+                // Moving the fence out is the fix, but the size of the move is not free: a
+                // capsule rests on its bottom sphere, which reaches over the lip. So
+                //
+                //     fence_rest_reach_m 0.10  <  fence_margin_m 0.18  <  radius_m 0.35
+                //
+                // and 0.18 is the geometric middle of the two — either bound has to move by a
+                // factor of ~1.9 before it bites. Below it a body can park on the fence inside
+                // the footprint; above it a body pressed against the fence has his origin
+                // outside the map and legitimate play gets teleported.
+                // ⚠️ The 0.18 m gap between the ground's edge and the fence is not a hole
+                // anybody can fall into: a body is 0.70 m wide.
+                fence_margin_m: 0.18,
+                // ## fence_rest_reach_m 0.10 — A MEASUREMENT (see maps.ron's sibling comment
+                // in the ashgate block and `src/data/mod.rs: Bounds`). Graybox's fence, body
+                // and solver are the same as Ashgate's, so the number is the same.
+                fence_rest_reach_m: 0.10,
+                fence_thickness_m: 10.0,
+                fence_bottom_m: -50.0,
+                fence_top_m: 200.0,
+                gear_ceiling_m: 62508.0,
+                recovery_plane_y_m: -300.0,
+                recovery_lift_m: 0.5,
+            ),
             supply_stations: [],
         ),
 
@@ -1517,6 +1619,140 @@
             // y = 2.0, not 0: the trigger is a 6 m sphere (gear.ron: resupply.station_radius_m)
             // measured in 3D from the centre, so lifting it clear of the ground slab gives a
             // player who arrives 4 m up the same catch as one who lands on it.
+            // ---- F-012: where this map ENDS -----------------------------------------
+            // The user, 2026-08-27: *„und man kann an der seite einfach runterfallen!"*, and
+            // asked what should be there he named both halves:
+            // *„unsichtbare wand + wenn man runterfaellt wegen bug teleport man zurueck!"*
+            //
+            // They are two mechanisms and not one thing twice. The fence is what normal play
+            // runs into. The recovery plane is what catches somebody the fence has ALREADY
+            // failed to hold — a warp, a seam, a body that got put somewhere by hand. Written
+            // as "the wall, and then the wall again" this feature does nothing for the case it
+            // was actually asked for.
+            //
+            // ## fence_thickness_m 10.0 — a tunnelling budget, not a taste
+            //
+            // At `vector.max_speed_m_s` 75, `simulation_hz` 60 and `game.ron: substeps` 24, a
+            // body advances 75 / (60 * 24) = **0.0521 m per substep**. Ten metres is 192 of
+            // those, and `MaxLinearSpeed` on the player makes 75 a hard ceiling, so there is no
+            // faster case to budget for. `tests/world.rs` does this arithmetic rather than
+            // trusting this paragraph.
+            //
+            // ## fence_top_m 200.0 — and it is NOT a ceiling, because there is no such thing
+            //
+            // 🔴 It stood here under the sentence *"far above anything the gear reaches on gas
+            // alone"*, and that sentence was **false**. Measured 2026-08-28, `W` + `Shift` held
+            // from a standing start at (0, 2, 0), looking straight up:
+            //
+            //   1 s 12.2 · 2 s 49.9 · 3 s 54.6 · 4 s 71.7 · 5 s 114.5 · 6 s 182.5 ·
+            //   7 s 259.3 · 8 s 336.3 m — over this fence in **under seven seconds**
+            //
+            // and the gas for the first six of those seconds was 15000.000 -> 14891.771:
+            // **0.72 % of one tank.** Worse, there is no apex to quote: held long enough the
+            // body simply sits at `vector.max_speed_m_s` going up. Ten seconds of steady climb
+            // measured **748.9 m for 179.88 gas**, i.e. 4.163 m per unit of gas — so one full
+            // tank is worth **62 580 m** here (`gear_ceiling_m` below, and
+            // `tests/player.rs::f012_the_gear_climbs_higher_than_the_fence_and_the_number_is_pinned`
+            // re-flies it every run). The 200 here is beaten by a factor of **313**.
+            //
+            // ⚠️ **And raising it is not the fix, which is why it did not get raised.** A taller
+            // fence still has a top face, and that top face is a solid, invisible, standable
+            // ring `fence_thickness_m` wide OUTSIDE the map: a body put on it at 200 m rested
+            // there indefinitely, recorded by nothing and recovered by nothing. Every height is
+            // a height somebody beats, and each one brings its own ledge.
+            //
+            // What closes it is `player::recovery::out_of_the_world`: **outside the map's own
+            // footprint is out of the world at any height.** That leaves this number free to be
+            // what it should have been all along — as tall as normal play needs and no taller,
+            // 80 m over the 120 m wall, so that walking and swinging along the coping meet a wall and
+            // not a teleport.
+            //
+            // It stops where it does for a second reason that is measured and not aesthetic:
+            // the fence is a collider, so an aim ray sees it, and
+            // `tests/vector_hooks.rs::f028_a_failed_pull_says_which_of_the_four_it_was` fires
+            // a level ray from **400 m** up and needs the answer "open sky" and then "out of
+            // reach" from a wall 900 m out. A fence to infinity turns both of those into
+            // "the surface holds nothing" — the feature would have broken the test that
+            // exists to keep the four miss reasons apart.
+            //
+            // ## recovery_plane_y_m — a DEPTH, and that is the whole discriminator
+            //
+            // Not a fall distance and not a speed: a player diving off the 120 m wall is not
+            // falling out of the world, and the only thing that separates the two honestly is
+            // how far down he gets. The plane sits under the deepest block this map has (see
+            // the per-map number below), so no surface in the game can be reached from below
+            // it, and `tests/world.rs` asserts exactly that against the planned geometry.
+            //
+            // Ashgate is 700 x 700 m: the two ground slabs end at +-350 and the deepest block
+            // in the file is the channel floor, underside **-4.2 m**. The plane at -300 is
+            // 295.8 m below it. ⚠️ It is also below where `scripts/f030-hitbox.txt` flies:
+            // that script warps into the void at z = 600..1200 and falls to about **-153 m**
+            // during its longest act, so it clears the plane by 147 m and keeps working. A
+            // shallower plane would have recovered the player in the middle of a hitbox
+            // measurement (`docs/FINDINGS.md` FIND-199).
+            bounds: (
+                // ## fence_margin_m 0.18 — DERIVED, bracketed by two measurements, and it is
+                // ## the one-character bug of 2026-08-29
+                //
+                // 🔴 It was 0.0: the fence's inner face stood exactly ON the map's edge, and
+                // `player::recovery::out_of_the_world` tests `|x| > hx`, **strictly**. So the
+                // line |x| = 350.000 — the inner lip of the widest floor in the district — was
+                // a solid invisible standable surface the rule called *in the world*. Measured
+                // on the shipped binary: `warp 350 201 0` rested at **200.000** after 3 s and
+                // after 10 s, all four sides and a corner the same, 6 s of held `W` did not
+                // move him; `warp 349.999 201 0` rested at 199.965, a millimetre inside.
+                // `record_safe_ground` then made the ring home — "back to Vec3(350.0,
+                // 200.49994, 0.0), the ground he stood on at tick 426" — and every later
+                // recovery of the session, from any cause, delivered the player onto the ledge.
+                // One nudge outward from it warped him **1501 times, one per tick, 25.0 s**.
+                //
+                // ## Why the move is 0.18 m and not "any number above zero"
+                //
+                // Because a capsule does not rest on the point under its origin; it rests on
+                // its bottom sphere, and that sphere reaches over the lip. Two measurements
+                // bracket the number, both against avian and neither argued:
+                //
+                //     fence_rest_reach_m 0.10  <  fence_margin_m 0.18  <  radius_m 0.35
+                //
+                //   * below — `fence_rest_reach_m`, the budget for how far back over the lip a
+                //     body may PARK. Measured 0.0000 m today: a body set down or dropped
+                //     anywhere inside the lip slides off and falls into the map, because past
+                //     the lip the contact normal tilts too far for friction to hold him. The
+                //     budget is held at 0.10 because that number is avian's and not ours.
+                //   * above — the solver holds a body pressed against the fence's inner face
+                //     exactly `radius_m` inside it: **-0.3500 m** relative to the map's edge at
+                //     `vector.max_speed_m_s`, to four decimals, at every height below the top
+                //     face. A margin at or over 0.35 puts a legitimately fenced-in player
+                //     outside the footprint and teleports him for playing.
+                //
+                // 0.18 is the geometric middle: either bound has to move by ~1.9x before it
+                // bites, and both have a test that re-measures rather than a sentence.
+                // ⚠️ The 0.18 m gap this opens between the ground's edge and the fence is not
+                // a hole anybody can fall into — a body is 0.70 m wide — and it is 250 m deep
+                // only in the sense that the fence spans -50 .. 200 m beside it.
+                fence_margin_m: 0.18,
+                // ## fence_rest_reach_m 0.10 — A MEASUREMENT, pinned the way gear_ceiling_m is
+                //
+                // How far back over the fence's inner lip a body may PARK — come to rest on
+                // the top face and still be there ten seconds later — before `fence_margin_m`
+                // stops covering it. **Measured 0.0000 m** on 2026-08-29 over 44 stances: past
+                // the lip the contact normal tilts too far for friction and every body slid
+                // off into the map. Held at 0.10 as budget, because friction is avian's number
+                // and not ours, and because a 0.0892 m reading earlier the same day turned out
+                // to be a fixture measuring a corner (`f32::signum(0.0)` is 1.0).
+                // `tests/player.rs::f012_nothing_that_can_rest_on_the_fence_rests_inside_the_map`
+                // re-measures it against a fence built 50 m INSIDE the map — where the recovery
+                // cannot reach the bodies and therefore cannot flatter the number — and goes
+                // red if the capsule, the friction or the solver ever move it. Re-measure and
+                // write the new number here; that is the whole ritual.
+                fence_rest_reach_m: 0.10,
+                fence_thickness_m: 10.0,
+                fence_bottom_m: -50.0,
+                fence_top_m: 200.0,
+                gear_ceiling_m: 62580.0,
+                recovery_plane_y_m: -300.0,
+                recovery_lift_m: 0.5,
+            ),
             supply_stations: [
                 // 🔴 **z = 45 and NOT z = 20, and a test is why.** The first placement put it
                 // at z = 20 — 4.47 m from the `recruit` deployment pad at (0, 0, 16), which is

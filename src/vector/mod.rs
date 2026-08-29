@@ -20,6 +20,7 @@
 //! | File | F-ID | writes |
 //! |---|---|---|
 //! | `aim.rs` | `F-002`, `F-003` | `AimPoint` |
+//! | `hookable.rs` | `F-003` (`Q-078`) | nothing — one predicate, and the switch behind it |
 //! | `gas.rs` | `F-018` | `Gas`, `GasGrant` |
 //! | `hook.rs` | `F-001` | `Hook`, `PrevButtons` |
 //! | `boost.rs` | `F-007`, `F-008` (the impulse) | `BoostAccel` |
@@ -35,6 +36,7 @@ pub mod hook;
 pub mod boost;
 pub mod dodge;
 pub mod aim;
+pub mod hookable;
 
 use bevy::prelude::*;
 
@@ -51,6 +53,13 @@ impl Plugin for VectorPlugin {
         // able to exist without the one system that applies it. Registering a message twice is
         // a no-op in Bevy, so moving the line to `lib.rs` later costs nothing.
         app.add_message::<RefuelRequest>();
+
+        // **`Q-078`: what a hook may take hold of.** Everything, today — the resource exists
+        // so that *„spaeter soll man auch bestimmte sachen toggeln koennen"* costs one value
+        // and no code (`vector::hookable`). It is registered here rather than in `src/lib.rs`
+        // for the same reason `RefuelRequest` is: it decides a rule this domain is the only
+        // reader of, and a switch that can be missing is a switch whose default is invisible.
+        app.init_resource::<hookable::HookableSurfaces>();
 
         app.add_systems(FixedUpdate, aim::aim.in_set(SimulationSystems::World))
             // `.chain()`: the tank is topped up BEFORE this tick's spending is booked, and the

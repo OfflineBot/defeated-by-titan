@@ -1729,3 +1729,109 @@ fn the_png_decoder_is_an_explicit_feature_and_not_a_transitive_one() {
          and a missing decoder is silent (docs/models.md)"
     );
 }
+
+#[test]
+fn f012_the_fence_stands_within_one_body_radius_of_the_map_edge() {
+    // ## The bracket that pays for the ZERO grace in `player::recovery::out_of_the_world`.
+    //
+    // A player is out of the world the moment his origin is past `map.size_m / 2`, with no
+    // tolerance at all — a grace of `g` metres is a standable ring `g` metres wide somewhere.
+    // What makes zero affordable is where the fence stands, and that is bracketed on BOTH
+    // sides. Neither bound is a taste; both are measured, and the file the numbers live in
+    // carries the derivation:
+    //
+    //     fence_rest_reach_m  <  fence_margin_m  <  game.ron: player.radius_m
+    //         0.10 m                 0.18 m                    0.35 m
+    //
+    // 🔴 **The lower bound is the bug of 2026-08-29 and it was a single character.** With
+    // `fence_margin_m: 0.0` the fence's inner face stood exactly ON the map's edge, and
+    // `out_of_the_world` tests `|x| > hx` — **strictly**. So the inner lip of the fence's top
+    // face, the line |x| = 350.000, was a solid invisible standable floor the rule called *in
+    // the world*: `warp 350 201 0` rested at 200.000 m after 3 s and after 10 s, six seconds of
+    // held `W` did not move him, `record_safe_ground` made it home, and every later recovery of
+    // the session delivered the player onto the ledge. One nudge outward from it produced 1501
+    // warps in 25 s.
+    //   `tests/player.rs::f012_nothing_that_can_rest_on_the_fence_rests_inside_the_map` measures
+    //   this bound against the solver, with the fence deliberately built 50 m INSIDE the map so
+    //   the recovery cannot flatter the number.
+    //
+    // 🔴 **The upper bound is the mirror image, and it was one RON edit away the day before.**
+    // The solver keeps a capsule's origin exactly `radius_m` inside any solid face — measured
+    // **-0.3500 m** relative to the map's edge at `vector.max_speed_m_s`, to four decimals — so
+    // the largest `|x|` a legitimate body can reach is `hx + fence_margin_m - radius_m`. At or
+    // above `radius_m` that is outside the map, and a player pressed against the fence gets
+    // teleported for playing.
+    //   `tests/player.rs::f012_a_body_driven_into_the_fence_at_top_speed_is_never_recovered` is
+    //   that measurement, and it now derives its own threshold from this margin.
+    //
+    // What this reads: `bounds.fence_margin_m`, `bounds.fence_rest_reach_m` per map, and
+    // `game.player.radius_m`.
+    // What it varies: every map in `maps.ron`. What it holds constant: nothing.
+    // What it skips: nothing — `checked` is counted and asserted.
+    let d = data();
+    let r = d.game.player.radius_m;
+    assert!(r > 0.0, "game.ron: player.radius_m is {r} — the derivation below needs a body");
+
+    let mut checked = 0usize;
+    for (key, map) in &d.maps.maps {
+        checked += 1;
+        let m = map.bounds.fence_margin_m;
+        let reach = map.bounds.fence_rest_reach_m;
+        assert!(
+            reach > 0.0,
+            "{key}: fence_rest_reach_m is {reach} — it is the budget for how far back over the \
+             fence's lip a body may park, and a budget of zero cannot be exceeded, so the \
+             lower bound below would be unpaid for"
+        );
+        assert!(
+            m > reach,
+            "{key}: fence_margin_m is {m} m and fence_rest_reach_m is {reach} m. The fence's \
+             inner lip then stands where a body can park on its top face with his origin still \
+             INSIDE the {} x {} m footprint, where `player::recovery::out_of_the_world` calls \
+             him in the world and nothing ever comes to get him. That is the 200 m ring of \
+             2026-08-28 and the |x| = 350.000 lip of 2026-08-29, with a smaller radius.",
+            map.size_m.0,
+            map.size_m.1
+        );
+        assert!(
+            m < r,
+            "{key}: fence_margin_m is {m} m and player.radius_m is {r} m. A body pressed \
+             against the fence then has his origin {:.2} m OUTSIDE the map's own edge, and \
+             `player::recovery::out_of_the_world` — which allows no tolerance there, because \
+             any tolerance is a ledge — would recover him for playing.",
+            m - r
+        );
+    }
+    assert_eq!(checked, d.maps.maps.len(), "the sweep skipped maps");
+    assert!(checked >= 2, "only {checked} map(s) — a sweep of one map is a sweep of one map");
+}
+
+#[test]
+fn f012_every_map_declares_a_measured_gear_ceiling_far_above_its_fence() {
+    // `bounds.gear_ceiling_m` is a MEASUREMENT (see `maps.ron`), and this file's job is only
+    // that it is present, positive and not quietly set to something that would make
+    // `tests/player.rs::f012_the_gear_climbs_higher_than_the_fence_and_the_number_is_pinned`
+    // pass by being vacuous — a declared ceiling of 0 would give that test a 5 % band of 0 m.
+    //
+    // What it reads: `bounds.gear_ceiling_m` and `bounds.fence_top_m`. What it varies: every
+    // map. What it holds constant: nothing. What it skips: nothing.
+    let d = data();
+    for (key, map) in &d.maps.maps {
+        let b = &map.bounds;
+        assert!(
+            b.gear_ceiling_m > b.fence_top_m,
+            "{key}: gear_ceiling_m {} m is not above fence_top_m {} m. Measured 2026-08-28 the \
+             gear passes a 200 m fence in under seven seconds for 0.72 % of a tank and one full \
+             tank is worth 62 km — if this really changed, re-fly it and say so here, because \
+             `maps.ron` and `player::recovery` both carry the sentence that it is true.",
+            b.gear_ceiling_m,
+            b.fence_top_m
+        );
+        assert!(
+            b.recovery_lift_m > 0.0,
+            "{key}: recovery_lift_m {} — a body put back exactly into the floor is a body the \
+             solver has to push out",
+            b.recovery_lift_m
+        );
+    }
+}

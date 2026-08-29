@@ -12704,7 +12704,7 @@ whose justification is a sentence about physics is a number nobody measured.**
 
 ---
 
-## FIND-204 — foreign territory: three scripts use "outside the map" as an empty stage, and the footprint rule now recovers them on the next tick
+## FIND-204 — foreign territory: three scripts use "outside the map" as an empty stage, and the footprint rule now recovers them on the next tick — ✅ CLOSED 2026-08-29 (all three re-aimed onto the boulevard; 0 warps each; see `FIND-207`)
 
 **Not fixed here** — `scripts/` outside `f012-edge.txt` was not this round's to touch. Recorded so
 it is not discovered as a mystery.
@@ -12735,3 +12735,108 @@ the exact command the user's bug arrives through, and the grace it would need is
 top of the fence (`B-016`).
 
 **Related:** `B-016` · `FIND-199` · `F-012` · `F-028` `F-030` `F-032`
+
+---
+
+## FIND-205 — "move the fence off the boundary" does **not** close the ring: a capsule rests on its bottom sphere, which reaches `radius_m` over the lip
+
+**Measured 2026-08-29**, and it refuted the obvious fix inside twenty minutes of running it.
+
+`B-017`'s defect is that the fence's inner lip stood exactly on `hx` while
+`out_of_the_world` tests `|x| > hx` strictly. The natural fix is *"stand the fence strictly
+outside the footprint, then the strict `>` already recovers from every point of it"*. **It is
+wrong, and the size of the move is not free.**
+
+A capsule does not rest on the point under its origin. With `fence_margin_m: 0.0`:
+
+| put at | came to rest at |
+|---|---|
+| `(349.999, 201, 0)` — a **millimetre inside** the map | `(349.938, 199.994, 0)`, on the fence's top face |
+| `(350.000, 201, 0)` | `(350.0, 199.99994, 0)` |
+
+**48 of 48** stances in `f012_the_ground_he_is_sent_back_to_is_never_ground_he_can_be_sent_back_from`
+left `SafeGround` pointing at the face. Moving the fence out by one ULP (3.05e-5 m at 350 m)
+would have changed **nothing**: the number to clear is not the float grid.
+
+### The bracket, and both ends are measurements
+
+```
+   fence_rest_reach_m  <  fence_margin_m  <  player.radius_m
+        0.10 m               0.18 m              0.35 m
+```
+
+- **Below**, how far back over the lip a body can **park** — come to rest and still be there ten
+  seconds later. Measured **0.0000 m** over 44 stances: past the lip the contact normal tilts too
+  far for friction and every body slides off into the map. Held at 0.10 as budget, because
+  friction is avian's number and not ours.
+- **Above**, `player.radius_m`: the solver holds a body pressed against the fence's inner face
+  exactly a radius inside it — **-0.3500 m** relative to the map edge at `vector.max_speed_m_s`,
+  to four decimals, so its penetration at the clamp is zero. At or over 0.35 a legitimately
+  fenced-in player is outside the footprint and gets teleported for playing.
+
+0.18 is the geometric middle: either bound has to move by ~1.9x before it bites.
+
+### ⚠️ The corollary that cost the most time: **geometry alone is not the fix**
+
+The window is only 3.5x wide, and it does **not** cover being `Grounded`: a body sliding off the
+lip stays `Grounded` the whole way down, because its bottom sphere keeps touching the box's edge.
+So `record_safe_ground` took stances **0.2590 m** back over the lip, at y = 199.886 — 200 m up
+with nothing under them. The margin cannot close that; the recorder has to. It now judges
+`recovery_destination(p) + one body radius outward` — **the whole body at the place he would be
+put down** — because the origin alone cannot tell a stance on the map's own ground from a stance
+on the fence's lip: the capsule that could be resting on either is the same size.
+
+⚠️ **And the control run deleted the other half of that fix.** A velocity gate — *"refuse a
+stance he is falling past"*, `|vy| > gravity_m_s2 / simulation_hz` — was written against the same
+measurement and then could not be made to go red in **any** legal configuration, because the body
+condition already covers every stance it would have refused. It was removed rather than shipped
+(`CLAUDE.md` rule 5: a fix without a red test is a guess). The body condition itself is paid for
+by `f012_at_the_smallest_legal_fence_margin_the_recorder_still_keeps_nothing_on_the_fence`, which
+goes red at **4 of 20** with one line reverted.
+
+## FIND-206 — the fourth `continue`: **64 of 648 skipped samples WERE the defect**, and the fixture asserted that it had reached them
+
+`CLAUDE.md` rule 5's fourth shape, now measured for the second time on the same feature.
+
+`tests/world.rs::f012_the_whole_top_face_of_the_fence_lies_outside_the_map_and_is_recovered_from`
+swept every fence panel's top face and `continue`d past every sample landing on the inner line
+`|coord| == size_m / 2`, counting them as `on_the_line`. It justified the skip with an unmeasured
+sentence — *"A body cannot rest on a line"* — and then **asserted `on_the_line > 0`**, as if
+reaching the defect and stepping over it were proof of coverage.
+
+Deleting the two `continue`s: **64 of 648 (9.9 %) fail**, and they are exactly `B-017`. The
+sentence was false: a body put on that line rested there for ten seconds and could be walked on.
+
+Its sibling `tests/player.rs::f012_the_top_of_the_fence_is_not_a_ring_you_can_stand_on_outside_the_map`
+dropped bodies at `across ∈ {0.5, 3.33, 6.67}` m **outward only, never at 0**, under a comment
+that said *"What it skips: nothing."* It now samples `{-1 mm, -1 ULP, 0, +1 ULP, +1 mm, 0.5, t/3,
+2t/3}`, 24 -> 64 stances.
+
+**The habit:** when a rule is an inequality, the sweep's first three samples are the boundary
+itself and one ULP either side. A `continue` that names a sample class is a claim about that
+class, and a claim needs a measurement.
+
+### And a fifth shape, cheap and embarrassing: **`f32::signum(0.0)` is `1.0`**
+
+A bearing vector written `Vec3::new(lip.x.signum(), 0.0, lip.z.signum()).normalize()` comes out
+**diagonal** for the four flat bearings, so a sweep that says "+x" measures a corner. It reported
+a 0.3721 m overhang that was 0.7071 of a corner distance, and an earlier 0.0892 m "friction
+reach" that was the same artefact. The form that works, and the one the rest of the F-012
+fixtures already used, is `x.signum() * x.abs().min(1.0)`.
+
+## FIND-207 — foreign territory: `scripts/f028-why.txt` measures a verdict the game no longer gives — a titan **anchors** a hook now
+
+Re-aiming `f028-why.txt` (see `FIND-204`, now closed) put its act 2 back where it was written for
+— husk 6 m in front, on the boulevard — and the run reads
+
+```
+hook Left of player 1 left the hand: 6.20 m, 1 ticks to the anchor
+hook Left of player 1 anchored on body 2902 at 0.00 5.64 -88.50
+```
+
+i.e. **anchored on the titan**. The script's whole premise is the opposite:
+*"a titan carries no `shared::Body`, so the ray ends on a surface that holds nothing —
+SurfaceHoldsNothing"* (`B-007`). `F-024` retired the anchor field in favour of surfaces, and the
+titan appears to have gained a `Body` with it. Not touched here: `src/vector/**` and
+`src/titan/**` are another stream's. Either the script's expectation is stale or `B-007` has
+silently reopened in the other direction, and one of the two has to be written down.

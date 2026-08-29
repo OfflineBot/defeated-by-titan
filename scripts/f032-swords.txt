@@ -22,6 +22,26 @@
 # (`scale.ron`), so his ONE body collider is a capsule of radius 1.25 m about his axis
 # (`src/titan/rig.rs:358`). Everything below is derived from those two numbers:
 #
+# ## 🔴 WHERE THE FIVE ACTS STAND, and it changed on 2026-08-29
+#
+# They stood at `z` 0, 150, 300, **450 and 600** — and Ashgate is 700 x 700 m, so the last two
+# were 100 and 250 m OUTSIDE the map. `F-012`'s recovery teleported the player home on the next
+# tick, twice per run, and because no act here asserts a position the file went on measuring a
+# player who had been moved: acts D and E were flown from `(-1.80, 2.00, 300)`, the previous
+# act's ground, and still exited with the same numbers.
+#
+# The five lanes now run along the **boulevard** `(0, -0.1, -83.75) x (700, 0.3, 27.5)` — a
+# cleared paved strip across the full width of the district, no house on it and no terrace over
+# it. Probed 2026-08-29 at x = -300, -200, -100, 0, 100, 200, 300: the resting height is
+# **0.050 m at every one of them**, which the old z-lanes were not (z 0 read 0.050, z 150/300
+# read 1.500). So the five acts now stand on identical ground for the first time.
+#
+# ⚠️ **Not one number in the pass changed.** The titan still spawns at `y = 0`, the player is
+# still warped to an absolute height and still falls `11.20 m` onto the nape, still stands
+# `1.80 m` off the axis on -X and `0.55 m` behind it on +Z, still looks yaw 0. Only the lane
+# moved, and it moved as a rigid translation: `x` carries the lane, `z` carries the same
+# `+0.55` set-back it always had.
+#
 # | act | the part the blade passes through | its metres | blade y | player y at warp |
 # |---|---|---|---|---|
 # | A | the **nape** — the cortex sphere, r 0.55, 0.55 m behind the neck | y 8.90 | 8.90 | 18.50 |
@@ -81,8 +101,8 @@
 wait 1.5
 
 # ---- ACT A — the nape. The one hit the game already has. --------------------------------
-spawn titan husk 0 0 0
-warp -1.80 18.50 0.55
+spawn titan husk -300 0 -83.75
+warp -301.80 18.50 -83.20
 look 0 0
 wait 0.90
 slash right 0.40
@@ -95,8 +115,8 @@ wait 1.30
 assert titans == 0
 
 # ---- ACT B — the torso, dead centre of the body box. -------------------------------------
-spawn titan husk 0 0 150
-warp -1.80 16.45 150
+spawn titan husk -150 0 -83.75
+warp -151.80 16.45 -83.20
 look 0 0
 wait 0.90
 slash right 0.40
@@ -109,8 +129,8 @@ wait 1.30
 assert titans == 1
 
 # ---- ACT C — the left arm. -----------------------------------------------------------------
-spawn titan husk 0 0 300
-warp -1.80 15.60 300
+spawn titan husk 0 0 -83.75
+warp -1.80 15.60 -83.20
 look 0 0
 wait 0.90
 slash right 0.40
@@ -121,8 +141,8 @@ wait 1.30
 assert titans == 2
 
 # ---- ACT D — the left leg. -----------------------------------------------------------------
-spawn titan husk 0 0 450
-warp -1.80 13.10 450
+spawn titan husk 150 0 -83.75
+warp 148.20 13.10 -83.20
 look 0 0
 wait 0.90
 slash right 0.40
@@ -135,7 +155,7 @@ assert titans == 3
 # ---- ACT E — the same swing at nothing. ----------------------------------------------------
 # The null case. Without it "the blade reports a hit" is not a measurement of the blade — it
 # could be a measurement of the swing firing at all.
-warp -1.80 18.50 600
+warp 298.20 18.50 -83.20
 look 0 0
 wait 0.90
 slash right 0.40

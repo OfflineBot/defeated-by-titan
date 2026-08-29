@@ -32,6 +32,25 @@
 # cushion a player can hold at 21 m/s (0.35 m per tick), not the last centimetre of a clearance.
 # **If a kind cannot be killed from 0.60 m of air, that kind's hitbox does not fit.**
 #
+# ## 🔴 WHERE THE SEVEN LANES STAND, and it changed on 2026-08-29
+#
+# They stood at `z` 0.55, 200.55, **400.55, 600.231, 800.231, 1000.77 and 1200.77** — and
+# Ashgate is 700 x 700 m, so five of the seven were outside the map, the last one 850 m out.
+# `F-012`'s recovery teleported the player home on the next tick, **six times per run**, and
+# because no act here asserts a position the file went on measuring a player who had been moved:
+# every act from `chorus` onward was flown from `(-2.20, 2.00, 200.55)`, the errant act's ground.
+#
+# The seven lanes now run along the **boulevard** `(0, -0.1, -83.75) x (700, 0.3, 27.5)` — a
+# cleared paved strip across the full width of the district, no house on it and no terrace over
+# it. Probed 2026-08-29 at x = -300, -200, -100, 0, 100, 200 and 300: the resting height is
+# **0.050 m at every one of the seven**, which the old z-lanes were not.
+#
+# ⚠️ **Not one number in a pass changed.** Every titan still spawns at `y = 0`, every player
+# warp keeps its absolute height and its `x` cushion and its `z` set-back relative to the
+# titan; the lane is a rigid translation of both. Lane spacing is 100 m — every act ends with
+# `assert titans == 0`, so nothing survives to walk into the next one, and the warden's two
+# passes share a lane on purpose.
+#
 # ## Why the player falls instead of flying
 #
 # Same reason as `scripts/q030-reach.txt` and `scripts/f030-cortex.txt`: hooking and boosting
@@ -69,10 +88,10 @@
 wait 1.5
 
 # ── husk · medium · the calibration body ─────────────────────────────────────────────────────
-warp -2.20 18.50 0.55
+warp -302.20 18.50 -83.20
 look 0 0
 wait 0.85
-spawn titan husk 0 0 0
+spawn titan husk -300 0 -83.75
 wait 0.06
 slash right 0.40
 wait 1.60
@@ -80,10 +99,10 @@ mark husk
 assert titans == 0
 
 # ── errant · medium · swerve 35°, and he swerves in Pursue, not in Windup ────────────────────
-warp -2.20 18.50 200.55
+warp -202.20 18.50 -83.20
 look 0 0
 wait 0.85
-spawn titan errant 0 0 200
+spawn titan errant -200 0 -83.75
 wait 0.06
 slash right 0.40
 wait 1.60
@@ -91,10 +110,10 @@ mark errant
 assert titans == 0
 
 # ── chorus · medium · a lone chorus has no partner to flank with ─────────────────────────────
-warp -2.20 18.50 400.55
+warp -102.20 18.50 -83.20
 look 0 0
 wait 0.85
-spawn titan chorus 0 0 400
+spawn titan chorus -100 0 -83.75
 wait 0.06
 slash right 0.40
 wait 1.60
@@ -102,10 +121,10 @@ mark chorus
 assert titans == 0
 
 # ── scuttler · small · the smallest nape in the game (0.20 m) and the widest band ────────────
-warp -1.475 13.30 600.231
+warp -1.475 13.30 -83.519
 look 0 0
 wait 0.85
-spawn titan scuttler 0 0 600
+spawn titan scuttler 0 0 -83.75
 wait 0.06
 slash right 0.40
 wait 1.40
@@ -114,10 +133,10 @@ assert titans == 0
 
 # ── weaver · small · `cortex_guard: WhenCommitted` — the nape is only open inside his own
 #    attack, so the 0.20 s of lead is what puts him in Windup when the blade arrives ──────────
-warp -1.475 13.30 800.231
+warp 98.525 13.30 -83.519
 look 0 0
 wait 0.85
-spawn titan weaver 0 0 800
+spawn titan weaver 100 0 -83.75
 wait 0.06
 slash right 0.40
 wait 1.40
@@ -125,10 +144,10 @@ mark weaver
 assert titans == 0
 
 # ── lurker · large · ambush, never takes a step. Pure geometry, no movement confound ─────────
-warp -2.70 22.10 1000.77
+warp 197.30 22.10 -82.98
 look 0 0
 wait 0.85
-spawn titan lurker 0 0 1000
+spawn titan lurker 200 0 -83.75
 wait 0.06
 slash right 0.40
 wait 2.00
@@ -150,16 +169,16 @@ assert titans == 0
 #        `turn_deg_per_s` 40 and there is 1.3 s between the two cuts, so about 50° of his turn
 #        happen between them. Opening from the same side would carry the nape out of the second
 #        pass's line and the act would measure his neck rotation instead of his guard. ────────
-warp 2.30 22.10 1198.50
+warp 302.30 22.10 -85.25
 look 180 0
 wait 0.85
-spawn titan warden 0 0 1200
+spawn titan warden 300 0 -83.75
 wait 0.06
 slash right 0.40
 wait 0.60
 mark warden-opened
 assert titans == 1
-warp -2.70 22.10 1200.77
+warp 297.30 22.10 -82.98
 look 0 0
 wait 0.85
 slash right 0.40

@@ -70,6 +70,34 @@ pub enum LobbyAction {
     Back,
 }
 
+/// **Every sortie this hub offers, in file order** — one entry per (template, difficulty), and
+/// a template with no levels contributes one entry with `None`.
+///
+/// The **one** place that flattens `missions.ron` into a list, and it exists because there are
+/// now two things that have to agree about what "the next mission" means: the plate above,
+/// which draws two rows and highlights the pair [`chosen`] returns, and [`board`](super::board),
+/// which steps `F` through them one at a time. Two implementations of one question drift, and
+/// no amount of sweeping finds it because both would be ours (`CLAUDE.md` rule 5, the
+/// corollary). So the plate, the board and the HUD panel all read *this*.
+///
+/// The `Option` is not a shrug: `None` is the tutorial's case and means what it means in
+/// `mission::SortieOrder` — fly the template's own numbers. Every entry is round-trip stable
+/// through [`chosen`], which is what lets the board write one back into [`LobbyChoice`] and
+/// find it again on the next press.
+pub fn entries(data: &GameData) -> Vec<(String, Option<String>)> {
+    let mut out = Vec::new();
+    for (key, template) in &data.missions.templates {
+        if template.difficulties.is_empty() {
+            out.push((key.clone(), None));
+        } else {
+            for level in template.difficulties.keys() {
+                out.push((key.clone(), Some(level.clone())));
+            }
+        }
+    }
+    out
+}
+
 /// The choice as it stands **against the file**: a template that exists, and a difficulty that
 /// exists inside it.
 ///

@@ -50,7 +50,7 @@ use defeated_by_titan::player::locomotion::{
 use defeated_by_titan::player::spawn_player;
 use defeated_by_titan::shared::{
     Block, BodyId, Buttons, Cli, Gas, Hook, HookState, IdCounter, Intent, LocalPlayer, MovementState,
-    PlayerId, RunAccel, Side, SpatialIndex, Velocity,
+    LookOverride, PlayerId, RunAccel, Side, SpatialIndex, Velocity,
 };
 
 /// Builds the **real** app, headless, one simulation step per `update()`, on the map named
@@ -2685,6 +2685,1471 @@ fn f005_ctrl_never_adds_an_acceleration_to_the_body_under_either_model() {
              change of `limits.max` and `player::rope::shorten_ropes` is its one writer — a \
              second, additive haul here pays it once and delivers it twice",
             to_anchor.length()
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// F-012 — THE MAP HAS AN EDGE. The user, 2026-08-27: *„und man kann an der seite einfach
+// runterfallen!"*, and asked what should be there he named BOTH mechanisms:
+// *„unsichtbare wand + wenn man runterfaellt wegen bug teleport man zurueck!"*
+//
+// The two are not one thing twice. The fence stops normal play from leaving; the recovery
+// works **after the fence has already failed** — a warp, a seam, a tunnel at 75 m/s. The
+// control below proves the recovery cannot fire on a legitimate 120 m dive.
+// ---------------------------------------------------------------------------------------
+
+/// Where the world's floor is, measured out of the map that is actually built, and never
+/// typed as a literal: the lowest underside of any block `world::map` planned.
+fn deepest_floor_m(app: &App) -> f32 {
+    let d = data(app);
+    let map = d.current_map().expect("maps.ron: `current` names a map").clone();
+    defeated_by_titan::world::map::plan_blocks(&d, &map)
+        .iter()
+        .map(|b| b.center_m.y - b.size_m.y * 0.5)
+        .fold(f32::INFINITY, f32::min)
+}
+
+/// Puts the body exactly there, the way a bug does — **not** through `WarpPlayer`, so that a
+/// test of the recovery cannot be answered by the warp path the recovery itself uses.
+fn put_body_at(app: &mut App, e: Entity, pos: Vec3) {
+    app.world_mut()
+        .entity_mut(e)
+        .get_mut::<Transform>()
+        .expect("a player has a transform")
+        .translation = pos;
+    app.world_mut()
+        .entity_mut(e)
+        .get_mut::<LinearVelocity>()
+        .expect("a player has a velocity")
+        .0 = Vec3::ZERO;
+}
+
+/// How many `WarpPlayer` messages the last tick produced. The recovery's only visible act.
+fn warps_sent(app: &App) -> usize {
+    app.world()
+        .resource::<Messages<defeated_by_titan::shared::WarpPlayer>>()
+        .iter_current_update_messages()
+        .count()
+}
+
+#[test]
+fn f012_a_body_dropped_past_the_edge_of_the_map_is_brought_back_into_it() {
+    // ## The repro of `B-015`, and the case the fence provably cannot answer.
+    //
+    // The body is **put** past the edge, not driven there — the fence is already behind it,
+    // which is exactly the situation the user asked the second mechanism for
+    // (*„wenn man runterfaellt wegen bug"*). Nothing here may depend on the fence at all.
+    //
+    // **In its first form this test asserted only that nothing catches him within 2 s, and it
+    // read 12 of 12 at `y = -44.0` — free fall at `gravity_m_s2 = -32`, nothing hit.** That is
+    // the measurement in `docs/BUGS.md` B-015, and it identified the cause out of the four
+    // candidates: not a plate smaller than the playable area, not a seam and not tunnelling —
+    // **past the plate there is no collider at any height.** The horizon is now long enough to
+    // reach the recovery plane, and what is asserted is that he comes back.
+    //
+    // What the answer depends on: `bounds.recovery_plane_y_m`, `recovery_lift_m`, `SafeGround`,
+    // `gravity_m_s2` (how long the fall takes) and the map's `size_m`.
+    // What this sweep varies: the sign and the axis of the offset (4 directions) x the distance
+    // past the edge (1, 5, 25 m) = 12 samples. **None is skipped** — every one is asserted, and
+    // the failure list below carries the count so a silent exclusion cannot hide in it.
+    // What it holds constant, and why: the height he is dropped from (20 m — the fall to the
+    // plane dominates it by a factor of sixteen) and the map (`current`, the district that
+    // ships, because the claim is about the shipped world).
+    let mut app = app_on_current_map();
+    let e = me(&mut app);
+    let d = data(&app);
+    let map = d.current_map().expect("maps.ron: `current` names a map").clone();
+    let (hx, hz) = (map.size_m.0 * 0.5, map.size_m.1 * 0.5);
+    let floor = deepest_floor_m(&app);
+    let plane = map.bounds.recovery_plane_y_m;
+
+    // He has to have stood somewhere first, or this measures the spawn point instead of the
+    // recorded ground.
+    put_body_at(&mut app, e, Vec3::new(0.0, 2.0, 0.0));
+    ticks(&mut app, 60);
+    assert_eq!(state(&app, e), MovementState::Grounded, "the fixture needs a recorded ground");
+    let safe = at(&app, e);
+
+    // 20 m up, falling to -300 m at 32 m/s^2 is sqrt(2 * 320 / 32) = 4.47 s = 269 ticks.
+    let horizon = 400;
+    let mut lost = Vec::new();
+    for (label, dir) in [("+x", Vec3::X), ("-x", Vec3::NEG_X), ("+z", Vec3::Z), ("-z", Vec3::NEG_Z)]
+    {
+        for past_m in [1.0_f32, 5.0, 25.0] {
+            let edge = Vec3::new(hx * dir.x, 20.0, hz * dir.z);
+            put_body_at(&mut app, e, edge + dir * past_m);
+            let mut deepest = f32::INFINITY;
+            for _ in 0..horizon {
+                app.update();
+                deepest = deepest.min(at(&app, e).y);
+            }
+            let p = at(&app, e);
+            if p.y < floor - 5.0 || p.x.abs() > hx + 1.0 || p.z.abs() > hz + 1.0 {
+                lost.push(format!(
+                    "{label} +{past_m} m -> {p:?} (deepest {deepest:.1} m, plane {plane} m)"
+                ));
+            }
+        }
+    }
+
+    assert!(
+        lost.is_empty(),
+        "{} of 12 bodies put one to twenty-five metres past the {} x {} m map were still out          of the world after {horizon} ticks. The ground they should have come back to is          {safe:?}, the deepest block underside is {floor:.2} m: {lost:?}",
+        lost.len(),
+        map.size_m.0,
+        map.size_m.1,
+    );
+}
+
+#[test]
+fn f012_walking_at_the_edge_of_the_map_does_not_walk_you_off_it() {
+    // Walking speed, the four edges. What the fence depends on: `bounds` out of `maps.ron`
+    // and the map's `size_m`. What this varies: which of the four edges, and therefore both
+    // signs of both horizontal axes. Held constant, and named: the speed (the legs' own
+    // `run_speed_m_s` — the speed case is the next test) and the map.
+    let mut app = app_on_current_map();
+    let e = me(&mut app);
+    let d = data(&app);
+    let map = d.current_map().expect("maps.ron: `current` names a map").clone();
+    let (hx, hz) = (map.size_m.0 * 0.5, map.size_m.1 * 0.5);
+    let floor = deepest_floor_m(&app);
+
+    for (label, key, from, dir) in [
+        ("+x", KeyCode::KeyD, Vec3::new(hx - 12.0, 2.0, 0.0), Vec3::X),
+        ("-x", KeyCode::KeyA, Vec3::new(-hx + 12.0, 2.0, 0.0), Vec3::NEG_X),
+        ("-z", KeyCode::KeyW, Vec3::new(0.0, 2.0, -hz + 12.0), Vec3::NEG_Z),
+        ("+z", KeyCode::KeyS, Vec3::new(0.0, 2.0, hz - 12.0), Vec3::Z),
+    ] {
+        put_body_at(&mut app, e, from);
+        ticks(&mut app, 10);
+        hold(&mut app, key);
+        ticks(&mut app, 240); // 4 s — more than the 12 m at 6 m/s needs
+        release(&mut app, key);
+        ticks(&mut app, 10);
+
+        let p = at(&app, e);
+        let out = p.dot(dir);
+        assert!(
+            p.y > floor - 5.0,
+            "{label}: walking into the edge dropped the player to y = {:.2} (world floor \
+             {floor:.2} m)",
+            p.y
+        );
+        assert!(
+            out <= hx.max(hz) + 1.0,
+            "{label}: walking carried the player {out:.2} m out along {dir:?}, past the \
+             {:.0} m half-extent of the map",
+            hx.max(hz)
+        );
+    }
+}
+
+#[test]
+fn f012_flying_at_the_edge_at_top_speed_does_not_tunnel_through_it() {
+    // The tunnelling case, and it is the one a collider can lose: `vector.max_speed_m_s`
+    // straight at the fence. What the answer depends on: `game.ron: substeps` and
+    // `player.max_speed_m_s`, and the fence's own thickness out of `maps.ron: bounds`.
+    // What this varies: the four edges and the sign of the vertical component (level, and
+    // 30 deg downwards — a diagonal is what a rope release actually produces).
+    // Held constant and named: the launch height (40 m, above every roof at the edge so
+    // that a house cannot do the fence's work for it).
+    let mut app = app_on_current_map();
+    let e = me(&mut app);
+    let d = data(&app);
+    let map = d.current_map().expect("maps.ron: `current` names a map").clone();
+    let (hx, hz) = (map.size_m.0 * 0.5, map.size_m.1 * 0.5);
+    let v_max = d.game.vector.max_speed_m_s;
+    let floor = deepest_floor_m(&app);
+
+    let mut escaped = Vec::new();
+    for (label, from, dir) in [
+        ("+x", Vec3::new(hx - 60.0, 40.0, 0.0), Vec3::X),
+        ("-x", Vec3::new(-hx + 60.0, 40.0, 0.0), Vec3::NEG_X),
+        ("+z", Vec3::new(0.0, 40.0, hz - 60.0), Vec3::Z),
+        ("-z", Vec3::new(0.0, 40.0, -hz + 60.0), Vec3::NEG_Z),
+    ] {
+        for (down_label, down) in [("level", 0.0_f32), ("30deg-down", -0.5)] {
+            put_body_at(&mut app, e, from);
+            app.update();
+            let v = (dir + Vec3::Y * down).normalize() * v_max;
+            app.world_mut().entity_mut(e).get_mut::<LinearVelocity>().expect("velocity").0 = v;
+            ticks(&mut app, 60); // 1 s at 75 m/s is 75 m — well past the 60 m of run-up
+            let p = at(&app, e);
+            let out = p.dot(dir);
+            if out > hx.max(hz) + 2.0 || p.y < floor - 5.0 {
+                escaped.push(format!("{label}/{down_label} -> {out:.2} m out, y = {:.2}", p.y));
+            }
+        }
+    }
+
+    assert!(
+        escaped.is_empty(),
+        "{} of 8 launches at {v_max} m/s went through the fence: {escaped:?}",
+        escaped.len()
+    );
+}
+
+#[test]
+fn f012_a_player_below_the_world_comes_back_to_where_he_last_stood() {
+    // The RECOVERY, and it is deliberately driven with the fence already defeated: the body
+    // is put below the plane by hand, exactly the way a seam or a bad warp would.
+    // What the answer depends on: `bounds.recovery_plane_y_m`, the recorded safe ground, and
+    // that `apply_warps` really moves the body. What this varies: the horizontal place he
+    // last stood (three of them) and how far below the plane he starts (2 m and 90 m).
+    let mut app = app_on_current_map();
+    let e = me(&mut app);
+    let d = data(&app);
+    let map = d.current_map().expect("maps.ron: `current` names a map").clone();
+    let plane = map.bounds.recovery_plane_y_m;
+
+    for stood_at in [Vec3::new(0.0, 2.0, 0.0), Vec3::new(40.0, 2.0, 40.0), Vec3::new(-30.0, 2.0, 20.0)]
+    {
+        put_body_at(&mut app, e, stood_at);
+        ticks(&mut app, 60); // he lands and is GROUNDED — that is what gets recorded
+        assert_eq!(
+            state(&app, e),
+            MovementState::Grounded,
+            "the fixture needs him STANDING at {stood_at:?} — otherwise nothing is recorded \
+             and the assertion below is about the spawn point"
+        );
+        let safe = at(&app, e);
+
+        for below_m in [2.0_f32, 90.0] {
+            put_body_at(&mut app, e, Vec3::new(safe.x, plane - below_m, safe.z));
+            ticks(&mut app, 8);
+            let p = at(&app, e);
+            assert!(
+                (p.xz() - safe.xz()).length() < 2.0 && p.y > plane + 100.0,
+                "dropped {below_m} m under the recovery plane ({plane} m) he came back to \
+                 {p:?}, not to the ground he last stood on ({safe:?})"
+            );
+        }
+    }
+}
+
+#[test]
+fn f012_a_dive_from_the_top_of_the_wall_is_not_a_fall_out_of_the_world() {
+    // ## THE CONTROL. A legitimate 120 m dive must NOT be recovered.
+    //
+    // The rule that tells the two apart is **depth, not fall distance and not speed**: the
+    // recovery plane lies far below the deepest block in the map, and no legitimate surface
+    // reaches it. This test proves the discriminator holds for the longest drop the district
+    // has — off the coping of the 120 m wall.
+    //
+    // What the answer depends on: `bounds.recovery_plane_y_m` and the height of the wall.
+    // What this varies: nothing — it is one dive, and it is the deepest one Ashgate offers.
+    // What would make it vacuous, and is therefore asserted: that he really fell (>100 m of
+    // it) and really landed (Grounded at the end). An assertion satisfied by a body that
+    // never moved is not an assertion.
+    let mut app = app_on_current_map();
+    let e = me(&mut app);
+    let d = data(&app);
+    let map = d.current_map().expect("maps.ron: `current` names a map").clone();
+    let plane = map.bounds.recovery_plane_y_m;
+
+    // Stand him on the ground first, so there IS a recorded safe spot to be wrongly sent to.
+    put_body_at(&mut app, e, Vec3::new(0.0, 2.0, 0.0));
+    ticks(&mut app, 60);
+    let ground = at(&app, e);
+    assert_eq!(state(&app, e), MovementState::Grounded, "the control needs a recorded ground");
+
+    // Off the coping: `maps.ron` puts it at y = 119 +- 1, so 121 m is one step above it.
+    let top = Vec3::new(0.0, 121.0, -60.0);
+    put_body_at(&mut app, e, top);
+    let mut warps = 0usize;
+    let mut lowest = f32::INFINITY;
+    for _ in 0..300 {
+        app.update();
+        warps += warps_sent(&app);
+        lowest = lowest.min(at(&app, e).y);
+    }
+    let p = at(&app, e);
+
+    assert!(top.y - lowest > 100.0, "the dive has to BE a dive: it fell {:.1} m", top.y - lowest);
+    assert!(lowest > plane, "a 120 m dive reached {lowest:.1} m, under the plane at {plane} m");
+    assert_eq!(warps, 0, "a legitimate dive sent {warps} recovery warps, and must send none");
+    assert!(
+        (p.xz() - Vec2::new(top.x, top.z)).length() < 15.0,
+        "he landed at {p:?} — a recovery would have put him back at {ground:?}"
+    );
+    assert_eq!(state(&app, e), MovementState::Grounded, "after 5 s the dive has to be over");
+}
+
+/// The eight bearings a rectangle can be left by: four flats and four corners. The corner is
+/// the seam between two fence panels and the flat is the middle of one, and a rule that reads
+/// `x` and `z` separately can be right on one and wrong on the other.
+fn eight_ways_out(hx: f32, hz: f32) -> [(&'static str, Vec3); 8] {
+    [
+        ("+x", Vec3::new(hx, 0.0, 0.0)),
+        ("-x", Vec3::new(-hx, 0.0, 0.0)),
+        ("+z", Vec3::new(0.0, 0.0, hz)),
+        ("-z", Vec3::new(0.0, 0.0, -hz)),
+        ("+x+z", Vec3::new(hx, 0.0, hz)),
+        ("+x-z", Vec3::new(hx, 0.0, -hz)),
+        ("-x+z", Vec3::new(-hx, 0.0, hz)),
+        ("-x-z", Vec3::new(-hx, 0.0, -hz)),
+    ]
+}
+
+/// Is this body inside the map's own footprint, and above the world's floor? The one question
+/// every test below asks about a final position, and it is asked about `map.size_m` alone —
+/// never about the fence, whose margin is exactly the latent bug in `record_safe_ground`.
+fn back_in_the_world(p: Vec3, hx: f32, hz: f32, floor_m: f32) -> bool {
+    p.x.abs() <= hx + 1.0 && p.z.abs() <= hz + 1.0 && p.y > floor_m - 5.0
+}
+
+#[test]
+fn f012_the_top_of_the_fence_is_not_a_ring_you_can_stand_on_outside_the_map() {
+    // ## The repro, measured 2026-08-28 in the round that refuted the first build
+    //
+    // A body put at `(355, 210, 0)` — 5 m past the 350 m edge, 10 m above `fence_top_m` — came
+    // to rest at **exactly y = 200.000** and was still there 14 s later. The same at the corner
+    // `(355, 210, 355)`, and 8 s of held `W` along it left him at 200.000.
+    //
+    // ## The two lists, because a sweep's size is not its coverage
+    //
+    // What the rule reads: the player's `Transform` (**all three** components),
+    // `map.size_m` (both axes), `bounds.recovery_plane_y_m`, and — this is the defect — nothing
+    // at all about how high above the plane he is.
+    // ## 🔴 AND THE AXIS IT HELD CONSTANT WAS THE DEFECT — the fifth time in this project.
+    //
+    // Until 2026-08-29 the three distances below were `0.5`, `t/3` and `2t/3` metres, **all
+    // strictly outward**, under a comment that said *"What it skips: nothing."* The one
+    // distance it never sampled was **zero** — and `out_of_the_world` tests `|x| > hx`,
+    // STRICTly, while `maps.ron` shipped `fence_margin_m: 0.0`, so the fence's inner lip stood
+    // exactly ON `hx`. `warp 350 201 0` rested at 200.000 m after 3 s and after 10 s and after
+    // six seconds of held `W`: a solid, invisible, standable floor the rule called IN THE
+    // WORLD. The bug lived in the single sample the fixture's own `across` list could not
+    // produce.
+    //
+    // What this sweep varies: 8 bearings out of the map (4 flats **and** 4 corners, the seam
+    // between two panels), and **8 distances across the top face**, derived and not typed:
+    // one millimetre INSIDE the boundary, one ULP inside, **exactly zero**, one ULP outside,
+    // one millimetre outside, then half a metre, a third of the way across the face and two
+    // thirds. 64 samples. The three in the middle are the ones that were missing, and one ULP
+    // at 350 m is 2^-15 = 30.5 micrometres — the smallest step the boundary can be crossed by.
+    // What it holds constant, and why: the drop height, at `fence_top_m + 10 m` — the point of
+    // this test is the *resting* place, and every drop lands on the same face. The height axis
+    // itself is swept in `f012_the_map_footprint_is_the_world_at_every_height`.
+    // What it skips: nothing, and there is no `continue` in it. `checked` is counted and
+    // asserted against the sweep's own size, so a skipped class cannot hide in the denominator.
+    let mut app = app_on_current_map();
+    let e = me(&mut app);
+    let d = data(&app);
+    let map = d.current_map().expect("maps.ron: `current` names a map").clone();
+    let b = map.bounds.clone();
+    let (hx, hz) = (map.size_m.0 * 0.5, map.size_m.1 * 0.5);
+    let floor = deepest_floor_m(&app);
+    let t = b.fence_thickness_m;
+
+    let mut parked = Vec::new();
+    let mut checked = 0usize;
+    for (label, on_edge) in eight_ways_out(hx, hz) {
+        let dir = Vec3::new(on_edge.x.signum() * on_edge.x.abs().min(1.0), 0.0, on_edge.z.signum() * on_edge.z.abs().min(1.0))
+            .normalize();
+        // One ULP at the boundary itself, read out of the float and never typed: at 350 m
+        // that is 2^-15 m, and it is exactly the step that separates "on the line" from
+        // "past it" for the `>` in `out_of_the_world`.
+        let ulp = f32::from_bits(hx.to_bits() + 1) - hx;
+        for across in [-0.001_f32, -ulp, 0.0, ulp, 0.001, 0.5, t / 3.0, 2.0 * t / 3.0] {
+            checked += 1;
+            let from = Vec3::new(on_edge.x, b.fence_top_m + 10.0, on_edge.z) + dir * across;
+            put_body_at(&mut app, e, from);
+            ticks(&mut app, 240); // 4 s: 0.8 s of falling, then 3.2 s of standing still
+            let p = at(&app, e);
+            // 🔴 TWO conditions, and the second one was missing until the control run of
+            // 2026-08-29 found it. `back_in_the_world` allows `hx + 1.0` of slack — it has to,
+            // it is the shared helper every F-012 fixture judges a final position with — and a
+            // body parked on the fence's inner lip at exactly `hx` satisfies it. So with
+            // `fence_margin_m` put back to 0.0 this test stayed **green** on a build where
+            // `warp 350 201 0` demonstrably parked at 200.000 forever. The face's own height is
+            // the discriminator that slack cannot swallow.
+            let on_the_face = (p.y - b.fence_top_m).abs() < 1.0;
+            if !back_in_the_world(p, hx, hz, floor) || on_the_face {
+                parked.push(format!(
+                    "{label} +{across:.2} m from {from:?} -> {p:?}{}",
+                    if on_the_face { " — STILL ON THE FENCE'S TOP FACE" } else { "" }
+                ));
+            }
+        }
+    }
+
+    assert_eq!(checked, 64, "the sweep skipped samples");
+    assert!(
+        parked.is_empty(),
+        "{} of {checked} bodies dropped onto the top face of the fence are still outside the \
+         {} x {} m map after 4 s. The fence top is a solid ring at y = {} m and it lies OUTSIDE \
+         the footprint, so nothing records it and nothing recovers from it: {parked:?}",
+        parked.len(),
+        map.size_m.0,
+        map.size_m.1,
+        b.fence_top_m,
+    );
+}
+
+#[test]
+fn f012_nothing_that_can_rest_on_the_fence_rests_inside_the_map() {
+    // ## 🔴 THE MEASUREMENT `fence_margin_m` STANDS ON, and it refuted the obvious fix twice.
+    //
+    // "Stand the fence outside the footprint and the strict `>` in `out_of_the_world` covers
+    // all of it" is **wrong**: a capsule does not rest on the point under its origin, it rests
+    // on its bottom sphere, and that sphere reaches over the lip. With `fence_margin_m: 0.0` a
+    // body put at x = **349.999**, a millimetre INSIDE the map, came to rest at **349.938,
+    // y 199.994** on the fence's top face — `Grounded`, in the world, recorded as home. 48 of
+    // 48 stances did. So the number to clear is not the float grid; moving the fence by one
+    // ULP would have changed nothing.
+    //
+    // What has to be cleared is **how far back over the lip a body can PARK** — come to rest
+    // and stay. Past that distance the contact normal tilts too far for friction and he slides
+    // off, which is the good case: he falls into the map and lands on real ground.
+    //
+    // ## Why the fence is built 50 m INSIDE the map for this, and it is the point of the test
+    //
+    // Because with the shipped fence the recovery reaches every one of these bodies and warps
+    // them away before they settle, so the measurement would report "nobody parks here" and
+    // mean "nobody was allowed to try". At `fence_margin_m = -50` the whole top face lies
+    // inside the footprint, `out_of_the_world` never fires, and what is left is a property of
+    // the capsule, the box edge and avian's friction alone — which is what it is, and why it
+    // transfers to the shipped fence 50 m further out.
+    //
+    // What the answer depends on: `game.ron: player.radius_m` and the capsule's endpoints, the
+    // solver's friction and contact tolerance, `gravity_m_s2`, `bounds.fence_top_m`.
+    // What this varies: **11 offsets from the lip**, every one a fraction of `radius_m` and
+    // none of them typed as a length, from 0.6 `radius_m` inside the lip out to 0.2 outside and
+    // concentrated in the last hundredth before it — the axis the whole fix lives on — x 2 ways
+    // of arriving (set down 5 cm over the face, dropped 2 m onto it) x 2 bearings. 44 stances,
+    // each given 10 s.
+    // What it holds constant, and why: the other two bearings, because the four were measured
+    // symmetric to four decimals on 2026-08-29 (+x 0.0702 against -x 0.0701); and the height of
+    // the face, which IS the face.
+    // What it skips: nothing. `checked` is counted and asserted, and `parked > 0` is what stops
+    // "everything slid off" from passing this by measuring nothing.
+    let d = data(&app_on_current_map());
+    let shipped = d.current_map().expect("maps.ron: `current` names a map").clone();
+    let b = shipped.bounds.clone();
+    let r = d.game.player.radius_m;
+
+    // The fence, deliberately inside the map, so the recovery cannot flatter the measurement.
+    let inward_m = -50.0_f32;
+    let mut app = app_with_fence_margin(inward_m);
+    let e = me(&mut app);
+    let (lx, lz) = (shipped.size_m.0 * 0.5 + inward_m, shipped.size_m.1 * 0.5 + inward_m);
+
+    let mut deepest = f32::NEG_INFINITY;
+    let mut deepest_at = String::new();
+    let (mut checked, mut parked) = (0usize, 0usize);
+    for (label, lip) in [("+x", Vec3::new(lx, 0.0, 0.0)), ("+z", Vec3::new(0.0, 0.0, lz))] {
+        // ⚠️ `f32::signum(0.0)` is **1.0**, not 0.0 — written the naive way this vector comes
+        // out diagonal for the flat bearings and the whole sweep measures a corner instead
+        // (it did, and read 0.3721 m). The `abs().min(1.0)` is what zeroes the axis that is
+        // not the bearing's, and it is the form the rest of this file's F-012 fixtures use.
+        let out = Vec3::new(
+            lip.x.signum() * lip.x.abs().min(1.0),
+            0.0,
+            lip.z.signum() * lip.z.abs().min(1.0),
+        );
+        for f in [
+            -0.6_f32, -0.3, -0.15, -0.08, -0.04, -0.02, -0.01, -0.005, 0.0, 0.05, 0.2,
+        ] {
+            let from_lip = f * r;
+            for (how, over) in [("set down", 0.05_f32), ("dropped", 2.0)] {
+                checked += 1;
+                let from = lip + out * from_lip + Vec3::Y * (b.fence_top_m + over);
+                put_body_at(&mut app, e, from);
+                // 10 s, and the question is asked at the END: a body that clings for two
+                // seconds and then goes has not parked. An earlier draft asked after 2.5 s and
+                // counted a body 1.5 m below the face and still falling (0.4073 m).
+                ticks(&mut app, 600);
+                let p = at(&app, e);
+                // Still ON the face after ten seconds? A capsule standing on it sits 6 mm into
+                // it; anything lower has slid off and landed in the map — the good case.
+                if (p.y - b.fence_top_m).abs() > 0.5 {
+                    continue;
+                }
+                parked += 1;
+                // How far INSIDE the lip he parked, along the bearing's own axis.
+                let inside = lip.dot(out) - p.dot(out);
+                if inside > deepest {
+                    deepest = inside;
+                    deepest_at = format!("{label} {how} {from_lip:+.4} m from the lip -> {p:?}");
+                }
+            }
+        }
+    }
+
+    println!(
+        "F-012 fence top face: {checked} stances, {parked} parked, deepest park {deepest:.4} m \
+         inside the lip ({deepest_at}); pinned fence_rest_reach_m {}, fence_margin_m {}, \
+         radius_m {r}",
+        b.fence_rest_reach_m, b.fence_margin_m
+    );
+    assert_eq!(checked, 44, "the sweep skipped samples");
+    assert!(
+        parked > 0,
+        "not one of {checked} bodies was still on the fence's top face after 10 s — then this \
+         test measures nothing and the margin it pays for is unpaid"
+    );
+    assert!(
+        deepest <= b.fence_rest_reach_m,
+        "a body parks {deepest:.4} m back over the fence's lip ({deepest_at}), and \
+         `maps.ron: bounds.fence_rest_reach_m` says {}. That number is a MEASUREMENT: re-measure \
+         it, write the new one into every map, and re-derive `fence_margin_m` — it has to stay \
+         strictly between the new reach and `player.radius_m` = {r} m, or the fence's top face \
+         is a ring a body can park on INSIDE the map's own footprint, which is the bug of \
+         2026-08-29 with a smaller radius.",
+        b.fence_rest_reach_m
+    );
+    // And the bracket, stated where the measurement is and not only in `tests/data.rs`.
+    assert!(
+        b.fence_rest_reach_m < b.fence_margin_m && b.fence_margin_m < r,
+        "the bracket is broken: fence_rest_reach_m {} < fence_margin_m {} < radius_m {r} is what \
+         makes every place a body can park on the fence lie outside the map, while a body \
+         pressed against the fence's inner face stays inside it",
+        b.fence_rest_reach_m,
+        b.fence_margin_m
+    );
+}
+
+#[test]
+fn f012_the_ground_he_is_sent_back_to_is_never_ground_he_can_be_sent_back_from() {
+    // ## THE POISONED HOME. `recovery.rs`'s own header claims this invariant, and on
+    // ## 2026-08-29 the shipped game falsified it in four seconds of standing still.
+    //
+    // The header says: *"the place you get sent back to can never itself be a place you get
+    // sent back from"*, and it says it because `record_safe_ground` and `recover_the_fallen`
+    // call the same `out_of_the_world`. **That is not enough.** `out_of_the_world` tests
+    // `|x| > hx` STRICTly and the fence's inner lip stood exactly ON `hx`, so a body parked at
+    // `(350, 201, 0)` was `Grounded`, was "in the world", and got RECORDED. The shipped log:
+    //   "back to Vec3(350.0, 200.49994, 0.0), the ground he stood on at tick 426"
+    // and every later recovery from any cause — a seam, a bad warp, the plane — delivered the
+    // player onto that 200 m ledge for the rest of the session. Reproduced under `--hub` too.
+    //
+    // 🔴 **And the oracle may not be `out_of_the_world` again** (`CLAUDE.md` rule 5, the fourth
+    // shape): the first draft of this test asked that function about the recorded point, which
+    // is the same function `record_safe_ground` had just asked about the same point, so it
+    // passed on the broken build. Two implementations of one question cannot disagree. The
+    // oracle here is the map's own **planned geometry**: a home has to be inside the footprint
+    // and at or under the tallest thing `world::map` planned — the fence is not in that plan
+    // (`bounds::plan_fence` is a different function), so its 200 m face cannot satisfy it.
+    //
+    // What the rule reads: the player's `Transform`, `MovementState`, `map.size_m`,
+    // `bounds.recovery_plane_y_m`, `bounds.recovery_lift_m`.
+    // What this varies: 8 bearings out of the map x **6 distances across the band where a body
+    // can be grounded on the fence's lip while his origin is still inside the footprint** x
+    // 2 drop heights over the face. 96 stances, each parked 5 s so the recorder really sees it.
+    //   That band is `[hx - (radius_m - fence_margin_m), hx]` — 0.17 m wide as the numbers
+    //   ship — and it is where the second half of the fix lives: the geometry cannot close it,
+    //   because a capsule reaches `radius_m` over the lip and `fence_margin_m` has to stay
+    //   under `radius_m` for the other half of the bracket. The distances are fractions of that
+    //   band and not typed lengths, so they follow both numbers when either moves, and they
+    //   include **exactly zero** — the map's own edge, which is the one-character bug.
+    // What it holds constant: the map, and the parking time.
+    // What it skips: nothing. There is no `continue`; `checked` is counted and asserted.
+    use defeated_by_titan::player::recovery::SafeGround;
+
+    let mut app = app_on_current_map();
+    let e = me(&mut app);
+    let d = data(&app);
+    let map = d.current_map().expect("maps.ron: `current` names a map").clone();
+    let (hx, hz) = (map.size_m.0 * 0.5, map.size_m.1 * 0.5);
+    // The oracle, out of the planned world and never typed: the highest surface `world::map`
+    // built. The fence is not in it.
+    let roof_m = defeated_by_titan::world::map::plan_blocks(&d, &map)
+        .iter()
+        .map(|b| b.center_m.y + b.size_m.y * 0.5)
+        .fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        roof_m + 1.0 < map.bounds.fence_top_m,
+        "the fixture needs the fence's top face ({} m) to be above everything the map plans \
+         ({roof_m} m), or the oracle below cannot tell the ledge from a roof",
+        map.bounds.fence_top_m
+    );
+
+    let mut poisoned = Vec::new();
+    let mut checked = 0usize;
+    for (label, on_edge) in eight_ways_out(hx, hz) {
+        let dir = Vec3::new(on_edge.x.signum() * on_edge.x.abs().min(1.0), 0.0, on_edge.z.signum() * on_edge.z.abs().min(1.0))
+            .normalize();
+        // The band a body can be grounded on the lip in while his origin is still inside the
+        // footprint, and the samples are fractions of it — `-1.0` is where his bottom sphere
+        // only just reaches the lip, `0.0` is the map's own edge, `+0.01` is a hair outside it.
+        let band_m = d.game.player.radius_m - map.bounds.fence_margin_m;
+        for f in [-1.0_f32, -0.6, -0.3, -0.01, 0.0, 0.01] {
+            let across = f * band_m;
+            for over in [1.0_f32, 2.0] {
+                checked += 1;
+                let from = Vec3::new(on_edge.x, map.bounds.fence_top_m + over, on_edge.z)
+                    + dir * across;
+                put_body_at(&mut app, e, from);
+                // 5 s: a 200 m fall to the ground inside the map takes 3.5 s at
+                // `gravity_m_s2`, and the recorder needs him standing for one tick after it.
+                ticks(&mut app, 300);
+                let safe = app
+                    .world()
+                    .entity(e)
+                    .get::<SafeGround>()
+                    .copied()
+                    .expect("a player carries his own SafeGround");
+                let h = safe.pos_m;
+                if h.x.abs() > hx || h.z.abs() > hz || h.y > roof_m + 1.0 {
+                    poisoned.push(format!(
+                        "{label} {across:+.4} m ({f:+.2} of the band), {over} m over the face, \
+                         from {from:?}: home is {h:?} at tick {}",
+                        safe.tick
+                    ));
+                }
+            }
+        }
+    }
+
+    assert_eq!(checked, 96, "the sweep skipped samples");
+    assert!(
+        poisoned.is_empty(),
+        "{} of {checked} stances left `SafeGround` pointing at a place that is not on anything \
+         the map planned (footprint {} x {} m, highest planned surface {roof_m:.2} m) — the home \
+         is poisoned and every later fall from any cause ends there: {:?}",
+        poisoned.len(),
+        map.size_m.0,
+        map.size_m.1,
+        &poisoned[..poisoned.len().min(3)]
+    );
+
+    // ## And the driven half, because the sweep above judges a recorded point and not a body.
+    //
+    // Park exactly on the lip, then fall under the plane the way a seam does it, and see where
+    // the recovery actually delivers him. On the broken build this read y = 200.000 — the
+    // ledge — and he was still there ten seconds later.
+    put_body_at(&mut app, e, Vec3::new(hx, map.bounds.fence_top_m + 1.0, 0.0));
+    ticks(&mut app, 300);
+    put_body_at(&mut app, e, Vec3::new(0.0, map.bounds.recovery_plane_y_m - 20.0, 0.0));
+    ticks(&mut app, 420);
+    let p = at(&app, e);
+    assert!(
+        p.x.abs() <= hx && p.z.abs() <= hz && p.y <= roof_m + 1.0,
+        "after parking on the fence's inner lip at ({hx}, {}, 0) and then falling under the \
+         plane, the recovery put him at {p:?} — outside the {} x {} m footprint or above the \
+         highest thing the map plans ({roof_m:.2} m). That is the 200 m ledge, and it is where \
+         every later recovery of the session would have gone.",
+        map.bounds.fence_top_m,
+        map.size_m.0,
+        map.size_m.1
+    );
+}
+
+#[test]
+fn f012_at_the_smallest_legal_fence_margin_the_recorder_still_keeps_nothing_on_the_fence() {
+    // ## 🔴 THE TEST THAT PAYS FOR THE OTHER HALF OF THE FIX, and it exists because the
+    // ## control run of 2026-08-29 caught it being unpaid for.
+    //
+    // `record_safe_ground` does two things beyond asking `out_of_the_world`: it judges the
+    // **whole body** (`+ radius_m` outward on each axis, at the place he would be PUT DOWN),
+    // and it refuses a stance he is **falling past** rather than standing on
+    // (`|vy| > gravity_m_s2 / simulation_hz`). Both were written against a measurement — a body
+    // sliding off the fence's lip was recorded at `(-299.74, 199.886, 0)`, 200 m up with
+    // nothing under it — and then **neither of them could be made to go red**: at the shipped
+    // `fence_margin_m` of 0.18 the lip is far enough out that the recovery removes a body
+    // before he can creep inward at all. Two fixes with no failing test are two guesses
+    // (`CLAUDE.md` rule 5), so this is the configuration that reaches them.
+    //
+    // ## The configuration, and it is a LEGAL one
+    //
+    // `tests/data.rs::f012_the_fence_stands_within_one_body_radius_of_the_map_edge` accepts any
+    // margin in `(fence_rest_reach_m, player.radius_m)`. This runs the **smallest** one a
+    // millimetre above the floor of that window. The fence's top face then begins only
+    // `margin` outside the map edge, its inner slope is `margin / radius_m` — gentle enough
+    // that friction holds a body dropped onto it — and a body can be `Grounded`, still, and
+    // **inside the footprint** on a surface that is not part of the world. The origin alone
+    // cannot tell that stance from standing on the map's own ground. The body can.
+    //
+    // What the rule reads: `Transform`, `MovementState`, `Velocity`, `map.size_m`,
+    // `bounds.recovery_lift_m`, `bounds.recovery_plane_y_m`, `game.player.radius_m`,
+    // `gravity_m_s2`, `simulation_hz`.
+    // What this varies: 4 bearings x 5 places across the band `[lip - radius_m, hx]`, dropped
+    // onto the fence's top face. 20 stances.
+    // What it holds constant, and why: the margin (that IS the configuration under test) and
+    // the drop height.
+    // What it skips: nothing. `checked` is counted and asserted, and `on_the_face > 0` is what
+    // stops "nobody ever landed on it" from passing this by measuring nothing.
+    use defeated_by_titan::player::recovery::SafeGround;
+
+    let shipped = data(&app_on_current_map());
+    let map0 = shipped.current_map().expect("maps.ron: `current` names a map").clone();
+    let r = shipped.game.player.radius_m;
+    // A millimetre above the floor of the window `tests/data.rs` allows.
+    let margin_m = map0.bounds.fence_rest_reach_m + 0.001;
+    assert!(margin_m < r, "the window `(fence_rest_reach_m, radius_m)` is empty — nothing to test");
+
+    let mut app = app_with_fence_margin(margin_m);
+    let e = me(&mut app);
+    let (hx, hz) = (map0.size_m.0 * 0.5, map0.size_m.1 * 0.5);
+    let top = map0.bounds.fence_top_m;
+    let roof_m = defeated_by_titan::world::map::plan_blocks(&shipped, &map0)
+        .iter()
+        .map(|b| b.center_m.y + b.size_m.y * 0.5)
+        .fold(f32::NEG_INFINITY, f32::max);
+
+    let mut poisoned = Vec::new();
+    let (mut checked, mut on_the_face) = (0usize, 0usize);
+    for (label, on_edge) in eight_ways_out(hx, hz) {
+        if on_edge.x != 0.0 && on_edge.z != 0.0 {
+            continue; // the four corners are the same face twice; counted below, not skipped
+        }
+        let dir = Vec3::new(on_edge.x.signum() * on_edge.x.abs().min(1.0), 0.0, on_edge.z.signum() * on_edge.z.abs().min(1.0))
+            .normalize();
+        // From where the bottom sphere only just reaches the lip, up to the map's own edge.
+        for f in [-1.0_f32, -0.7, -0.4, -0.15, 0.0] {
+            checked += 1;
+            let from = Vec3::new(on_edge.x, top + 1.0, on_edge.z) + dir * (f * (r - margin_m));
+            app.world_mut()
+                .entity_mut(e)
+                .insert(SafeGround { pos_m: Vec3::new(0.0, -1000.0, 0.0), tick: 0 });
+            put_body_at(&mut app, e, from);
+            let mut landed = false;
+            for _ in 0..300 {
+                ticks(&mut app, 1);
+                if (at(&app, e).y - top).abs() < 0.5 {
+                    landed = true;
+                }
+                let home = app
+                    .world()
+                    .entity(e)
+                    .get::<SafeGround>()
+                    .copied()
+                    .expect("a player carries his own SafeGround")
+                    .pos_m;
+                if home.y > roof_m + 1.0 {
+                    poisoned.push(format!(
+                        "{label} {:+.3} m from the map edge, from {from:?}: home is {home:?}, \
+                         above everything the map plans ({roof_m:.2} m)",
+                        f * (r - margin_m)
+                    ));
+                    break;
+                }
+            }
+            if landed {
+                on_the_face += 1;
+            }
+        }
+    }
+
+    assert_eq!(checked, 20, "the sweep skipped samples — the four corners are counted out on \
+         purpose (the same face twice) and the four flats are all of it");
+    assert!(
+        on_the_face > 0,
+        "not one of {checked} bodies ever touched the fence's top face at margin {margin_m} — \
+         then this fixture measures nothing and both halves of the recorder are unpaid for"
+    );
+    assert!(
+        poisoned.is_empty(),
+        "{} of {checked} stances got a home 200 m up on the fence's top face, inside the \
+         footprint, with nothing under it. `record_safe_ground` has to judge the WHOLE BODY at \
+         the place he would be put down, and refuse a stance he is falling past: {:?}",
+        poisoned.len(),
+        &poisoned[..poisoned.len().min(3)]
+    );
+}
+
+#[test]
+fn f012_a_recovery_whose_destination_does_not_hold_is_not_repeated_every_tick() {
+    // ## THE LOOP, and it is a defect of its own even with the ring gone.
+    //
+    // Measured on the shipped binary, 2026-08-29: from the fence's inner lip any lateral input
+    // nudged `x` from 350.000 to 350.1, `PastTheEdge` fired, the warp put him back at
+    // `safe + lift` = (350.0, 200.49994, 0) — **on the lip** — he dropped the half metre onto
+    // it and drifted out again. **1501 warp lines in one run, one per tick, 25.0 s of wall
+    // clock, every one with the identical destination**, plus 60 `warn!` lines per second.
+    //
+    // If the destination does not hold, warping to it again is not a fix. So the rule under
+    // test is not "the ring is gone" — that is the geometry's job and
+    // `f012_the_top_of_the_fence_is_not_a_ring_you_can_stand_on_outside_the_map` measures it.
+    // It is: **a recovery that fails is escalated and then given up on, and it is bounded.**
+    //
+    // The poison is injected by hand, exactly the way `put_body_at` injects a position: the
+    // whole point is that this has to hold for a `SafeGround` that no code path can produce
+    // any more, because the next bug will produce one the same way this one did.
+    //
+    // What the rule reads: `Transform`, `SafeGround`, `map.size_m`,
+    // `bounds.recovery_plane_y_m`, `bounds.recovery_lift_m`.
+    // What this varies: two poisoned homes (past the edge, and under the plane) x two places
+    // to be stranded in. 4 cases, 300 ticks (5 s) each.
+    // What it holds constant: the map.
+    // What it skips: nothing — every case asserts, and each asserts that the FIRST tick did
+    // warp, so a recovery that never fires cannot pass by doing nothing.
+    use defeated_by_titan::player::recovery::SafeGround;
+
+    let mut app = app_on_current_map();
+    let e = me(&mut app);
+    let d = data(&app);
+    let map = d.current_map().expect("maps.ron: `current` names a map").clone();
+    let (hx, hz) = (map.size_m.0 * 0.5, map.size_m.1 * 0.5);
+    let plane = map.bounds.recovery_plane_y_m;
+
+    let mut runaway = Vec::new();
+    let mut never_fired = Vec::new();
+    let mut checked = 0usize;
+    for (home_label, home) in [
+        ("past the edge", Vec3::new(hx + 50.0, 5.0, 0.0)),
+        ("under the plane", Vec3::new(0.0, plane - 10.0, 0.0)),
+    ] {
+        for (where_label, stranded) in [
+            ("on the fence", Vec3::new(hx + 5.0, map.bounds.fence_top_m + 1.0, 0.0)),
+            ("over the void", Vec3::new(0.0, 40.0, hz + 80.0)),
+        ] {
+            checked += 1;
+            app.world_mut().entity_mut(e).insert(SafeGround { pos_m: home, tick: 0 });
+            put_body_at(&mut app, e, stranded);
+            let mut warps = 0usize;
+            let mut first = 0usize;
+            for tick in 0..300 {
+                app.update();
+                let n = warps_sent(&app);
+                warps += n;
+                if tick == 0 {
+                    first = n;
+                }
+            }
+            let case = format!("home {home_label}, stranded {where_label}");
+            if first == 0 {
+                never_fired.push(case.clone());
+            }
+            // Two: one to the recorded ground, one to the fallback when that did not hold.
+            // Anything above that is a recovery repeating itself.
+            if warps > 2 {
+                runaway.push(format!("{case}: {warps} warps in 300 ticks"));
+            }
+        }
+    }
+
+    assert_eq!(checked, 4, "the sweep skipped samples");
+    assert!(
+        never_fired.is_empty(),
+        "the recovery never fired at all for {never_fired:?} — this fixture measures a BOUND on \
+         a mechanism, and a mechanism that does nothing satisfies every bound"
+    );
+    assert!(
+        runaway.is_empty(),
+        "{} of {checked} strandings warped the player more than twice — a destination that does \
+         not hold is not fixed by warping to it again, and the shipped game did it 1501 times \
+         in 25 s with 60 warn lines a second: {runaway:?}",
+        runaway.len()
+    );
+}
+
+#[test]
+fn f012_the_map_footprint_is_the_world_at_every_height() {
+    // ## THE HEIGHT AXIS. It is the one every fixture of the first round held constant, and it
+    // ## is the one the rule depended on.
+    //
+    // What the rule reads: `Transform.translation.x`, `.y`, `.z`; `map.size_m` (both axes);
+    // `bounds.recovery_plane_y_m`; `SafeGround`.
+    // What this sweep varies: 8 bearings out of the map x **11 heights**, derived from the
+    // map's own numbers and spanning everything a body can be at — below the fence's foot, on
+    // the ground, on the coping of the 120 m wall, just under and just over `fence_top_m`, and
+    // up at the two ceilings the gear was measured to reach (657 m from the ground, 900 m from
+    // the wall). 88 samples.
+    // What it holds constant: the distance past the edge (2 m — far enough that no rounding
+    // decides it, close enough that a body 2 m out is exactly the case a swing produces) and
+    // the map (`current`, because the claim is about the district that ships).
+    // What it skips: nothing; `checked` is asserted against the sweep's size.
+    let mut app = app_on_current_map();
+    let e = me(&mut app);
+    let d = data(&app);
+    let map = d.current_map().expect("maps.ron: `current` names a map").clone();
+    let b = map.bounds.clone();
+    let (hx, hz) = (map.size_m.0 * 0.5, map.size_m.1 * 0.5);
+    let floor = deepest_floor_m(&app);
+
+    let heights = [
+        b.fence_bottom_m + 5.0,
+        floor,
+        2.0,
+        30.0,
+        121.0,
+        b.fence_top_m * 0.5,
+        b.fence_top_m - 1.0,
+        b.fence_top_m + 0.5,
+        b.fence_top_m + 60.0,
+        657.0,
+        902.0,
+    ];
+
+    let mut lost = Vec::new();
+    let mut checked = 0usize;
+    for (label, on_edge) in eight_ways_out(hx, hz) {
+        let dir = Vec3::new(on_edge.x.signum() * on_edge.x.abs().min(1.0), 0.0, on_edge.z.signum() * on_edge.z.abs().min(1.0))
+            .normalize();
+        for y in heights {
+            checked += 1;
+            let from = Vec3::new(on_edge.x, y, on_edge.z) + dir * 2.0;
+            put_body_at(&mut app, e, from);
+            ticks(&mut app, 90); // 1.5 s — a recovery costs ONE tick, and then he settles
+            let p = at(&app, e);
+            if !back_in_the_world(p, hx, hz, floor) {
+                lost.push(format!("{label} at y = {y:.1} -> {p:?}"));
+            }
+        }
+    }
+
+    assert_eq!(checked, 8 * heights.len(), "the sweep skipped samples");
+    assert!(
+        lost.is_empty(),
+        "{} of {checked} bodies two metres outside the {} x {} m map were still out of the \
+         world 1.5 s later. Every one of them is out whatever his height — the ones above \
+         {} m are the ones the first build could not see: {lost:?}",
+        lost.len(),
+        map.size_m.0,
+        map.size_m.1,
+        b.fence_top_m,
+    );
+}
+
+/// Flies `n` ticks with the look nailed at an absolute angle and **samples every tick**:
+/// how many ticks he spent outside the map's footprint in total, the longest unbroken run of
+/// them, and the lowest `y` he reached. A final position cannot see any of the three — the
+/// bug being measured is a body that is outside for ten seconds and then lands somewhere
+/// ordinary.
+fn fly_looking(
+    app: &mut App,
+    e: Entity,
+    yaw_deg: f32,
+    pitch_deg: f32,
+    n: u64,
+    hx: f32,
+    hz: f32,
+) -> (u64, u64, f32) {
+    let (mut total, mut streak, mut longest, mut lowest) = (0u64, 0u64, 0u64, f32::INFINITY);
+    for _ in 0..n {
+        app.world_mut().resource_mut::<LookOverride>().0 =
+            Some((yaw_deg.to_radians(), pitch_deg.to_radians()));
+        app.update();
+        let p = at(app, e);
+        lowest = lowest.min(p.y);
+        if p.x.abs() > hx || p.z.abs() > hz {
+            total += 1;
+            streak += 1;
+            longest = longest.max(streak);
+        } else {
+            streak = 0;
+        }
+    }
+    (total, longest, lowest)
+}
+
+#[test]
+fn f012_two_held_keys_from_the_spawn_point_do_not_carry_you_out_of_the_world() {
+    // ## The keyboard-only escape, driven exactly as it was measured on 2026-08-28
+    //
+    // No warp anywhere but onto the spawn point, no velocity written by hand, no hook: `W` and
+    // `ShiftLeft` held, and the look angle turned twice. The measured run read
+    // **243.143 m** after 7 s of climbing at pitch 89, then **284.175 m and outside the map**
+    // after 9 s at pitch 20, then **-233.201 m and still falling** eight seconds later —
+    // roughly **ten seconds of falling out of the world** before the plane at -300 m caught
+    // him. The fence is 200 m tall and did nothing about any of it.
+    //
+    // ## What is asserted, and why it is a STREAK and not a final position
+    //
+    // After the fix he still flies out — of course he does, he is holding `W` at the edge —
+    // and he is put back on the tick after he crosses. So the honest measure is **how long he
+    // is out**, sampled every tick: one crossing is not a bug, ten seconds of falling is. The
+    // recovery costs one tick to write the message and one for `apply_warps` to move the body,
+    // so anything up to a handful of ticks is the mechanism working.
+    //
+    // What the answer depends on: `player.air_accel_m_s2`, `vector.boost_m_s2`,
+    // `game.gravity_m_s2`, `vector.gas_tank`, `map.size_m`, `bounds.*`, `SafeGround`.
+    // What this varies: the two look angles (up, then out), and it samples **every one of the
+    // 1080 ticks** rather than the three the old fixture looked at.
+    // What it holds constant: one flight path — it is a repro of a reported escape, not a
+    // sweep; the sweep over heights is `f012_the_map_footprint_is_the_world_at_every_height`.
+    // What it skips: nothing; `total` counts the ticks it saw him out and the assertion below
+    // prints it, so a run in which he never left says so instead of passing vacuously.
+    // ⚠️ It asserts no height anywhere, so a retune of the provisional `gravity_m_s2` /
+    // `boost_m_s2` changes how far he gets and not whether this passes.
+    let mut app = app_on_current_map();
+    let e = me(&mut app);
+    let d = data(&app);
+    let map = d.current_map().expect("maps.ron: `current` names a map").clone();
+    let (hx, hz) = (map.size_m.0 * 0.5, map.size_m.1 * 0.5);
+    let floor = deepest_floor_m(&app);
+
+    put_body_at(&mut app, e, Vec3::new(0.0, 2.0, 0.0));
+    ticks(&mut app, 60);
+    assert_eq!(state(&app, e), MovementState::Grounded, "the escape starts from a STANDING player");
+
+    hold(&mut app, KeyCode::KeyW);
+    hold(&mut app, KeyCode::ShiftLeft);
+    // 7 s straight up. Measured apex of this leg on 2026-08-28: 241.9 m — over a 200 m fence.
+    let (up_total, _, _) = fly_looking(&mut app, e, 0.0, 89.0, 420, hx, hz);
+    let apex = at(&app, e);
+    // 9 s outward. `yaw = -90` looks along +X (`docs/conventions.md`), `pitch 20` keeps him
+    // climbing while he travels — the exact pair that read 284 m and outside the map.
+    let (out_total, longest, lowest) = fly_looking(&mut app, e, -90.0, 20.0, 540, hx, hz);
+    release(&mut app, KeyCode::KeyW);
+    release(&mut app, KeyCode::ShiftLeft);
+    let (tail_total, tail_longest, tail_lowest) = fly_looking(&mut app, e, -90.0, 20.0, 480, hx, hz);
+
+    // The fixture has to BE the escape, or every assertion below is satisfied by a player who
+    // never went anywhere (`CLAUDE.md` rule 5).
+    assert!(
+        apex.y > 120.0,
+        "7 s of W+Shift looking up reached only {:.1} m — that is not over the 200 m fence and \
+         the run below is not the escape that was reported",
+        apex.y
+    );
+    assert_eq!(up_total, 0, "he left the footprint while flying straight UP from the spawn point");
+    assert!(
+        out_total > 0,
+        "9 s of flying outward from {apex:?} never crossed the {} x {} m edge at all — the \
+         escape did not happen and this test proves nothing",
+        map.size_m.0,
+        map.size_m.1
+    );
+
+    // 6 ticks: one to write `WarpPlayer`, one for `apply_warps` to move the body, and slack for
+    // the tick he is still travelling on. Ten seconds is 600.
+    let cap = 6;
+    assert!(
+        longest.max(tail_longest) <= cap,
+        "he was outside the {} x {} m map for {} ticks in a row on two held keys ({out_total} \
+         + {tail_total} ticks out of 1020 in total). Anything over {cap} is a player falling \
+         through nothing: the escape reached {apex:?} and the lowest he got was {:.1} m",
+        map.size_m.0,
+        map.size_m.1,
+        longest.max(tail_longest),
+        lowest.min(tail_lowest)
+    );
+    let p = at(&app, e);
+    assert!(
+        back_in_the_world(p, hx, hz, floor),
+        "after the escape and 8 s more he is at {p:?}, out of the world (floor {floor:.2} m)"
+    );
+    assert!(
+        lowest.min(tail_lowest) > map.bounds.recovery_plane_y_m,
+        "the footprint rule is supposed to catch him BEFORE the plane does, and he still \
+         reached {:.1} m against a plane at {} m",
+        lowest.min(tail_lowest),
+        map.bounds.recovery_plane_y_m
+    );
+}
+
+#[test]
+fn f012_a_body_driven_into_the_fence_at_top_speed_is_never_recovered() {
+    // ## THE CONTROL THAT PAYS FOR THE ZERO GRACE, and it is a measurement first.
+    //
+    // `player::recovery::out_of_the_world` allows **no tolerance** at the map's edge, because
+    // any tolerance of `g` metres is a standable ring `g` metres wide on top of the fence. That
+    // is only affordable if the solver never puts a legitimate body past the edge — so this
+    // test drives one into the fence at `vector.max_speed_m_s` and reads the largest excursion
+    // it can produce, instead of arguing from the capsule radius.
+    //
+    // What the answer depends on: `player.radius_m`, `bounds.fence_margin_m`,
+    // `fence_thickness_m`, `game.ron: substeps`, `vector.max_speed_m_s`, `map.size_m`.
+    // What this varies: the four flats **x six heights** spanning the fence from its foot to
+    // its top face — including 199 m and 200.5 m, the two either side of `fence_top_m`, which
+    // is where a body that is going over rather than into it separates. 24 launches.
+    // What it holds constant, and why: the direction is straight at the panel (the diagonal
+    // case is `f012_flying_at_the_edge_at_top_speed_does_not_tunnel_through_it`) and the map.
+    // What it skips: the two heights above `fence_top_m` are **expected** to leave the map, so
+    // they are counted separately and not asserted as excursions — the count is printed.
+    let mut app = app_on_current_map();
+    let e = me(&mut app);
+    let d = data(&app);
+    let map = d.current_map().expect("maps.ron: `current` names a map").clone();
+    let b = map.bounds.clone();
+    let (hx, hz) = (map.size_m.0 * 0.5, map.size_m.1 * 0.5);
+    let v_max = d.game.vector.max_speed_m_s;
+
+    let mut worst = f32::NEG_INFINITY;
+    let mut worst_at = String::new();
+    let mut warped_below_the_top = Vec::new();
+    let mut over_the_top = 0usize;
+    let mut checked = 0usize;
+
+    for (label, from, dir) in [
+        ("+x", Vec3::new(hx - 60.0, 0.0, 0.0), Vec3::X),
+        ("-x", Vec3::new(-hx + 60.0, 0.0, 0.0), Vec3::NEG_X),
+        ("+z", Vec3::new(0.0, 0.0, hz - 60.0), Vec3::Z),
+        ("-z", Vec3::new(0.0, 0.0, -hz + 60.0), Vec3::NEG_Z),
+    ] {
+        for y in [b.fence_bottom_m + 10.0, 3.0, 60.0, 121.0, b.fence_top_m - 1.0, b.fence_top_m + 0.5]
+        {
+            checked += 1;
+            let above_the_fence = y > b.fence_top_m;
+            put_body_at(&mut app, e, from + Vec3::Y * y);
+            app.update();
+            app.world_mut().entity_mut(e).get_mut::<LinearVelocity>().expect("velocity").0 =
+                dir * v_max;
+            let mut warps = 0usize;
+            let mut out_by = f32::NEG_INFINITY;
+            for _ in 0..90 {
+                app.update();
+                warps += warps_sent(&app);
+                let p = at(&app, e);
+                out_by = out_by.max((p.x.abs() - hx).max(p.z.abs() - hz));
+            }
+            if above_the_fence {
+                over_the_top += 1;
+                continue;
+            }
+            if out_by > worst {
+                worst = out_by;
+                worst_at = format!("{label} at y = {y:.1}");
+            }
+            if warps > 0 {
+                warped_below_the_top.push(format!("{label} at y = {y:.1}: {warps} warp(s)"));
+            }
+        }
+    }
+
+    println!(
+        "F-012 fence at speed: worst excursion {worst:+.4} m relative to the map edge \
+         ({worst_at}), fence_margin_m {}, radius_m {}",
+        b.fence_margin_m,
+        d.game.player.radius_m
+    );
+    assert_eq!(checked, 24, "the sweep skipped samples");
+    assert_eq!(over_the_top, 4, "4 of the 24 launches start above the fence and are expected to \
+         leave the map — they are counted, not asserted, and this is the count");
+    assert!(
+        warped_below_the_top.is_empty(),
+        "a body flying INTO the fence at {v_max} m/s was recovered {} time(s) — the zero grace \
+         at the edge is eating legitimate play: {warped_below_the_top:?}",
+        warped_below_the_top.len()
+    );
+    // ## The number the upper half of the bracket stands on, and it is DERIVED, not typed.
+    //
+    // The solver keeps a capsule's origin `player.radius_m` inside any solid face, so a body
+    // pressed against the fence's inner face — which stands `fence_margin_m` outside the map's
+    // edge — sits `radius_m - fence_margin_m` INSIDE that edge. Measured 2026-08-29 at
+    // `fence_margin_m: 0.0`: **-0.3500 m**, `radius_m` to four decimals, so the solver's
+    // penetration at the clamp is zero. The threshold is half of the derived clearance: a real
+    // regression halves it, and a rounding does not.
+    let clearance_m = d.game.player.radius_m - b.fence_margin_m;
+    assert!(
+        clearance_m > 0.0,
+        "maps.ron: fence_margin_m {} is not below player.radius_m {} — a body pressed against \
+         the fence is then outside the map by construction and this measurement is meaningless \
+         (`tests/data.rs::f012_the_fence_stands_within_one_body_radius_of_the_map_edge`)",
+        b.fence_margin_m,
+        d.game.player.radius_m
+    );
+    assert!(
+        worst < -0.5 * clearance_m,
+        "the solver let a body at {v_max} m/s reach {worst:.4} m past the {} x {} m edge \
+         ({worst_at}). `radius_m` {} minus `fence_margin_m` {} is {clearance_m:.4} m of \
+         clearance, and the zero grace in `out_of_the_world` needs the fence to keep a body at \
+         least half of it inside the map.",
+        map.size_m.0,
+        map.size_m.1,
+        d.game.player.radius_m,
+        b.fence_margin_m
+    );
+}
+
+#[test]
+fn f012_a_legitimate_fall_inside_the_map_is_never_recovered_at_any_height() {
+    // ## THE CONTROLS the user's own play consists of. Not one of these may be recovered.
+    //
+    //   a tower dive of 120 m · a fall into a courtyard · a hook that drops you 60 m ·
+    //   a rope swing along the OUTSIDE of the 120 m wall, at the far end of the district
+    //
+    // The rule that tells them from a fall out of the world is `map.size_m` and
+    // `recovery_plane_y_m` — never the fall distance, never the speed, and (since 2026-08-28)
+    // never the height either, which is exactly why this control has to run at several.
+    //
+    // What the answer depends on: `map.size_m`, `bounds.recovery_plane_y_m`, `SafeGround`,
+    // `gravity_m_s2`.
+    // What this varies: 4 kinds of legitimate fall x the place in the district, and for the
+    // drops the height (30, 60 and 121 m). 11 cases.
+    // What it holds constant: the map, because the claim is about the district that ships.
+    // What it skips: nothing — every case asserts, and each one also asserts that it really
+    // fell or really moved, so a body that never left its start cannot satisfy it.
+    let mut app = app_on_current_map();
+    let e = me(&mut app);
+    let d = data(&app);
+    let map = d.current_map().expect("maps.ron: `current` names a map").clone();
+    let (hx, hz) = (map.size_m.0 * 0.5, map.size_m.1 * 0.5);
+    let v_max = d.game.vector.max_speed_m_s;
+
+    // Give him a ground to be wrongly sent back to, or a recovery would be invisible.
+    put_body_at(&mut app, e, Vec3::new(0.0, 2.0, 0.0));
+    ticks(&mut app, 60);
+    assert_eq!(state(&app, e), MovementState::Grounded, "the controls need a recorded ground");
+
+    let mut recovered = Vec::new();
+    // Free falls: a courtyard, three 60 m drops of the kind a released hook produces, and two
+    // dives off the coping — one in the middle of the wall and one 10 m from the map's corner,
+    // which is the case a footprint rule can eat.
+    for (label, from) in [
+        ("courtyard 30 m", Vec3::new(0.0, 30.0, 0.0)),
+        ("hook drop 60 m, mid-district", Vec3::new(200.0, 60.0, 200.0)),
+        ("hook drop 60 m, west", Vec3::new(-260.0, 60.0, 100.0)),
+        ("hook drop 60 m, 10 m from the corner", Vec3::new(hx - 10.0, 60.0, hz - 10.0)),
+        ("tower dive 121 m, mid-wall", Vec3::new(0.0, 121.0, -60.0)),
+        ("tower dive 121 m, 10 m from the edge", Vec3::new(hx - 10.0, 121.0, -60.0)),
+    ] {
+        put_body_at(&mut app, e, from);
+        let mut warps = 0usize;
+        let mut lowest = f32::INFINITY;
+        for _ in 0..300 {
+            app.update();
+            warps += warps_sent(&app);
+            lowest = lowest.min(at(&app, e).y);
+        }
+        assert!(
+            from.y - lowest > 20.0,
+            "{label}: it has to BE a fall — it dropped {:.1} m",
+            from.y - lowest
+        );
+        if warps > 0 {
+            recovered.push(format!("{label} from {from:?}: {warps} warp(s), lowest {lowest:.1} m"));
+        }
+    }
+
+    // The swing along the OUTSIDE of the wall. Ashgate's wall is `(0, 119, -120) x (700, 2, 28)`
+    // — it runs the full width of the map, so its outer face is at z = -134 and everything
+    // beyond it to z = -350 is still the district. A rope carries a player along there at the
+    // clamp; the fence is what he meets at the end of it, and he must not be teleported for it.
+    for (label, from, dir) in [
+        ("swing +x outside the wall", Vec3::new(-hx + 20.0, 60.0, -140.0), Vec3::X),
+        ("swing -x outside the wall", Vec3::new(hx - 20.0, 60.0, -140.0), Vec3::NEG_X),
+        ("swing -z into the corner, over the wall", Vec3::new(hx - 20.0, 140.0, -170.0), Vec3::NEG_Z),
+        ("swing +x along the far edge", Vec3::new(-hx + 20.0, 25.0, hz - 6.0), Vec3::X),
+        ("swing -z along the far edge", Vec3::new(hx - 6.0, 25.0, hz - 20.0), Vec3::NEG_Z),
+    ] {
+        put_body_at(&mut app, e, from);
+        app.update();
+        app.world_mut().entity_mut(e).get_mut::<LinearVelocity>().expect("velocity").0 =
+            dir * v_max;
+        let mut warps = 0usize;
+        let mut travelled = 0.0_f32;
+        for _ in 0..420 {
+            app.update();
+            warps += warps_sent(&app);
+            travelled = travelled.max((at(&app, e) - from).dot(dir));
+        }
+        assert!(
+            travelled > 50.0,
+            "{label}: it has to BE a swing — he covered {travelled:.1} m along {dir:?}"
+        );
+        if warps > 0 {
+            recovered.push(format!("{label} from {from:?}: {warps} warp(s) after {travelled:.1} m"));
+        }
+    }
+
+    assert!(
+        recovered.is_empty(),
+        "{} of 11 legitimate falls and swings inside the {} x {} m district were recovered. \
+         The footprint rule is eating play it must not touch: {recovered:?}",
+        recovered.len(),
+        map.size_m.0,
+        map.size_m.1
+    );
+}
+
+/// The same app, but the fence is planned `margin_m` outside the map's own edge — the latent
+/// bug of 2026-08-28, in the one form that makes it visible. Mutated **before** the first
+/// `update()`, so `world::bounds::build_bounds` really builds the fence out there.
+fn app_with_fence_margin(margin_m: f32) -> App {
+    let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    {
+        let mut d = app.world_mut().resource_mut::<GameData>();
+        let key = d.maps.current.clone();
+        d.maps.maps.get_mut(&key).expect("current names a map").bounds.fence_margin_m = margin_m;
+    }
+    app.update();
+    app
+}
+
+#[test]
+fn f012_a_fence_far_outside_the_map_is_not_a_bigger_map() {
+    // ## The latent one, and it was one RON number away from shipping.
+    //
+    // `record_safe_ground` gated the footprint on `map.size_m * 0.5 + bounds.fence_margin_m` —
+    // the **fence's** footprint, not the map's — inside a file whose own header says it knows
+    // nothing about `world::bounds`. With `fence_margin_m = 0` the two coincide and nothing
+    // shipped wrong; with `500` the recovery put the player back at `(350.10, 120.50, -120.0)`,
+    // 0.1 m past the end of the coping with nothing under it, and he fell out and had to be
+    // recovered twice.
+    //
+    // What the rule reads: `map.size_m` and `bounds.recovery_plane_y_m` — and it must read
+    // **nothing else**, which is what this measures by changing the one thing it must not read.
+    // What this varies: `fence_margin_m` (0 and 500 m), x 8 bearings x 5 heights for the pure
+    // half, and one driven body in the 500 m gap between the map's edge and the fence.
+    // What it skips: nothing.
+    use defeated_by_titan::player::recovery::out_of_the_world;
+
+    let d = data(&app_on_current_map());
+    let mut wide = d.current_map().expect("maps.ron: `current` names a map").clone();
+    let narrow = wide.clone();
+    wide.bounds.fence_margin_m = 500.0;
+    let (hx, hz) = (narrow.size_m.0 * 0.5, narrow.size_m.1 * 0.5);
+
+    let mut disagreed = Vec::new();
+    let mut checked = 0usize;
+    for (label, on_edge) in eight_ways_out(hx, hz) {
+        let dir = Vec3::new(on_edge.x.signum() * on_edge.x.abs().min(1.0), 0.0, on_edge.z.signum() * on_edge.z.abs().min(1.0))
+            .normalize();
+        for past in [-5.0_f32, -0.5, 0.5, 5.0, 400.0] {
+            for y in [-40.0_f32, 2.0, 121.0, 205.0, 900.0] {
+                checked += 1;
+                let p = Vec3::new(on_edge.x, y, on_edge.z) + dir * past;
+                if out_of_the_world(&narrow, p) != out_of_the_world(&wide, p) {
+                    disagreed.push(format!("{label} {past:+} m at y = {y}: {p:?}"));
+                }
+            }
+        }
+    }
+    assert_eq!(checked, 8 * 5 * 5, "the sweep skipped samples");
+    assert!(
+        disagreed.is_empty(),
+        "{} of {checked} points got a different answer when the FENCE moved 500 m — \
+         `out_of_the_world` reads the map's footprint and must not read the fence's: \
+         {disagreed:?}",
+        disagreed.len()
+    );
+
+    // And the driven half, because a pure sweep over invented `Vec3`s is arithmetic
+    // (`CLAUDE.md` rule 5, the fourth shape): a real body, in the real 500 m gap, with a real
+    // fence built out at 850 m.
+    let mut app = app_with_fence_margin(500.0);
+    let e = me(&mut app);
+    let floor = deepest_floor_m(&app);
+    put_body_at(&mut app, e, Vec3::new(0.0, 2.0, 0.0));
+    ticks(&mut app, 60);
+    let safe = at(&app, e);
+    assert!(safe.x.abs() <= hx, "the fixture needs him standing INSIDE the map: {safe:?}");
+
+    put_body_at(&mut app, e, Vec3::new(hx + 150.0, 20.0, 0.0));
+    ticks(&mut app, 90);
+    let p = at(&app, e);
+    assert!(
+        back_in_the_world(p, hx, hz, floor),
+        "a body 150 m past the {} x {} m map, inside a fence planned 500 m further out, is at \
+         {p:?} 1.5 s later. The gap between the map and the fence is floorless — it is not a \
+         bigger map.",
+        narrow.size_m.0,
+        narrow.size_m.1
+    );
+}
+
+/// Holds `W` + `ShiftLeft` straight up from `from` and reports the **steady** climb: metres
+/// gained and gas spent between second 5 and second 15, by which time the body is at
+/// `vector.max_speed_m_s` and every transient is behind it.
+///
+/// No hook, no warp after the start, no velocity written by hand — two keys, exactly the two
+/// the escape of 2026-08-28 was flown on.
+fn steady_climb(app: &mut App, e: Entity, from: Vec3) -> (f32, f32) {
+    let gas = |app: &App| app.world().get::<Gas>(e).expect("the player has gas").current;
+    put_body_at(app, e, from);
+    ticks(app, 30);
+    hold(app, KeyCode::KeyW);
+    hold(app, KeyCode::ShiftLeft);
+    let up = |app: &mut App, n: u64| {
+        for _ in 0..n {
+            app.world_mut().resource_mut::<LookOverride>().0 =
+                Some((0.0, 89.0_f32.to_radians()));
+            app.update();
+        }
+    };
+    up(app, 300); // 5 s of spin-up, thrown away
+    let (y0, g0) = (at(app, e).y, gas(app));
+    up(app, 600); // 10 s of steady state, measured
+    let (y1, g1) = (at(app, e).y, gas(app));
+    release(app, KeyCode::KeyW);
+    release(app, KeyCode::ShiftLeft);
+    (y1 - y0, g0 - g1)
+}
+
+/// The highest surface of this map you can stand on, and the point above its middle — derived
+/// out of the planned blocks, never typed. For Ashgate that is the coping of the 120 m wall.
+fn highest_standing_start(app: &App) -> Vec3 {
+    let d = data(app);
+    let map = d.current_map().expect("maps.ron: `current` names a map").clone();
+    let top = defeated_by_titan::world::map::plan_blocks(&d, &map)
+        .into_iter()
+        .filter(|b| b.solid)
+        .max_by(|a, b| {
+            (a.center_m.y + a.size_m.y * 0.5)
+                .partial_cmp(&(b.center_m.y + b.size_m.y * 0.5))
+                .expect("no NaN in a planned block")
+        })
+        .expect("a map has blocks");
+    top.center_m + Vec3::Y * (top.size_m.y * 0.5 + 2.0)
+}
+
+#[test]
+fn f012_the_gear_climbs_higher_than_the_fence_and_the_number_is_pinned() {
+    // ## The measurement the first build asserted in prose and never took.
+    //
+    // `fence_top_m` stood at 200 m under the sentence *"far above anything the gear reaches on
+    // gas alone"*. Measured 2026-08-28 from a standing start at (0, 2, 0), `W` + `Shift`,
+    // looking up: **12.2 · 49.9 · 54.6 · 71.7 · 114.5 · 182.5 · 259.3 · 336.3 m** after one to
+    // eight seconds, and the gas for the first six was 15000.000 -> 14891.771 — **0.72 % of one
+    // tank**. The sentence was wrong by 3.3x in height and irrelevant in gas.
+    //
+    // 🔴 **And it is worse than 3.3x, because there is no apex at all.** The 657 m that round
+    // reported was where its script ran out of ticks. Held long enough the body simply sits at
+    // `vector.max_speed_m_s` going up: this fixture measured **3992 m in 60 s** on `graybox`.
+    // The climb is bounded by the **tank**, not by the sky — so the honest ceiling is
+    // `metres per unit of gas x vector.gas_tank`, and it is measured here in a ten-second
+    // steady-state window instead of flown for the fourteen minutes it would really take.
+    //
+    // 🔴 **This test exists to go red on a retune.** It does NOT demand that the fence be
+    // taller than the gear — it must not, because a taller fence is not the fix (it would still
+    // have a top face to stand on) and `player::recovery::out_of_the_world` is. What it pins is
+    // the MEASUREMENT, in `maps.ron: bounds.gear_ceiling_m`, so the next person who lowers
+    // `vector.gas_tank` or raises `vector.boost_m_s2` finds out here rather than in the sky.
+    //
+    // What the answer depends on: `vector.boost_m_s2`, `player.air_accel_m_s2`,
+    // `game.gravity_m_s2`, `vector.max_speed_m_s`, the gas cost of a held boost, and
+    // `vector.gas_tank`.
+    // What this varies: the launch point — the ground **and** the highest standable surface of
+    // the map, derived from the planned blocks and not typed — and the map: `graybox` (35 m
+    // skyline) and `ashgate` (a 120 m wall), whose numbers must not be the same.
+    // What it holds constant, and why: the look angle (89 deg, the maximum an `Intent` allows)
+    // and the two keys, because the claim is about the cheapest escape and not the best one.
+    // What it skips: nothing; both maps and both launch points are measured and asserted.
+    for map_key in ["graybox", "ashgate"] {
+        let mut app = app_on(map_key);
+        let e = me(&mut app);
+        let d = data(&app);
+        let map = d.current_map().expect("a map").clone();
+        let tank = d.game.vector.gas_tank;
+        let start = highest_standing_start(&app);
+
+        let (climbed_g, spent_g) = steady_climb(&mut app, e, Vec3::new(0.0, 2.0, 0.0));
+        let (climbed_r, spent_r) = steady_climb(&mut app, e, start);
+        assert!(
+            spent_g > 0.0 && spent_r > 0.0,
+            "{map_key}: ten seconds of held boost spent {spent_g} / {spent_r} gas — a climb              that costs nothing is not the flight this test is about"
+        );
+        assert!(
+            climbed_g > 100.0 && climbed_r > 100.0,
+            "{map_key}: ten seconds of W+Shift straight up gained {climbed_g:.1} /              {climbed_r:.1} m — that is not a climb and the pin below would be noise"
+        );
+
+        // The ceiling one full tank buys, from the better of the two starts.
+        let per_gas = (climbed_g / spent_g).max(climbed_r / spent_r);
+        let base = start.y.max(2.0);
+        let measured = base + per_gas * tank;
+        let declared = map.bounds.gear_ceiling_m;
+
+        // 5 %: a retune of gas, boost, gravity or the speed clamp moves this by far more, and
+        // the noise of a ten-second window by far less. It is the width of "nobody touched the
+        // gear", not a taste.
+        assert!(
+            (measured - declared).abs() <= declared * 0.05,
+            "{map_key}: one full tank of {tank} lifts the gear {measured:.0} m              ({per_gas:.3} m per unit of gas, {climbed_g:.1} m / {spent_g:.2} gas from the              ground and {climbed_r:.1} m / {spent_r:.2} gas from {start:?}), and `maps.ron:              bounds.gear_ceiling_m` says {declared:.0} m. Somebody changed the gear. Re-fly it,              write {measured:.0} into `maps.ron` — and then read `fence_top_m` ({} m) again              with the new number in front of you.",
+            map.bounds.fence_top_m
+        );
+        // And the sentence that used to stand in `maps.ron` in place of a measurement, now
+        // asserted instead of believed.
+        assert!(
+            measured > map.bounds.fence_top_m,
+            "{map_key}: the gear now stops at {measured:.0} m, BELOW the {} m fence. That would              be a real change and a welcome one — but `player::recovery::out_of_the_world` is              what holds the world together now, and this line is here so the claim in              `maps.ron` and the claim in `recovery.rs` cannot quietly drift apart.",
+            map.bounds.fence_top_m
         );
     }
 }
