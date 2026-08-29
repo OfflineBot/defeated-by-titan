@@ -1507,3 +1507,73 @@ titan appears to have gained a `Body` with it. Not touched here: `src/vector/**`
 `src/titan/**` are another stream's. Either the script's expectation is stale or `B-007` has
 silently reopened in the other direction, and one of the two has to be written down.
 
+
+## FIND-211 — the map edge's loose ends: a fixture that was being teleported mid-measurement, and a script whose premise expired ten days before it was re-aimed
+
+*(claimed 2026-08-29, stream B — being written)*
+
+---
+
+---
+
+## FIND-210 — the district was flat because a **flight of stairs was pointed the wrong way**, and that capped `step_m` at 1.80 m
+
+**Measured 2026-08-29.** The user, 2026-08-27 and again today: *„es soll auch noch verschiedene
+hoehen geben. aktuell sit alles flach von der map."* — and asked which he meant, *„Das Gelaende
+selbst — Huegel, Terrassen"*.
+
+### The cause is one bound, and it was never written down anywhere
+
+A falling terrace edge used to be a full-length stepped **bank** laid across the street. A bank
+is bounded by the street it crosses: a house stands `street_m / 2 - cell_jitter_m` = 1.50 m back
+on **each** side, so the run is at most 3.00 m, and at the 0.60 m tread a 0.30 m riser needs,
+
+    step_m <= (3.00 / 0.60 + 1) * 0.30 = 1.80 m
+
+**1.80 m per level was a hard ceiling, and no amount of tuning `maps.ron` could pass it.**
+`FIND-134` had already ruled out the renderer (the retaining-wall/cap split moved **5 of
+921 600 pixels**) and correctly named the 3.6 % grade as the cause — but read it as a number
+somebody had chosen, when it was a number the geometry had chosen.
+
+**Turn the flight ninety degrees and the bound changes.** A flight that runs *along* the wall is
+bounded by the cell's **length** (42 m) instead of the street's width (3 m) — fourteen times the
+room. The edge becomes a **retaining wall** with one stair cut into it, which is what a terraced
+town actually has.
+
+| | before | after |
+|---|---|---|
+| `terrain.step_m` | 1.50 m | **3.00 m** |
+| peak relief | 7.50 m | **12.00 m** (= `scale.ron: house_large` 11.50) |
+| ground under the houses, p10→p90 | 0.00 → 4.50 m | **0.00 → 9.00 m** |
+| mean cell height | 1.69 m | **3.26 m** |
+| terrace blocks | 1236 | **2337** (+89 %) |
+| **aerial pixels changed, delta > 3** | *(FIND-134: 5)* | **249 979 of 921 600 (27 %)** |
+
+Same 1280x720 vantage FIND-134 used (`f003-map-aerial`, `warp 150 45 60`, `look 48 -17`).
+
+### ⚠️ The trap: raising `levels` makes the district FLATTER
+
+`sky_m = step_m * (levels - 1) + door_height_m` is the line above which a hand-placed block stops
+pinning its cell flat. Raise it and blocks that were **cut around as pillars** become **pins**
+instead. Measured over the shipped map at `step_m` 1.5: `levels` 6 → 8 pins two more cells and
+drops the peak **7.5 → 6.0 m**. `levels` stays 6.
+
+**And the ceiling was never the constraint anyway:** the field is a distance transform from the
+86 pinned cells and the grid rim, and it is already **saturated** — the shipped levels are
+identical, cell for cell, to the pure transform computed with the ceiling set to 25. The only
+lever on this map is `step_m`.
+
+### The control that says the walk did not get harder
+
+`stair_rise_m` did not move (0.30). Same route, same binary, only `gravity_m_s2` differing:
+**-20 → 9.000 climbs to 11.837 m** (nine risers, on foot); **-32 → 9.000, not one riser**. That
+is `B-018` unchanged — the new flight climbs at exactly the gravity the old bank climbed at and
+fails at exactly the one it failed at.
+
+### What it cost to find out, and the rule
+
+A first pass concluded "the new stairs are a walkability regression" from a route that walked
+**east** — and this harness cannot move a body along X at all while reporting `speed 6.000`
+(**`B-022`**, found here). The conclusion was confident, reproducible and wrong.
+**Before believing a body did not climb, prove it moved**: read a coordinate that must change,
+not the speed, which reads full running speed into a wall.

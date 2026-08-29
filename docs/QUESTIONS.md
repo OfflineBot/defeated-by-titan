@@ -3546,3 +3546,37 @@ edge's loose ends are closed.
 
 **Play test — „Später — bau weiter."** `Q-063` gravity, `Q-064` Shift, `Q-046` gas and `Q-077`
 "too light" stay open and provisional. **The supervisor owes him all four the moment he plays.**
+
+---
+
+## Q-0RELIEF — how tall should the ground be? `terrain.step_m` is now 3.00 m and that is a taste call
+
+**Asked 2026-08-29** (`FIND-210`). He said the map is flat and that he means the ground itself —
+*„Das Gelaende selbst — Huegel, Terrassen"*. What was in the way was geometry, and that is fixed:
+a flight now runs along the retaining wall instead of banking across the street, so `step_m` is
+no longer capped at 1.80 m. **How far past it to go is not a geometry question any more.**
+
+`ASSUMPTION:` **3.00 m per level**, which puts the district's peak at 12.00 m — one
+`house_large` (11.50 m) — and the grade at 7.1 %. Chosen so the relief reads as *one storey of
+ground* rather than as a cliff, and so the existing 10 % grade guard in
+`tests/world.rs::f003_the_terrain_grade_stays_inside_what_the_flight_geometry_can_carry` still
+holds without being touched.
+
+Measured alternatives, same binary, same vantage — all of them legal, none of them free:
+
+| `step_m` | peak | grade | note |
+|---|---|---|---|
+| 1.50 | 7.50 m | 3.6 % | what he called flat |
+| 3.00 | **12.00 m** | 7.1 % | shipped |
+| 3.60 | 14.40 m | 8.6 % | still under the grade guard |
+| 4.50 | 18.00 m | 10.7 % | **trips the guard**; the guard would have to be re-derived, not raised |
+| 6.00 | 24.00 m | 14.3 % | a 6 m wall in a 6 m street |
+
+`ROLLBACK:` one number — `assets/data/maps.ron`, `ashgate.terrain.step_m`. It must stay a whole
+multiple of `stair_rise_m` (0.30). Nothing else in the change depends on its value: the flight
+geometry, the tests and the two scripts all derive from it. Screenshots of 3.6 and 4.5 were
+taken and are in the round's scratch if he wants to look before deciding.
+
+⚠️ Costs that come with it and do not depend on taste: **+89 % terrace blocks** (1236 → 2337),
+and the district is now climbed by **finding the stairs** rather than by walking straight up any
+edge — a 5.40 m flight at one corner of each 42 m cell instead of a bank along the whole of it.

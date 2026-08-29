@@ -106,7 +106,7 @@ fn data(app: &App) -> GameData {
 /// capsules, and avian pushes them apart: measured, that cost **1.10 m/s of the 68** after two
 /// seconds, and the difference looked exactly like a physics bug in the boost. Whoever needs
 /// two fliers gives them different `x_m`.
-fn flier(app: &mut App, x_m: f32) -> Entity {
+fn flier_at(app: &mut App, x_m: f32, z_m: f32) -> Entity {
     let world = app.world_mut();
     let data = world.resource::<GameData>().clone();
     let mut ids = world.resource::<IdCounter>().to_owned();
@@ -122,10 +122,33 @@ fn flier(app: &mut App, x_m: f32) -> Entity {
     // for the boost's own downward component when a test aims one.
     let longest_s = 4.0_f32;
     let fall_m = 0.5 * data.game.gravity_m_s2.abs() * longest_s * longest_s;
-    let e = spawn_player(&mut commands, &mut ids, &data, Vec3::new(x_m, fall_m * 1.5, 0.0), false);
+    let e = spawn_player(&mut commands, &mut ids, &data, Vec3::new(x_m, fall_m * 1.5, z_m), false);
     *world.resource_mut::<IdCounter>() = ids;
     app.update();
     e
+}
+
+/// The same flier, spawned at `z = 0`. **Every horizontal stance in this file drifts along
+/// `-Z`** (yaw 0 looks down `-Z`, `docs/conventions.md`), so `z = 0` gives a run half the map's
+/// depth and no more — 200 m on the graybox — and a stance that outlives it is picked up by
+/// `player::recovery` mid-measurement instead of being measured.
+///
+/// 🔴 Whoever writes a test here that holds a horizontal input for more than about three
+/// seconds uses [`flier_at`] with a runway and puts it under
+/// [`f008_the_held_dodge_stance_never_leaves_the_map_footprint`].
+fn flier(app: &mut App, x_m: f32) -> Entity {
+    flier_at(app, x_m, 0.0)
+}
+
+/// **The runway**: a quarter of the map's own depth upwind of the origin, on `+Z`, so a stance
+/// that drifts along `-Z` gets three quarters of the map instead of half.
+///
+/// Out of `maps.ron` rather than written as `100.0`, so a smaller graybox moves the fixture
+/// with the map instead of quietly turning a gas measurement into a teleport
+/// (`docs/FINDINGS.md` FIND-211). Measured with it: the longest dodge window ends **95.5 m**
+/// short of the edge; without it, **0.465 m past** it and one warp.
+fn runway_z(data: &GameData) -> f32 {
+    data.current_map().expect("this file pins a map by name").size_m.1 * 0.25
 }
 
 /// Hold the boost button and grant the gas for it.
@@ -937,12 +960,14 @@ fn charges(app: &App, e: Entity) -> f32 {
 #[test]
 fn f008_a_held_dodge_spends_the_magazine_and_not_one_dash_more() {
     let mut app = app();
-    let e = flier(&mut app, 0.0);
+    let d = data(&app);
+    // Upwind, because a held `move_y` drifts along `-Z` for the whole window — see `flier_at`
+    // and `f008_the_held_dodge_stance_never_leaves_the_map_footprint`.
+    let e = flier_at(&mut app, 0.0, runway_z(&d));
     ticks(&mut app, 5); // out of `Grounded` and into a settled free fall
     steer(&mut app, e, 0.0, 0.0, 0.0, 1.0);
     set_dodge(&mut app, e, true);
 
-    let d = data(&app);
     let full = tank(&app, e);
     // 200 ticks = 3.33 s. Long enough for the whole magazine at `dodge_cooldown_s` 0.6 s
     // spacing (0, 36, 72), short enough that `dodge_recharge_s` 4.0 has not put a fourth
@@ -967,11 +992,12 @@ fn f008_a_held_dodge_spends_the_magazine_and_not_one_dash_more() {
 #[test]
 fn f008_the_magazine_empties_and_then_refills_at_the_rate_from_the_file() {
     let mut app = app();
-    let e = flier(&mut app, 0.0);
+    let d = data(&app);
+    // 🔴 Upwind. This is the 440 tick window that left the 400 x 400 m graybox at
+    // `Vec3(0.0, 204.1, -200.5)` and got warped home mid-measurement — `FIND-211`.
+    let e = flier_at(&mut app, 0.0, runway_z(&d));
     ticks(&mut app, 5);
     steer(&mut app, e, 0.0, 0.0, 0.0, 1.0);
-
-    let d = data(&app);
     assert!(
         (charges(&app, e) - d.game.vector.dodge_charges).abs() < 1e-4,
         "a player deploys with a loaded magazine, got {}",
@@ -987,7 +1013,13 @@ fn f008_the_magazine_empties_and_then_refills_at_the_rate_from_the_file() {
     );
 
     // Let go and wait exactly one recharge period. One charge, not three: the refill is a rate.
+    // ⚠️ The **movement** input goes with it, and that is not decoration: held for the whole
+    // 445 tick window it carries the flier 300 m, which is three quarters of the graybox's own
+    // depth, and `f008_no_dodge_stance_in_this_file_leaves_the_map_footprint` is where that is
+    // measured. Nothing here reads a direction — the magazine and its refill are a count and a
+    // rate — so letting go of the stick with the button costs the test nothing.
     set_dodge(&mut app, e, false);
+    steer(&mut app, e, 0.0, 0.0, 0.0, 0.0);
     let before = charges(&app, e);
     let period = (d.game.vector.dodge_recharge_s * d.game.simulation_hz as f32).round() as u64;
     ticks(&mut app, period);
@@ -1010,7 +1042,8 @@ fn f008_a_refused_dash_costs_no_gas_at_all() {
     // money. A check behind the booking debits 45 gas for an impulse that never happens, and a
     // leak you cannot see is worse than one you can.
     let mut app = app();
-    let e = flier(&mut app, 0.0);
+    let d0 = data(&app);
+    let e = flier_at(&mut app, 0.0, runway_z(&d0)); // upwind — see `flier_at`
     ticks(&mut app, 5);
     steer(&mut app, e, 0.0, 0.0, 0.0, 1.0);
     set_dodge(&mut app, e, true);
@@ -1040,6 +1073,150 @@ fn f008_a_refused_dash_costs_no_gas_at_all() {
         dv.xz().length(),
         d.game.vector.dodge_impulse_m_s,
     );
+}
+
+/// One driven dodge stance, sampled every tick. Returns
+/// `(sampled, outside, min_margin_m, worst_pos, warps)`.
+///
+/// `release_move` is the difference between "he lets go of everything" and "he keeps holding
+/// the stick", and it is an input of the guarded tests, not a knob of this fixture.
+fn dodge_stance(held: u64, tail: u64, release_move: bool) -> (u64, u64, f32, Vec3, u32) {
+    let mut app = app();
+    let d = data(&app);
+    let map = d.current_map().expect("this file pins `graybox`").clone();
+    let hx = map.size_m.0 * 0.5;
+    let hz = map.size_m.1 * 0.5;
+
+    let e = flier_at(&mut app, 0.0, runway_z(&d));
+    ticks(&mut app, 5);
+    steer(&mut app, e, 0.0, 0.0, 0.0, 1.0);
+    set_dodge(&mut app, e, true);
+
+    let (mut sampled, mut outside) = (0_u64, 0_u64);
+    let mut min_margin = f32::INFINITY;
+    let mut worst = Vec3::ZERO;
+    for t in 0..(held + tail) {
+        if t == held {
+            set_dodge(&mut app, e, false);
+            if release_move {
+                steer(&mut app, e, 0.0, 0.0, 0.0, 0.0);
+            }
+        }
+        app.update();
+        let p = app.world().get::<Transform>(e).expect("a player has a transform").translation;
+        sampled += 1;
+        let margin = (hx - p.x.abs()).min(hz - p.z.abs());
+        if margin < min_margin {
+            min_margin = margin;
+            worst = p;
+        }
+        if defeated_by_titan::player::recovery::out_of_the_world(&map, p).is_some() {
+            outside += 1;
+        }
+    }
+    let warps = app
+        .world()
+        .get::<defeated_by_titan::player::recovery::Recoveries>(e)
+        .expect("a player carries his own recovery record")
+        .in_a_row;
+    (sampled, outside, min_margin, worst, warps)
+}
+
+#[test]
+fn f008_no_dodge_stance_in_this_file_leaves_the_map_footprint() {
+    // 🔴 **THE GUARD ON THIS FILE'S OWN FIXTURE, and it exists because the fixture had already
+    // lost a measurement to exactly this.** `f007_the_boost_does_not_outrun_the_top_speed`
+    // boosted horizontally for 4 s on a **400 x 400 m** map, left the footprint at
+    // `Vec3(0.0, 243.1, -200.7)`, and `player::recovery` warped him home **and zeroed his
+    // velocity** (`player::apply_warps` does that on purpose). The test then read **3.7357 m/s**
+    // and blamed the boost. That one was re-aimed on 2026-08-29; the three `F-008` dodge tests
+    // under this guard were not, and the longest of them was still logging
+    // `player 2 was at Vec3(0.0, 204.1, -200.5) m, outside the map footprint (400 x 400 m,
+    // plane -300 m): back to Vec3(0.0, 384.5, 0.0)` on every single run — at tick 245 of 445,
+    // i.e. **the whole second half of its recharge measurement ran on a player who had been
+    // picked up and put back at his spawn point with zero velocity.**
+    //
+    // The other two came within **4.7 m** of the same edge, which is a defect that has not
+    // fired yet rather than a fixture that is fine.
+    //
+    // **THE ORACLE IS NOT MINE.** Both verdicts come from things the *game* wrote:
+    // `player::recovery::out_of_the_world` — the one function that decides where the world ends
+    // (`CLAUDE.md` rule 5's corollary: read the decision, do not re-derive it) — asked about a
+    // position the **driven simulation** produced and never one this test invented
+    // (rule 5, the fourth shape); and `Recoveries::in_a_row`, which is the recovery system's own
+    // count of how often it has had to pick this player up.
+    //
+    // ## WHAT THE CODE UNDER TEST READS   (`recovery::out_of_the_world`)
+    //   `p.x`, `p.y`, `p.z` · `map.size_m.0`, `map.size_m.1` · `bounds.recovery_plane_y_m`
+    // ## WHAT THIS FIXTURE VARIES
+    //   `p.x`, `p.y`, `p.z` — **every tick**, driven by the real app — and **the stance**, which
+    //   is the axis a single-window guard would have held constant: all three windows the `F-008`
+    //   tests below actually hold, at their real lengths and with their real inputs. The longest
+    //   of them is 2.2x the shortest, and the shortest is the one that looks safe.
+    //   The **map** is deliberately not varied: every test guarded here pins `graybox` through
+    //   `app()`, and a different `size_m` is a different fixture rather than a wider sweep.
+    // ## WHAT IT SKIPS
+    //   **Nothing.** No `continue`, no filter, no early exit: `sampled` counts every tick from
+    //   the first to the last and is asserted against the window's own length, so a `0 of N`
+    //   here cannot be arithmetic about a smaller set (`FIND-206`).
+    // ## AND IT SAMPLES THE BOUNDARY ITSELF
+    //   `min_margin_m` is the smallest distance to the edge over the run and is printed in every
+    //   message, red or green. `out_of_the_world` tests `|x| > hx` **strictly**, so a margin of
+    //   exactly `0.0` is a body on the line and *inside* — the class `B-017` was about — which
+    //   is why the last assertion is on the margin and not only on the verdict: a stance that
+    //   survives by 0.17 m is a teleport waiting for the next retune.
+    //
+    // ⚠️ **PINS: the runway, in metres — not the gas, not the charges.** If `dodge_impulse_m_s`,
+    // `air_accel_m_s2`, `gravity_m_s2` or a window length moves, this is the number that moves,
+    // and it moves here one round before it turns back into a silent teleport somewhere else.
+    let d0 = data(&app());
+    let map = d0.current_map().expect("this file pins `graybox`").clone();
+    let period = (d0.game.vector.dodge_recharge_s * d0.game.simulation_hz as f32).round() as u64;
+
+    // (label, held, tail, release_move) — one row per guarded test, its real window.
+    let stances: [(&str, u64, u64, bool); 3] = [
+        ("f008_a_held_dodge_spends_the_magazine_and_not_one_dash_more", 200, 0, false),
+        ("f008_a_refused_dash_costs_no_gas_at_all", 200, 30, false),
+        ("f008_the_magazine_empties_and_then_refills_at_the_rate_from_the_file", 200, period, true),
+    ];
+
+    for (label, held, tail, release_move) in stances {
+        let (sampled, outside, min_margin, worst, warps) = dodge_stance(held, tail, release_move);
+        assert_eq!(
+            sampled,
+            held + tail,
+            "{label}: the sweep sampled {sampled} ticks of a {} tick window — then a `0 of N` \
+             about it is arithmetic about the wrong N",
+            held + tail
+        );
+        assert_eq!(
+            outside, 0,
+            "{label}: {outside} of {sampled} ticks stood outside the {} x {} m footprint; \
+             closest approach {min_margin:.3} m at {worst:?}. Every number that test measures \
+             is measured on a player the recovery picked up and put down again.",
+            map.size_m.0, map.size_m.1
+        );
+        assert_eq!(
+            warps, 0,
+            "{label}: `recovery::Recoveries::in_a_row` says the game warped this player \
+             {warps} time(s) during the stance — the recovery's own count, not mine. Closest \
+             approach {min_margin:.3} m at {worst:?}."
+        );
+        // Measured 2026-08-29 with the runway in place: **100.210 m · 100.210 m · 43.047 m**
+        // (the first two are closest at tick 0, at the start position itself; the third is
+        // closest at the end, at `z = -156.95`). With `runway_z` forced to 0 — the one-line
+        // control — the **second** stance, the one that never once logged a warp, reads
+        // **10.068 m**, and the third reads **-0.465 m and one warp**. The floor is 25 m: under
+        // all three, over the control's worst, and still about a second of drift at the ~22 m/s
+        // the longest stance ends with, so a retune trips this before it trips a gas number.
+        assert!(
+            min_margin > 25.0,
+            "{label}: the stance comes within {min_margin:.3} m of the edge at {worst:?} — \
+             under the 25 m of runway this fixture keeps (measured 100.2 / 100.2 / 43.0 m). \
+             Re-aim the stance (`flier_at`, `runway_z`); never weaken the recovery to make a \
+             test fit."
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------------------

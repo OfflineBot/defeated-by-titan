@@ -1629,3 +1629,82 @@ below; the world simply continuing (generated ground) so there is no edge to fin
 
 **Related:** `FIND-134` · `FIND-091` · `Q-070` (the town stays intact) · `docs/NEXT.md` §3C ·
 `F-003` `M-002`
+
+## §5A — 🔴 HE PLAYED IT, 2026-08-29. Seven things, verbatim, and two of them contradict a 🟧.
+
+> *"ok problem: ist ist immernohc nicht am cursor. es bewegt sich immernohc also die target seile.
+> das passt nicht. zudem steht no target selbst wenn ich ein seil dran hab.. das ist gar nicht gut.
+> die hitboxen passen auch nicht. ich komme nicht an ein titan ran zum hitten! das passt auch
+> nicht! zu not erstelle nochmal einen eigenen titan mit passender größe weil die aktuellen sind
+> eher kleiner! gerne doppelt so groß oder so. und leichter hittable am nacken.. aber aktuell nicht
+> gut. auch die verschiedenen höhen passen nicht! das soll grass sein und nicht so wie jetzt! und
+> nicht verschiedene hardcoded stufen sondern wirklich terrain! und deutlich höher und niedriger
+> als jetzt! und aktuell sind immernoch die großen türme /gates beim eingang. das passt GAR nicht
+> zu attack on titan und existiert so nicht! adde andere türme beim wasser (das wasser ist auch
+> VIEL zu klein)"*
+
+**A round building stepped terraces was STOPPED mid-flight and reverted for point 5** — 373 lines
+of `src/world/map.rs` and 64 of `maps.ron`, saved at
+`$SCRATCH/relief-and-edges.patch`. It was building the thing he just rejected.
+
+### 1 · 🔴 THE MARKER IS STILL NOT AT THE CURSOR, AND IT STILL MOVES — against a 🟧 claim
+
+*„ist immernoch nicht am cursor. es bewegt sich immernoch"*. `F-026`/`FIND-129` claim the drawn
+pixel **is** the projection of the point the rope flies to, measured at **0.0 px on fire and
+anchor**, and an adversary re-derived it independently (`(640.00, 357.77)` computed against
+`(639.5, 375.5)` measured, the 17.7 px in `y` being `SIGHT_CORE_PX`'s documented stand-down).
+**His eye says otherwise and his eye wins** — `CLAUDE.md`: *a symptom he reports is real even when
+the code looks right; every single one so far has been.*
+**So the stage is wrong, not him.** `F-026` goes back to 🟨 until this is understood.
+⚠️ **The likely gap: what was measured is not what he is looking at.** The 🟧 evidence is a
+*projection at one tick*, decoded from a screenshot. He is describing **motion** — a marker that
+lags, jitters or slides while he turns. Nothing in the evidence measures the marker across
+consecutive frames, and `place_arm_aim` runs in `Update` against a `Transform` that `FixedUpdate`
+writes (the same schedule split that produced `FIND-190`'s stale hub prompt). **Measure it in
+motion, tick by tick, before changing anything.**
+
+### 2 · 🔴 „NO TARGET" WHILE A ROPE IS ATTACHED
+
+*„zudem steht no target selbst wenn ich ein seil dran hab"*. An anchored arm is `ArmAimState`'s
+strongest state; reading *no target* there means the state machine and the rope disagree about
+whether an arm is anchored. **This is a two-writers-on-one-question shape** (`FIND-190` again) and
+it should be found by asking who writes `ArmAimState` and who writes `HookState`.
+
+### 3 · 🔴 HE CANNOT REACH A TITAN TO HIT IT — and the titans are too small
+
+*„die hitboxen passen auch nicht. ich komme nicht an ein titan ran zum hitten!"* and
+*„die aktuellen sind eher kleiner! gerne doppelt so groß oder so. und leichter hittable am nacken"*.
+⚠️ **This is the third time hitboxes have come back** (2026-08-24, 2026-08-26). The pass width was
+widened 0.20 → 0.80 m once already and the lurker was *literally unkillable* before that.
+**He is asking for two separate things and they must not be conflated:**
+- **titan SIZE** — roughly double. `assets/data/titan.ron` and `scale.ron`; ⚠️ `max_spawnable_class`
+  gates the bellower and the whole scale ladder is `Q-002`'s.
+- **nape REACH** — easier to hit. That is `cortex_radius_m` and the pass geometry, and
+  `FIND-206` already measured the current window as **one simulation step wide at 21 m/s**.
+  **One tick is not a hitbox, it is a coincidence.**
+
+### 4 · 🔴 REAL TERRAIN, NOT STEPS — and it is GRASS
+
+*„das soll grass sein und nicht so wie jetzt! und nicht verschiedene hardcoded stufen sondern
+wirklich terrain! und deutlich höher und niedriger als jetzt!"*
+**Three separate demands:** a continuous height field (not `levels × step_m` terraces), a **grass**
+surface, and a **much larger vertical range** than today's 3.6 % grade.
+⚠️ `plan_terrain`'s stair asserts, `stair_rise_m` and the `step_m`-must-be-a-multiple rule all
+exist to make *terraces* walkable. **A continuous field does not need them and they should not be
+carried over** — but `FIND-091`'s real finding survives in a new form: *whatever the slope, the
+player has to be able to walk up it.*
+
+### 5 · 🔴 THE GATES AND TOWERS AT THE ENTRANCE ARE WRONG FOR THE GENRE
+
+*„die großen türme /gates beim eingang. das passt GAR nicht zu attack on titan und existiert so
+nicht!"* They are hand-placed in `maps.ron` and are part of the 203 untextured blocks that make up
+the district's whole silhouette. **Removing them changes `f003-ashgate.txt`'s geometry and the
+`hook.gesims_*` ladders.**
+
+### 6 · 🔴 THE WATER IS MUCH TOO SMALL, AND THE TOWERS BELONG THERE INSTEAD
+
+*„adde andere türme beim wasser (das wasser ist auch VIEL zu klein)"*. So the water becomes a real
+feature of the map and the towers move to it.
+
+**Related:** `FIND-129` · `FIND-190` · `FIND-206` · `FIND-134` · `FIND-091` · `Q-002` ·
+`docs/NEXT.md` §4A · `F-026` `F-030` `F-003`

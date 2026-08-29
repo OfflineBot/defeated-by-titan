@@ -1792,3 +1792,66 @@ red on purpose; that file measures the feel of the rope and a bracket moved to f
 loss would delete the only instrument that can see it.
 
 **Related:** `B-013` · `B-020` · `Q-058` · `FIND-191` · `F-004` `F-005` `F-006`
+
+## B-023 — the world fence is correct, invisible and completely silent: 75 m/s into nothing, and the game says nothing at all
+
+*(claimed 2026-08-29, stream B — being written)*
+
+---
+
+## B-022 — **no script in this repo can walk a body along X**: `key W` obeys the yaw on Z and ignores it on X, at a steady `speed 6.000`
+
+**Found 2026-08-29** while re-deriving `scripts/w2-terrain-walk.txt` for `FIND-210`. Foreign
+territory (`src/debug/script.rs` / `src/input`), so it is filed and not fixed here.
+
+### The measurement, and it is one warp and four yaws
+
+Ashgate, shipped `gravity_m_s2: -32`, standing in the middle of terrain cell (12,12) — level 4,
+`x 168..210`, `z 168..210`, top **12.0 m**. Its neighbours are level 4 to the west and north,
+level 3 (**9.0 m**) to the east and south, so each direction has a different, known answer.
+
+```text
+warp 189.0 13.0 189.0
+look <yaw> 0
+wait 1.5
+key W 6.0          # 36 m at run_speed_m_s 6.0 — well past the 21 m to any edge
+wait 6.5
+assert height > 900
+```
+
+| leg | should read | reads |
+|---|---|---|
+| `key W` · `look 0 0` (−Z) | 12.0 | **12.000** ✓ |
+| `key W` · `look 180 0` (+Z) | 9.0 | **9.000** ✓ |
+| `key W` · `look 90 0` (+X) | 9.0 | **12.000** ✗ |
+| `key W` · `look -90 0` (−X) | 12.0 | 12.000 (cannot tell) |
+| `key D` · `look 0 0` (strafe +X) | 9.0 | **12.000** ✗ |
+| `key A` · `look 0 0` (strafe −X) | 12.0 | 12.000 (cannot tell) |
+
+**The Z axis obeys the yaw. The X axis is not reachable at all** — not by turning, not by
+strafing.
+
+### Why it is worse than it looks: `assert speed` reads 6.000 the whole time
+
+A leg that goes nowhere reports **`speed 6.000`**, which is `player.run_speed_m_s` exactly. So a
+route that walks east looks like a route that walks east in every metric a script can ask for,
+and only a *height* that never changes gives it away. This cost the `FIND-210` round several
+runs and produced a confident, wrong conclusion — "the new stairs are a walkability regression"
+— from a body that was never moving. **`assert speed` cannot tell walking from standing**, the
+same shape as the rope test that could not tell a swing from a fall (`CLAUDE.md` rule 5).
+
+### What it invalidates
+
+Every evidence script whose route walks in **x**. `scripts/w2-terrain-walk.txt` was rewritten
+onto a −Z route because of this and says so; nobody has audited the rest.
+
+### Repro
+
+```bash
+cargo run -- --headless --script scripts/<the file above> --ticks 900
+```
+
+**Not fixed, and not mine:** the terrain round owns `src/world/**`, not `src/debug` or
+`src/input`. What a fix needs first is the answer to *which* of the two is wrong — the yaw
+convention every script comment states (`# yaw +90 = +X`, `scripts/f003-ashgate.txt`) or the
+movement basis the input builds from it.

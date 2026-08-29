@@ -330,7 +330,7 @@ before `Could` is the order, not a recommendation (prompts/init.md §2).
 | ⬜ | F-029 | Dynamische Ankerpunkte | 2 | F-021 | needs F-021 |
 | ⬜ | F-024 | Snap auf Q und E | 1 | F-023 | needs F-023 |
 | ⬜ | F-025 | Bewertungsfunktion fuer Kandidaten | 1 | F-023 | needs F-023 |
-| ⬜ | F-026 | Highlighting der Ankerpunkte | 1 | F-023 | needs F-023 |
+| 🟨 | F-026 | Highlighting der Ankerpunkte | 1 | F-023 | needs F-023 |
 | ⬜ | F-030a | Performance der Kandidatensuche | 1 | F-023 | needs F-023 |
 | ⬜ | F-031a | Ankerpunkt-Validierung im Editor | 1 | F-022 | needs F-022 |
 | ⬜ | F-027 | Marker-Dichtebegrenzung | 1 | F-026 | needs F-026 |
