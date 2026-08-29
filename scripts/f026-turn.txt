@@ -1,20 +1,33 @@
 # f026-turn — THE MARKER IN MOTION. One `look` per tick, so the trace has a frame-by-frame
 # yaw and not a warp between two stills.
 #
-# PINS: the **tick numbers of the four marks**. `look <y> <p>` + `wait 0` is exactly one
-# simulation tick (`debug/mod.rs::run_script`: `wait_s > 0.0` is false at 0.0), so every
-# phase below is as long as it has lines. If `simulation_hz` moves, the DEGREES PER SECOND
-# of every phase move with it and the tick numbers do NOT — that is the quantity this file
-# holds: **degrees of yaw per tick**, 2.0 slow and 6.0 fast, not degrees per second.
-# Nothing here reads a tuning constant, so no `.ron` value can move a mark.
+# PINS: **degrees of yaw per tick** — 2.0 slow, 6.0 fast. `look <y> <p>` followed by `wait 0` is
+# exactly one simulation tick (`debug/mod.rs::run_script`: `wait_s > 0.0` is false at 0.0), so
+# every phase is as long as it has lines and the four marks land at fixed ticks: 122, 152, 212,
+# 252, 372. If `simulation_hz` moves, the degrees per SECOND move with it and the tick numbers do
+# not. Nothing here reads a tuning constant, so no `.ron` value can move a mark.
 #
-#   DBT_AIMTRACE=1 ./target/debug/defeated_by_titan --headless \
-#       --script scripts/f026-turn.txt --ticks 600 2>&1 | grep -E 'AIMTRACE|MARK'
+# The verdict run, and it returns a usable exit code:
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/f026-turn.txt --ticks 600
+#
+# ⚠️ **The trace itself needs `--offscreen` AND `--screenshot`, and that is not a preference.**
+# Without a render target `Camera::logical_viewport_size()` is `None`, `hud::arm_aim::place_arm_aim`
+# returns on its first guard, and the two markers stay on the placeholder percentages
+# `spawn_arm_aim` wrote — for the whole run, silently (`docs/FINDINGS.md` FIND-212 §3). A
+# `--headless` run of this file therefore measures the asserts and nothing about the marker:
+#
+#   DBT_AIMTRACE=1 ./target/debug/defeated_by_titan --offscreen --screenshot /tmp/x.png \
+#       --script scripts/f026-turn.txt --ticks 620 2>&1 | grep -E 'AIMTRACE|MARK'
+#
+# `AIMTRACE` prints, per frame and per arm: `dproj` (the arm's world point against the crosshair
+# — the aim's own error), `dglyph` (the drawn glyph centre against the crosshair — what the
+# player sees) and `dgp` (glyph minus projection — what the layout rule adds).
 #
 # The stand is `scripts/f-001-hooks.txt`'s ashgate stand (51, 0, 13) — the one place in this
-# repository where an anchor is measured rather than assumed. A full 360 deg sweep from there
-# crosses the market-square church, open street, and sky, so the trace covers `Ready` and
-# `Free` without the file having to know which yaw is which.
+# repository where an anchor is measured rather than assumed. A full sweep from there crosses the
+# market-square church, open street and sky, so the trace covers `Ready` and `Free` without the
+# file having to know which yaw is which.
 
 warp 51 0 13
 look 0 0

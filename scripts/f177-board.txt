@@ -1,5 +1,14 @@
 # f177-board — ⭐ THE MISSION BOARD, end to end, driven by nothing but look, movement and F.
 #
+# PINS: this file's own fall/flight (its drop and its timing are unchanged). The husk's
+#       geometry is what moved: `scale.ron`'s classes DOUBLED on 2026-08-29 on the user's
+#       word and `titan::rig::body_segments_m` gave the titan a neck (`docs/FINDINGS.md`
+#       FIND-213), so every nape aim below is re-derived as
+#         warp y  += cortex_height_m 17.80 - 8.90 = 8.90   (the drop is untouched)
+#         x offset = clearance 1.55 + the air this file already chose  (was 1.60 + air)
+#         z offset = set-back 1.10 + whatever this file already added  (was 0.55)
+#       Nothing here was re-aimed; one input moved and the aim follows it.
+#
 #   the verdict:  ./target/debug/defeated_by_titan --headless --hub --script scripts/f177-board.txt --ticks 2000
 #   the exit:     ./target/debug/defeated_by_titan --headless --hub --script scripts/f177-board.txt --ticks 2000 >/dev/null 2>&1; echo $?
 #   the picture:  ./target/debug/defeated_by_titan --offscreen --screenshot docs/images/f177-board-open.png \
@@ -118,7 +127,7 @@ mark f177-deployed-veteran
 #
 # The arrangement is `scripts/f175-loop.txt` ACT 3's, re-aimed for `gravity_m_s2 -32`.
 spawn titan husk 17.5 0 0
-warp 15.75 18.5 0.8
+warp 15.80 27.4 1.35
 look 0 0
 wait 0.72
 slash right 0.40
@@ -127,7 +136,7 @@ assert kills >= 1
 mark f177-kill-one
 
 spawn titan husk 17.5 0 0
-warp 15.75 18.5 0.8
+warp 15.80 27.4 1.35
 look 0 0
 wait 0.72
 slash right 0.40
@@ -137,7 +146,7 @@ assert phase == 2      # ⭐ recruit's target is 2 and would read WON here. This
 mark f177-kill-two
 
 spawn titan husk 17.5 0 0
-warp 15.75 18.5 0.8
+warp 15.80 27.4 1.35
 look 0 0
 wait 0.72
 slash right 0.40
@@ -190,21 +199,21 @@ mark f177-deployed-breach
 # ACT 9 — and it is a BREACH: kills do not win it
 # =========================================================================================
 spawn titan husk 17.5 0 0
-warp 15.75 18.5 0.8
+warp 15.80 27.4 1.35
 look 0 0
 wait 0.72
 slash right 0.40
 wait 1.60
 
 spawn titan husk 17.5 0 0
-warp 15.75 18.5 0.8
+warp 15.80 27.4 1.35
 look 0 0
 wait 0.72
 slash right 0.40
 wait 1.60
 
 spawn titan husk 17.5 0 0
-warp 15.75 18.5 0.8
+warp 15.80 27.4 1.35
 look 0 0
 wait 0.72
 slash right 0.40

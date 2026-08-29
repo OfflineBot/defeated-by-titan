@@ -1,5 +1,14 @@
 # game-full — THE WHOLE GAME, ONCE, END TO END: fly, cut, cut, cut, WON.
 #
+# PINS: this file's own fall/flight (its drop and its timing are unchanged). The husk's
+#       geometry is what moved: `scale.ron`'s classes DOUBLED on 2026-08-29 on the user's
+#       word and `titan::rig::body_segments_m` gave the titan a neck (`docs/FINDINGS.md`
+#       FIND-213), so every nape aim below is re-derived as
+#         warp y  += cortex_height_m 17.80 - 8.90 = 8.90   (the drop is untouched)
+#         x offset = clearance 1.55 + the air this file already chose  (was 1.60 + air)
+#         z offset = set-back 1.10 + whatever this file already added  (was 0.55)
+#       Nothing here was re-aimed; one input moved and the aim follows it.
+#
 #   the verdict:  cargo run -q -- --headless  --mission tutorial \
 #                     --script scripts/game-full.txt --ticks 1600
 #   the picture:  cargo run -q -- --offscreen --mission tutorial \
@@ -270,7 +279,7 @@ assert height > 11.5
 # **Control: put g = 20 back in and it prints `0.450` and `0.900`** — the two waits this file
 # carried from 2026-08-19 to 2026-08-29, and a drop of 22.5 m against the 23.5 it carried. So
 # `wait #1` really was "the 9 m/s", and it is 0.281 s at the new gravity and not 0.45.
-warp -1.80 21.36 18.55  # 1.80 m to -X of the axis, on the plane of the cortex's centre
+warp -1.75 30.26 19.10  # 1.80 m to -X of the axis, on the plane of the cortex's centre
 look 0 0
 wait 0.281              # the head start: 9 m/s of extra fall BEFORE the husk exists — that is
 spawn titan husk 0 0 18 # what puts the player at 30 m/s at a nape, where f030 is at 21
@@ -379,7 +388,7 @@ assert phase == 2       # one kill of three does not win it
 # apart.** `assert titans` cannot see either half: it read 2.000 in the failing run and 2.000
 # in the fixed one.
 
-warp 8.20 21.36 -89.45
+warp 8.25 30.26 -88.90
 look 0 0
 wait 0.281
 spawn titan husk 10 0 -90
@@ -409,7 +418,7 @@ assert phase == 2       # two of three, still not won
 # 2's, and the cut lands on the same tick arithmetic — measured 2026-08-29, t=793 torso,
 # t=796 cortex.
 
-warp -1.80 21.36 -39.45
+warp -1.75 30.26 -38.90
 look 0 0
 wait 0.281
 spawn titan husk 0 0 -40

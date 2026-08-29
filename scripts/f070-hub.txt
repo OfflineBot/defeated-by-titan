@@ -1,6 +1,15 @@
 # f070-hub — THE LOOP THE GAME DID NOT HAVE, end to end, in one run — and since 2026-08-13 the
 # building is part of it: he WALKS IN, is supplied, and WALKS OUT again.
 #
+# PINS: this file's own fall/flight (its drop and its timing are unchanged). The husk's
+#       geometry is what moved: `scale.ron`'s classes DOUBLED on 2026-08-29 on the user's
+#       word and `titan::rig::body_segments_m` gave the titan a neck (`docs/FINDINGS.md`
+#       FIND-213), so every nape aim below is re-derived as
+#         warp y  += cortex_height_m 17.80 - 8.90 = 8.90   (the drop is untouched)
+#         x offset = clearance 1.55 + the air this file already chose  (was 1.60 + air)
+#         z offset = set-back 1.10 + whatever this file already added  (was 0.55)
+#       Nothing here was re-aimed; one input moved and the aim follows it.
+#
 #   the verdict:  cargo run -q -- --headless --hub --script scripts/f070-hub.txt --ticks 3600
 #   the picture:  cargo run -q -- --offscreen --screenshot docs/images/f070-hub-supply.png \
 #                                 --hub --script scripts/f070-hub.txt --ticks 1035
@@ -241,7 +250,7 @@ mark f072-deployed
 # 23.0 does not. `gravity_m_s2` went -20 -> -32 on 2026-08-27 and is PROVISIONAL — when the
 # user moves it again, evaluate the line above, do not re-measure the file.
 spawn titan husk 17.5 0 0
-warp 15.75 24.9 0.8
+warp 15.80 33.8 1.35
 look 0 0
 wait 0.90
 slash right 0.40
@@ -253,7 +262,7 @@ assert kills == 1     # ⭐ and the MISSION counted it
 mark f072-first-kill
 
 spawn titan husk 17.5 0 0
-warp 15.75 24.9 0.8
+warp 15.80 33.8 1.35
 look 0 0
 wait 0.90
 slash right 0.40

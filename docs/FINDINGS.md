@@ -1577,3 +1577,349 @@ A first pass concluded "the new stairs are a walkability regression" from a rout
 (**`B-022`**, found here). The conclusion was confident, reproducible and wrong.
 **Before believing a body did not climb, prove it moved**: read a coordinate that must change,
 not the speed, which reads full running speed into a wall.
+
+## FIND-212 — the marker was 16.00 px below the cursor, always, and every test that "proved" it was 0.0 px measured the projection instead of the pixel
+
+**Round:** 2026-08-29 · **Owner:** agent A · **Stage:** 🟧 (measured before and after, image + numbers + a test that goes red on one line)
+
+The user, twice — 2026-08-19 *„wichtig wäre nur dass diese auch genau da sind visuell wo das seil
+auch landen würde!"* and 2026-08-29 *„ist immernoch nicht am cursor. es bewegt sich immernoch."*
+`F-026` stood at 🟧 on `FIND-129`, which measured **0.0 px on fire and on anchor**, and an
+independent adversary re-derived it. **Both were right about different things.**
+
+### 1 · What the old evidence measured, and what it could not see
+
+`tests/hud.rs::f171_a_free_aim_point_projects_onto_the_crosshair` computes `eye + look_dir * d`,
+projects it with `world_to_viewport`, and asserts the result is the centre pixel. It **never reads
+a `Node`.** It proves the *projection* is exact — which it is, to 0.00 px, even through a 360 °/s
+flick. It cannot see where the **glyph** was drawn, and the glyph is the element.
+`CLAUDE.md` rule 5, provenance shape: *two computations agreeing about a point the test invented.*
+
+### 2 · What the drawn pixel actually was — a per-frame trace through a real turn
+
+`scripts/f026-turn.txt` (new) turns one `look` per tick; `hud::arm_aim::trace_arm_aim`
+(`DBT_AIMTRACE=1`) prints, per frame and per arm, the world point, its projection, and the glyph
+centre read back off the `Node`. **3 268 samples, Left arm, 1280 × 720, ~3.9 frames per fixed
+tick.** `dproj` = point vs crosshair · `dglyph` = drawn glyph vs crosshair · `dgp` = glyph vs its
+own point.
+
+| phase | n | dproj med / max | **dglyph med / max** | dgp max |
+|---|---|---|---|---|
+| still, 30 ticks | 119 | 0.00 / 0.00 | **16.00 / 16.00** | 16.00 |
+| slow pan, 120 °/s | 237 | 0.00 / 0.00 | **16.00 / 16.00** | 16.00 |
+| flick, 360 °/s | 158 | 0.00 / 0.00 | **16.00 / 16.00** | 16.00 |
+| boosting, 120 °/s | 473 | 7.02 / **46.53** | 16.88 / 46.53 | 16.00 |
+
+**Within one fixed tick the drawn marker does not move at all (spread 0.0000 px over 120 ticks).**
+There is no schedule race and no sub-frame jitter: `place_arm_aim` is already in `PostUpdate`.
+
+`16.00` is `SIGHT_CORE_PX` (6) + half a 20 px glyph, to the pixel — `layout_for` step 3, the
+"stand-down" FIND-129's adversary had already computed as 17.7 px and filed as *documented*.
+**A skip you are proud of is still a skip.** After removing step 3's `Some(p)` arm: `dgp` **16.00
+→ 0.00** in every phase, `dglyph` **16.00 → 0.00** standing, turning and flicking.
+Image: `docs/images/f026-marker-at-cursor.png` (t = 140, same script, pinned binaries; 632 changed
+pixels of 921 600, bbox 612,350..665,386). The ring is a 3 px annulus with a hollow ~14 px
+interior, so the crosshair's own 6 px hole shows straight through it — measured off the frame.
+
+### 3 · The remaining drift is NOT the layout, and it is not fixed: `vector::aim` is one fixed step stale
+
+The `moving` row above is untouched by the fix (the frames at t = 349 are **bit-identical** before
+and after — at 46 px out the marker was never inside the sight core, so step 3 never fired there).
+`vector::aim::aim` runs in `FixedUpdate` / `SimulationSystems::World`, i.e. **before** `Integrate`;
+the HUD projects its answer from the camera at the **end** of that step. One whole step of eye
+travel separates the ray's origin from the projection's origin, and the error is `v/60/d`:
+
+| eye speed | target distance | dproj |
+|---|---|---|
+| 18.3 m/s | 40.2 m | 0.73 px |
+| 27.2 m/s | 10.4 m | 16.36 px |
+| 29.4 m/s | 5.7 m | **39.29 px** |
+
+**The one-line candidate:** move `aim` from `SimulationSystems::World` to `PostStep` in
+`src/vector/mod.rs:64`. `vector::hook` reads `ArmAim` in `Drive`, before `Integrate`, so it would
+then read a point cast from the position it is still standing at — **exactly as fresh for the
+rope, and exact for the picture.** Not done here: `src/vector/mod.rs` was not this round's, and a
+schedule move deserves its own red test.
+
+### 4 · And a hole in the evidence route itself
+
+`--offscreen` **without** `--screenshot` never swaps the camera's `RenderTarget`
+(`debug::screenshot::swap_target` only fires for a screenshot job), so
+`Camera::logical_viewport_size()` is `None`, `place_arm_aim` returns on its first guard, and the
+markers sit on `spawn_arm_aim`'s placeholder percentages (34 %/64 %, top 50 %) for the whole run —
+silently, exit code 0. Any offscreen run that is not also taking a picture measures nothing about
+where a marker is.
+
+### What the fix costs, said out loud rather than discovered later
+
+`F-170`'s sight-core clause is **retired for a marker that carries a place** — that is a proven
+🟧 claim being pulled back on his instruction, and the rollback point is one arm of one `match`
+(`hud::arm_aim::layout_for`, step 3) plus five assertions that now say the opposite
+(`tests/hud.rs::f170_nothing_covers_the_middle_of_the_screen`,
+`f170_the_arm_markers_stay_out_of_the_middle_in_every_state`,
+`f170_an_anchor_dead_ahead_stands_on_the_anchor`, and the two `src/hud/arm_aim.rs` unit tests).
+**Measured, not argued, for `Ready`/`Anchored`:** the glyph is a 3 px annulus and its interior is
+empty across x 633..647 in the shipped frame, so the crosshair's own 6 px hole shows straight
+through it.
+⚠️ **`Free` is the case that really does cover the sight now**: its glyph is a 20 × 4 flat dash,
+so an idle marker with nothing hookable under it lies across the middle ±10 px × ±2 px. Nobody
+has seen that in play yet. If he says the dash is in the way, the answer is a **hollow** `Free`
+glyph, not the 16 px back.
+
+### The rule
+
+**A test that never reads the drawn `Node` is not a test of a drawn element.** Project and glyph
+are two different numbers; the player reads the second one. And when a fixture holds a rule
+constant by *skipping* the case it fires on — here: never measuring the pixel — that skip is the
+first place to look.
+
+---
+
+## FIND-213 — the kill zone was **inside** the body he collides with, on all 8 kinds — and the obstacle scaled with the titan while the blade did not
+
+*(2026-08-29, stream B. His words: „die hitboxen passen auch nicht. ich komme nicht an ein titan
+ran zum hitten!" and „die aktuellen sind eher kleiner! gerne doppelt so gross oder so. und
+leichter hittable am nacken.")*
+
+### The measurement
+
+A titan's physical collider was **one capsule of SHOULDER half-width** (`width_fraction 0.25 ×
+height / 2`) running from the ankles to the crown. At nape height the head is `head_m / 2` =
+`0.055 × height`, so the solid was **2.27× wider than the head it wrapped**. The amber sphere
+sits `head_m / 2` behind the neck axis, so on every kind its rearmost point was **inside** that
+capsule:
+
+| kind | class | h | cortex back | body there | exposure |
+|---|---|---|---|---|---|
+| weaver | small | 4.2 | 0.461 | 0.524 | **−0.063** |
+| scuttler | small | 4.2 | 0.431 | 0.524 | **−0.093** |
+| husk | medium | 10.0 | 1.100 | 1.241 | **−0.141** |
+| errant · chorus | medium | 10.0 | 1.050 | 1.241 | **−0.191** |
+| warden · lurker | large | 14.0 | 1.540 | 1.732 | **−0.192** |
+| bellower | huge | 21.0 | 2.315 | 2.605 | **−0.290** |
+
+**1202 of 1221** measured (kind × class × a 2..120 m continuum) were buried. A cut only ever
+landed because `blades::cut::sweep` casts `LAYER_TITAN_CORTEX` and `LAYER_TITAN_BODY`
+**separately** — the blade reaches the nape by passing *through* solid titan, which works exactly
+as long as `reach_m` 2.00 is longer than the titan is wide. That is the scaling trap: the
+obstacle is `0.125 × height`, the blade is a constant. **Doubling the titans as he asked made the
+`large` class hittable on 0 ticks — unkillable at every offset.** (Control below.)
+
+### The second half, and it is the one the previous two rounds missed
+
+`q030_the_nape_is_reachable_on_a_large_titan_too` reported **+0.87 m** of reach margin for the
+same kind `scripts/f030-hitbox.txt` measured as **one simulation step**. Both were honest: the
+margin is a bound **along** the blade, the window is the chord **across** it, and at the edge of
+the first the second is zero. Swept tick by tick at 21 m/s, the shipped windows were
+
+```
+before   scuttler 1 · weaver 1 · chorus 2 · errant 2 · husk 3 · lurker  3 · warden  3   ticks
+after    scuttler 3 · weaver 3 · chorus 7 · errant 7 · husk 8 · lurker 10 · warden 10
+```
+
+**Seven of seven kinds inside three ticks, and a single green pass per kind cannot tell 1 from
+11.** Two 🟧 rounds of hitbox work (2026-08-24, 2026-08-26) both grew the *weapon* — pass width
+0.20 → 0.80 m, `reach_m` 1.6 → 2.0, `thickness_m` 0.12 → 0.20 — and neither ever measured a
+window.
+
+### The fix: **a titan has a neck** (and it is the same change as the size he asked for)
+
+`titan::rig::body_segments_m` is now the one writer of the body's width at a height, and it
+returns two capsules: a torso ending at `shoulder_m`, and a neck+head at `head_m / 2`. The nape's
+set-back **is** the neck's radius, so **half the sphere protrudes at every size, on every kind, by
+construction and not by tuning**. And because the shoulder is now `0.07 × height` below the nape,
+a 1.8 m player fits into the pocket beside the neck the moment `0.07 × height > 1.25 m`, i.e.
+above ~17.9 m. **Doubling the classes is what opens that pocket** — his two sentences are one
+change:
+
+| | before | after |
+|---|---|---|
+| class heights | 4.2 / 10 / 14 / 21 / 28 | **8.4 / 20 / 28 / 42 / 56** |
+| `cortex_radius_m` | 0.20 … 1.16 | **doubled, 0.40 … 2.32** |
+| `width_fraction` | 0.25 | **0.20** — see below |
+| clearance at the nape, `large` | 2.10 m (shoulder) | **1.89 m (neck), at twice the height** |
+| cortex exposure, all 1221 geometries | **−0.06 … −1.74 m** | **exactly `+cortex_radius_m`, every kind, every class** |
+| reach margin, tightest kind | +0.30 m (a `large`) | **+1.41 m (a `small`)** — the ordering inverted |
+| window, ticks at 21 m/s | 1·1·2·2·3·3·3 | **3·3·7·7·8·10·10** |
+
+The exposure column is the structural part and it is not tuning: the nape's set-back **is** the
+neck's radius, both `head_m / 2`, so the sphere's centre lands on the skin and exactly
+`cortex_radius_m` of it protrudes — at 8.4 m and at 56 m, on all eight kinds, in one arithmetic.
+
+**`width_fraction` 0.25 → 0.20 came out of the doubling, not out of taste.** `0.25 × 28 m` is a
+7.00 m body in a 6.0 m street and `tests/data.rs::t005_the_class_cap_names_a_class_that_exists…`
+said so — the guard whose own comment had warned *"at `boss` (28 m) it is exactly 7.0 m and the
+alley is blocked by a silent wall"*, one class early. Of the levers that could answer it, the
+class heights are HIS (given today), `min_street_m` 6.0 is HIS (2026-08-09), and dropping
+`max_spawnable_class` to `medium` would delete the warden and the lurker to fix a width. **This
+number is the only one on the table the file itself marks UNTUNED**, and it does not touch the
+nape: the `large` clearance is 1.890 m at either value, because it is the neck.
+**ASSUMPTION:** he wants the size more than he wants the silhouette. **Rollback:** put 0.25 back
+and `max_spawnable_class` down to `"medium"`.
+
+Evidence: `scripts/f030-hitbox.txt` **8 asserts held**, all seven kinds killed at the nape at
+double size · `docs/images/f030-nape-kill-after.png` (KILL 20.8 m/s on a 28 m lurker) ·
+`docs/images/f030-size-after.png` · `tests/titan.rs::f030_the_nape_sticks_out_of_the_body_on_every_kind_and_every_class`
+and `::f030_the_nape_is_hittable_for_more_than_one_tick_on_every_spawnable_kind`.
+
+**Control (rule 5, second half):** one line of `body_segments_m` back to a single capsule →
+exposure red on **1173 of 1221**, and lurker and warden read **0 ticks, a 0.00 m band, blade tip
++2.01 m against a 1.74 m sphere** — i.e. the class he most wanted to see would have been
+unkillable at every offset and every timing.
+
+### Foreign territory, not touched here
+
+1. 🔴 **`gear.ron: blades.thickness_m` is 0.20 and its own comment argues 0.30 — four times.**
+   `git log -S` says the value went `0.12 → 0.20` in `54fd93b` while that commit's own text and
+   the shipped comment both say *"0.12 -> 0.30"* and compute windows (`±0.50 m`, `±0.85 m`) for a
+   build that never existed. The shipped windows are `±0.40` and `±0.75`. It is exactly the
+   missing tick on the `small` class: at 0.30 they measure **4** ticks instead of 3.
+2. **`titan.ron: attack_range_m` did not scale** (6.0 / 8.0 / 2.5). A 20 m husk has an 8.8 m arm
+   and stops 6.0 m from the player's centre — 3.5 m of that is his own body. Deliberately left,
+   because it moves `B-020`'s premise and `scripts/f032-swords.txt` is red on his account.
+3. **`scale.ron: max_spawnable_class` stays `large`.** Doubling did not touch the bellower gate
+   (`Q-028`); `huge` and `boss` are covered by the shape test and by nothing that runs.
+
+### The rule
+
+**A hit zone that does not protrude from the collider is not a hitbox — it is a hole the cast
+happens to reach through.** And when one number bounds a reach and another bounds a window, a
+green pass measures neither: **sweep the axis the fixture takes from a single call.**
+
+---
+
+## FIND-214 — the ground: 42 m terraces became a 5 m height field, and the one number that bounds all of it was measured in eleven runs
+
+**2026-08-29.** The user, after playing: *„auch die verschiedenen hoehen passen nicht! das soll
+grass sein und nicht so wie jetzt! und nicht verschiedene hardcoded stufen sondern wirklich
+terrain! und deutlich hoeher und niedriger als jetzt!"*
+
+### 1 · The measurement everything else hangs from: what riser can he actually walk up?
+
+`docs/BUGS.md` B-018 had one data point — a 0.30 m terrace riser is a wall at `gravity_m_s2:
+-32`. That is not enough to design a field with. Eleven risers, ten steps each, `key W` from
+flat, shipped binary, tread 3.0 m:
+
+| riser m | 0.10 | 0.15 | 0.20 | 0.25 | 0.26 | 0.27 | 0.28 | 0.29 | 0.30 | 0.40 | 0.80 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| climbed m | 1.00 | 1.50 | 2.00 | 2.50 | 2.60 | 2.70 | **0.28** | 0.00 | 0.00 | 0.00 | 0.00 |
+
+**0.27 m climbs, 0.28 m is a wall.** Treads of 1.0, 2.0 and 3.0 m at riser 0.25 all give the
+full 2.50 m, so the *tread is not a factor* in that range and the riser is the whole
+discriminator. ⚠️ The first version of this sweep read **0.000 for every riser including
+0.10** and would have concluded that no step is climbable at all: the staircases were 33 m long
+and the walk was 63 m, so he crested each one and fell off the far end onto the flat. The fix
+was a plateau at the top — **a sweep that reports the same number for every input is measuring
+the fixture, not the function.**
+
+### 2 · What that one number buys, and why it decides the cell size
+
+The steepest ground a cuboid world can have is `rise_m / cell_m`, because two neighbouring
+cells always meet in a riser. With `rise_m` capped at 0.27 the cell is the only free variable,
+and it costs blocks quadratically. Shipped: **`cell_m 5.0`, `rise_m 0.25` = a 5.0 % grade.**
+
+| | terraces (before) | field (after) |
+|---|---|---|
+| cell | 42.0 m | **5.0 m** |
+| quantum | `step_m` 1.50 m | `rise_m` **0.25 m** |
+| grade | 3.6 % | **5.0 %** |
+| relief | 0.00 .. 7.50 m | **-12.00 .. +8.25 m = 20.25 m** |
+| distinct heights | 6 | **82** |
+| ground blocks | 1 236 | **6 614** (19 600 cells, greedily merged) |
+| map total | 2 901 | **8 278** |
+| seed moves | 1 cell of 256 (FIND-101) | 27.6 .. 63.6 % of cells |
+
+The shape comes from a two-sided envelope, not from the noise: `hi = rise * L1 distance to the
+nearest pin`, `lo = -rise * L1 distance to the nearest pin or paving`, the noise clamped between
+them and then lowered until no two neighbours differ by more than one rise. Pins land at exactly
+0 under every seed, which is what keeps 243 hand-placed blocks standing where the file puts
+them without one of them moving a centimetre.
+
+### 3 · The pixels, because FIND-134 called 5 of 921 600 invisible
+
+Same vantage, same script (`scripts/f003-map.txt`), pinned binary vs new:
+
+| | changed > 2 | changed > 32 | green pixels |
+|---|---|---|---|
+| aerial (t=140) | **397 026 (43.1 %)** | 240 059 (26.0 %) | 5 -> **121 093** |
+| street (t=129) | 60 030 (6.5 %) | 44 833 (4.9 %) | 0 -> **6 133** |
+
+### 4 · Two things this round learned the hard way and neither is about terrain
+
+**a · A colour slab can be a load-bearing apron.** The three `olive_green` field patches outside
+the wall look like paint. Deleted together with the sand floors, the district grew by **146
+houses** (898 -> 1044 facades) out there, because `plan_blocks` vetoes every generated house that
+touches a placed block. They were put back. `grep` for a block's colour tells you nothing about
+what it does.
+
+**b · B-022's blanket sentence does not hold on the route this round needed.** It says *no script
+in this repo can walk a body along X*. Control on the shipped binary, `warp -340 40 210`:
+`look -90 0` + `key W` reads **-8.000 -> -5.100 -> -2.250**; the same run with `key W` deleted
+reads **-8.000 -> -8.000 -> -8.000**; `look 0 0`, `look 90 0` and `look 180 0` each give a
+different trace. Four yaws, four answers, and the control moves the number — so +X is reachable
+and the yaw is obeyed. The likely cause of B-022 is a sign: it labels `look 90 0` as +X while
+`scripts/f003-map.txt` and every other comment label `look -90 0` as +X, so its "+X" leg walked
+into the neighbour it thought it was walking away from. Foreign territory (`src/debug`,
+`src/input`), so it is recorded and not fixed.
+
+### The rule
+
+**When a cuboid world has to look continuous, the quantum is not a taste — it is whatever a body
+can walk over, and that is one afternoon of measurement.** Everything else (cell size, relief,
+block count, whether the round is affordable at all) is arithmetic on it. And before believing
+any sweep of that quantum: check that the fixture is long enough for the biggest input, or every
+row reports the same number for the same wrong reason.
+
+### 5 · What the ground moved under, and it is three brackets in three files nobody owns here
+
+Corpus, HEAD binary + HEAD assets against this round's, both through `tools/corpus.sh`:
+**56 GREEN / 12 RED -> 46 GREEN / 22 RED.** Eleven scripts went red, and eight of them come
+back GREEN the moment `assets/data/scale.ron` and `assets/data/titan.ron` are reverted to HEAD —
+they belong to the titan-size round running beside this one, not to the ground
+(`f029-grapple`, `f034-hitstop`, `f070-hub`, `f175-loop`, `f177-board`, `f-flight-cut`,
+`game-full`, `q030-reach`). `w2-terrain-walk` went RED -> GREEN.
+
+**Three are the ground's, and all three are the same one-line re-derivation:** a bracket that
+pinned `1 * step_m = 1.500 m`, the height of a terrace that no longer exists. The claim in each
+is *"he is standing on the ground and not through it"* and it is untouched; only the number
+moved. Not edited here — none of the three files belongs to this round:
+
+| file | line | reads | was |
+|---|---|---|---|
+| `scripts/f003-ground.txt` | 30 | `assert height > 1.0` | **-1.500** |
+| `scripts/f171-crosshair.txt` | 120 | `assert height > 1.40` | **-0.058** |
+| `scripts/q078-fling.txt` | 62 | `assert height > 1.0` | **-1.000** |
+
+`f171-crosshair`'s own comment is the clearest statement of the pattern and of why this is a
+re-derivation and not a loosening: *"The claim is unchanged: the stand is bare ground, not a
+lot. Only the ground moved, so only the number did."*
+
+### What the doubling cost the corpus, measured with a control
+
+Every script that aims at a titan by absolute metres had to be re-derived, and **the whole
+correction is one substitution** — the drop each file chose is untouched, only the husk moved:
+
+```
+warp y  += cortex_height_m 17.80 − 8.90 = 8.90
+x offset = clearance 1.55 + the air that file already chose     (was 1.60 + air)
+z offset = set-back 1.10 + whatever that file already added     (was 0.55)
+```
+
+Controlled by reverting **only** this stream's ten files and rebuilding, so the terrain stream's
+own reds do not land in this column:
+
+| | control (my files reverted) | after |
+|---|---|---|
+| corpus | 54 GREEN / 14 RED | **54 GREEN / 14 RED** |
+| broken by the doubling and repaired | — | `q030-reach` · `f029-grapple` · `f034-hitstop` · `f175-loop` · `f177-board` · `f070-hub` · `game-full` |
+| broken by the doubling and **NOT** repaired | — | 🔴 `f-flight-cut` |
+| red on purpose that went green | `f032-swords` | see `docs/BUGS.md` B-020 |
+
+🔴 **`scripts/f-flight-cut.txt` is handed on red, deliberately.** Its pass is not a fall but a
+**reel up a rope past the nape**, so three things are coupled that the substitution above treats as
+independent: the anchor beam's position, the height asserts along the climb, and the gas ledger the
+file pins. Shifting the slash by the extra `8.90 / 28 = 0.318 s` of climb makes the cut land — on
+`ArmLeft` and `Torso`, because at the lower part of the climb the player's fixed `x = −4` is now
+**0.25 m inside** a torso capsule of radius 2.00 m (it was 1.25 m). The fix is to move the stand
+out to `titan_x − 2.60` and re-measure the gas bounds, and that is the rope stream's file and the
+rope stream's ledger. Diagnosed, not guessed: `1 of 25`, `assert titans == 0` at line 277.

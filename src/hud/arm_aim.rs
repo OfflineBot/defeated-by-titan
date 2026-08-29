@@ -1437,38 +1437,26 @@ mod tests {
                             honest_x
                         );
 
-                        // 3 · …and it never sits on the pixels being cut.
-                        let core = SCREEN * 0.5;
-                        assert!(
-                            !(l.glyph.x < core.x + SIGHT_CORE_PX
-                                && l.glyph.x + shape.glyph_w_px > core.x - SIGHT_CORE_PX
-                                && l.glyph.y < core.y + SIGHT_CORE_PX
-                                && l.glyph.y + full_h > core.y - SIGHT_CORE_PX),
-                            "{state:?} {side:?} aimed at {at:?} put the glyph at {:?}, on the \
-                             {SIGHT_CORE_PX} px square the player is cutting",
-                            l.glyph
-                        );
-                        // 4 · the vertical step is the ONLY licence, and it is bounded.
+                        // 3 · **and its y is the projection too, since 2026-08-29.**
+                        // Clause 3 used to be `!over_the_core` and clause 4 counted the
+                        // "dodges" it caused. That dodge was the whole of the user's
+                        // *„ist immernoch nicht am cursor"*: 16.00 px, measured on the drawn
+                        // `ComputedNode` at every stance, standing still (FIND-212). A marker
+                        // that carries a place now carries it on **both** axes.
                         let honest_y = (at.y - shape.glyph_h_px * 0.5)
                             .clamp(0.0, (SCREEN.y - full_h).max(0.0));
                         if (l.glyph.y - honest_y).abs() > 0.01 {
                             dodges += 1;
-                            assert!(
-                                (l.glyph.y - honest_y).abs() <= SIGHT_CORE_PX + full_h + 1.0,
-                                "{state:?} {side:?} aimed at {at:?}: the glyph stepped from \
-                                 y {honest_y:.1} to {:.1} to clear the sight core — that is \
-                                 further than the core plus a glyph and it is no longer a dodge",
-                                l.glyph.y
-                            );
                         }
                     }
                 }
             }
         }
-        assert!(
-            dodges > 0,
-            "the sight-core step never fired over the whole screen sweep — it is dead code and \
-             clause 3 above is proving nothing"
+        assert_eq!(
+            dodges, 0,
+            "a marker carrying a place was moved off its own pixel {dodges} times in the sweep. \
+             The only rule left that may move it is step 2's viewport clamp, which is already \
+             in `honest_x`/`honest_y` — anything else is a fixed slot growing back"
         );
     }
 
@@ -1495,14 +1483,16 @@ mod tests {
                     let l = layout_for(side, shape, Some(at), SCREEN);
                     let lo = l.glyph;
                     let hi = l.glyph + size;
-                    let clear = hi.x <= centre.x - SIGHT_CORE_PX
-                        || lo.x >= centre.x + SIGHT_CORE_PX
-                        || hi.y <= centre.y - SIGHT_CORE_PX
-                        || lo.y >= centre.y + SIGHT_CORE_PX;
-                    assert!(
-                        clear,
-                        "{state:?} {side:?} aimed at {at:?} put the glyph at {lo:?}..{hi:?}, \
-                         over the {SIGHT_CORE_PX} px square the player is actually cutting"
+                    let _ = hi;
+                    // **The sight-core clearance was retired on 2026-08-29** — it used to be
+                    // asserted right here, and it was the 16 px the user kept seeing under his
+                    // crosshair (FIND-212). What replaces it is the opposite claim: the glyph's
+                    // y is the projection, exactly, everywhere on the sweep.
+                    assert_eq!(
+                        lo.y,
+                        at.y - shape.glyph_h_px * 0.5,
+                        "{state:?} {side:?} aimed at {at:?} put the glyph at {lo:?} — a marker \
+                         carrying a place stands on it, and the y is half of that place"
                     );
                     if l.glyph.y != at.y - shape.glyph_h_px * 0.5 {
                         dodged += 1;
@@ -1524,11 +1514,10 @@ mod tests {
                     }
                 }
             }
-            assert!(
-                dodged > 0,
-                "{state:?}: the sweep crossed the middle of the screen and the glyph never once \
-                 stepped out of the sight core — the guard is dead code and the test proved \
-                 nothing about it"
+            assert_eq!(
+                dodged, 0,
+                "{state:?}: the glyph was stepped off its own row {dodged} times. Since \
+                 2026-08-29 there is no rule left that may do that"
             );
         }
 
@@ -1537,7 +1526,14 @@ mod tests {
         let shape = shape_of(ArmAimState::Ready);
         let l = layout_for(Side::Right, shape, Some(centre), SCREEN);
         assert_eq!(l.glyph.x, centre.x - shape.glyph_w_px * 0.5, "the x was moved");
-        assert_eq!(l.glyph.y, centre.y + SIGHT_CORE_PX, "the glyph did not step out of the core");
+        // ⭐ **The centre pixel, which is where an idle preview always is.** Until 2026-08-29
+        // this read `centre.y + SIGHT_CORE_PX` and that literal was the defect, spelled out:
+        // the marker aimed at the middle of the screen was drawn 6 px + half a glyph below it.
+        assert_eq!(
+            l.glyph.y,
+            centre.y - shape.glyph_h_px * 0.5,
+            "aimed dead centre, the glyph must be centred on the centre pixel"
+        );
     }
 
     #[test]

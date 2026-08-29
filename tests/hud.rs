@@ -554,6 +554,7 @@ fn f170_nothing_covers_the_middle_of_the_screen() {
         arm_carries_a_place(&mut app, Side::Right),
     ];
     let mut seen = 0;
+    let mut placed_seen = 0;
     let mut q = app
         .world_mut()
         .query_filtered::<(&Name, &Node, &ComputedNode, &UiGlobalTransform), With<HudElement>>();
@@ -566,19 +567,18 @@ fn f170_nothing_covers_the_middle_of_the_screen() {
             continue;
         }
         seen += 1;
-        // A marker that CARRIES A PLACE is exempt from the box and owes `SIGHT_CORE_PX` instead
-        // (`FIND-129`, and the user's instruction of 2026-08-19). Asking that here rather than
-        // skipping it means the placed case is now covered by an assertion instead of by luck.
+        // 🔴 **A marker that carries a place is exempt from the box AND from the sight core
+        // since 2026-08-29.** It owed `SIGHT_CORE_PX` here until the user said, for the second
+        // time, *„ist immernoch nicht am cursor"* — and the clearance was measured to be the
+        // whole of it: 16.00 px, at every stance, standing still. The claim that replaces it is
+        // stronger and lives in `f026_the_drawn_marker_stands_on_the_cursor_and_not_beside_it`,
+        // which reads the drawn `ComputedNode` against the projection of the `ArmAim`
+        // `vector::aim` itself wrote. **Not a silent skip:** the placed nodes are counted below
+        // and the count is asserted, so this branch cannot quietly swallow the element.
         if let Some(side) = arm_side_of(name.as_str())
             && placed[side.index()]
         {
-            assert!(
-                clears_the_sight_core(w, h, (min_x, min_y, max_x, max_y)),
-                "`{name}` carries a place, so it may stand inside the central box — but it must \
-                 still keep the blade's own {core} px clear, and it stands at \
-                 ({min_x:.1}, {min_y:.1})..({max_x:.1}, {max_y:.1}) on a {w} x {h} screen",
-                core = arm_aim::SIGHT_CORE_PX
-            );
+            placed_seen += 1;
             continue;
         }
         let overlaps = min_x < box_max_x && max_x > box_min_x && min_y < box_max_y && max_y > box_min_y;
@@ -594,6 +594,17 @@ fn f170_nothing_covers_the_middle_of_the_screen() {
         seen >= 12,
         "only {seen} HUD nodes were laid out — with five elements and an eight-node crosshair \
          there have to be more, so this test just checked almost nothing"
+    );
+    // **What this test did NOT check, said out loud and in a number.** Both idle arms carry a
+    // place here (the aim ray finds the world), so their glyph, tether and letter are exempt.
+    // A `0` would mean the exemption never fired and the box claim below was carrying the arm
+    // markers by accident; anything else means those nodes are somebody else's claim, and that
+    // somebody is `f026_the_drawn_marker_stands_on_the_cursor_and_not_beside_it`.
+    println!("f170: {seen} nodes checked against the box, {placed_seen} exempt (they carry a place)");
+    assert!(
+        placed_seen > 0,
+        "not one marker node carried a place — then `arm_carries_a_place` is broken and the \
+         exemption above is dead code pretending to be a decision"
     );
     // And the board panel really was one of them, laid out with real pixels. Without this the
     // block above could have been shown into a zero-width node and skipped by the `<= 0.0`
@@ -1182,6 +1193,7 @@ fn f170_the_arm_markers_stay_out_of_the_middle_in_every_state() {
             .world_mut()
             .query_filtered::<(&Name, &Node, &ComputedNode, &UiGlobalTransform), Or<(With<ArmMarker>, With<ArmMarkerLabel>)>>();
         let mut seen = 0;
+        let mut placed_seen = 0;
         for (name, node, computed, at) in q.iter(app.world()) {
             if node.display == Display::None {
                 continue;
@@ -1191,20 +1203,14 @@ fn f170_the_arm_markers_stay_out_of_the_middle_in_every_state() {
                 continue;
             }
             seen += 1;
-            // Same question as the general test, and the scope note above is exactly it: this is
-            // the BADGE claim. If an arm turns out to carry a place, the badge claim does not
-            // apply to it and `SIGHT_CORE_PX` does — asserted rather than skipped, so the placed
-            // case stops being covered by the fixture's silence (`FIND-129`).
+            // This is the BADGE claim, and since 2026-08-29 it is the *only* claim `F-170`
+            // makes about an arm marker: a marker that carries a place stands on that place and
+            // owes the middle of the screen nothing (the user, twice —
+            // `docs/FINDINGS.md` FIND-212). **Counted, not silently skipped.**
             if let Some(side) = arm_side_of(name.as_str())
                 && placed[side.index()]
             {
-                assert!(
-                    clears_the_sight_core(w, h, (min_x, min_y, max_x, max_y)),
-                    "in {state:?} `{name}` carries a place, so the box does not bind it — but it \
-                     must keep the blade's own {core} px clear, and it stands at \
-                     ({min_x:.1}, {min_y:.1})..({max_x:.1}, {max_y:.1})",
-                    core = arm_aim::SIGHT_CORE_PX
-                );
+                placed_seen += 1;
                 continue;
             }
             let overlaps =
@@ -1224,6 +1230,10 @@ fn f170_the_arm_markers_stay_out_of_the_middle_in_every_state() {
              the test just checked almost nothing, and requirement 1 is that both markers are \
              visible ALWAYS"
         );
+        // The exclusion, counted. In this fixture the arms carry no place in `Free`/`Ready`
+        // (nothing is aimed at) and do carry one once a tip is out, so this number moves with
+        // the state and a constant here would mean the branch never fires.
+        println!("f170 {state:?}: {seen} nodes, {placed_seen} of them exempt as place-carrying");
     }
 }
 
@@ -1529,7 +1539,7 @@ fn f171_two_anchors_put_the_two_markers_on_two_different_points() {
 }
 
 #[test]
-fn f170_an_anchor_dead_ahead_stands_on_the_anchor_and_off_the_sight_core() {
+fn f170_an_anchor_dead_ahead_stands_on_the_anchor() {
     // ★ **The trap, sprung on purpose** — and since FIND-129 it catches the opposite lie.
     //
     // A marker that follows a world point will sooner or later be aimed straight at; that is not
@@ -1575,29 +1585,32 @@ fn f170_an_anchor_dead_ahead_stands_on_the_anchor_and_off_the_sight_core() {
             continue;
         }
         seen += 1;
-        let covers_core = min_x < want.x + SIGHT_CORE_PX
-            && max_x > want.x - SIGHT_CORE_PX
-            && min_y < want.y + SIGHT_CORE_PX
-            && max_y > want.y - SIGHT_CORE_PX;
-        assert!(
-            !covers_core,
-            "{name} sits at x {min_x:.1}..{max_x:.1}, y {min_y:.1}..{max_y:.1} with both arms \
-             anchored dead ahead — on the {SIGHT_CORE_PX} px square around {want:?} that the \
-             player is cutting. The marker may stand on its anchor; it may not stand on the \
-             blade's own pixels"
-        );
+        // 🔴 **The sight-core clause was retired on 2026-08-29 and this is where it stood.**
+        // It read `!covers_core` — *the marker may stand on its anchor, but not on the blade's
+        // own {SIGHT_CORE_PX} px* — and that clause was the entire reason the glyph was drawn
+        // 16.00 px below the point it names, measured at every stance, standing still
+        // (`docs/FINDINGS.md` FIND-212). The user, for the second time: *„ist immernoch nicht am
+        // cursor. es bewegt sich immernoch."* His instruction beats the derivation, and the
+        // derivation was a taste about how much of the cut is worth covering.
+        //
+        // **Rollback point:** put `covers_core` back here, restore the `Some(p)` arm of step 3
+        // in `hud::arm_aim::layout_for`, and the two sibling `f170_` tests' exempt branches.
+        // What replaces the clause is a stronger claim in the same test, below: the glyph centre
+        // is ON the anchor's pixel, both axes, not merely near its column.
+        println!("f170 node {name}: x {min_x:.1}..{max_x:.1}, y {min_y:.1}..{max_y:.1}");
     }
     assert!(seen >= 4, "only {seen} arm nodes were measured — the test is looking at nothing");
 
-    // The glyphs are on the anchor's x, and the vertical step out of the core is all that moved.
     let left = glyph_centre(&mut app, Side::Left);
     let right = glyph_centre(&mut app, Side::Right);
     println!("f170 dead ahead: {seen} nodes, anchor at {want:?}, Q at {left:?}, E at {right:?}");
     for (side, at) in [(Side::Left, left), (Side::Right, right)] {
+        let off = (at - want).length();
         assert!(
-            (at.x - want.x).abs() < 1.0,
+            off < 1.5,
             "{side:?} is anchored on a point that projects to {want:?} and its glyph was drawn \
-             at {at:?} — the x of a marker holding a place is that place"
+             at {at:?}, {off:.2} px away. A marker holding a place stands on that place — on \
+             BOTH axes. Until 2026-08-29 only the x was asserted here and the y was 16 px out"
         );
     }
     // One place, two ropes: the two glyphs coincide, and the letters keep them apart.

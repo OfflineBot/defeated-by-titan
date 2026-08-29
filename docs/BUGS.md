@@ -1720,6 +1720,35 @@ defect** — it is not in this round's group and was not checked.
 
 ## B-020 — at `gravity_m_s2: -32` three husks kill the player; at `-20` he lives
 
+> 🔴 **2026-08-29, LATER THE SAME DAY: `f032-swords.txt` no longer carries this repro, and it is
+> not because the bug went away.** The class table doubled (`docs/FINDINGS.md` FIND-213), so every
+> act in that file warps 6 m higher and spends **~0.81 s on the ground instead of ~1.03 s** —
+> under the husk's own `windup_s 0.60 + strike_s 0.2 = 0.80 s`. Three blows became zero and the
+> file reads **11 asserts held**. The exposure window was never the point of that script; it was
+> a by-product of the warp height, and the class height controls it. **Nothing here was re-aimed
+> and `player.health` was not touched.**
+>
+> **The repro is now simpler and it still fires** — one husk, no falling, no blades:
+>
+> ```
+> wait 1.5
+> spawn titan husk -300 0 -83.75
+> warp -304.0 2.0 -83.75
+> look 180 0
+> wait 6.0
+> assert health > 99
+> ```
+>
+> ```
+> strike: player 1 takes 34.0 — 66.0/100.0 left
+> strike: player 1 takes 34.0 — 32.0/100.0 left
+> strike: player 1 takes 34.0 —  0.0/100.0 left
+> line 6: assert Health > 99 — measured 0.000
+> ```
+>
+> `3 × damage 34.0` against `player.health 100.0` is the whole of it, and it is a division nobody
+> chose. Still his call at the play test; still no `health` raise here.
+
 **2026-08-29 · [offlinebot] · found by the adversary of the corpus re-aim round, controlled**
 
 `scripts/f032-swords.txt` ends with three husks alive and standing next to the player. Its
@@ -1855,3 +1884,144 @@ cargo run -- --headless --script scripts/<the file above> --ticks 900
 `src/input`. What a fix needs first is the answer to *which* of the two is wrong — the yaw
 convention every script comment states (`# yaw +90 = +X`, `scripts/f003-ashgate.txt`) or the
 movement basis the input builds from it.
+
+## B-024 — `NO TARGET` stays on the marker for 1.6 s after the arm has anchored
+
+**Found:** 2026-08-29 by the user, playing — *„zudem steht no target selbst wenn ich ein seil dran
+hab.. das ist gar nicht gut."* · **Fixed:** same round · **Evidence:**
+`tests/hud.rs::f028_a_hint_dies_when_the_arm_it_belongs_to_catches`
+
+### The cause
+
+Two writers answering one question. `sense_arm_aim` reads the `Hook` and writes
+`ArmAimState::Anchored`; `show_arm_miss` reads `ArmMiss` and writes the word. `ArmMiss` is
+`F-028`'s 1.6 s countdown and **the only way it ended was by running out** — `step_miss` had no
+branch for *the arm got what it was missing*. So a pull at open sky followed within `MISS_HINT_S`
+by a pull that anchors draws `Anchored`'s filled disc with `NO TARGET` under it. In play that is
+the common case, not a corner one: he presses `Q` while turning, misses, keeps turning, catches.
+
+### Repro (the test, red before the fix)
+
+```
+f028 Left anchored=true: marker state Anchored, label "Q  NO TARGET"
+thread 'f028_a_hint_dies_when_the_arm_it_belongs_to_catches' panicked at tests/hud.rs:3667:13:
+the Left arm is Anchored — there is a rope in the world — and the marker still reads "Q  NO TARGET".
+```
+
+Both arms × `Anchored` and `Flying`, driven through the real `HookReleased` message and the real
+`Hook` component, so `sense_arm_aim` reads the state the way it reads the game's.
+
+### The fix
+
+`step_miss` takes `caught` — *this arm's tip is out or holding* — and clears the hint when it is
+true and no fresh miss arrived this tick. `Retracting` is deliberately **not** caught: a refire
+during the retract that finds nothing is a real miss and `vector::hook` reports it, so an arm on
+its way home keeps its word.
+
+Control: `None if caught && false =>` puts the message above back verbatim.
+
+---
+
+## B-025 — a blade cast that starts **inside** a titan cuts nothing at all, not even the torso
+
+**Measured 2026-08-29** (stream B), while sweeping the lateral cushion of `scripts/f030-hitbox.txt`
+from +1.20 m of air down to −1.20 m. Below a per-class threshold every act reports **no `cut
+titan` line of any zone** — not a graze, not a torso hit, nothing:
+
+```
+c_husk_-0.6   Torso         c_scuttler_-0.2  Torso        c_lurker_-1.0  Torso
+c_husk_-0.8   none          c_scuttler_-0.4  none         c_lurker_-1.2  none
+c_husk_-1.0   none          c_scuttler_-0.6  none
+```
+
+`none` begins exactly where the player's capsule starts the tick **overlapping** the titan's, i.e.
+where `SpatialQuery::cast_shape` is asked to sweep a capsule out of an initial penetration. The
+zero is not "he missed": the blade is inside the neck and reports nothing.
+
+### Repro
+
+```
+wait 1.5
+warp -300.40 23.091 -82.65        # husk axis at x −300, i.e. 0.85 m INSIDE a 1.10 m neck
+look 0 0
+wait 0.446
+spawn titan husk -300 0 -83.75
+wait 0.06
+slash right 0.40
+wait 1.60
+```
+
+`./target/debug/defeated_by_titan --headless --script <that> --ticks 300 2>&1 | grep 'cut titan'`
+prints nothing. Move the warp out to `−302.306` and it prints `Cortex at 20.80 m/s`.
+
+### Why it matters in play, and why it is not fixed here
+
+A player who hugs a titan is the genre's core move, and `blades::cut` already has a *deliberate*
+rule for it — `min_speed_m_s` 8.0, *"a player parked on the nape closes at ~0 m/s and cuts
+nothing"* (`src/titan/rig.rs`). **This is not that rule.** He is closing at 21 m/s and still gets
+nothing, because the cast never returns a hit. The honest fix is in `blades::cut::sweep` (a
+zero-distance overlap query before the sweep, or `ShapeCastConfig::ignore_origin_penetration`),
+which is a behaviour change to the one function every kill goes through, and it wants its own
+round with its own adversary.
+
+**Not observed in his play session** — filed because it fell out of a sweep, not out of a symptom.
+Priority is below `B-020`.
+
+## B-026 — the ground climbs **2.50 m over the market square** and buries the paving it is standing on
+
+**Found 2026-08-29**, in the round that replaced the terraces with a continuous height field
+(`docs/FINDINGS.md` FIND-214). Not a symptom the user reported; it fell out of probing the
+paving after the change.
+
+### The measurement
+
+`warp <x> 40 <z>`, fall, read `assert height` on the shipped binary. Paving top is 0.05 m, so
+0.050 means the stone is visible and anything above it means grass is standing on it:
+
+| point | what is there | reads |
+|---|---|---|
+| (75, -30) · (62, -22) | market square | 0.050 ✓ |
+| (0, -37) · (0, 240) | main street | 0.050 ✓ |
+| (0, -83) · (±200..300, -83) | wall boulevard | 0.050 ✓ |
+| (-235, -232) | green field, west | 0.050 ✓ |
+| (-70, 0) | canal floor | -4.000 ✓ (a hole, correct) |
+| **(40, -50)** | **market square, south-west** | **2.500** ✗ |
+| **(235, -232)** | **green field, east** | **4.500** ✗ |
+| **(0, -336)** | **green strip** | **0.500** ✗ |
+
+So a corner of a 76 x 76 m stone square is under 2.5 m of grass, and the eastern field patch
+under 4.5 m.
+
+### Repro
+
+```bash
+cargo build
+cargo run -- --headless --script scripts/w2-terrain-walk.txt --ticks 2500   # green, for contrast
+# and the probe itself, three lines, any scratch file:
+#   look 0 0 / warp 40 40 -50 / wait 2.6 / mark m / assert height > 99.0
+```
+
+### The cause is a role, and the fix is a trade-off somebody has to choose
+
+`shared::CellRole::Floor` (a hand-placed block whose top is at or below `terrain.paving_top_m`)
+constrains the field from **below only**: the ground may not sink away under paving and leave it
+hanging, but it may climb over it. That is inherited behaviour and it was deliberate for
+terraces (`maps.ron`: *"a terrace may cover it"*) — at 1.50 m per 42 m cell it almost never
+happened, because the 42 m cell containing a stall was pinned flat anyway. At 5 m cells only the
+cells actually under a stall are pinned, and the rest of the square is free to climb.
+
+**Making `Floor` a `Pin` fixes it and costs the whole feature.** The streets are a lattice across
+the entire district at a 42 m pitch; pinned, nothing between them can be more than
+`21 m * 5 % = 1.05 m` off the base plane, and the 20.25 m of relief this round exists to deliver
+collapses to about 2 m. Measured on the way in: with the two 700 m sand floors kept as `Floor`
+the field reached `-0.25 .. +13.25`; as `Pin` it would be far less.
+
+Three candidates, none of them free:
+1. a **ceiling on `Floor`** — `h <= k * rise_m` over paving, a third envelope. Buries at most
+   `k` rises but pulls the whole district down toward the streets with it;
+2. **per-block roles in `maps.ron`** — the market square and the boulevard say `pin`, the
+   scattered aprons say `floor`. Honest, and it needs a field on `MapBlock`;
+3. **leave it** and treat a square on a slope as the shape the town has.
+
+Not fixed: the choice belongs with whoever owns how the district should read, and it is one
+line of code plus a decision, not a bug in the arithmetic.
