@@ -3580,3 +3580,45 @@ taken and are in the round's scratch if he wants to look before deciding.
 ⚠️ Costs that come with it and do not depend on taste: **+89 % terrace blocks** (1236 → 2337),
 and the district is now climbed by **finding the stairs** rather than by walking straight up any
 edge — a 5.40 m flight at one corner of each 42 m cell instead of a bank along the whole of it.
+
+---
+
+## ✅ ANSWERED 2026-08-29 — the water and the wall
+
+**Water on contact — „Man schwimmt / wird langsam."**
+You fall in, lose speed and gas, and work your way out. **Not lethal.** So water is *terrain with a
+cost*, which means it needs a volume, an entry rule, a drag and an exit — not just a coloured
+plane. ⚠️ It also needs an answer for the Vector Gear: a hook fired *from* the water, and gas
+spent while in it.
+
+**Hookable — „Nein — Wasser hält keinen Haken."**
+Unchanged from today's channel: `anchorable: false`. ⚠️ **This is the one deliberate exception to
+`Q-078`'s "everything is hookable"** — and it is exactly the toggle he asked for there
+(*„später soll man auch bestimmte sachen toggeln können"*). Water is the first category that is
+switched **off**, and that is what the switch was built for.
+The bridges and the new towers stay the crossing, which is what makes the river cost something.
+
+**The entrance gates — 🔴 „Echte AoT-Mauer mit Toren drin."**
+The wall becomes the structure and the gate a passage through it, as in the reference. **The swing
+anchors come from the wall's own ledges and cornices instead of from freestanding crossbeams.**
+
+⭐ **AND THAT IS ALREADY THE PROJECT'S OWN NUMBER ONE, measured and then filed as cosmetics.**
+`FIND-134`, 2026-08-19, closed with a queue whose first item reads:
+
+> **Re-cut the wall into modules** so the tile set can dress it — biggest aerial win, and **it
+> unlocks `hook.gesims_*` anchors along the wall as a side effect.**
+
+Those `gesims` (cornice) anchors are *precisely* the swing points his answer needs, and the same
+finding measured why the wall cannot be dressed today: the model pack's wall vocabulary
+(`a-095`, `a-096`, `a-101`) is a **tile set at one module — 11.20 m wide, 120 m tall** — while
+Ashgate's wall is **monolithic 700 / 336 / 285 m bands**, and `fit_to_class` scales uniformly: it
+can fit a tile to a box, it cannot repeat one along it (700 / 11.2 = 62.5, and the runs do not even
+divide).
+
+**So one job answers three of his complaints at once** — the entrance shape, the swing anchors, and
+the bare aerial silhouette — and it was sitting in the queue described as a level-design chore.
+⚠️ It is expensive: every collider in the silhouette, the 40 asserts of `scripts/f003-ashgate.txt`,
+and the `hook.*` ladders move with it. **It goes after the terrain, which is reshaping the ground
+those bands stand on.**
+
+**Related:** `FIND-134` · `Q-078` · `docs/NEXT.md` §5A · `F-003` `F-004` · `M-002`
