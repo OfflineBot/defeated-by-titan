@@ -142,16 +142,28 @@
         // is the more expensive but correct way: the guard above checks their ratio instead
         // of producing it — that makes it stronger, not weaker. (2026-08-09.)
         classes: {
-            "small":        (height_m:  4.2, cortex_height_m:  3.7),
-            "medium":       (height_m: 10.0, cortex_height_m:  8.9),
-            "large": (height_m: 14.0, cortex_height_m: 12.5),
-            "huge":        (height_m: 21.0, cortex_height_m: 18.7),
+            // 🔴 **DOUBLED 2026-08-29, on his word.** He played it and wrote
+            // *„zu not erstelle nochmal einen eigenen titan mit passender groesse weil die
+            // aktuellen sind eher kleiner! gerne doppelt so gross oder so."* — so every class
+            // is exactly 2x what it was (4.2 / 10 / 14 / 21 / 28), and every `cortex_height_m`
+            // with it, which keeps `cortex_fraction` 0.89 and the head fraction 0.11 untouched
+            // (`tests/data.rs` guards both). `Q-002`: a direct figure from him beats any
+            // derivation, and "doppelt" is a direct figure.
+            // ⚠️ Not a free lever. `titan.ron: cortex_radius_m` doubled in the same change —
+            // the nape has to keep pace with the body or the target halves again (`Q-019`) —
+            // and `titan::rig::body_segments_m` had to grow a NECK first, because the old
+            // single shoulder-wide capsule put the doubled `large` class out of reach at ANY
+            // offset (`docs/FINDINGS.md` FIND-213).
+            "small":        (height_m:  8.4, cortex_height_m:  7.4),
+            "medium":       (height_m: 20.0, cortex_height_m: 17.8),
+            "large": (height_m: 28.0, cortex_height_m: 25.0),
+            "huge":        (height_m: 42.0, cortex_height_m: 37.4),
             // The user names the class "Abnormal / Boss". Whether he means the size class
             // by that or the titan kind that the project vocabulary calls "Errant" is
             // open — docs/QUESTIONS.md Q-020. It is deliberately still used by NO kind in
             // titan.ron: the first representative is a raid opponent, and raids are
             // behind the Vector Gear gate (docs/ROADMAP.md).
-            "boss":         (height_m: 28.0, cortex_height_m: 24.9),
+            "boss":         (height_m: 56.0, cortex_height_m: 49.8),
         },
 
         // ------------------------------------------------------------------
@@ -164,11 +176,37 @@
 
         // **The biggest single hole in the repository until today: nothing said how
         // wide a titan is.** No collider, no rig, and no answer to the alley
-        // question could be given without it. 0.25 makes a `large` titan 3.5 m
-        // wide in a 7.0 m street (maps.ron: layout.street_m) — 1.75 m clearance per
-        // side. At `boss` (28 m) it is exactly 7.0 m and the alley is blocked by a
-        // silent wall; that is why `max_spawnable_class` stands below.
-        width_fraction: 0.25,
+        // question could be given without it.
+        //
+        // 🔴 **0.25 -> 0.20 on 2026-08-29, and it is arithmetic, not taste.** The class
+        // table doubled on the user's word, and that comment's own warning came true
+        // one class early: `0.25 x 28 m` is exactly the 7.00 m body it called *"a silent
+        // wall"* — except that 28 m is now `large`, which `max_spawnable_class` lets
+        // into the city, and `maps.ron: ashgate.layout.street_m` is 6.0.
+        // `tests/data.rs::t005_the_class_cap_names_a_class_that_exists_and_leaves_something_out`
+        // is what said so, out loud, and it is the guard doing its job.
+        //
+        // **Three levers could have answered it and only this one is mine to pull.**
+        // The class heights are HIS, given today (`Q-002`: a direct figure beats any
+        // derivation). `min_street_m` 6.0 is his too, from 2026-08-09, and it is the
+        // reason speed in the Vector Gear feels like speed. `max_spawnable_class` down
+        // to `medium` would delete the warden and the lurker from the game to fix a
+        // width. **This number is the only one on the table that the file itself marks
+        // UNTUNED — "invented by the main head against no measurement", twelve lines
+        // above.**
+        //
+        // 0.20 puts a `large` titan at **5.60 m in a 6.0 m street** and the bound is
+        // `street_m / cap_height` = 6.0 / 28.0 = 0.2143, so there is real clearance and
+        // not a rounding. It also reads BETTER: a 28 m body 5.60 m across the shoulders
+        // is a 1:5 ratio where a human is 1:4, and a narrower silhouette is one of the
+        // two things this file already uses to make a titan read as huge rather than
+        // near (see `human_head_fraction` above).
+        // ⚠️ It does NOT touch the nape. The body a blade meets at the neck is
+        // `head_m / 2` = `0.055 x height` (`titan::rig::body_segments_m`), which is a
+        // function of `torso_fraction` and `leg_fraction` and not of this number: the
+        // `large` clearance at the cortex is **1.890 m either way**.
+        // Rollback: put 0.25 back and `max_spawnable_class` down to "medium".
+        width_fraction: 0.20,
 
         // The four parts of the rig, stacked. They are chosen to ADD UP against the
         // numbers that are already laid down, and that is the whole reason they are

@@ -1,5 +1,14 @@
 # F-029 Dynamische Ankerpunkte — a rope bites a titan, rides him, and lets go when he dies.
 #
+# PINS: this file's own fall/flight (its drop and its timing are unchanged). The husk's
+#       geometry is what moved: `scale.ron`'s classes DOUBLED on 2026-08-29 on the user's
+#       word and `titan::rig::body_segments_m` gave the titan a neck (`docs/FINDINGS.md`
+#       FIND-213), so every nape aim below is re-derived as
+#         warp y  += cortex_height_m 17.80 - 8.90 = 8.90   (the drop is untouched)
+#         x offset = clearance 1.55 + the air this file already chose  (was 1.60 + air)
+#         z offset = set-back 1.10 + whatever this file already added  (was 0.55)
+#       Nothing here was re-aimed; one input moved and the aim follows it.
+#
 #   cargo run -q -- --headless --script scripts/f029-grapple.txt --ticks 900
 #
 # and, as a SEPARATE run, the one that returns a usable exit code:
@@ -108,7 +117,7 @@ wait 0.8
 
 # ---- Act 2: hook the titan that is about to die, then kill him -------------------------
 spawn titan husk 0 900 0
-warp -1.80 918.5 0.55
+warp -1.75 927.4 1.10
 # Down and inward, at the body's own axis: the horizontal line from (-1.80, 0.55) to (0, 0) is
 # yaw -73°, and 82° of descent puts the ray 2.4 m under his crown — the middle of the capsule
 # and not its last millimetre.

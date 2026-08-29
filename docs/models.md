@@ -228,12 +228,12 @@ the user has said nothing about.
 | Tree | 12 m | foreground layering |
 | Watchtower on the wall | 12 m | |
 | Church / bell tower | 35 m | landmark, not a grid house |
-| **Titans (×1.4)** | | cortex at ~89 % |
-| Small titan | 4.2 m | Cortex 3.7 m |
-| Medium titan | 10 m | Cortex 8.9 m |
-| Large titan | 14 m | Cortex 12.5 m |
-| Huge titan | 21 m | Cortex 18.7 m |
-| Abnormal / Boss | 28 m | Cortex 24.9 m — row title as the user has it, [Q-020](QUESTIONS.md) |
+| **Titans (×1.4)** | | cortex at ~89 % — 🔴 **every class DOUBLED on 2026-08-29**, on the user's word *„die aktuellen sind eher kleiner! gerne doppelt so gross oder so"* ([FIND-213](FINDINGS.md)). The old ladder was 4.2 / 10 / 14 / 21 / 28. |
+| Small titan | 8.4 m | Cortex 7.4 m |
+| Medium titan | 20 m | Cortex 17.8 m |
+| Large titan | 28 m | Cortex 25 m |
+| Huge titan | 42 m | Cortex 37.4 m |
+| Abnormal / Boss | 56 m | Cortex 49.8 m — row title as the user has it, [Q-020](QUESTIONS.md) |
 | Titan head size | 1/9 – 1/10 of the height | human = 1/7.5 |
 | **Walls (×2.4)** | | |
 | Wall height | 120 m | |

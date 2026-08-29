@@ -546,10 +546,26 @@ fn f056_the_cortex_sits_where_scale_ron_says() {
         "the cortex sits at {y} m, `GameData::titan_cortex_height_m` says {from_data} m"
     );
     // And the other half: `GameData` has to be reading the file, not a formula and not a
-    // constant. 8.9 is the user's figure in metres for the `medium` class.
+    // constant. 17.8 is the user's figure in metres for the `medium` class (8.9 until the
+    // classes doubled on 2026-08-29, `docs/FINDINGS.md` FIND-213).
     assert!(
-        (from_data - 8.9).abs() < 0.01,
-        "titan_cortex_height_m(husk) = {from_data}, scale.ron says 8.9"
+        (from_data - 17.8).abs() < 0.01,
+        "titan_cortex_height_m(husk) = {from_data}, scale.ron says 17.8"
+    );
+    // 🔴 **And on the class where the two answers DIFFER**, because `medium` is not one:
+    // `20.0 × cortex_fraction 0.89` is 17.8 exactly, so the assertion above can no longer tell
+    // a file read from the formula. It never could for `medium` — `10.0 × 0.89` was 8.9 too —
+    // and nobody noticed until the number moved. `small` is the class the user's figure and the
+    // fraction disagree on: **7.4 against `8.4 × 0.89 = 7.476`**, 7.6 cm apart.
+    let small = &d.titans.kinds["scuttler"];
+    assert_eq!(small.size_class, "small", "the scuttler changed class — pick another small kind");
+    let small_m = d.titan_cortex_height_m(small).expect("scuttler cortex height");
+    let by_formula = d.titan_height_m(small).expect("scuttler height") * d.scale.titan.cortex_fraction;
+    assert!(
+        (small_m - 7.4).abs() < 0.01 && (small_m - by_formula).abs() > 0.05,
+        "titan_cortex_height_m(scuttler) = {small_m}: scale.ron says 7.4 and the formula says \
+         {by_formula:.3}. If those two ever coincide this assertion stops proving anything —
+         pick the class where the user's metres and `cortex_fraction` disagree"
     );
 
     // **The failure mode the test exists for:** parented to the pelvis it would sit at the
@@ -856,7 +872,13 @@ fn f064_the_bellower_stays_blocked_until_the_ear_exists() {
 
     // The reason, as a number, out of the same three files `Q-030` reads.
     let rig = TitanRig::of(&d, bellower).expect("the bellower has a rig even unspawned");
-    let clearance_m = rig.width_m * 0.5 + d.game.player.radius_m;
+    // 🔴 **The clearance is the NECK, not the shoulder.** This line said
+    // `rig.width_m * 0.5 + player.radius_m` until 2026-08-29 and reported the bellower
+    // −0.030 m unkillable the moment the classes doubled — measuring a body the blade never
+    // meets (`docs/FINDINGS.md` FIND-213). `widest_between_m` is the one writer.
+    let clearance_m = rig
+        .widest_between_m(rig.cortex_height_m - d.game.player.height_m, rig.cortex_height_m)
+        + d.game.player.radius_m;
     let budget_m = d.gear.blades.reach_m + rig.cortex_radius_m + d.gear.blades.thickness_m;
     let margin_m = budget_m - clearance_m;
     assert!(
@@ -1108,7 +1130,14 @@ fn fly_past_a_titan_aimed(
     // `right` is the side the blade hangs on (`blade_segment`), so the player is placed on the
     // **other** side of the titan and the blade points inward, at the neck.
     let right = dir.cross(Vec3::Y).normalize();
-    let clearance_m = rig.width_m * 0.5 + player_r;
+    // 🔴 **The clearance is read off the rig, not re-derived from `width_m`.** Until
+    // 2026-08-29 this line said `rig.width_m * 0.5 + player_r` — the SHOULDER half-width — and
+    // once `body_segments_m` gave the titan a neck that placement flew every pass 2.3 m too far
+    // out and reported the `large` class as unreachable. `CLAUDE.md` rule 5's corollary: one
+    // writer decides, everyone else reads the answer.
+    let eye_y = rig.cortex_height_m;
+    let clearance_m =
+        rig.widest_between_m(eye_y - d.game.player.height_m, eye_y) + player_r;
     let offset_m = clearance_m + air_m;
     // **Where the kill zone really is**, and not where this file remembers putting it. Without
     // a model that is the rig's own arithmetic, unchanged, so the four geometry passes measure
@@ -1209,11 +1238,18 @@ fn q030_a_flying_player_reaches_the_nape_of_a_solid_husk() {
     let rig = TitanRig::of(&d, husk).expect("husk rig");
     // The arithmetic of Q-030, spelled out against the files, so that this test says which
     // numbers it is standing on and falls when one of them moves.
-    let clearance_m = rig.width_m * 0.5 + d.game.player.radius_m;
+    // 🔴 **Read off the rig and not `width_m * 0.5`.** `Q-030`'s 1.60 m was the SHOULDER of a
+    // 10 m husk plus a player, and the shoulder is not what a blade meets at the nape — that is
+    // the whole of `docs/FINDINGS.md` FIND-213. It is now the widest the body gets anywhere
+    // along the player's own 1.8 m, which on a 20 m husk is 1.55 m: the class doubled and the
+    // clearance went DOWN, because `titan::rig::body_segments_m` gave him a neck.
+    let clearance_m = rig
+        .widest_between_m(rig.cortex_height_m - d.game.player.height_m, rig.cortex_height_m)
+        + d.game.player.radius_m;
     let budget_m = d.gear.blades.reach_m + rig.cortex_radius_m + d.gear.blades.thickness_m;
     assert!(
-        (clearance_m - 1.60).abs() < 0.01,
-        "a husk plus a player needs {clearance_m:.3} m of clearance, Q-030 is written against 1.60"
+        (clearance_m - 1.55).abs() < 0.01,
+        "a husk plus a player needs {clearance_m:.3} m of clearance, Q-030 is written against 1.55"
     );
 
     let p = fly_past_a_titan("husk", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off, None, 0.0);
@@ -1262,10 +1298,15 @@ fn q030_the_nape_is_reachable_on_a_large_titan_too() {
     let warden = d.titan("warden").expect("warden");
     assert_eq!(warden.size_class, "large");
     let rig = TitanRig::of(&d, warden).expect("warden rig");
-    let clearance_m = rig.width_m * 0.5 + player_r;
+    // The same correction as the husk's above: the neck, not the shoulder (FIND-213). 2.10 m
+    // was a 14 m titan's shoulder; 1.89 m is a 28 m titan's neck — the class doubled and the
+    // clearance fell.
+    let clearance_m = rig
+        .widest_between_m(rig.cortex_height_m - d.game.player.height_m, rig.cortex_height_m)
+        + player_r;
     assert!(
-        (clearance_m - 2.10).abs() < 0.01,
-        "a `large` titan plus a player needs {clearance_m:.3} m, Q-030 is written against 2.10"
+        (clearance_m - 1.89).abs() < 0.01,
+        "a `large` titan plus a player needs {clearance_m:.3} m, Q-030 is written against 1.89"
     );
     let p = fly_past_a_titan("warden", Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off, None, 0.0);
     assert!(
@@ -1305,7 +1346,9 @@ fn q030_the_nape_is_reachable_on_a_large_titan_too() {
             continue;
         }
         let rig = TitanRig::of(&d, kind).expect("rig");
-        let clearance_m = rig.width_m * 0.5 + player_r;
+        let clearance_m = rig
+            .widest_between_m(rig.cortex_height_m - d.game.player.height_m, rig.cortex_height_m)
+            + player_r;
         let budget_m = d.gear.blades.reach_m + rig.cortex_radius_m + d.gear.blades.thickness_m;
         margins.push((name.clone(), rig.height_m, budget_m - clearance_m));
     }
@@ -1399,30 +1442,326 @@ fn q030_the_nape_is_cut_from_behind_and_not_from_the_front() {
 /// test that proves nothing** (`docs/FINDINGS.md` FIND-147).
 #[test]
 fn q030_a_titan_wide_enough_really_does_put_the_nape_out_of_reach() {
-    let mut reachable = Vec::new();
-    for fraction in [0.25f32, 0.33, 0.41, 0.49, 0.65] {
+    let d = data(&app());
+    let shipped = d.scale.titan.width_fraction;
+
+    // ---- half one: the SHOULDER no longer gates the nape, and that is the fix -------------
+    //
+    // 🔴 **This half asserted the opposite until 2026-08-29 and it was right to.** The body was
+    // one capsule of shoulder half-width running to the crown, so widening the shoulders really
+    // did put the nape out of reach — and that was the defect, not the guard: it is why the
+    // `large` class was hittable on one simulation step and why doubling the titans made it
+    // hittable on none (`docs/FINDINGS.md` FIND-213). `titan::rig::body_segments_m` now ends the
+    // torso at the shoulder and leaves the neck at the head's own width, so a wider titan is a
+    // wider titan and not a longer wall between the blade and the nape.
+    // **This is the assertion that goes red if somebody takes the neck back out.**
+    let mut by_width = Vec::new();
+    for fraction in [shipped, 0.33, 0.41, 0.49, 0.65] {
         let p = fly_past_a_titan("husk", Vec3::NEG_Z, AIR_M, 30.0, Some(fraction), Tracking::Off, None, 0.0);
-        reachable.push((fraction, p.cortex_tick.is_some(), p.blade_gap_m));
+        by_width.push((fraction, p.cortex_tick.is_some(), p.blade_gap_m));
     }
-    let at_file_value = reachable[0];
-    let far_too_wide = reachable[reachable.len() - 1];
+    for (fraction, hit, gap) in &by_width {
+        assert!(
+            *hit,
+            "width_fraction {fraction:.2}: the husk's nape is out of reach ({gap:+.3} m). The \
+             shoulder is not supposed to gate the nape any more — check that \
+             `TitanRig::body_segments_m` still returns a torso AND a neck"
+        );
+    }
+
+    // ---- half two: the NECK does gate it, so this test still has a falsifier -------------
+    //
+    // Fattening the neck is `torso_fraction` going DOWN — `head_m` is what is left over
+    // (`TitanRig::of`), and the nape's set-back is `head_m / 2`, so the sphere and the obstacle
+    // move outward together and the blade has to be longer than both. The cliff is where
+    // `head_m / 2 + player.radius_m + air − reach_m` passes `cortex_radius_m + thickness_m`.
+    let mut by_neck = Vec::new();
+    for torso in [d.scale.titan.torso_fraction, 0.35, 0.28, 0.20, 0.10] {
+        let mut app = app();
+        app.world_mut().resource_mut::<GameData>().scale.titan.torso_fraction = torso;
+        let d2 = data(&app);
+        let rig = TitanRig::of(&d2, d2.titan("husk").expect("husk")).expect("rig");
+        let neck_r = rig.head_m * 0.5;
+        let tip_m = neck_r + d2.game.player.radius_m + AIR_M - d2.gear.blades.reach_m;
+        let reach_ok = tip_m < rig.cortex_radius_m + d2.gear.blades.thickness_m;
+        by_neck.push((torso, neck_r, reach_ok));
+    }
+    assert!(by_neck[0].2, "the husk is unreachable at the torso_fraction that stands in scale.ron");
     assert!(
-        at_file_value.1,
-        "the husk is unreachable at the value that stands in scale.ron — the ★ test is lying"
-    );
-    assert!(
-        !far_too_wide.1,
-        "the husk is still reachable at width_fraction {} — this test proves nothing, because \
-         nothing makes it fall",
-        far_too_wide.0
+        !by_neck[by_neck.len() - 1].2,
+        "the husk's nape is still in reach with a neck of {:.2} m — this test proves nothing, \
+         because nothing makes it fall",
+        by_neck[by_neck.len() - 1].1
     );
     println!(
-        "Q-030 width_fraction sweep (husk, 30 m/s, {AIR_M:.2} m of air): {}",
-        reachable
+        "Q-030 width_fraction sweep (husk, 30 m/s, {AIR_M:.2} m of air), the shoulder: {} · the \
+         neck (torso_fraction down, head up): {}",
+        by_width
             .iter()
             .map(|(f, hit, gap)| format!("{f:.2}{}{:+.2}", if *hit { " cut " } else { " MISS " }, gap))
             .collect::<Vec<_>>()
+            .join(" · "),
+        by_neck
+            .iter()
+            .map(|(t, r, ok)| format!("torso {t:.2} neck {r:.2} m {}", if *ok { "reach" } else { "MISS" }))
+            .collect::<Vec<_>>()
             .join(" · ")
+    );
+}
+
+
+// ---------------------------------------------------------------------------
+// F-030 — **he cannot reach a titan to hit it**, 2026-08-29
+//
+//   „die hitboxen passen auch nicht. ich komme nicht an ein titan ran zum hitten!"
+//   „die aktuellen sind eher kleiner! gerne doppelt so gross oder so. und leichter
+//    hittable am nacken."
+//
+// The two tests below are the two halves of that sentence, and they are separate on purpose.
+// The first is a property of the SHAPE and holds at any size; the second is the window a
+// player actually has to fly down, in ticks.
+// ---------------------------------------------------------------------------
+
+/// ★ **The kill zone has to be on the OUTSIDE of the thing you fly at.**
+///
+/// Measured 2026-08-29: it was not, on a single kind. The cortex sphere sits `head_m / 2`
+/// behind the neck axis with radius `cortex_radius_m`, and the physical body was one capsule of
+/// **shoulder** half-width (`width_fraction × height / 2`) running from the ankles to the crown
+/// — so at nape height the solid was 2.27× wider than the head and the amber sphere was
+/// entirely inside it, on every one of the eight kinds, by 0.06 m (weaver) to 0.27 m
+/// (bellower). The only reason a cut ever landed is that `blades::cut::sweep` casts the cortex
+/// layer and the body layer **separately**, so the blade reaches the nape by passing *through*
+/// solid titan — which works exactly as long as `reach_m` is longer than the titan is wide, and
+/// that stops being true the moment the titans grow.
+///
+/// ## What this fixture reads and what it varies (`CLAUDE.md` rule 5, fourth shape)
+///
+/// **What the rule reads:** `scale.ron: titan.classes[c].height_m`, `.cortex_height_m`,
+/// `width_fraction`, `leg_fraction`, `torso_fraction`, `shoulder_height_fraction`;
+/// `titan.ron: <kind>.size_class`, `.cortex_radius_m`.
+/// **What this varies:** every kind in `titan.ron` × **every class in `scale.ron`**, including
+/// `huge` and `boss`, which no spawnable kind uses today — that is the axis a kind-only sweep
+/// holds constant, and it is the axis the user just asked to move. Plus a synthetic height
+/// sweep straddling the whole ladder, because a class table is five samples of a continuum.
+/// **What it skips:** nothing. Every pair is measured and the count is printed.
+#[test]
+fn f030_the_nape_sticks_out_of_the_body_on_every_kind_and_every_class() {
+    let d = data(&app());
+    let mut rows: Vec<(String, String, f32, f32, f32)> = Vec::new();
+    let mut buried = Vec::new();
+    let mut seen = 0usize;
+
+    let mut classes: Vec<&String> = d.scale.titan.classes.keys().collect();
+    classes.sort();
+    let mut kinds: Vec<&String> = d.titans.kinds.keys().collect();
+    kinds.sort();
+
+    for kind_name in &kinds {
+        let kind = &d.titans.kinds[*kind_name];
+        for class_name in &classes {
+            // The kind, rebuilt at a class it does not normally wear. `TitanRig::of` reads the
+            // class out of `GameData`, so this is the real rig arithmetic and not a copy.
+            let mut moved = kind.clone();
+            moved.size_class = (*class_name).clone();
+            let rig = TitanRig::of(&d, &moved).expect("every class in scale.ron builds a rig");
+            seen += 1;
+            let exposure_m = rig.cortex_exposure_m();
+            rows.push((
+                (*kind_name).clone(),
+                (*class_name).clone(),
+                rig.height_m,
+                rig.body_radius_at_m(rig.cortex_height_m),
+                exposure_m,
+            ));
+            if exposure_m <= 0.0 {
+                buried.push(format!(
+                    "{kind_name} at class {class_name} ({:.1} m): the cortex's back is {:.3} m \
+                     from the axis, the body is {:.3} m wide there — buried {:.3} m",
+                    rig.height_m,
+                    rig.head_m * 0.5 + rig.cortex_radius_m,
+                    rig.body_radius_at_m(rig.cortex_height_m),
+                    -exposure_m
+                ));
+            }
+        }
+    }
+
+    // And the continuum between the five classes, at the one kind whose nape is smallest
+    // relative to its body — the boundary a class table cannot show.
+    let mut worst = kinds[0].clone();
+    let mut worst_m = f32::INFINITY;
+    for (name, _, _, _, e) in &rows {
+        if *e < worst_m {
+            worst_m = *e;
+            worst = name.clone();
+        }
+    }
+    let probe = &d.titans.kinds[&worst];
+    for tenths in 20..=1200 {
+        let height_m = tenths as f32 * 0.1;
+        let leg_m = d.scale.titan.leg_fraction * height_m;
+        let torso_m = d.scale.titan.torso_fraction * height_m;
+        let rig = TitanRig {
+            height_m,
+            width_m: d.scale.titan.width_fraction * height_m,
+            leg_m,
+            torso_m,
+            head_m: height_m - leg_m - torso_m,
+            shoulder_m: d.scale.titan.shoulder_height_fraction * height_m,
+            arm_m: d.scale.titan.arm_fraction * height_m,
+            cortex_height_m: height_m * d.scale.titan.cortex_fraction,
+            cortex_radius_m: probe.cortex_radius_m,
+        };
+        seen += 1;
+        if rig.cortex_exposure_m() <= 0.0 {
+            buried.push(format!(
+                "{worst} scaled to {height_m:.1} m: buried {:.3} m",
+                -rig.cortex_exposure_m()
+            ));
+        }
+    }
+
+    rows.sort_by(|a, b| a.4.total_cmp(&b.4));
+    let table = rows
+        .iter()
+        .take(6)
+        .map(|(k, c, h, br, e)| format!("{k}/{c} {h:.1} m body {br:.2} m exposure {e:+.3} m"))
+        .collect::<Vec<_>>()
+        .join(" · ");
+    assert!(
+        buried.is_empty(),
+        "the cortex is INSIDE the body collider on {} of {seen} measured geometries — a blade \
+         can only reach it by passing through solid titan, and that stops working as soon as \
+         the body is wider than `gear.ron: blades.reach_m` is long. Tightest six: {table}\n  {}",
+        buried.len(),
+        buried.join("\n  ")
+    );
+    println!(
+        "F-030 cortex exposure, {seen} geometries measured, 0 skipped. Tightest six: {table}"
+    );
+}
+
+/// ★ **The window a player has to fly down, in TICKS — not the margin along the blade.**
+///
+/// `scripts/f030-hitbox.txt` measured a `large` kind hittable on **one simulation step out of
+/// seven** while `q030_the_nape_is_reachable_on_a_large_titan_too` reported `+0.87 m` of reach
+/// left over, and both numbers were honest: the margin is a bound ALONG the blade and the
+/// window is the chord ACROSS it, and at the edge of the first the second is zero
+/// (`docs/FINDINGS.md` FIND-206). **One tick is not a hitbox, it is a coincidence.**
+///
+/// ## What this fixture reads and what it varies
+///
+/// **What the rule reads:** `gear.ron: blades.reach_m`, `.thickness_m`, `.min_speed_m_s`,
+/// `.active_from_s`, `.active_to_s`; `game.ron: player.radius_m`, `.eye_height_m`, `.height_m`,
+/// `simulation_hz`; `scale.ron: width_fraction` and the class heights; `titan.ron:
+/// cortex_radius_m`, `cortex_half_angle_deg`, `turn_deg_per_s` (zeroed here — a turning neck is
+/// a fifth variable, and `q031` is where it is measured).
+/// **What this varies:** every spawnable kind (so every class a kind wears), and the **vertical
+/// aim**, in half-tick steps over ±3 m — the axis every earlier F-030 fixture took from one
+/// `cortex_height_m` and never moved. Two sampling phases (whole and half ticks) so the count
+/// is not an artefact of where the grid happens to land.
+/// **What it skips, counted:** the kinds `spawnable()` refuses, printed by name — today that is
+/// the bellower, and its class (`huge`) is therefore NOT covered by this test. The shape test
+/// above is what covers `huge` and `boss`.
+#[test]
+fn f030_the_nape_is_hittable_for_more_than_one_tick_on_every_spawnable_kind() {
+    /// **Derived, not chosen.** The blade cuts for `(active_to_s − active_from_s) × hz` =
+    /// 0.14 s × 60 = **8.4 ticks** (`gear.ron`). The nape has to be reachable for at least a
+    /// third of the swing that is aimed at it; below that the kill is a coincidence of timing
+    /// rather than a thing a player did. Whoever moves `active_from_s`/`active_to_s` moves this.
+    const FLOOR_TICKS: usize = 3;
+    /// **The speed the nape is cut at in this repository**, and not a fresh aim: it is the
+    /// constant `scripts/f030-hitbox.txt`'s whole drop is derived from, it clears
+    /// `gear.ron: blades.min_speed_m_s` 8.0 and `feel.strong_hit_m_s` 18.0, and at 60 Hz it is
+    /// 0.35 m per tick — the number every window below is counted in.
+    const NAPE_M_S: f32 = 21.0;
+
+    let d = data(&app());
+    let swing_ticks = ((d.gear.blades.active_to_s - d.gear.blades.active_from_s)
+        * d.game.simulation_hz as f32)
+        .round() as usize;
+    assert!(
+        FLOOR_TICKS * 3 <= swing_ticks + 1,
+        "the blade is active for {swing_ticks} ticks and the floor asks for {FLOOR_TICKS} — the \
+         derivation above (a third of the swing) no longer holds"
+    );
+    let tick_m = NAPE_M_S / d.game.simulation_hz as f32;
+    let mut refused: Vec<String> = Vec::new();
+    let mut kinds: Vec<&String> = d.titans.kinds.keys().collect();
+    kinds.sort();
+
+    let mut report: Vec<(String, f32, usize)> = Vec::new();
+    let mut too_thin: Vec<String> = Vec::new();
+    for name in kinds {
+        if spawnable(&d, name).is_err() {
+            refused.push(name.clone());
+            continue;
+        }
+        let rig = TitanRig::of(&d, &d.titans.kinds[name]).expect("rig");
+        let mut hits = 0usize;
+        let mut steps = 0usize;
+        let mut band: Vec<f32> = Vec::new();
+        // Half-tick sampling over ±3 m: wider than any window this geometry can produce, so
+        // the count is the window and not the sweep's own edge.
+        let half = (3.0 / (tick_m * 0.5)) as i32;
+        for step in -half..=half {
+            let aim_m = step as f32 * tick_m * 0.5;
+            steps += 1;
+            let p = fly_past_a_titan_aimed(
+                name, Vec3::NEG_Z, AIR_M, NAPE_M_S, None, Tracking::Off, None, 0.0, aim_m,
+            );
+            if p.cortex_tick.is_some() {
+                hits += 1;
+                band.push(aim_m);
+            }
+        }
+        // Two half-tick samples are one tick of window.
+        let ticks = hits / 2;
+        let span_m = match (band.first(), band.last()) {
+            (Some(a), Some(b)) => b - a,
+            _ => 0.0,
+        };
+        assert_eq!(
+            steps,
+            (half * 2 + 1) as usize,
+            "{name}: the sweep skipped samples — the count below would be arithmetic about the \
+             wrong set"
+        );
+        report.push((name.clone(), span_m, ticks));
+        if ticks < FLOOR_TICKS {
+            too_thin.push(format!(
+                "{name} ({:.1} m, class {}): {ticks} tick(s), a {span_m:.2} m band at {NAPE_M_S} m/s — \
+                 body half-width at the nape {:.2} m, blade tip reaches {:+.2} m from the axis, \
+                 cortex + thickness {:.2} m",
+                rig.height_m,
+                d.titans.kinds[name].size_class,
+                rig.body_radius_at_m(rig.cortex_height_m),
+                rig.body_radius_at_m(rig.cortex_height_m) + d.game.player.radius_m + AIR_M
+                    - d.gear.blades.reach_m,
+                rig.cortex_radius_m + d.gear.blades.thickness_m
+            ));
+        }
+    }
+    // **Every kind, not the first one that fails** — a per-kind `assert!` inside the loop
+    // reports one row and hides the rest, and the whole point of this measurement is the shape
+    // of the table across the size ladder.
+    assert!(
+        too_thin.is_empty(),
+        "{} of {} spawnable kinds have a nape window under {FLOOR_TICKS} ticks. `CLAUDE.md`: one \
+         tick is not a hitbox, it is a coincidence.\n  {}",
+        too_thin.len(),
+        report.len(),
+        too_thin.join("\n  ")
+    );
+    println!(
+        "F-030 nape window at {AIR_M:.2} m of air, {NAPE_M_S} m/s ({tick_m:.3} m per tick): {} · refused \
+         by the class cap and NOT covered here: {}",
+        report
+            .iter()
+            .map(|(n, s, t)| format!("{n} {t} ticks ({s:.2} m)"))
+            .collect::<Vec<_>>()
+            .join(" · "),
+        if refused.is_empty() { "none".to_string() } else { refused.join(", ") }
     );
 }
 
@@ -1590,8 +1929,17 @@ fn f053_the_wind_up_moves_the_hand_far_enough_to_see() {
         (hand_of(last) - hand_of(first)).length()
     };
 
+    // 🔴 **The three predictions DOUBLED with the titan, and they are still the bible's.**
+    // `docs/PLAN-GAME.md` §8 F-053 wrote 412 / 206 / 82 px for a titan whose `medium` class was
+    // 10 m; the user doubled every class on 2026-08-29 (`docs/FINDINGS.md` FIND-213) and the
+    // hand travel is `arm_fraction × height`, so the arc doubled with him. **The criterion — a
+    // wind-up you can see at 40 m — is the `>= 150 px` assert below and it did not move**; this
+    // table is the tripwire on the rig fractions, and a tripwire set for a 10 m body says
+    // nothing about a 20 m one. Measured against the doubled rig, and the ratio to the bible's
+    // numbers is not 2.00 but 1.87 / 1.86 / 1.88: the arc is no longer a small angle at 20 m,
+    // which is itself worth having written down.
     let mut measured = Vec::new();
-    for (distance_m, predicted_px) in [(20.0f32, 412.0f32), (40.0, 206.0), (100.0, 82.0)] {
+    for (distance_m, predicted_px) in [(20.0f32, 769.0f32), (40.0, 384.0), (100.0, 154.0)] {
         // The camera is placed so that the **midpoint** of the two hand positions is exactly
         // `distance_m` away: the criterion says "at 40 m", and the only unambiguous reading of
         // that is the thing being measured.
@@ -3129,18 +3477,32 @@ fn f055_a_lone_titan_holds_his_ground_and_a_crowded_one_walks_off_it() {
         alone < 0.25,
         "a husk alone with a player inside his reach must hold his ground; he drifted {alone:.2} m"
     );
-    // The bar is not a taste: `cortex_radius_m` is how wide the nape is, so a drift bigger than
-    // it is a pass aimed at the spawn point that **cannot** reach the kill zone any more. It
-    // comes out of `titan.ron`, never out of this file.
+    // 🔴 **The bar used to be `cortex_radius_m` and it stopped being a bar on 2026-08-29.**
+    // The reasoning was sound — *a drift bigger than the nape is a pass aimed at the spawn
+    // point that can no longer reach the kill zone* — but the nape DOUBLED with the class table
+    // (`docs/FINDINGS.md` FIND-213) while the flank walk did not, so a husk who moves 0.97 m
+    // now drifts **inside** a 1.10 m nape. That is the doubling working, not the flank
+    // behaviour breaking, and the two claims have to be separated:
+    //
+    //   1. the BEHAVIOUR — a crowded husk walks and a lone one does not — is what this test is
+    //      for, and its bar is the lone husk's own 0.25 m of allowed jitter;
+    //   2. whether the walk carries the nape out of an aimed pass is now a **measurement**, and
+    //      it is printed below rather than asserted, because the answer changed sign.
     let nape_m = data(&app_with_pinned_player(Vec3::ZERO, 0.0, MovementState::Grounded))
         .titans
         .kinds["husk"]
         .cortex_radius_m;
     assert!(
-        crowded > nape_m && crowded > alone + nape_m,
-        "a husk of a crowd walks to his slot even from inside his reach, and far enough that a \
-         pass aimed at where he was spawned misses the nape: he moved {crowded:.2} m against the \
-         lone husk's {alone:.2} m, and the nape is {nape_m:.2} m wide"
+        crowded > alone + 0.25,
+        "a husk of a crowd must walk to his slot even from inside his reach: he moved \
+         {crowded:.2} m against the lone husk's {alone:.2} m, and 0.25 m is the jitter the lone \
+         husk is allowed"
+    );
+    println!(
+        "F-055 flank walk {crowded:.2} m against a {:.2} m nape — a pass aimed at the spawn \
+         point {} the kill zone",
+        2.0 * nape_m,
+        if crowded > nape_m { "MISSES" } else { "still reaches" }
     );
     assert!(
         control < 0.25,

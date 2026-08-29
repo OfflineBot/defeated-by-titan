@@ -88,7 +88,8 @@
 #     g      = -game.ron: gravity_m_s2  = 32.0 m/s²
 #     drop   = v² / (2 g)      = 441 / 64   = 6.891 m     (was 11.2 m at g = 20)
 #     t_fall = v / g           = 21 / 32    = 0.656 s     (was 1.05 s)
-#     warp y = cortex_height_m 8.90 - eye_height_m 1.60 + drop   = 14.19
+#     warp y = cortex_height_m 17.80 - eye_height_m 1.60 + drop  = 23.091
+#     (8.90 -> 17.80 on 2026-08-29: `scale.ron`'s classes doubled on the user's word)
 #     wait   = t_fall - (blades.active_from_s 0.08 + active_to_s 0.22) / 2 = 0.656 - 0.15 = 0.506
 #
 # The last line aims the nape crossing at the MIDDLE of the blade's active window, which is where
@@ -110,7 +111,14 @@
 # 138, 139 and 140, i.e. 0.35 m per tick, which is exactly 21 m/s and says the fall resumed on
 # **138** and not before. The repeated number is the hit stop and not the instrument.
 #
-# ## Why x = 15.75 and z = 0.8
+# PINS: the pass speed at the nape (21.0 m/s) and the 0.15 m of air between the two capsules.
+#       Warp height and x offset follow. Re-derived 2026-08-29 for the doubled class table and
+#       for `titan::rig::body_segments_m`, which gave the titan a NECK — so the clearance is no
+#       longer `width_m / 2` (2.50 m here) but `widest_between_m` over the player's own 1.8 m,
+#       which is 1.550 m at `width_fraction` 0.20. x = 17.5 - (1.550 + 0.15) = 15.800,
+#       z = set-back 1.10 + 0.25.
+#
+# ## Why x = 15.644 and z = 1.35
 #
 # The husk's body capsule has a radius of `width_fraction × height / 2` = 1.25 m and the player
 # capsule 0.35 m, so anything closer than **1.60 m** to his axis is a collision and not a pass.
@@ -155,7 +163,7 @@
 # `MARK t=130` against `tick 130: cut titan 1 Cortex`, the same tick.
 wait 1.5
 spawn titan husk 17.5 0 0
-warp 15.75 14.19 0.8
+warp 15.800 23.091 1.35
 look 0 0
 key F3 0.05
 wait 0.506

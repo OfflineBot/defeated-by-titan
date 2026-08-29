@@ -165,9 +165,27 @@ impl TitanRig {
     /// out of exactly this list and nothing else, and every test asks this instead of
     /// re-deriving `width_fraction × height / 2` for itself (`CLAUDE.md` rule 5's corollary:
     /// *one writer decides, everyone else reads the answer*).
+    /// **A titan has a neck, and until 2026-08-29 he did not.** The collider was ONE capsule of
+    /// shoulder half-width (`width_fraction × height / 2`) running from the ankles to the crown,
+    /// so the solid at nape height was `0.125 × height` where the head is only `0.055 × height`
+    /// wide — 2.27× too fat, on every kind. That capsule is what the user ran into:
+    /// *„ich komme nicht an ein titan ran zum hitten"*. It also buried the amber sphere
+    /// completely (see [`cortex_exposure_m`](Self::cortex_exposure_m)), and it made the reach
+    /// arithmetic scale the wrong way — the obstacle grows with `height_m` while
+    /// `gear.ron: reach_m` does not, so every kind gets harder to kill as the titans grow.
+    ///
+    /// The two segments below put the widest part of the body **at and below the shoulder**,
+    /// where a body is widest, and leave the neck and head at the head's own width. The nape
+    /// then sits on the neck's SKIN — `cortex_in_head` sets it back by exactly `head_m / 2`,
+    /// which is exactly the neck's radius — so half the sphere protrudes at every size and on
+    /// every kind, by construction and not by tuning.
     pub fn body_segments_m(&self) -> Vec<(f32, f32, f32)> {
-        let r = self.width_m * 0.5;
-        vec![(r, r, self.height_m - r)]
+        let torso_r = self.width_m * 0.5;
+        let neck_r = self.head_m * 0.5;
+        vec![
+            (torso_r, torso_r, self.shoulder_m - torso_r),
+            (neck_r, self.shoulder_m - neck_r, self.height_m - neck_r),
+        ]
     }
 
     /// The half-width of the physical body at height `y_m` above the feet — 0.0 where the
@@ -183,6 +201,33 @@ impl TitanRig {
                 } else {
                     0.0
                 };
+                if d >= r { 0.0 } else { (r * r - d * d).sqrt() }
+            })
+            .fold(0.0f32, f32::max)
+    }
+
+    /// The widest the physical body gets **anywhere between two heights**.
+    ///
+    /// A player is 1.8 m tall and his eye is at the top of him, so when he flies past at nape
+    /// height his knees are down among the shoulders. The clearance a pass needs is therefore
+    /// not `body_radius_at_m(cortex_height_m)` but the widest point over his whole capsule —
+    /// and every fixture that wrote `width_m * 0.5 + player.radius_m` was answering a question
+    /// about the shoulder when it meant to ask one about the neck.
+    pub fn widest_between_m(&self, low_m: f32, high_m: f32) -> f32 {
+        let (low_m, high_m) = if low_m <= high_m { (low_m, high_m) } else { (high_m, low_m) };
+        self.body_segments_m()
+            .into_iter()
+            .map(|(r, bottom, top)| {
+                // The capsule is widest at any height between its two endpoints; outside them
+                // it falls off, so the nearest end of the interval is the widest it can be.
+                let y = if high_m < bottom {
+                    high_m
+                } else if low_m > top {
+                    low_m
+                } else {
+                    return r;
+                };
+                let d = if y < bottom { bottom - y } else { y - top };
                 if d >= r { 0.0 } else { (r * r - d * d).sqrt() }
             })
             .fold(0.0f32, f32::max)

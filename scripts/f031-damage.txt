@@ -39,7 +39,11 @@
 #     wait   = v / g - 0.15                = 0.506 s   (0.15 = the middle of the blade's
 #                                                       active window, gear.ron 0.08..0.22)
 #
-# and the nape warp is `cortex_height_m 8.90 - eye_height_m 1.60 + drop` = **14.19**.
+# and the nape warp is `cortex_height_m 17.80 - eye_height_m 1.60 + drop` = **23.091**.
+# PINS: the pass speed at the nape (21.0 m/s). Warp heights and x offsets follow from it and
+#       from the geometry; re-derived 2026-08-29 for the doubled classes and for the neck
+#       (`titan::rig::body_segments_m`) — the body cuts are flown at x offset 2.50 because at
+#       chest height the clearance is the TORSO (2.00 + 0.35), not the neck.
 # The control: feed g = 20 back in and it prints `wait 0.900` and `drop 11.03 m`, which is the
 # calibration this file shipped with. **When gravity moves again, re-evaluate those two lines —
 # do not re-aim by hand.**
@@ -68,7 +72,7 @@ look 0 0
 key F3 0.05
 
 # --- pass 1: the chest, at 20.27 m/s -------------------------------------------------
-warp 15.75 11.19 0.8
+warp 15.000 17.091 1.35
 wait 0.506
 slash right 0.40
 wait 0.30
@@ -76,7 +80,7 @@ mark body-pass-1
 assert titans == 1
 
 # --- pass 2 --------------------------------------------------------------------------
-warp 15.75 11.19 0.8
+warp 15.000 17.091 1.35
 wait 0.506
 slash right 0.40
 wait 0.30
@@ -84,7 +88,7 @@ mark body-pass-2
 assert titans == 1
 
 # --- pass 3: the pool should be empty around here, and he goes on the floor -----------
-warp 15.75 11.19 0.8
+warp 15.000 17.091 1.35
 wait 0.506
 slash right 0.40
 wait 0.30
@@ -117,7 +121,7 @@ spawn titan husk 17.5 0 -60
 # assert on the same line as the spawn reads 1 and says nothing about the spawn.
 wait 0.10
 assert titans == 2
-warp 15.75 14.19 -59.2
+warp 15.800 23.091 -58.65
 wait 0.506
 slash right 0.40
 wait 0.08

@@ -1,6 +1,11 @@
 # F-030 — **the hitbox, measured as a cushion.** One nape pass per spawnable kind, every one of
 # them flown with **0.60 m of air between the two capsules**, and every one of them has to kill.
 #
+# PINS: the pass speed at the nape (21.0 m/s) AND the 0.60 m of air between the two capsules.
+#       Warp height, fall time and the x offset all follow from those two. When a class height,
+#       `gravity_m_s2` or `titan::rig::body_segments_m` moves, the three numbers below move and
+#       the speed and the cushion do NOT.
+#
 #   nice -n 15 cargo run -q -- --headless --script scripts/f030-hitbox.txt --ticks 1600
 #
 # and, as a SEPARATE run, the one that returns a usable exit code:
@@ -17,16 +22,18 @@
 # `docs/FINDINGS.md` FIND-147: the term that decides whether a nape is reachable is not
 # `cortex_radius_m`. It is
 #
-#     band = reach_m + thickness_m + cortex_radius_m − body_radius − player_radius
+#     band = reach_m + thickness_m + cortex_radius_m − clearance − player_radius
 #
-# and `body_radius` is `scale.ron: width_fraction 0.25 × height / 2`, which grows with the class
-# three times faster than the cortex does. So the numbers that matter are **per kind** and a
-# single absolute standoff would be meaningless: 1.85 m is a comfortable pass at a husk and
-# inside a warden's shoulder.
+# ⚠️ **`clearance` used to be `width_fraction 0.25 × height / 2` and that was the defect**, not
+# the formula: it is the SHOULDER, and the shoulder is not what a blade meets at the nape. Since
+# 2026-08-29 the body is a torso capsule ending at the shoulder plus a neck at the head's own
+# width, and the clearance is `TitanRig::widest_between_m` over the player's own 1.8 m. So the
+# numbers that matter are still **per kind** and a single absolute standoff would still be
+# meaningless.
 #
 # Every act below therefore flies at
 #
-#     x = −(body_radius + player_radius + 0.60)      body_radius = 0.125 × height_m
+#     x = −(clearance + player_radius + 0.60)
 #
 # i.e. with **0.60 m of empty air between the player's capsule and the titan's**. That is a
 # cushion a player can hold at 21 m/s (0.35 m per tick), not the last centimetre of a clearance.
@@ -73,20 +80,47 @@
 #
 # The warp height is therefore `cortex_height_m − eye_height_m 1.60 + drop`:
 #
-#     small  (4.2 m, cortex 3.7)   8.99      body_radius 0.525   x −1.475   z 0.231
-#     medium (10 m,  cortex 8.9)   14.19      body_radius 1.250   x −2.200   z 0.550
-#     large  (14 m,  cortex 12.5)  17.79      body_radius 1.750   x −2.700   z 0.770
+# 🔴 **THE WHOLE TABLE MOVED ON 2026-08-29, TWICE OVER, AND NEITHER MOVE WAS A RE-AIM.**
 #
-# ⚠️ **`x` and `z` did not move and could not have:** they are the lateral cushion and the
-# cortex's set-back, and gravity touches neither. Only the height column and the wait are
+# First, `scale.ron`'s five classes DOUBLED on the user's word (*„die aktuellen sind eher kleiner!
+# gerne doppelt so gross oder so"*), and with them every `cortex_height_m` and every
+# `titan.ron: cortex_radius_m`. Second, and this is the one that changes the meaning of the `x`
+# column: **the clearance is no longer `width_fraction × height / 2`.** A titan's physical body
+# was one capsule of SHOULDER half-width running from the ankles to the crown; it is now a torso
+# capsule that stops at the shoulder plus a neck at the head's own width
+# (`titan::rig::body_segments_m`). So the number a pass has to clear at nape height is
+# `TitanRig::widest_between_m(cortex_height_m − player.height_m, cortex_height_m) + 0.35`, which is
+# the widest the body gets anywhere along the player's own 1.8 m — his knees are down among the
+# shoulders while his eye is at the nape, and every fixture that wrote `width_m * 0.5` was
+# answering a question about the shoulder.
+#
+#     class   height  cortex   warp y    clearance   x offset (+0.60)   z set-back
+#     small    8.4      7.4    12.691      1.190        −1.790            0.462
+#     medium  20.0     17.8    23.091      1.550        −2.150            1.100
+#     large   28.0     25.0    30.291      1.890        −2.490            1.540
+#
+# ⚠️ `width_fraction` also moved, 0.25 -> 0.20, because `0.25 x 28 m` is a 7.00 m body in a 6.0 m
+# street and `tests/data.rs` says so out loud. It shrinks the `small` and `medium` clearances
+# above and leaves `large` at 1.890 — because `large`'s clearance is the NECK, and the neck is a
+# function of `head_m` and not of the shoulders.
+#
+# `clearance` is the shoulder for `small` (0.84 m: an 8.4 m titan's shoulder is only 0.92 m below
+# his nape, so a 1.8 m player still hangs into it), the shoulder's cap for `medium`
+# (1.20 m, 1.6 m above the capsule's top endpoint) and the NECK for `large` (1.54 m, where the
+# player fits entirely into the pocket between the shoulders and the head). **That is the whole
+# fix: the bigger the titan, the more room there is at his neck** — which is why the size the
+# user asked for and the reach he asked for are one change and not two.
+#
+# ⚠️ **`x` and `z` are not functions of `g`.** They are the lateral cushion and the cortex's
+# set-back; gravity touches neither. They moved on 2026-08-29 because the class table doubled and
+# the body grew a neck, and for no other reason. Only the height column and the wait are
 # functions of `g`.
 #
 # `z` is `head_m / 2` = `0.055 × height_m`, the cortex's set-back behind the neck axis
 # (`src/titan/rig.rs::cortex_in_head`) — standing on it puts the blade's line through the
 # sphere's centre, so the only thing being measured is the lateral cushion.
-# ⚠️ That `z` is a SET-BACK and not a radius. On a husk it is 0.55 and `cortex_radius_m` is also
-# 0.55 today; the two are different numbers that happen to coincide, and they diverge the moment
-# either moves.
+# ⚠️ That `z` is a SET-BACK and not a radius. On a husk both are 1.10 m today; they are different
+# numbers that happen to coincide, and they diverge the moment either moves.
 #
 # ## Why the titan is spawned 0.20 s before the cut
 #
@@ -102,50 +136,30 @@
 # zone — so it measures the blade and not a titan walking into a falling player. Run it that way
 # before believing a green.
 #
-# ## 🔴 THIS FILE IS RED ON PURPOSE, 3 of 8, AND ONE OF THE THREE IS A REAL DEFECT
+# ## 🔴 WHERE THIS FILE STOOD BEFORE 2026-08-29, and what the doubling did to it
 #
-# Measured 2026-08-29, re-derived pass, everything else identical:
+# It ran 8 asserts green at the OLD sizes — but green was hiding the measurement. Swept tick by
+# tick at the shipped cushion, the nape was open for
 #
-#   line 217  the LURKER — ✅ **GREEN since 2026-08-29.** It was declared unreachable and filed;
-#             it was one simulation step. See the act's own note below. Nothing is filed for it.
-#   line 245  `assert titans == 1` reads 2  — the lurker, still standing, counted again
-#   line 252  `assert titans == 0` reads 1  — the lurker, still standing, counted again
+#   scuttler 1 · weaver 1 · chorus 2 · errant 2 · husk 3 · lurker 3 · warden 3   ticks (21 m/s)
 #
-# **Only the first is a finding.** The warden dies on both of his passes (`tick 986: cut titan 7
-# Cortex at 20.27 m/s`); lines 180 and 187 are `titans` counting the lurker's corpse-that-isn't,
-# and they are off by exactly one. Five of the seven kinds die at the nape at 20.80 m/s.
+# and `tests/titan.rs::f030_the_nape_is_hittable_for_more_than_one_tick_on_every_spawnable_kind`
+# is where that sweep now lives. **One tick is not a hitbox, it is a coincidence** — a single
+# green pass per kind cannot tell a 1-tick window from an 11-tick one, and this file was reporting
+# 8 of 8 while five of seven kinds were inside three ticks. After the doubling and the neck:
 #
-# **What the lurker measurement says, and the two controls that pin it** — sweeping the slash tick
-# ±3 at the shipped cushion, and sweeping the cushion at the shipped tick:
+#   scuttler 3 · weaver 3 · chorus 7 · errant 7 · husk 8 · lurker 11 · warden 11
 #
-#   tick    -3     -2     -1      0     +1     +2     +3
-#           Torso  Torso  Torso  Torso  **Cortex**  Torso  ArmLeft
-#
-#   cushion 0.60   0.40   0.20   0.00
-#           Torso  **Cortex**  **Cortex**  **Cortex**   (all four at the SAME tick)
-#
-# So the nape is reachable on **exactly one tick out of seven** at 0.60 m of air, and reachable at
-# the tick that fails the moment 0.20 m of that air is given back. The arithmetic behind it: the
-# blade tip reaches `x = titan_x − (body_radius 1.75 + player_radius 0.35 + 0.60) + reach 2.00`
-# = `titan_x − 0.70`, and `cortex_radius_m` is 0.77 — so it penetrates 0.07 m of a 0.77 m sphere,
-# and the chord it can reach is `sqrt(0.77² − 0.70²)` = **0.32 m** tall, which at 0.35 m per tick
-# is one tick. **The band formula of `FIND-147` says 0.87 m of clearance for a large kind and is
-# not wrong — it is a LATERAL bound, and at the edge of a lateral bound the vertical window goes
-# to zero.** That is the finding, and this file is where it shows.
-#
-# ⚠️ **The warden is not a counter-example, he is the same fact from the other side.** He is large
-# too, with the same `cortex_radius_m` 0.77 and the same cushion — and he dies, because his
-# opening pass turns him ~50° and 0.77 m of set-back swung through 50° carries the sphere
-# `0.77 x sin 50°` = 0.59 m closer to the blade. **His act measures his rotation, not his
-# hitbox**, and it is the lurker — the one kind that provably never turns — that measures what
-# this file set out to measure.
+# ⚠️ The two `small` kinds are at 3 and the derived floor is 3. The missing centimetres are
+# `gear.ron: blades.thickness_m`, which is **0.20** while its own comment in the same file argues
+# for 0.30 four times over (`docs/FINDINGS.md` FIND-213). At 0.30 the small class is at 4.
 #
 # 1.5 s of lead-in: under `--offscreen` the render pipelines are still coming up in the first
 # second, and the two run modes must not disagree about which tick anything happens on.
 wait 1.5
 
 # ── husk · medium · the calibration body ─────────────────────────────────────────────────────
-warp -302.20 14.19 -83.20
+warp -302.150 23.091 -82.650
 look 0 0
 wait 0.446
 spawn titan husk -300 0 -83.75
@@ -156,7 +170,7 @@ mark husk
 assert titans == 0
 
 # ── errant · medium · swerve 35°, and he swerves in Pursue, not in Windup ────────────────────
-warp -202.20 14.19 -83.20
+warp -202.150 23.091 -82.650
 look 0 0
 wait 0.446
 spawn titan errant -200 0 -83.75
@@ -167,7 +181,7 @@ mark errant
 assert titans == 0
 
 # ── chorus · medium · a lone chorus has no partner to flank with ─────────────────────────────
-warp -102.20 14.19 -83.20
+warp -102.150 23.091 -82.650
 look 0 0
 wait 0.446
 spawn titan chorus -100 0 -83.75
@@ -178,7 +192,7 @@ mark chorus
 assert titans == 0
 
 # ── scuttler · small · the smallest nape in the game (0.20 m) and the widest band ────────────
-warp -1.475 8.99 -83.519
+warp -1.790 12.691 -83.288
 look 0 0
 wait 0.446
 spawn titan scuttler 0 0 -83.75
@@ -190,7 +204,7 @@ assert titans == 0
 
 # ── weaver · small · `cortex_guard: WhenCommitted` — the nape is only open inside his own
 #    attack, so the 0.20 s of lead is what puts him in Windup when the blade arrives ──────────
-warp 98.525 8.99 -83.519
+warp 98.210 12.691 -83.288
 look 0 0
 wait 0.446
 spawn titan weaver 100 0 -83.75
@@ -201,15 +215,14 @@ mark weaver
 assert titans == 0
 
 # ── lurker · large · ambush, never takes a step. Pure geometry, no movement confound ─────────
-#    ✅ **GREEN. This act was RED ON PURPOSE for about an hour and the filing was wrong.**
-#    The nape is reachable on exactly ONE tick of the fall at 0.60 m of cushion, and on four of
-#    four at 0.40 m or less. The two controls and the arithmetic are in the header block above.
-#    **Do not re-aim this act to make it green** — the aim is correct, the reach is not. Its
-#    survivor is also what makes lines 245 and 252 read one too many, and those two are the same
-#    defect counted twice, not three defects.
-warp 197.30 17.79 -82.98
+#    ✅ **GREEN, and since 2026-08-29 it is green with room.** This act was the one that measured
+#    the defect: at the old `large` (14 m) the nape was reachable on exactly ONE tick of the fall,
+#    because the player was held off by a shoulder-wide capsule and the blade tip poked 0.07 m
+#    into a 0.77 m sphere. At 28 m with a neck it is 11 ticks. The lurker never takes a step, so
+#    he is still the only act here that measures geometry and not a titan's rotation.
+warp 197.510 30.291 -82.210
 look 0 0
-wait 0.4627
+wait 0.446
 spawn titan lurker 200 0 -83.75
 wait 0.06
 slash right 0.40
@@ -235,7 +248,7 @@ assert titans == 0
 #        `turn_deg_per_s` 40 and there is 1.26 s between the two cuts (0.60 + 0.506 + 0.15,
 #        re-derived 2026-08-29 from 1.3 s), so about 50° of his turn happen between them. Opening from the same side would carry the nape out of the second
 #        pass's line and the act would measure his neck rotation instead of his guard. ────────
-warp 302.30 17.79 -85.25
+warp 302.090 30.291 -85.250
 look 180 0
 wait 0.446
 spawn titan warden 300 0 -83.75
@@ -244,7 +257,7 @@ slash right 0.40
 wait 0.60
 mark warden-opened
 assert titans == 1
-warp 297.30 17.79 -82.98
+warp 297.510 30.291 -82.210
 look 0 0
 wait 0.506
 slash right 0.40

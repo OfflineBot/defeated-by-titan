@@ -1,5 +1,14 @@
 # Q-030 — the nape of a SOLID husk is reachable, with air to spare.
 #
+# PINS: this file's own fall/flight (its drop and its timing are unchanged). The husk's
+#       geometry is what moved: `scale.ron`'s classes DOUBLED on 2026-08-29 on the user's
+#       word and `titan::rig::body_segments_m` gave the titan a neck (`docs/FINDINGS.md`
+#       FIND-213), so every nape aim below is re-derived as
+#         warp y  += cortex_height_m 17.80 - 8.90 = 8.90   (the drop is untouched)
+#         x offset = clearance 1.55 + the air this file already chose  (was 1.60 + air)
+#         z offset = set-back 1.10 + whatever this file already added  (was 0.55)
+#       Nothing here was re-aimed; one input moved and the aim follows it.
+#
 # cargo run -- --offscreen --script scripts/q030-reach.txt --ticks 168 \
 #              --screenshot docs/images/f030-solid-husk.png
 #
@@ -80,7 +89,7 @@
 # block meshes are still coming up in the first second.
 wait 1.5
 spawn titan husk 0 0 0
-warp -1.80 18.5 0.55
+warp -1.75 27.4 1.10
 look 0 0
 key F3 0.05
 # THE FALL TO THE CORTEX, AND IT IS TIMED AGAINST `gravity_m_s2` — this is the one number in the

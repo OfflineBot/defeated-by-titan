@@ -1,5 +1,14 @@
 # F-034 — hit stop: the bodies stop, the clock does not.
 #
+# PINS: this file's own fall/flight (its drop and its timing are unchanged). The husk's
+#       geometry is what moved: `scale.ron`'s classes DOUBLED on 2026-08-29 on the user's
+#       word and `titan::rig::body_segments_m` gave the titan a neck (`docs/FINDINGS.md`
+#       FIND-213), so every nape aim below is re-derived as
+#         warp y  += cortex_height_m 17.80 - 8.90 = 8.90   (the drop is untouched)
+#         x offset = clearance 1.55 + the air this file already chose  (was 1.60 + air)
+#         z offset = set-back 1.10 + whatever this file already added  (was 0.55)
+#       Nothing here was re-aimed; one input moved and the aim follows it.
+#
 # cargo run -- --offscreen --script scripts/f034-hitstop.txt --ticks 137 \
 #              --screenshot docs/images/f034-hitstop.png
 #
@@ -94,7 +103,7 @@
 # evidence of nothing (`scripts/p1-overlay.txt` uses the same 1.5).
 wait 1.5
 spawn titan husk 17.5 0 0
-warp 15.75 14.19 0.8
+warp 15.80 23.09 1.35
 look 0 0
 key F3 0.05
 wait 0.506

@@ -57,7 +57,7 @@ use defeated_by_titan::shared::{
 };
 use defeated_by_titan::combat::combo::Combo;
 use defeated_by_titan::combat::damage::{damage_of, ticks_of, CollapseGuard};
-use defeated_by_titan::titan::rig::TitanPart;
+use defeated_by_titan::titan::rig::{TitanPart, TitanRig};
 
 // ---------------------------------------------------------------------------
 // the harness
@@ -447,16 +447,35 @@ fn fly_past(
     lead: u32,
     count: u64,
 ) -> Vec<f32> {
+    fly_past_phased(app, cortex_m, cortex_r, speed_m_s, hand_y_m, lead, count, 0.5)
+}
+
+/// The same pass with the **phase** of the tick grid chosen instead of assumed.
+///
+/// `phase_m` is how far past the target the tick boundary before the crossing lands. The 0.5 m
+/// [`fly_past`] passes was written when a nape plus a blade was 0.35 m and one tick at 75 m/s
+/// was 1.25 m; both halves of that arithmetic moved on 2026-08-29 (`docs/FINDINGS.md` FIND-213)
+/// and a fixed literal cannot straddle a target whose size is a file value.
+#[allow(clippy::too_many_arguments)]
+fn fly_past_phased(
+    app: &mut App,
+    cortex_m: Vec3,
+    cortex_r: f32,
+    speed_m_s: f32,
+    hand_y_m: f32,
+    lead: u32,
+    count: u64,
+    phase_m: f32,
+) -> Vec<f32> {
     let d = data(app);
     let step = speed_m_s / d.game.simulation_hz as f32;
     until_the_blade_bites(app);
-    // Half a step past the target plus the lead, so that at 75 m/s the two tick boundaries
-    // around the crossing land at +0.5 m and −0.75 m — both outside the 0.35 m an overlap
-    // test could see. The pass is aimed, not hoped for.
+    // `phase_m` past the target plus the lead, so that the two tick boundaries around the
+    // crossing land at `+phase_m` and `phase_m − step`. The pass is aimed, not hoped for.
     let start = Vec3::new(
         cortex_m.x - REACH_X,
         hand_y_m - d.game.player.eye_height_m,
-        cortex_m.z + 0.5 + step * lead as f32,
+        cortex_m.z + phase_m + step * lead as f32,
     );
     place(app, start, Vec3::new(0.0, 0.0, -speed_m_s));
 
@@ -598,24 +617,42 @@ fn f030_a_pass_at_30_m_s_hits_the_cortex() {
 
 /// ★ **The one that catches the sensor-overlap implementation by name.**
 ///
-/// A weaver's cortex is `2 × 0.23 = 0.46 m` across (`titan.ron:75`) and 75 m/s is
-/// `75 / 60 = 1.250 m` per tick: the player is inside the target for **0.37 of a tick**. The
-/// assertion is therefore two-sided, and the second half is the teeth:
+/// The assertion is two-sided, and the second half is the teeth:
 ///
-/// 1. the cut lands, **and**
-/// 2. at **every tick boundary** of the pass the blade and the cortex are apart.
+/// 1. the cut lands at the criterion's own 75 m/s, **and**
+/// 2. at a speed where the target is provably narrower than one tick of travel, the cut still
+///    lands **and at every tick boundary the blade and the cortex are apart**.
 ///
-/// A blade collider, a `Sensor` + `CollisionStart` or an AABB overlap all sample positions
-/// once per tick — and the second assertion says, in metres, that there was nothing at any
-/// sample to find. They cannot pass this test; they pass at 8 m/s and they pass the husk.
+/// A blade collider, a `Sensor` + `CollisionStart` or an AABB overlap all sample positions once
+/// per tick — and the second assertion says, in metres, that there was nothing at any sample to
+/// find. They cannot pass it; they pass at 8 m/s and they pass the husk.
+///
+/// 🔴 **The teeth used to be on the weaver himself and cannot be any more.** His nape was
+/// `2 × 0.23 = 0.46 m` across and one tick at 75 m/s is 1.250 m, so the crossing was 0.37 of a
+/// tick and a fixed `+0.5 m` phase straddled it. On 2026-08-29 `titan.ron: cortex_radius_m`
+/// doubled with the class table (`docs/FINDINGS.md` FIND-213): the nape plus
+/// `gear.ron: thickness_m` is now **1.32 m against a 1.25 m tick**, so a boundary *must* land
+/// inside it and **no phase exists**. Nor can the speed be raised — `game.ron:
+/// vector.max_speed_m_s` clamps the player at exactly 75.000 m/s
+/// (`src/player/locomotion.rs:683`), which is why 75 was the criterion's number in the first
+/// place. **That is the change he asked for working, not a regression.**
+///
+/// So the criterion keeps its 75 on the real weaver, and the claim about the *mechanism* — that
+/// `blades::cut::sweep` sweeps and does not sample — moves onto a synthetic target sized to be
+/// sub-tick at the same 75 m/s: `step / 3 − thickness_m`. Nothing about it is chosen; if
+/// `thickness_m` ever grows past `step / 3` the test says so instead of quietly proving
+/// nothing.
 #[test]
 fn f030_a_pass_at_75_m_s_still_hits_the_weaver() {
     let mut app = app();
     let d = data(&app);
     let weaver = d.titan("weaver").expect("titan.ron has a weaver");
+    // ⚠️ The literal is the CRITERION, not a copy of the file: `Q-030` is written against a
+    // nape of this diameter at this speed. It doubled on 2026-08-29 with `scale.ron`'s classes
+    // (`docs/FINDINGS.md` FIND-213) and the sentence above doubled with it.
     assert!(
-        (weaver.cortex_radius_m - 0.23).abs() < 1e-6,
-        "titan.ron weaver.cortex_radius_m = {} — the criterion is written against 0.46 m of \
+        (weaver.cortex_radius_m - 0.46).abs() < 1e-6,
+        "titan.ron weaver.cortex_radius_m = {} — the criterion is written against 0.92 m of \
          diameter",
         weaver.cortex_radius_m
     );
@@ -624,7 +661,6 @@ fn f030_a_pass_at_75_m_s_still_hits_the_weaver() {
     spawn_target(&mut app, 1, cortex, r, false);
 
     let gaps = fly_past(&mut app, cortex, r, 75.0, LANE_Y + 1.6, 2, 5);
-
     let landed: Vec<_> = hits(&app).into_iter().filter(|(_, h)| h.zone == HitZone::Cortex).collect();
     assert_eq!(
         landed.len(),
@@ -634,17 +670,46 @@ fn f030_a_pass_at_75_m_s_still_hits_the_weaver() {
         gaps
     );
 
-    let closest = gaps.iter().cloned().fold(f32::INFINITY, f32::min);
+    // ---- the teeth, on a target that is provably sub-tick at the game's own top speed ----
+    let hz = d.game.simulation_hz as f32;
+    let thickness_m = d.gear.blades.thickness_m;
+    let step_m = 75.0 / hz;
+    let r_sub = step_m / 3.0 - thickness_m;
+    assert!(
+        r_sub > 0.0,
+        "`gear.ron: blades.thickness_m` {thickness_m} is more than a third of one tick at the \
+         speed cap ({step_m:.3} m) — no target can be sub-tick any more and this test proves \
+         nothing. That is a finding, not a re-aim."
+    );
+    let mut fast = self::app(); // `app` the binding shadows `app` the fixture in this scope
+    spawn_target(&mut fast, 1, cortex, r_sub, false);
+    let gaps_fast =
+        fly_past_phased(&mut fast, cortex, r_sub, 75.0, LANE_Y + 1.6, 2, 5, step_m * 0.5);
+    let landed_fast: Vec<_> =
+        hits(&fast).into_iter().filter(|(_, h)| h.zone == HitZone::Cortex).collect();
+    assert_eq!(
+        landed_fast.len(),
+        1,
+        "a pass at 75 m/s over a {:.3} m target produced {} cortex hits — gaps {gaps_fast:?}",
+        2.0 * r_sub,
+        landed_fast.len()
+    );
+    let closest = gaps_fast.iter().cloned().fold(f32::INFINITY, f32::min);
     assert!(
         closest > 0.0,
-        "the blade and the cortex overlapped at a tick boundary ({closest:.3} m) — this pass \
-         no longer proves that a position sample would have missed. Re-aim it."
+        "the blade and the cortex overlapped at a tick boundary ({closest:.3} m) — this pass no \
+         longer proves that a position sample would have missed. The derivation above says it \
+         cannot happen; check `thickness_m` before re-aiming."
     );
-    // 1.250 m per tick, 0.46 m of cortex: 0.37 ticks inside the target.
-    let inside_ticks = (2.0 * r) / (75.0 / d.game.simulation_hz as f32);
+    let inside_75 = 2.0 * (r + thickness_m) / step_m;
+    let inside_sub = 2.0 * (r_sub + thickness_m) / step_m;
     println!(
-        "F-030 weaver at 75 m/s: hit, closest approach at a tick boundary {closest:.3} m, \
-         {inside_ticks:.2} ticks inside the target · gaps {gaps:?}"
+        "F-030 weaver: cut at 75 m/s, {inside_75:.2} ticks inside a {:.2} m nape — NO LONGER \
+         sub-tick, and that is the doubling working · the sweep itself still lands on a \
+         {:.2} m target at the same 75 m/s with the closest tick boundary {closest:.3} m clear \
+         ({inside_sub:.2} ticks inside) · gaps {gaps_fast:?}",
+        2.0 * (r + thickness_m),
+        2.0 * r_sub
     );
 }
 
@@ -792,17 +857,22 @@ fn f030_the_cut_kills_the_real_husk() {
         .get::<GlobalTransform>(cortex_entity)
         .expect("the cortex has a GlobalTransform")
         .translation();
+    // Read out of `scale.ron` and not typed in: the class table doubled on 2026-08-29 and a
+    // literal here would have to be found by a failing test instead of following the file.
+    let says_m = d.titan_cortex_height_m(d.titan("husk").expect("husk")).expect("husk class");
     assert!(
-        (cortex.y - 8.9).abs() < 0.05,
-        "the husk's cortex sits at {} m, scale.ron says 8.9",
+        (cortex.y - says_m).abs() < 0.05,
+        "the husk's cortex sits at {} m, scale.ron says {says_m}",
         cortex.y
     );
 
-    // ⚠️ The player is put on his own collision layer for this pass. The husk's body capsule
-    // is solid and 2.5 m wide and `gear.ron: reach_m` is 2.00 m — measured, the player at
+    // ⚠️ The player is put on his own collision layer for this pass. The husk's torso capsule
+    // is solid and 5.0 m wide and `gear.ron: reach_m` is 2.00 m — measured, the player at
     // 30 m/s slams into him and is thrown sideways before the blade is anywhere near the nape.
-    // That is a **finding about the numbers** (`reach_m` vs. `scale.ron: width_fraction`), and
-    // this test is about the cut. Nothing in the repo wears `LAYER_WORLD` today
+    // That was a **finding about the numbers** and it is now `docs/FINDINGS.md` FIND-213: the
+    // body a blade meets at the nape is the NECK (`titan::rig::body_segments_m`), not the
+    // shoulder, and `tests/titan.rs::f030_the_nape_is_hittable_…` flies the pass with the
+    // collider left on. This test is about the cut, so it keeps the layer. Nothing in the repo wears `LAYER_WORLD` today
     // (`src/shared/layers.rs:28-32`), so this makes the player pass through everything.
     let me = player(&mut app);
     app.world_mut()
@@ -2539,6 +2609,16 @@ fn f032_the_cost_of_one_thousand_limb_refinements() {
     let (root, cortex) = a_standing_husk(&mut app);
     let d = data(&app);
     let thickness = d.gear.blades.thickness_m;
+    // 🔴 **Read off the rig, not typed in.** Until 2026-08-29 this benchmark swept a blade at
+    // absolute `cortex.x + 0.9 .. + 2.5` and `cortex.y − 1.0` downwards, which are the husk's
+    // arm and shoulder at 10 m and nothing at all at 20 m — the class table doubled and the
+    // benchmark reported `0 of 1000 found a limb`, i.e. it measured an empty loop and would
+    // have gone on printing a µs figure if its own guard were not there. The band below is the
+    // same band it always was, expressed in the husk's own fractions.
+    let rig = TitanRig::of(&d, d.titan("husk").expect("husk")).expect("husk rig");
+    let arm_x = rig.width_m * 0.625; // `shoulder_in_torso`: half the width plus an eighth
+    let top_m = rig.shoulder_m; // shoulder ...
+    let drop_m = rig.shoulder_m - rig.leg_m * 0.5; // ... down to the knee
 
     #[derive(Resource, Default)]
     struct Cost(f64, u32);
@@ -2555,8 +2635,9 @@ fn f032_the_cost_of_one_thousand_limb_refinements() {
                     // A different blade every time, so nothing is cached: the hand walks down
                     // the husk's right flank from the shoulder to the knee, which is the band
                     // an arm zone and a leg zone share.
-                    let y = cortex.y - 1.0 - i as f32 * 0.006;
-                    let a = Vec3::new(cortex.x + 0.9, y, cortex.z);
+                    let y = cortex.y - (rig.cortex_height_m - top_m)
+                        - i as f32 * drop_m / 1000.0;
+                    let a = Vec3::new(cortex.x + arm_x - 0.8, y, cortex.z);
                     let b = a + Vec3::new(1.6, 0.0, 0.0);
                     let blade = Collider::capsule_endpoints(thickness, a, b);
                     if limb_zone(&children, &limbs, root, &blade, Vec3::new(0.0, -0.5, 0.0))

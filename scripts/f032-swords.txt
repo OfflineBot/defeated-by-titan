@@ -6,6 +6,12 @@
 # books something invisible. Those are three different bugs. So this run swings the same blade,
 # out of the same fall, at the same husk geometry, at five heights — and the log says which.
 #
+# PINS: the pass speed at the target (21.0 m/s) and each act's BLADE HEIGHT as a fraction of
+#       the husk (0.890 / 0.685 / 0.600 / 0.350 of `height_m`). Warp heights and x offsets
+#       follow from those. Re-derived 2026-08-29 for the doubled class table and for the neck
+#       in `titan::rig::body_segments_m` — the clearance is `widest_between_m` over the
+#       player's 1.8 m, which is 1.706 m at the nape and 2.850 m at chest and arm height.
+#
 #   cargo run -q -- --headless --script scripts/f032-swords.txt --ticks 1200
 #   # the exit code needs its OWN run — a pipeline's $? is the LAST command's:
 #   ./target/debug/defeated_by_titan --headless --script scripts/f032-swords.txt --ticks 1200 >/dev/null 2>&1; echo $?
@@ -57,13 +63,19 @@
 # moved, and it moved as a rigid translation: `x` carries the lane, `z` carries the same
 # `+0.55` set-back it always had.
 #
-# | act | the part the blade passes through | its metres | blade y | player y at warp |
-# |---|---|---|---|---|
-# | A | the **nape** — the cortex sphere, r 0.55, 0.55 m behind the neck | y 8.90 | 8.90 | 14.19 |
-# | B | the **torso** box, `leg_m` 4.80 .. `cortex` 8.90, centre 6.85 | y 4.80..8.90 | 6.85 | 12.14 |
-# | C | the **left arm** box, shoulder 8.20 down `arm_m` 4.40 to 3.80 | y 3.80..8.20 | 6.00 | 11.29 |
-# | D | the **left leg** box, ground to `leg_fraction × h` | y 0..4.80 | 3.50 | 8.79 |
-# | E | **nothing at all** — 150 m from the nearest titan | — | 8.90 | 14.19 |
+# 🔴 **THE HUSK IS 20 m SINCE 2026-08-29** (`scale.ron`'s classes doubled on the user's word),
+# so every metre below is twice what it was and the x offsets are no longer 1.80 for all four:
+# at the nape the player clears a NECK (1.550 + 0.20 = 1.750), at chest and arm height he clears
+# the TORSO (2.350 + 0.20 = 2.550). **`blade y` as a fraction of the body is the column that
+# carries the meaning and it did not move.**
+#
+# | act | the part the blade passes through | its metres | blade y | x offset | player y at warp |
+# |---|---|---|---|---|---|
+# | A | the **nape** — the cortex sphere, r 1.10, 1.10 m behind the neck | y 17.80 | 17.80 | 1.750 | 23.091 |
+# | B | the **torso** box, `leg_m` 9.60 .. `cortex` 17.80, centre 13.70 | y 9.60..17.80 | 13.70 | 2.550 | 18.991 |
+# | C | the **left arm** box, shoulder 16.40 down `arm_m` 8.80 to 7.60 | y 7.60..16.40 | 12.00 | 2.550 | 17.291 |
+# | D | the **left leg** box, ground to `leg_fraction × h` | y 0..9.60 | 7.00 | 2.550 | 12.291 |
+# | E | **nothing at all** — 150 m from the nearest titan | — | 17.80 | 1.750 | 23.091 |
 #
 # `player y at warp` is always `blade y − eye_height_m 1.60 + drop`, and `drop` is the derived
 # 6.891 m above. **`blade y` is the column that carries the meaning and it did not move** — the
@@ -138,7 +150,7 @@ wait 1.5
 
 # ---- ACT A — the nape. The one hit the game already has. --------------------------------
 spawn titan husk -300 0 -83.75
-warp -301.80 14.19 -83.20
+warp -301.750 23.091 -82.65
 look 0 0
 wait 0.506
 slash right 0.40
@@ -152,7 +164,7 @@ assert titans == 0
 
 # ---- ACT B — the torso, dead centre of the body box. -------------------------------------
 spawn titan husk -150 0 -83.75
-warp -151.80 12.14 -83.20
+warp -152.550 18.991 -82.65
 look 0 0
 wait 0.506
 slash right 0.40
@@ -166,7 +178,7 @@ assert titans == 1
 
 # ---- ACT C — the left arm. -----------------------------------------------------------------
 spawn titan husk 0 0 -83.75
-warp -1.80 11.29 -83.20
+warp -2.550 17.291 -82.65
 look 0 0
 wait 0.506
 slash right 0.40
@@ -178,7 +190,7 @@ assert titans == 2
 
 # ---- ACT D — the left leg. -----------------------------------------------------------------
 spawn titan husk 150 0 -83.75
-warp 148.20 8.79 -83.20
+warp 147.450 12.291 -82.65
 look 0 0
 wait 0.506
 slash right 0.40
@@ -191,7 +203,7 @@ assert titans == 3
 # ---- ACT E — the same swing at nothing. ----------------------------------------------------
 # The null case. Without it "the blade reports a hit" is not a measurement of the blade — it
 # could be a measurement of the swing firing at all.
-warp 298.20 14.19 -83.20
+warp 298.250 23.091 -82.65
 look 0 0
 wait 0.506
 slash right 0.40
