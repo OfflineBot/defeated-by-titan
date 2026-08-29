@@ -17,6 +17,36 @@
 # `--screenshot` together with `--script` swallows the verdict, so the two runs are two runs:
 # the first one is the exit code, the second one is the picture.
 #
+# PINS: the STAND AND THE AIM of every act — `warp`, `look`, which arm, how long the reel is
+# held. When the map moves under this file (the ground became a continuous height field on
+# 2026-08-29), the recorded heights, speeds and gas figures are RE-MEASURED against the same
+# stand and the same aim; the stand is never moved to recover an old number. That is the whole
+# reason the nine red asserts below can be read as evidence at all — a file that re-aims itself
+# each round measures its own aim (FIND-096).
+#
+# ⚠️ **RE-MEASURED 2026-08-29 under the new ground, and the verdict did not move: 9 of 40 red
+# before, 9 of 40 red after, the SAME nine lines.** The two runs are the pinned binary against
+# `git archive HEAD assets` and the new binary against the working tree:
+#
+#   line 126  Height < 33.3   44.363 -> 44.363     unchanged to three decimals
+#   line 128  Speed  < 31.7   32.086 -> 32.086     unchanged
+#   line 133  Height > 57     48.451 -> 48.451     unchanged
+#   line 185  Height > 110   105.000 -> 81.868     ⚠️ MOVED — see below
+#   line 244  Height > 14     13.863 -> 13.891     +0.028 m
+#   line 250  Height > 11.8    9.631 ->  9.659     +0.028 m
+#   line 257  Speed  > 18      0.047 ->  5.090     +5.04 m/s
+#   line 263  Height <  6.4    9.299 ->  9.045     -0.254 m
+#   line 275  Gas    < 14968 14971.811 -> 14977.389
+#
+# Eight of the nine reproduce their old value, which is what says the ground change did not
+# break this run: ACT 1 to ACT 3 are bit-identical (the market square, the canal and the arc
+# stand on cells the field pins to 0). **Line 185 is the one the ground moved**, and it moved
+# because ACT 4's second hook is a six-degree window (see the sweep at `look 0 72` below): the
+# corbel is 120 m up and 24 m out, and a launch platform that differs by centimetres changes
+# where the ray lands. It was already red at 105.000 for a documented reason that is not the
+# ground — `DO NOT RE-AIM IT HERE`, `docs/NEXT.md` §2D — so it stays red and is not re-aimed on
+# the ground's account either. Re-aiming it here would bake today's snap in twice over.
+#
 # 🔴 **9 OF 40 RED SINCE THE HOOK STOPPED USING THE ANCHOR FIELD — AND IT IS NOT GRAVITY.**
 # Measured 2026-08-29 by running this file at `gravity_m_s2: -20` **and** `-32` against the same
 # binary: ACT 3's arc, ACT 4's crown and ACT 5's street are red at **both**, so the -20 -> -32

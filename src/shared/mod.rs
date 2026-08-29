@@ -57,4 +57,4 @@ pub use layers::{
 pub use anchors::{
     is_anchor_name, ModelAnchors, ModelName, ANCHOR_NAMES, CORTEX_ANCHOR, HOOK_PREFIX,
 };
-pub use terrain::TerrainField;
+pub use terrain::{CellRole, TerrainField};

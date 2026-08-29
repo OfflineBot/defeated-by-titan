@@ -898,59 +898,79 @@ pub struct SupplyPoint {
     pub uses: u32,
 }
 
-/// The stepped ground under the district — every number the plateaus and their stairs need.
+/// The ground under the district — **a continuous height field, and every number it needs.**
 ///
-/// The user, 2026-08-13: *„adde verschiedene höhen vom boden her! lass es wie die echte stadt
-/// aussehen! aktuell kann man es noch nicht erkennen!"*. Until that day the ground was one
-/// 700 x 700 m slab at `y = -0.1` and every house in the district stood on `y = 0`.
+/// The user, 2026-08-29, after playing the terraced version: *„auch die verschiedenen hoehen
+/// passen nicht! das soll grass sein und nicht so wie jetzt! und nicht verschiedene hardcoded
+/// stufen sondern wirklich terrain! und deutlich hoeher und niedriger als jetzt!"*
+///
+/// What that sentence deleted from this struct: `levels`, `step_m`, `stair_rise_m`,
+/// `stair_tread_m`, `stair_color` and `pillar_gap_m`. Those six existed to make **terraces**
+/// walkable — a flight of stairs on every falling edge, cut out of the terrace's own rim. A
+/// continuous field has no falling edge to put a flight on; what it has instead is `rise_m`,
+/// which is the same question (*can he walk up it?*) answered once for the whole map.
 ///
 /// The generator is [`shared::TerrainField`](crate::shared::TerrainField); what stands here is
-/// only the shape of the result. **Everything is a length or a count** — the code holds the
-/// mechanics and not one of these figures (`docs/conventions.md` §4).
+/// only the shape of the result. **Everything is a length or a colour key** — the code holds
+/// the mechanics and not one of these figures (`docs/conventions.md` §4).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Terrain {
-    /// Edge of one terrain cell. **An exact multiple of `Layout::lot_m + Layout::street_m`**,
-    /// and `world::map` asserts it: the cell boundary then always falls in the middle of a
-    /// street and never through a house, which is the only reason the terraces can have a
-    /// cliff at all.
-    pub cell_m: f32,
-    /// How much one level is worth. `0.0` together with `levels: 1` means "no terrain".
-    pub step_m: f32,
-    /// How many levels there are, the flat ground counted. `1` = flat.
-    pub levels: u32,
-    /// The radius around the origin that stays at level 0. The player spawns there, and a
-    /// terrace under a spawn point is a player standing inside the ground.
-    /// `>= Layout::clear_radius_m`, or the pads reach into the space the layout keeps free.
-    pub flat_radius_m: f32,
-    /// One riser of the stairs that lead up a terrace. `step_m` has to be a whole multiple of
-    /// it, or the last step of a flight does not land on the plateau.
-    pub stair_rise_m: f32,
-    /// One tread. Bounded from above by `street_m / 2 - cell_jitter_m`, because the flight is
-    /// cut into the terrace's own edge and must not undercut the house standing on it —
-    /// `world::map` asserts that arithmetic rather than clamping it.
-    pub stair_tread_m: f32,
-    /// Anything hand-placed in `Map::blocks` whose top is **at or below** this is ground —
-    /// paving, the slab itself — and a terrace may cover it. Anything **above** it is a
-    /// structure, and its cell is pinned flat: a terrace cannot bury a door, a market stall or
-    /// a quay wall. It is also where a pad's underside sits, so the pad touches the paving
-    /// instead of intersecting it.
-    pub paving_top_m: f32,
-    /// How far a terrace stops short of a **pillar** it is cut around.
+    /// Edge of one terrain cell, in metres. `Map::size_m` has to be a whole multiple of it,
+    /// or the grid does not cover the map and the last row of the world has no ground.
     ///
-    /// A hand-placed block that stands on the ground and reaches a door's height above the
-    /// terrain's ceiling — a tree, a bell tower, a gantry leg, the church — does not pin its
-    /// cell flat: the terrace is cut around its footprint and the pillar itself plugs the hole,
-    /// because it is solid from the ground up. Without a gap the cut edge would sit exactly on
-    /// the pillar's face, and `world::map::overlaps` — two different float sums of the same
-    /// algebra — would decide `tests/world.rs::f003_no_grid_house_stands_inside_a_placed_block`
-    /// by one ULP. One centimetre is invisible and a 0.35 m capsule cannot fall into it.
-    pub pillar_gap_m: f32,
-    /// The colour key of the terrace top, out of [`Maps::palette`].
-    pub color: String,
-    /// The colour key of the stairs. Its own key, and not the terrace's: a flight you cannot
-    /// tell from the plateau is a step the player walks into.
-    pub stair_color: String,
+    /// It is also the **tread** of every riser in the game: `rise_m / cell_m` is the steepest
+    /// grade anything on this map has.
+    pub cell_m: f32,
+    /// The quantum of the field, in metres — and therefore the tallest riser a player ever
+    /// meets on foot.
+    ///
+    /// 🔴 **Bounded above by a measurement, not by taste.** At `game.ron: gravity_m_s2 -32`,
+    /// walking `W` from flat, the player climbs a 0.27 m riser and is stopped dead by 0.28 m
+    /// (`docs/FINDINGS.md` FIND-214, eleven risers swept, treads 1.0/2.0/3.0 m make no
+    /// difference). `docs/BUGS.md` B-018 is the same number from the other side.
+    /// ⚠️ `gravity_m_s2` is PROVISIONAL (`docs/QUESTIONS.md` Q-063): if it rises again, this
+    /// ceiling falls with it and this is the field that has to move.
+    pub rise_m: f32,
+    /// One octave of value noise each, in metres of amplitude and metres of wavelength. Same
+    /// length, or `world::map` refuses the map.
+    ///
+    /// **`amplitude_m: []` means "provably flat"** and is a statement, not a missing key
+    /// (§4, no `serde(default)`) — which is exactly what `graybox` writes, and it has to,
+    /// because eight tests in `tests/vector_aiming.rs` and four in `tests/player.rs` reason
+    /// about `y = 0` on that fixture.
+    pub amplitude_m: Vec<f32>,
+    pub wavelength_m: Vec<f32>,
+    /// The radius around the origin that stays at height 0. The player spawns there and the
+    /// hub pads stand around him at `y = 0` (`missions.ron`); ground under any of them is a
+    /// pad inside the earth. `>= Layout::clear_radius_m`, or the field reaches into the space
+    /// the layout keeps free.
+    pub flat_radius_m: f32,
+    /// How high the field is allowed to climb over the base plane.
+    ///
+    /// Two jobs, and the second is the one that is easy to miss: it is asserted against the
+    /// field that actually came out, **and** it is what separates a hand-placed block that
+    /// the ground could bury from one it can never reach — `max_rise_m + door_height_m` is
+    /// the line above which a block is sky and the terrain ignores it.
+    pub max_rise_m: f32,
+    /// How deep the ground goes. Every ground block runs from here up to its own height, so
+    /// the world is solid when you look into the canal or over the rim instead of a crust.
+    /// Has to lie below the lowest cell the field produces, and `world::map` asserts it.
+    pub base_m: f32,
+    /// Anything hand-placed in `Map::blocks` whose top is **at or below** this is paving —
+    /// the ground may climb over it but may never sink away underneath and leave it hanging
+    /// (`shared::CellRole::Floor`). Anything above it, up to `max_rise_m + door_height_m`,
+    /// pins its cell to 0: the ground may not bury a door, a market stall or a quay wall.
+    /// Anything whose top is **below the base plane** is a hole — the canal — and gets no
+    /// ground at all.
+    pub paving_top_m: f32,
+    /// The colour keys of the ground, out of [`Maps::palette`], **from the lowest band to the
+    /// highest**. The field's own range is cut into as many equal bands as there are keys.
+    ///
+    /// The user, 2026-08-29: *„das soll grass sein"*. One key would be legal and would make
+    /// 490 000 m² of one flat albedo; three make the relief readable from the air, which is
+    /// the half of `FIND-134` that a shape alone never fixed.
+    pub colors: Vec<String>,
 }
 
 /// The rule `world` deterministically generates buildings from.

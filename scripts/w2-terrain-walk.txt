@@ -1,51 +1,115 @@
-# w2-terrain-walk — can you WALK up the district, or is the terrain a wall?
+# w2-terrain-walk — can you WALK up the ground of this district, or is it a wall?
 #
-#   cargo run -- --headless --script scripts/w2-terrain-walk.txt --ticks 2000
+#   cargo run -- --headless --script scripts/w2-terrain-walk.txt --ticks 2500
+#   cargo run -- --offscreen --screenshot docs/images/f003-field-street.png \
+#                --script scripts/w2-terrain-walk.txt --ticks 2163
+#   cargo run -- --offscreen --screenshot docs/images/f003-field-aerial.png \
+#                --script scripts/w2-terrain-walk.txt --ticks 2174
 #
-# The user, 2026-08-13: „adde verschiedene höhen vom boden her! lass es wie die echte stadt
-# aussehen! aktuell kann man es noch nicht erkennen!". Before that day the ground of this game
-# was one 700 x 700 m slab and every generated house stood on y = 0.
+# ⚠️ Three runs and not one: `--screenshot` together with `--script` swallows the verdict
+# (`docs/FINDINGS.md` FIND-073), so the exit code comes from the headless run and only the
+# pictures come from the offscreen ones.
+#
+# PINS: the WALKED ROUTE (warp -340 40 210, look -90 0, `key W`, no gear). The heights are read
+# off whatever ground the seed builds under that route; if `terrain.rise_m`, `terrain.cell_m`,
+# `amplitude_m`/`wavelength_m` or `map.seed` move, the four `assert height` numbers are
+# re-measured against the same route and the route itself does not move. It is the route that
+# is the evidence: a different one could always be found that happens to be flat.
+#
+# The user, 2026-08-29, having played the terraced version: „auch die verschiedenen hoehen passen
+# nicht! ... nicht verschiedene hardcoded stufen sondern wirklich terrain! und deutlich hoeher
+# und niedriger als jetzt!". This file is the half of the answer that a screenshot cannot give.
 #
 # ⚠️ **This is the acceptance run, and it is the only one that can fail for the right reason.**
-# `tests/world.rs` measures that the ground is stepped, that no cell stands more than one level
-# over the one beside it and that every falling edge carries its flight of stairs. None of that
-# proves a body can get up them: a 0.30 m riser is climbable only because the player capsule has
-# a 0.35 m radius and rides over a box step of less than that (`src/player/mod.rs`). Terraces
-# you cannot walk up are a wall, not terrain.
+# `tests/world.rs` measures that the field is continuous, that its relief is 20.25 m and that no
+# cell stands more than one `rise_m` over the one beside it. None of that proves a BODY can get
+# up it: at `game.ron: gravity_m_s2 -32` a 0.35 m capsule rides a 0.27 m riser and is stopped
+# dead by 0.28 m (`docs/FINDINGS.md` FIND-214 — eleven risers swept on the shipped binary, and
+# treads of 1.0/2.0/3.0 m make no difference). `maps.ron` spends 0.25 of that 0.27, and this run
+# is what says the 8 % of margin is really there.
 #
-# 🔴 **RED ON PURPOSE SINCE 2026-08-29 — `docs/BUGS.md` B-018.** Line 40 reads **3.000**: at the
-# shipped `gravity_m_s2: -32` the player cannot walk up a single 0.30 m riser, and sixty seconds
-# of `key W` does not move him. At `-20`, same binary and same route, he climbs 3.0 -> 4.5 -> 6.0
-# m in twenty seconds. **The terraces are a wall now**, which is the exact thing the paragraph
-# above says this file exists to catch. The assert is CORRECT and stays red until the step-up is
-# fixed; re-aiming it would delete the only evidence that traversal broke.
+# 🔴 **HISTORY: this file was RED on purpose from 2026-08-29 (`docs/BUGS.md` B-018).** Its old
+# route walked -Z along x = 168 over two 0.30 m terrace risers, and at -32 the player could not
+# climb ONE of them — sixty seconds of held `W` left him at 3.000 m. The terraces are gone and
+# the risers with them, so the route is re-derived rather than re-aimed. **B-018's finding is
+# not closed by that**: nothing in the code still encodes the relationship between
+# `gravity_m_s2` and what a capsule can ride, and `gravity_m_s2` is PROVISIONAL (`Q-063`). What
+# changed is that the number it bites is now ONE number, `terrain.rise_m`, in one file, with a
+# test in `tests/world.rs` holding it under 0.27.
 #
-# ## The route, and every number in it comes out of the map
+# ## The route, and every number in it is measured and not derived
 #
-# x = 168 is the middle of the street between lot column 11 (x 129..165) and 12 (x 171..207) —
-# and, because `terrain.cell_m` 42 is exactly one block pitch, it is also the boundary between
-# terrain cell 11 and 12. Walking -Z along it crosses one terrace edge per block:
+# z = 210 is a street centre (`start_z -333`, lot pitch 42: -294 + 12 * 42 = 210), so the run
+# has a lane instead of a row of facades. Walking +X along it from the western rim crosses one
+# continuous hillside — the field's own, not a flight of plateaus:
 #
-#   z 252..294  (cell row 14)  level 2 = 3.0 m
-#   z 210..252  (cell row 13)  level 3 = 4.5 m
-#   z 168..210  (cell row 12)  level 4 = 6.0 m
+#   x -340   -8.00 m   the hollow in the west quarter
+#   x ~ -280 -5.10 m   after 10 s
+#   x ~ -220 -2.25 m   after 20 s   <- 5.75 m climbed, on foot, no gear
+#   x ~ -160 -2.75 m   after 30 s   the ground rolls back down again
 #
-# So the run climbs 3.0 m in two flights of five 0.30 m risers each, on foot, with no gear.
+# 5.75 m in 20 s is a sustained 5.0 % grade, which is the steepest this map has anywhere
+# (`terrain.rise_m 0.25` per `terrain.cell_m 5.0`). The terraces climbed 3.00 m in 20 s at -20
+# and 0.00 m at -32.
 
-look 0 0                       # along -Z, the axis contract (docs/conventions.md)
-warp 168 4.2 292               # in the street, 1.2 m over the level-2 terrace
-wait 1.0
+# ## 🔴 THE CONTROL, because `assert speed` cannot tell walking from standing (B-022)
+#
+# A leg that goes nowhere still reports `speed 6.000`, and `docs/BUGS.md` B-022 claims outright
+# that **no script in this repo can walk a body along X**. So this route was not believed until
+# the thing it measures was deleted and the number was watched move (`CLAUDE.md` rule 5). Same
+# binary, same warp, same 20 s:
+#
+#   look -90 0  + key W 30    -8.000 -> -5.100 -> -2.250     <- this file
+#   look -90 0  + NO key W    -8.000 -> -8.000 -> -8.000     <- the control: he does not drift
+#   look  90 0  + key W 30    -8.500 -> -8.500               <- into the west fence, 10 m away
+#   look   0 0  + key W 30    -8.250 -> -7.815               <- a different hillside, along -Z
+#   look 180 0  + key W 30   -11.250 -> -11.750              <- and a fourth
+#
+# Four yaws, four different traces, and the run stops dead without `key W`. **On this route the
+# +X axis is reachable and the yaw is obeyed**, which contradicts B-022's blanket sentence —
+# most likely because B-022 labels `look 90 0` as +X while every script comment in this repo
+# (`scripts/f003-map.txt`, `docs/conventions.md`) labels `look -90 0` as +X, so its "+X" leg
+# walked into the neighbour it thought it was walking away from. Not fixed here: `src/debug` and
+# `src/input` are foreign territory to the terrain round (`docs/FINDINGS.md` FIND-214).
+
+look -90 0                     # yaw -90 = +x (docs/conventions.md)
+warp -340 40 210               # over the western hollow; he falls onto it
+wait 2.6
 
 mark start
-assert height > 2.5            # landed ON the terrace and not through it
-assert height < 4.0            # and not on the one above it
+assert height < -6.0           # landed IN the hollow and not on a roof
+assert height > -12.5          # and on the ground, not through it
 
-key W 20.0                     # walk. No Space, no hook, no boost — legs only.
-wait 20.5
+key W 30.0                     # walk. No Space, no hook, no boost — legs only.
+wait 10.5
 
-mark climbed
-assert height > 5.2            # two terraces higher: 3.0 -> 6.0 m
-assert height < 9.0            # ...and still on the ground, not flying over it
+mark ten
+assert height > -6.5           # 1.5 m up the hillside already
+
+wait 10.0
+mark twenty
+assert height > -3.5           # 4.5 m above the start: the slope is walkable, not a wall
 assert speed < 12.0            # on foot the whole way
 
+wait 10.0
+mark thirty
+assert height > -4.5           # over the crest and rolling down the far side
+assert height < 4.0            # ...still on the ground, not flying over it
+
 mark end
+
+# ---------------------------------------------------------------------------------------
+# THE PICTURES. Not asserts — the two vantages the round is judged on, and they are aimed at
+# the western hillside because that is where the field's own relief is (the extremes are
+# -12.00 m at x -347.5 z 292.5 and +8.25 m at x 292.5 z -337.5, `tests/world.rs`).
+# ---------------------------------------------------------------------------------------
+warp -330 40 210        # back into the hollow, on foot, looking east UP the slope
+wait 2.6
+look -90 -3
+wait 0.2
+mark w2-terrain-street
+
+warp -200 48 210        # and from 48 m, looking west back DOWN it
+look 90 -20
+wait 0.15               # ⚠️ SHORT: he is airborne and every tick is 32 m/s more of falling
+mark w2-terrain-aerial

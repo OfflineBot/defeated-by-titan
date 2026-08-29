@@ -521,7 +521,7 @@ fn f003_no_grid_house_stands_inside_a_placed_block() {
     let plan = plan();
     let (placed, generated) = plan.split_at(map.blocks.len());
 
-    for house in generated {
+    for house in generated.iter().filter(|b| !b.name.starts_with("ground_")) {
         for block in placed {
             let distance = (house.center_m - block.center_m).abs();
             let sum = house.size_m * 0.5 + block.size_m * 0.5;
@@ -549,7 +549,7 @@ fn f003_the_space_around_the_origin_stays_clear() {
     let radius = map.layout.clear_radius_m;
     let plan = plan();
 
-    for house in &plan[map.blocks.len()..] {
+    for house in plan[map.blocks.len()..].iter().filter(|b| !b.name.starts_with("ground_")) {
         let half = house.size_m * 0.5;
         let dx = (house.center_m.x.abs() - half.x).max(0.0);
         let dz = (house.center_m.z.abs() - half.z).max(0.0);
@@ -580,7 +580,7 @@ fn f003_the_grid_houses_stay_in_the_height_window_from_the_file() {
     // `scale.ron: architecture.heights_m[layout.tall_height_key]`. `layout.tall_fraction` of
     // the houses are built to it — `Q-036`, answered.
     let tall_m = d.scale.architecture.heights_m[&r.tall_height_key];
-    let ceiling_m = map.terrain.step_m * (map.terrain.levels.saturating_sub(1)) as f32;
+    let ceiling_m = map.terrain.max_rise_m;
     let mut tall = 0usize;
 
     for house in &houses {
@@ -599,19 +599,24 @@ fn f003_the_grid_houses_stay_in_the_height_window_from_the_file() {
         );
         assert!(house.size_m.y > 0.0, "{}: the roof ate the whole wall", house.name);
         // ⚠️ Until 2026-08-13 this line read "stands on y = 0" — and it had to, there was no
-        // terrain. What it means now is **stands on a terrace**: the base is a whole number of
-        // `terrain.step_m` and never above the ceiling the file allows. That is stricter, not
-        // weaker: a house half a step off its plateau floats or sinks, and neither shows up in
-        // the picture.
+        // terrain. Until 2026-08-29 it read "stands on a terrace". What it means now is
+        // **stands on the ground**: the base is a whole number of `terrain.rise_m`, inside
+        // the range the field is allowed, and it is the LOWEST cell the house covers so the
+        // downhill corner cannot stand on air. A house half a rise off the ground floats or
+        // sinks, and neither shows up in the picture.
         let base = base_m(house);
-        assert!(base >= 0.0 && base <= ceiling_m + 1e-4, "{}: stands at {base} m", house.name);
-        if map.terrain.step_m > 0.0 {
-            let levels = base / map.terrain.step_m;
+        assert!(
+            base >= -map.terrain.max_rise_m - 1e-4 && base <= ceiling_m + 1e-4,
+            "{}: stands at {base} m, outside +/- terrain.max_rise_m",
+            house.name
+        );
+        if map.terrain.rise_m > 0.0 && !map.terrain.amplitude_m.is_empty() {
+            let rises = base / map.terrain.rise_m;
             assert!(
-                (levels - levels.round()).abs() < 1e-3,
-                "{}: stands at {base} m, which is {levels} steps of {} m — not on a terrace",
+                (rises - rises.round()).abs() < 1e-3,
+                "{}: stands at {base} m, which is {rises} rises of {} m — not on the field",
                 house.name,
-                map.terrain.step_m
+                map.terrain.rise_m
             );
         } else {
             assert!(base.abs() < 1e-4, "{}: a flat map, and the house stands at {base}", house.name);
@@ -777,21 +782,29 @@ fn f003_the_ground_is_stepped_and_not_one_flat_slab() {
     // see **why** a number came out the way it did: every 0 is something hand-placed pinning
     // its cell, and the slope away from it is the distance transform (`docs/FINDINGS.md`
     // FIND-090). Reading the histogram instead sent this round down a wrong path twice.
-    for iz in 0..ground.field.nz() as i32 {
+    for iz in (0..ground.field.nz() as i32).step_by(4) {
         let row: String = (0..ground.field.nx() as i32)
-            .map(|ix| char::from_digit(ground.field.level_at(ix, iz), 10).unwrap_or('?'))
+            .step_by(2)
+            .map(|ix| {
+                if ground.field.is_hole(ix, iz) {
+                    '~'
+                } else {
+                    let s = ground.field.step_at(ix, iz);
+                    char::from_digit((s.rem_euclid(10)) as u32, 10).unwrap_or('?')
+                }
+            })
             .collect();
-        eprintln!("terrain row {iz:2}  {row}");
+        eprintln!("ground row {iz:3}  {row}");
     }
     eprintln!(
         "ground under {} houses: p10 {p10:.2} m, p90 {p90:.2} m, relief {:.2} m · \
-         {} distinct levels {distinct:?} · {} terrain cells, levels used {:?} · \
-         {} terrace blocks",
+         {} distinct levels {distinct:?} · {} terrain cells, {} heights used · \
+         {} ground blocks",
         houses.len(),
         p90 - p10,
         distinct.len(),
         cells.len(),
-        ground.field.levels_used(),
+        ground.field.steps_used().len(),
         ground.pads.len()
     );
 
@@ -809,61 +822,74 @@ fn f003_the_ground_is_stepped_and_not_one_flat_slab() {
         distinct.len()
     );
 
-    // And the invariant the stairs hang from, on the **real** field and not on a fixture:
-    // no cell may be more than one level above the one next to it, or the flight that leads
-    // up it is short by a riser and the terrace edge is a wall.
+    // And the invariant every riser hangs from, on the **real** field and not on a fixture:
+    // no cell may stand more than one `rise_m` over the one next to it. One rise is 0.25 m and
+    // 0.28 m is already a wall at `gravity_m_s2: -32` (FIND-214) — so this assert is the
+    // difference between terrain and a wall with a texture.
+    //
+    // ## What this sweep varies, and what it holds constant
+    //
+    // It varies **nothing**: it is an exhaustive walk over every cell of the shipped Ashgate
+    // and both of its neighbour directions (the other two are the same pairs seen from the
+    // other side). Skipped: nothing — holes are checked too, because a hole still has a height
+    // and its neighbours still have to be reachable from the quay beside it.
     let f = &ground.field;
+    let mut steepest = 0i32;
     for iz in 0..f.nz() as i32 {
         for ix in 0..f.nx() as i32 {
-            for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            for (dx, dz) in [(1, 0), (0, 1)] {
+                let d = (f.step_at(ix, iz) - f.step_at(ix + dx, iz + dz)).abs();
+                steepest = steepest.max(d);
                 assert!(
-                    f.drop_to(ix, iz, dx, dz) <= 1,
-                    "cell ({ix},{iz}) at level {} stands {} levels over ({},{}) — the flight \
-                     built for it is one riser deep and the rest is a cliff",
-                    f.level_at(ix, iz),
-                    f.drop_to(ix, iz, dx, dz),
+                    d <= 1,
+                    "cell ({ix},{iz}) at {:.2} m stands {:.2} m over ({},{}) — one rise is \
+                     {} m and 0.28 m is a wall he cannot walk up",
+                    f.height_at(ix, iz),
+                    d as f32 * f.rise_m(),
                     ix + dx,
-                    iz + dz
+                    iz + dz,
+                    f.rise_m()
                 );
             }
         }
     }
+    assert_eq!(steepest, 1, "the whole field is flat — no cell is a rise above its neighbour");
 
-    // Every terrace really carries its stairs: a plateau with a falling neighbour and no
-    // flight beside it is the wall this whole design exists to avoid.
-    let flight = (map.terrain.step_m / map.terrain.stair_rise_m).round() as u32;
-    let mut naked = 0usize;
-    for iz in 0..f.nz() as i32 {
-        for ix in 0..f.nx() as i32 {
-            if f.level_at(ix, iz) == 0 {
-                continue;
-            }
-            for (dx, dz, side) in [(-1, 0, 'w'), (1, 0, 'e'), (0, -1, 'n'), (0, 1, 's')] {
-                if f.drop_to(ix, iz, dx, dz) == 0 {
-                    continue;
-                }
-                for k in 1..flight {
-                    let want = format!("terrace_{ix}_{iz}_{side}{k}");
-                    if !ground.pads.iter().any(|p| p.name == want) {
-                        naked += 1;
-                    }
-                }
-            }
-        }
-    }
-    assert_eq!(naked, 0, "{naked} terrace edges fall away without a step built into them");
+    // The steepest grade anything on this map has, and it is what the acceptance run
+    // (`scripts/w2-terrain-walk.txt`) has to be able to climb.
+    let grade = map.terrain.rise_m / map.terrain.cell_m;
+    eprintln!(
+        "steepest ground: {} m over {} m = {:.1} % grade (the terraces were 3.6 %)",
+        map.terrain.rise_m,
+        map.terrain.cell_m,
+        grade * 100.0
+    );
+    assert!(
+        map.terrain.rise_m <= 0.27,
+        "terrain.rise_m is {} m. At game.ron gravity_m_s2 -32 the player climbs 0.27 m and is \
+         stopped dead by 0.28 m (docs/FINDINGS.md FIND-214, docs/BUGS.md B-018) — a field with \
+         a taller quantum is a wall wherever it is not flat",
+        map.terrain.rise_m
+    );
 
-    // The risers themselves: nothing the player has to climb is taller than one step of the
-    // stairs. Measured against the file, so widening `stair_rise_m` past what a 0.35 m capsule
-    // can ride up shows here and not only in the run.
+    // Every ground block's top really is on the field: a slab half a rise off is a lip the
+    // player trips on and nothing in a screenshot shows it.
     for pad in &ground.pads {
         let top = pad.center_m.y + pad.size_m.y * 0.5;
-        let level = top / map.terrain.stair_rise_m;
+        let rises = top / map.terrain.rise_m;
         assert!(
-            (level - level.round()).abs() < 1e-3,
-            "{}: its top is at {top} m, which is not a whole number of {} m risers",
+            (rises - rises.round()).abs() < 1e-3,
+            "{}: its top is at {top} m, which is not a whole number of {} m rises",
             pad.name,
-            map.terrain.stair_rise_m
+            map.terrain.rise_m
+        );
+        assert!(
+            pad.center_m.y - pad.size_m.y * 0.5 <= map.terrain.base_m + 1e-3,
+            "{}: its underside is at {} m and terrain.base_m is {} — the ground is a crust \
+             over a hole instead of solid rock",
+            pad.name,
+            pad.center_m.y - pad.size_m.y * 0.5,
+            map.terrain.base_m
         );
     }
 }
@@ -883,8 +909,8 @@ fn f003_the_terrain_did_not_cost_the_district_its_houses() {
     let with = plan();
 
     let mut flat_map = map.clone();
-    flat_map.terrain.levels = 1;
-    flat_map.terrain.step_m = 0.0;
+    flat_map.terrain.amplitude_m = Vec::new();
+    flat_map.terrain.wavelength_m = Vec::new();
     let flat = plan_blocks(&d, &flat_map);
 
     let count = |p: &[BlockPlan]| p.iter().filter(|k| k.name.starts_with("house_")).count();
@@ -905,9 +931,9 @@ fn f003_the_terrain_did_not_cost_the_district_its_houses() {
 
     // And the terrain really is what is being compared: the flat plan has no terrace in it,
     // the shipped one has many.
-    let terraces = |p: &[BlockPlan]| p.iter().filter(|k| k.name.starts_with("terrace_")).count();
-    assert_eq!(terraces(&flat), 0, "`levels: 1` still built terraces");
-    assert!(terraces(&with) > 50, "only {} terraces in the district", terraces(&with));
+    let ground = |p: &[BlockPlan]| p.iter().filter(|k| k.name.starts_with("ground_")).count();
+    assert_eq!(ground(&flat), 0, "`amplitude_m: []` still built ground blocks");
+    assert!(ground(&with) > 500, "only {} ground blocks in the district", ground(&with));
 }
 
 #[test]
@@ -1187,54 +1213,59 @@ fn f003_the_hand_placed_blocks_that_have_a_model_in_the_drop_wear_it() {
 }
 
 #[test]
-fn f003_the_ground_of_this_district_is_a_3_6_percent_grade_and_that_is_the_whole_relief() {
-    // \u26a0\ufe0f **The measurement that stopped a fix from being built on 2026-08-19.** `FIND-132`
-    // reported the ground as "one flat sand plane — the 3.00 m of terracing is invisible from
-    // the air", and the natural reading is that the terrain is not drawn. It IS drawn:
-    // `f003_the_terrain_...` counts 1236 terrace blocks over six levels and 7.50 m of relief.
+fn f003_the_ground_climbs_six_times_what_the_terraces_did_and_still_holds_a_walkable_grade() {
+    // ★ **The number FIND-134 named, replaced.** On 2026-08-19 this test asserted the district
+    // was a 3.6 % grade and explained, correctly, that 3.6 % under an 11.50 m roofscape is
+    // 13 % of one roof and therefore nothing the eye can read. The user played it on
+    // 2026-08-29 and said the same thing in his own words — *„und deutlich hoeher und niedriger
+    // als jetzt!"* — so the number, not the explanation, was the defect.
     //
-    // What is true instead is arithmetic, and this test is the arithmetic: **one step of
-    // `terrain.step_m` per `terrain.cell_m` of ground.** At 1.50 m per 42 m that is a 3.6 %
-    // grade, under houses `scale.ron` allows 11.50 m of — so the largest thing the eye could
-    // read is 13 % of one roof, and every one of those steps is covered by a five-tread flight
-    // in `stair_color` (there is no bare riser in the district). A district that reads as *a
-    // mosaic on a table* is therefore not a rendering bug: it is this number, and it is the
-    // user's (`docs/FINDINGS.md` FIND-134, `docs/QUESTIONS.md`).
-    //
-    // The test exists so the number cannot drift silently: change `step_m` or `cell_m` and the
-    // grade this file claims has to be re-measured together with it.
+    // What replaced it is the same arithmetic on a different instrument: **one `rise_m` per
+    // `cell_m` of ground**, everywhere, instead of a 1.50 m cliff every 42 m. The two ends of
+    // it are bounded from opposite sides and that is why this test has two asserts:
+    //   * from **above** by what a body can walk over (0.27 m at `gravity_m_s2 -32`, FIND-214)
+    //     — a steeper field is a prettier picture of a wall;
+    //   * from **below** by what the eye can read, which is the whole reason for the round.
     let d = data();
     let map = d.current_map().expect("current map");
     let t = &map.terrain;
-    if t.levels <= 1 || t.step_m <= 0.0 {
+    if t.amplitude_m.is_empty() || t.rise_m <= 0.0 {
         return;
     }
-    let grade = t.step_m / t.cell_m;
-    let relief_m = t.step_m * (t.levels - 1) as f32;
+    let (_, ground) = defeated_by_titan::world::map::terrain_of(&d, map);
+    let hs = ground.field.heights_m();
+    let lo = hs.iter().copied().fold(f32::INFINITY, f32::min);
+    let hi = hs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let grade = t.rise_m / t.cell_m;
     eprintln!(
-        "terrain: {:.2} m step per {:.1} m cell = {:.1} % grade · {} levels = {relief_m:.2} m \
-         of relief · tallest house {:.2} m",
-        t.step_m,
+        "ground: {:.2} m rise per {:.1} m cell = {:.1} % grade · {lo:.2} .. {hi:.2} m = \
+         {:.2} m of relief in {} heights · tallest house {:.2} m",
+        t.rise_m,
         t.cell_m,
         grade * 100.0,
-        t.levels,
+        hi - lo,
+        ground.field.steps_used().len(),
         d.scale.architecture.heights_m.values().copied().fold(0.0, f32::max)
     );
     assert!(
-        grade < 0.10,
-        "the terrain now climbs {:.1} % — that is no longer the district FIND-134 measured, \
-         and the flight geometry (stair_tread_m against street_m) has to be re-checked with it",
+        grade <= 0.27 / t.cell_m + 1e-6 && t.rise_m <= 0.27,
+        "the ground climbs {:.1} % ({} m per {} m cell) — above a 0.27 m riser the player \
+         cannot walk up it at all (FIND-214), and a picture of a wall is not terrain",
+        grade * 100.0,
+        t.rise_m,
+        t.cell_m
+    );
+    assert!(
+        grade >= 0.045,
+        "the ground climbs {:.1} % — the terraces were 3.6 % and FIND-134 measured that as \
+         unreadable under an 11.50 m roofscape; this is not a step away from it",
         grade * 100.0
     );
-    // And the other half: it really is six levels and not one, so "flat" is a statement about
-    // the STEP and never about the field being switched off.
-    let (_, ground) = defeated_by_titan::world::map::terrain_of(&d, map);
     assert!(
-        ground.field.levels_used().len() >= 4,
-        "only {:?} of {} terrain levels are used — the field, not the grade, is the problem \
-         then, and FIND-134's conclusion does not apply",
-        ground.field.levels_used(),
-        t.levels
+        hi - lo >= 20.0,
+        "{:.2} m of relief. The terraces had 7.50 m and the user asked for *deutlich hoeher \
+         und niedriger*",
+        hi - lo
     );
 }
 
@@ -2368,25 +2399,21 @@ fn f003_a_dressed_house_is_exactly_its_model_and_never_leaves_its_slot() {
 }
 
 #[test]
-fn f003_the_districts_ground_comes_from_the_map_and_barely_from_the_seed() {
-    // ★ Written 2026-08-18, after `shared::terrain`'s own `assert_ne!` ("two seeds give two
-    // grounds") turned out to be false and to have never been run — its five unit tests live
-    // inside `src/shared/terrain.rs` and only `--lib` executes those.
+fn f003_the_districts_ground_is_reproducible_and_the_seed_moves_it_without_moving_a_pin() {
+    // ★ Two properties, and the second one **reversed on 2026-08-29** — deliberately, with the
+    // old sentence kept so the reversal is readable.
     //
-    // The rule behind it is exact (`docs/FINDINGS.md` FIND-101): the relaxation's fixed point
-    // is the L1 distance transform from every pinned cell and from the outside of the grid,
-    // capped by the cell's own draw `levels - 1 - notch`. So the seed can move a cell **only**
-    // where that cell is `levels - 1` or more away from every pin and from the rim. This test
-    // measures how much of the shipped district that is, because the answer is what the number
-    // "6 levels" is worth: on 2026-08-18 it was **one cell out of 256**, and that one cell is
-    // the district's only level-5 cell.
+    // The terraced field asserted *the seed stays a footnote*: `FIND-101` measured that its
+    // relaxation erased the draw everywhere except one cell of 256, so the ground was the shape
+    // of the hand-placed geometry and almost nothing else. The continuous field is the
+    // opposite by construction — the noise decides where the high ground is and the clamp only
+    // decides how fast you get there — so a seed that moved 0.4 % of the cells would now mean
+    // the noise is doing nothing and the ground is a pure distance cone off the streets.
+    // **The same measurement, the same six seeds, the bound turned around.**
     //
-    // Two things are asserted, and the second one is the interesting half:
-    //   * the shipped seed reproduces its ground exactly — the desync guard, at map level and
-    //     through the whole pin pipeline rather than on a 12 x 12 fixture;
-    //   * the seed stays a footnote. If a later `cell_m`, `levels` or a thinned-out set of
-    //     hand-placed blocks lets the draw take over the district, this goes red — and it
-    //     should, because from that point on the ground is noise and not the town.
+    // What did NOT turn around, and is the half that protects the district: whatever the seed,
+    // every pinned cell is still exactly 0. A quay wall hanging in the air is a desync you can
+    // photograph.
     let d = data();
     let map = d.current_map().expect("current map");
     let (_, base) = defeated_by_titan::world::map::terrain_of(&d, map);
@@ -2396,37 +2423,55 @@ fn f003_the_districts_ground_comes_from_the_map_and_barely_from_the_seed() {
     let (_, again) = defeated_by_titan::world::map::terrain_of(&d, map);
     assert_eq!(base.field, again.field, "the same map planned twice gave two grounds");
 
-    let mut worst = 0;
+    let mut least = usize::MAX;
     for seed in [1u64, 2, 7, 12_345, 0xDEAD_BEEF, 999_999_999] {
         let mut m = map.clone();
         m.seed = seed;
         let (_, other) = defeated_by_titan::world::map::terrain_of(&d, &m);
         let moved = (0..nz)
             .flat_map(|iz| (0..nx).map(move |ix| (ix, iz)))
-            .filter(|(ix, iz)| base.field.level_at(*ix, *iz) != other.field.level_at(*ix, *iz))
+            .filter(|(ix, iz)| base.field.step_at(*ix, *iz) != other.field.step_at(*ix, *iz))
             .count();
         eprintln!(
-            "seed {seed}: {moved} of {} cells move, levels used {:?}",
+            "seed {seed}: {moved} of {} cells move ({:.1} %), {} heights used",
             nx * nz,
-            other.field.levels_used()
+            100.0 * moved as f32 / cells,
+            other.field.steps_used().len()
         );
-        worst = worst.max(moved);
+        least = least.min(moved);
+        // The pins do not care which seed it is. Taken on the OTHER field, cell by cell,
+        // against the cells this map pins — the spawn disc is the one every mission needs.
+        for iz in 0..nz {
+            for ix in 0..nx {
+                let (x, z) = (
+                    -map.size_m.0 * 0.5 + (ix as f32 + 0.5) * map.terrain.cell_m,
+                    -map.size_m.1 * 0.5 + (iz as f32 + 0.5) * map.terrain.cell_m,
+                );
+                if x * x + z * z < (map.terrain.flat_radius_m - map.terrain.cell_m).powi(2) {
+                    assert_eq!(
+                        other.field.step_at(ix, iz),
+                        0,
+                        "seed {seed}: the spawn cell ({ix},{iz}) is at {:.2} m — the hub pads \
+                         stand at y = 0 and one of them is now inside the ground",
+                        other.field.height_at(ix, iz)
+                    );
+                }
+            }
+        }
     }
     eprintln!(
-        "shipped ground: {}x{nz} cells, levels used {:?}, at most {worst} cells ({:.1} %) \
-         depend on the seed",
-        nx,
-        base.field.levels_used(),
-        100.0 * worst as f32 / cells
+        "shipped ground: {nx}x{nz} cells, {} heights used, every seed moves at least {least} \
+         cells ({:.1} %)",
+        base.field.steps_used().len(),
+        100.0 * least as f32 / cells
     );
     assert!(
-        worst as f32 <= 0.05 * cells,
-        "{worst} of {} terrain cells ({:.1} %) change when only the seed changes — the ground \
-         of this district is supposed to be the shape of its hand-placed geometry \
-         (FIND-090, FIND-101), not a draw. Either the pins thinned out or `levels` grew past \
-         the distance transform",
-        nx * nz,
-        100.0 * worst as f32 / cells
+        least as f32 >= 0.15 * cells,
+        "the quietest of six seeds moves only {least} of {} cells ({:.1} %) — the noise is \
+         doing nothing and this ground is a distance transform off the streets, which is the \
+         pyramid the round set out to replace",
+        cells as usize,
+        100.0 * least as f32 / cells
     );
 }
 
@@ -3555,5 +3600,88 @@ fn f012_the_whole_top_face_of_the_fence_lies_outside_the_map_and_is_recovered_fr
          200 m ring of 2026-08-28 and the inner lip of 2026-08-29: {:?}",
         standable.len(),
         &standable[..standable.len().min(3)]
+    );
+}
+
+/// ★ **F-003 / FIND-214 — the ground is a CONTINUOUS height field, not a flight of terraces.**
+///
+/// The user, 2026-08-29, after playing: *„auch die verschiedenen hoehen passen nicht! das soll
+/// grass sein und nicht so wie jetzt! und nicht verschiedene hardcoded stufen sondern wirklich
+/// terrain! und deutlich hoeher und niedriger als jetzt!"* — three demands, and this test is
+/// the first two of them in numbers. The third (grass) is a colour and is checked below.
+///
+/// **What the code under test reads, and what this test varies.** `plan_terrain` reads
+/// `map.terrain.{cell_m, rise_m, amplitude_m, wavelength_m, flat_radius_m, paving_top_m,
+/// pillar_gap_m, base_m, colors}`, `map.seed`, `map.size_m` and every entry of `map.blocks`.
+/// This test varies **none** of them: it is a measurement of the SHIPPED Ashgate, the one
+/// ground the user actually looks at, and it is deliberately a property of `maps.ron` and not
+/// of a fixture. The sweep over the parameters is
+/// `f003_no_two_neighbouring_cells_differ_by_more_than_one_rise`; the sweep over the seeds is
+/// `f003_the_same_seed_yields_exactly_the_same_ground`. Nothing here is skipped — every cell
+/// of the field is in `heights_m()`, holes included.
+#[test]
+fn f003_the_ground_is_a_continuous_field_and_not_a_flight_of_terraces() {
+    let d = data();
+    let map = d.current_map().expect("maps.ron: current");
+    let (_, ground) = defeated_by_titan::world::map::terrain_of(&d, map);
+    let hs = ground.field.heights_m();
+    let lo = hs.iter().copied().fold(f32::INFINITY, f32::min);
+    let hi = hs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let mut distinct: Vec<i64> = hs.iter().map(|h| (h * 1000.0).round() as i64).collect();
+    distinct.sort_unstable();
+    distinct.dedup();
+    eprintln!(
+        "field: {} cells of {:.2} m · {:.2} .. {:.2} m = {:.2} m of relief · {} distinct \
+         heights · {} ground blocks",
+        hs.len(),
+        map.terrain.cell_m,
+        lo,
+        hi,
+        hi - lo,
+        distinct.len(),
+        ground.pads.len()
+    );
+    // Where the two extremes actually are, in world metres — this is what an evidence
+    // screenshot has to be aimed at, and guessing at it cost this round one useless aerial.
+    let world = |i: usize| {
+        let (nx, cell) = (ground.field.nx() as usize, map.terrain.cell_m);
+        (
+            -map.size_m.0 * 0.5 + ((i % nx) as f32 + 0.5) * cell,
+            -map.size_m.1 * 0.5 + ((i / nx) as f32 + 0.5) * cell,
+        )
+    };
+    let imin = hs.iter().enumerate().min_by(|a, b| a.1.total_cmp(b.1)).map(|k| k.0).unwrap();
+    let imax = hs.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map(|k| k.0).unwrap();
+    eprintln!(
+        "lowest {:.2} m at x {:.1} z {:.1} · highest {:.2} m at x {:.1} z {:.1}",
+        lo,
+        world(imin).0,
+        world(imin).1,
+        hi,
+        world(imax).0,
+        world(imax).1
+    );
+    assert!(
+        hi - lo >= 20.0,
+        "the ground of Ashgate spans {:.2} m from its lowest cell to its highest — the user \
+         asked for *deutlich hoeher und niedriger als jetzt* and 'jetzt' was 7.50 m",
+        hi - lo
+    );
+    assert!(
+        distinct.len() >= 40,
+        "the field takes only {} distinct heights — that is a flight of terraces with a \
+         different number of steps, not a continuous field",
+        distinct.len()
+    );
+    assert!(
+        map.terrain.cell_m <= 6.0,
+        "one terrain cell is {:.1} m across — a cell that is wider than a house cannot carry \
+         a slope, only a plateau",
+        map.terrain.cell_m
+    );
+    assert!(
+        lo < -3.0,
+        "the lowest ground of Ashgate is at {lo:.2} m: the field only ever climbs, and *und \
+         deutlich hoeher UND NIEDRIGER als jetzt* is half unanswered"
     );
 }

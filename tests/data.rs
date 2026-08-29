@@ -1126,6 +1126,15 @@ fn t005_every_size_class_has_a_structure_above_its_cortex() {
     // other files that nobody holds up against each other.
     // The user's numbers stay; what changes is the composition of the city (church 35 m,
     // watchtower 12 m, tree 12 m). docs/QUESTIONS.md Q-022.
+    //
+    // 🔴 **Split in two on 2026-08-29, and the spawnable half got STRICTER, not looser.** The
+    // class table doubled on the user's word (`docs/FINDINGS.md` FIND-213) and `boss`'s cortex
+    // went to 49.8 m, above the 35 m church — while `boss` and `huge` are exactly the classes
+    // `max_spawnable_class` keeps out of the game, so nobody can ever fly at one. The rule the
+    // comment above is about — *a titan you cannot approach from above* — is a rule about
+    // titans a player MEETS. So: a spawnable class must have a piece of ARCHITECTURE above its
+    // cortex, and a class behind the cap only has to be under the wall the district stands in.
+    // Raise the cap and the first branch takes over, which is the point.
     let d = data();
     let m = &d.scale;
     let (tallest, height) = m
@@ -1134,13 +1143,30 @@ fn t005_every_size_class_has_a_structure_above_its_cortex() {
         .iter()
         .max_by(|a, b| a.1.total_cmp(b.1))
         .expect("scale.ron without a single structure");
+    let cap_m = m
+        .titan
+        .classes
+        .get(&m.titan.max_spawnable_class)
+        .expect("max_spawnable_class names a class")
+        .height_m;
     for (name, k) in &m.titan.classes {
-        assert!(
-            *height >= k.cortex_height_m,
-            "class {name}: cortex at {} m, but the tallest structure is {tallest} with \
-             {height} m — there is no anchor above that cortex",
-            k.cortex_height_m
-        );
+        if k.height_m <= cap_m {
+            assert!(
+                *height >= k.cortex_height_m,
+                "class {name} CAN SPAWN and its cortex is at {} m, but the tallest structure is \
+                 {tallest} with {height} m — there is no anchor above a titan the player meets",
+                k.cortex_height_m
+            );
+        } else {
+            assert!(
+                m.wall.height_m >= k.cortex_height_m,
+                "class {name}: cortex at {} m, above the wall itself ({} m). Nothing in this \
+                 world is above that cortex, and raising max_spawnable_class to it would put a \
+                 titan in the city that cannot be approached from anywhere",
+                k.cortex_height_m,
+                m.wall.height_m
+            );
+        }
     }
 }
 
