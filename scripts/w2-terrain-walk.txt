@@ -13,6 +13,13 @@
 # a 0.35 m radius and rides over a box step of less than that (`src/player/mod.rs`). Terraces
 # you cannot walk up are a wall, not terrain.
 #
+# 🔴 **RED ON PURPOSE SINCE 2026-08-29 — `docs/BUGS.md` B-018.** Line 40 reads **3.000**: at the
+# shipped `gravity_m_s2: -32` the player cannot walk up a single 0.30 m riser, and sixty seconds
+# of `key W` does not move him. At `-20`, same binary and same route, he climbs 3.0 -> 4.5 -> 6.0
+# m in twenty seconds. **The terraces are a wall now**, which is the exact thing the paragraph
+# above says this file exists to catch. The assert is CORRECT and stays red until the step-up is
+# fixed; re-aiming it would delete the only evidence that traversal broke.
+#
 # ## The route, and every number in it comes out of the map
 #
 # x = 168 is the middle of the street between lot column 11 (x 129..165) and 12 (x 171..207) —

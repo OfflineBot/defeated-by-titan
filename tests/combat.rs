@@ -2281,7 +2281,10 @@ fn f032_a_pass_out_of_reach_staggers_nothing() {
 /// Every successful pass reports `[Torso, Cortex]` — every titan is wider than his own neck
 /// (`f030_the_cortex_wins_over_the_body_it_hides_in`), so the graze lands first and the stagger
 /// with it. **And it lands EARLIER, not in the same tick:** the run of `scripts/f032-swords.txt`
-/// on 2026-08-19 measured `Torso` on tick 154 and `Cortex` on tick 157 of the same fall. If the
+/// on 2026-08-19 measured `Torso` on tick 154 and `Cortex` on tick 157 of the same fall, and the
+/// re-derived run of 2026-08-29 (`gravity_m_s2` -20 -> -32) measures 130 and 133. **The absolute
+/// ticks are a function of gravity and the THREE between them is not** — that gap is what this
+/// test is about, and it has now survived a 60 % change in the constant that moves the pass. If the
 /// kill then merely took the LONGER of the two freezes, the corpse would stand still for what
 /// was left of `stagger_s` instead of `feel.hit_stop_cortex_s`, and the dissolve of
 /// `scripts/f034-hitstop.txt` — a 🟧 row whose evidence is two photographed ticks 0.983 and

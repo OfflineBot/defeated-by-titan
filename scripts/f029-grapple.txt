@@ -121,7 +121,22 @@ assert rope == 1
 # The look goes back to q030's, because the blade hangs perpendicular to it and not to the
 # velocity (`blades::cut::blade_segment`). The rope does not care where the player is looking.
 look 0 0
-wait 0.50
+# THE FALL TO THE CORTEX, TIMED AGAINST `gravity_m_s2` — same rule as `scripts/q030-reach.txt`,
+# but the descent here is NOT free fall: the hook was aimed 82 degrees DOWN, so the rope pulls
+# the player along gravity instead of against it and he arrives sooner than `sqrt(2h/g)`.
+#
+#   the cortex plane      900 + cortex_height_m 8.90  =  908.90 m
+#   at `wait 0.50` (the old value, staged at g -20)      907.05 m — 1.85 m UNDER the cortex
+#   at `wait 0.20`                                       910.435 m, and the log reads
+#                                                        `cut titan 1 Cortex at 26.15 m/s`
+#
+# ⚠️ q030's free-fall version wants 0.99 m of lead over the cortex; this one wants 1.54 m,
+# because the rope is adding to the fall. The pre-slash total is 0.20 + 0.20 + 0.20 = 0.60 s
+# against the old 0.90 s — SHORTER than the 0.712 s pure gravity scaling would ask for, and the
+# rope is the difference. Both asserts below were downstream of this one line: the titan did not
+# die, so the corpse never let the rope go (`rope` read 1.000) and it was still counted
+# (`titans` read 2.000).
+wait 0.20
 slash right 0.40
 wait 0.08
 mark act2-cortex-pass

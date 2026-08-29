@@ -12,11 +12,25 @@
 #
 # ## The five acts, and why each one stands where it does
 #
-# Every act is the SAME pass: the player falls 11.20 m (−20 m/s² ⇒ 21.2 m/s, 1.058 s), stands
-# 1.80 m off the husk's axis, looks at yaw 0 so the RIGHT blade lies on +X
-# (`src/blades/cut.rs: blade_segment`), and slashes 0.90 s into the fall so that the blade's
+# Every act is the SAME pass: the player falls **6.891 m** onto the target at **21 m/s** in
+# **0.656 s**, stands 1.80 m off the husk's axis, looks at yaw 0 so the RIGHT blade lies on +X
+# (`src/blades/cut.rs: blade_segment`), and slashes **0.506 s** into the fall so that the blade's
 # active window (`gear.ron`: 0.08..0.22 s of a 0.35 s swing) brackets the crossing.
 # **Only the HEIGHT changes** — and with it which part of the husk the blade passes through.
+#
+# 🔴 **Those three numbers are DERIVED from `game.ron: gravity_m_s2` and must never be re-aimed
+# by hand.** The constant is the pass SPEED, because that is what the game reads: `damage =
+# blades.damage_per_m_s x closing_m_s x zone x combo`, and `feel.strong_hit_m_s` 18.0 is what
+# splits a CUT from a GRAZE. 21 m/s clears that by 17 %. Everything else follows:
+#
+#     g      = -game.ron: gravity_m_s2 = 32.0
+#     drop   = v² / (2 g) = 441 / 64 = 6.891 m        (was 11.20 m at g = 20)
+#     t_fall = v / g      = 0.656 s                   (was 1.058 s)
+#     wait   = t_fall - (active_from_s + active_to_s) / 2 = 0.656 - 0.15 = 0.506
+#
+# **The control that says this is a derivation and not a fresh guess: put g = 20 back in and it
+# prints `wait 0.900` and `drop 11.03 m`** — the calibration this file carried until 2026-08-29.
+# The full write-up is in the header of `scripts/f030-cortex.txt`.
 #
 # A husk is the `medium` class: height 10.00 m, width `width_fraction × h` = 2.50 m
 # (`scale.ron`), so his ONE body collider is a capsule of radius 1.25 m about his axis
@@ -37,20 +51,24 @@
 # read 1.500). So the five acts now stand on identical ground for the first time.
 #
 # ⚠️ **Not one number in the pass changed.** The titan still spawns at `y = 0`, the player is
-# still warped to an absolute height and still falls `11.20 m` onto the nape, still stands
+# still warped to an absolute height and still falls onto the nape (`11.20 m` then, the derived
+# `6.891 m` since the gravity change of 2026-08-29 — same speed, same crossing), still stands
 # `1.80 m` off the axis on -X and `0.55 m` behind it on +Z, still looks yaw 0. Only the lane
 # moved, and it moved as a rigid translation: `x` carries the lane, `z` carries the same
 # `+0.55` set-back it always had.
 #
 # | act | the part the blade passes through | its metres | blade y | player y at warp |
 # |---|---|---|---|---|
-# | A | the **nape** — the cortex sphere, r 0.55, 0.55 m behind the neck | y 8.90 | 8.90 | 18.50 |
-# | B | the **torso** box, `leg_m` 4.80 .. `cortex` 8.90, centre 6.85 | y 4.80..8.90 | 6.85 | 16.45 |
-# | C | the **left arm** box, shoulder 8.20 down `arm_m` 4.40 to 3.80 | y 3.80..8.20 | 6.00 | 15.60 |
-# | D | the **left leg** box, ground to `leg_fraction × h` | y 0..4.80 | 3.50 | 13.10 |
-# | E | **nothing at all** — 150 m from the nearest titan | — | 8.90 | 18.50 |
+# | A | the **nape** — the cortex sphere, r 0.55, 0.55 m behind the neck | y 8.90 | 8.90 | 14.19 |
+# | B | the **torso** box, `leg_m` 4.80 .. `cortex` 8.90, centre 6.85 | y 4.80..8.90 | 6.85 | 12.14 |
+# | C | the **left arm** box, shoulder 8.20 down `arm_m` 4.40 to 3.80 | y 3.80..8.20 | 6.00 | 11.29 |
+# | D | the **left leg** box, ground to `leg_fraction × h` | y 0..4.80 | 3.50 | 8.79 |
+# | E | **nothing at all** — 150 m from the nearest titan | — | 8.90 | 14.19 |
 #
-# `player y at warp` is always `blade y − eye_height_m 1.60 + 11.20` of fall.
+# `player y at warp` is always `blade y − eye_height_m 1.60 + drop`, and `drop` is the derived
+# 6.891 m above. **`blade y` is the column that carries the meaning and it did not move** — the
+# four heights on the husk are the same four heights they were; only the run-up to them is
+# shorter. Recompute the last column from `drop` and never from the previous run's numbers.
 # The five titans stand 150 m apart in z so that no husk of a finished act is inside the
 # `aggro_radius_m: 45` of the next one — a husk walks 3 m/s and the whole run is 14 s.
 #
@@ -74,6 +92,23 @@
 # | D | leg | `tick 673: cut titan 4 Torso at 20.67 m/s` | **nothing** |
 # | E | air | *(no line)* | — |
 #
+# **And this is the same table after the 2026-08-29 gravity re-derivation** — same five verdicts,
+# 24 ticks earlier, and every act now books the limb it flies through instead of reporting
+# `Torso` for all four (the limb boxes carry colliders now; that is drift since 2026-08-19 and
+# not this round's):
+#
+# | act | target | what the log says today | what happened to the titan |
+# |---|---|---|---|
+# | A | nape | `tick 130: cut titan 1 Torso at 20.27 m/s` **then** `tick 133: … Cortex at 20.80 m/s` | dead |
+# | B | torso | `tick 279: … Torso at 20.27` then `tick 282: … ArmLeft at 20.80` | **nothing** |
+# | C | arm | `tick 428: … ArmLeft at 20.27` then `tick 436: … LegLeft at 23.47` | **nothing** |
+# | D | leg | `tick 577: … LegLeft at 20.27 m/s` | **nothing** |
+# | E | air | *(no line)* | — |
+#
+# ⚠️ **The three-tick gap between the graze and the nape in act A survived the change** (154→157
+# then, 130→133 now), and it is not decoration: it is the whole premise of
+# `tests/combat.rs::f032_a_cortex_hit_assigns_the_kill_frame_over_any_stagger`.
+#
 # **So it is the third of the three bugs `docs/NEXT.md` §2B listed: the swing fires, the cast
 # lands, a `TitanHit` IS written — and nothing in the repository reads it.** Not "the swing never
 # fires" and not "it fires and books nothing". Two further facts fall out of the same table:
@@ -82,7 +117,8 @@
 #    (`src/titan/rig.rs:358`); the limb boxes carry meshes and no colliders at all, and every limb
 #    sits inside a capsule of radius `width_m / 2`. `HitZone::ArmLeft`/`LegLeft`/`Head` have never
 #    been produced by anything in this game.
-#  * **the graze precedes the nape by three ticks** (154 → 157) and not by zero, which is why
+#  * **the graze precedes the nape by three ticks** (154 → 157 then, 130 → 133 today) and not by
+#    zero, which is why
 #    `combat::hitstop` has to ASSIGN the kill frame rather than take the longer of the two
 #    (`tests/combat.rs::f032_a_cortex_hit_assigns_the_kill_frame_over_any_stagger`).
 #
@@ -102,9 +138,9 @@ wait 1.5
 
 # ---- ACT A — the nape. The one hit the game already has. --------------------------------
 spawn titan husk -300 0 -83.75
-warp -301.80 18.50 -83.20
+warp -301.80 14.19 -83.20
 look 0 0
-wait 0.90
+wait 0.506
 slash right 0.40
 mark A-cortex
 # The crossing is ~0.16 s after the button. 0.60 s covers the whole active window with room.
@@ -116,9 +152,9 @@ assert titans == 0
 
 # ---- ACT B — the torso, dead centre of the body box. -------------------------------------
 spawn titan husk -150 0 -83.75
-warp -151.80 16.45 -83.20
+warp -151.80 12.14 -83.20
 look 0 0
-wait 0.90
+wait 0.506
 slash right 0.40
 mark B-torso
 wait 0.60
@@ -130,9 +166,9 @@ assert titans == 1
 
 # ---- ACT C — the left arm. -----------------------------------------------------------------
 spawn titan husk 0 0 -83.75
-warp -1.80 15.60 -83.20
+warp -1.80 11.29 -83.20
 look 0 0
-wait 0.90
+wait 0.506
 slash right 0.40
 mark C-arm
 wait 0.60
@@ -142,9 +178,9 @@ assert titans == 2
 
 # ---- ACT D — the left leg. -----------------------------------------------------------------
 spawn titan husk 150 0 -83.75
-warp 148.20 13.10 -83.20
+warp 148.20 8.79 -83.20
 look 0 0
-wait 0.90
+wait 0.506
 slash right 0.40
 mark D-leg
 wait 0.60
@@ -155,9 +191,9 @@ assert titans == 3
 # ---- ACT E — the same swing at nothing. ----------------------------------------------------
 # The null case. Without it "the blade reports a hit" is not a measurement of the blade — it
 # could be a measurement of the swing firing at all.
-warp 298.20 18.50 -83.20
+warp 298.20 14.19 -83.20
 look 0 0
-wait 0.90
+wait 0.506
 slash right 0.40
 mark E-air
 wait 0.60
@@ -167,5 +203,19 @@ assert titans == 3
 # `assert kills` is deliberately NOT here: the tally is `mission`'s and this run carries no
 # `--mission`, so the line reported "measured nothing" rather than a number (measured, first run
 # 2026-08-19). `titans` already carries the whole claim — one husk gone, three standing.
+#
+# 🔴 **THIS LINE WAS CHANGED TO `== 0` ON 2026-08-29 AND CHANGED BACK THE SAME DAY.**
+#
+# The re-aim round wrote `assert health == 0` under a derivation — *3 surviving husks x
+# `titan.ron: husk.damage` 34 = 102 >= `game.ron: player.health` 100* — and an adversary killed
+# it with the control the derivation was missing: **that arithmetic contains no gravity, so it
+# predicts 0 at BOTH tunings.** Run this same file against `gravity_m_s2: -20` / `boost_m_s2: 34`
+# and it reads **11 asserts held, including `health > 0`**. At `-32` the player dies.
+#
+# So the player dying here is a **behaviour change the heavier world caused**, and writing it
+# into the assert is the one thing `CLAUDE.md` forbids: it converts a regression into a
+# calibration and the corpus stops being able to report it. Filed as **`docs/BUGS.md` B-020**
+# and left RED until somebody decides whether a player SHOULD survive three husks at -32.
+# ⚠️ Do not "fix" this by raising `player.health` either — that is the same move one file over.
 assert health > 0
 end

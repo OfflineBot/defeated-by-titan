@@ -2,6 +2,17 @@
 # chained on the assist. **31 asserts, 838 ticks, exit 0 (2026-08-19).**
 #
 # 🔴 **5 OF 31 RED SINCE 2026-08-20, AND THE AIM IS THE CAUSE — do not re-derive the angles.**
+# ⚠️ **RE-MEASURED 2026-08-29 AND THE DIAGNOSIS BELOW IS OUT OF DATE.** The symptom this header
+# was written around — `found no anchor: NothingInRange — open sky` — **no longer occurs**: not
+# one hook in this run fails now (`grep -c 'found no anchor'` = 0). The ropes anchor; they anchor
+# somewhere ELSE. `ee43b4e` (F-024, "the anchor field is retired, because surfaces are what you
+# hook") moved the bite point, and the arc that this file records at 32.853 m now bottoms at
+# 35.163 m. Ten of its asserts are red at `gravity_m_s2: -20` **and** at `-32` against the same
+# binary, so the -20 -> -32 change of 2026-08-27 is NOT the cause of any of them.
+# The one line that WAS gravity is the settle assert in ACT 1 — search for
+# "DERIVED from `gravity_m_s2`"; it now carries its formula and reproduces `< 3.0` at -20.
+# ⚠️ Still: **do not re-aim it here.** -> `docs/NEXT.md` §2D, with `f003-ashgate` and `w5-lane`.
+#
 # `F-024` (1450bfc, "the snap searches sideways only") removed the snap's vertical correction:
 # its own commit measures *"largest vertical deviation a snap can produce 9.232 deg / 3.414 m ->
 # 0.000006 deg / 0.0000 m"*. Every `look` line here was aimed under the 2D cone. One shot now
@@ -151,7 +162,11 @@ look 0 0
 wait 0.1
 mark f004-arc-start
 assert height > 57.5    # 57.82: dropped off one station behind it, level with the beams
-assert speed < 3.0
+# ⚠️ DERIVED from `gravity_m_s2`: the `wait 0.1` above is an 8-tick settle and nothing but
+# gravity acts in it, so the speed here is exactly |g| * 8/60 — 4.267 m/s at -32, 2.667 at -20
+# (both measured 2026-08-29). The bound is that plus ONE more simulation step, |g|/60, which is
+# the rule the old `< 3.0` encoded at -20 (2.667 + 0.333). At -32: 4.267 + 0.533 = 4.80.
+assert speed < 4.8
 
 hook right 4.0          # the rope, and nothing else, for the next four seconds
 wait 1.95

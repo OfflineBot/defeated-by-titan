@@ -86,12 +86,38 @@ assert gas < 14964.0     # measured 14963.724 (it was 263.701 while gas_tank was
                          # f32 accumulation over 121 subtractions at 15000, ~0.05, by 10x)
 
 look 0 -89               # turn the camera down onto the spot he took off from
-wait 1.4                 # coast on: at 27.9 m/s the apex is 1.40 s away
+wait 0.85                # coast on. THE COAST IS PURE GRAVITY, so this is the one number in
+                         # this file that moves when `gravity_m_s2` moves:
+                         #     t_apex = v0 / g = 27.732 / 32 = 0.867 s
+                         # It was `wait 1.4` while g was -20 (27.9 / 20 = 1.395 s). At -32 a
+                         # 1.4 s coast overshoots the apex by 0.53 s and the run reads 35.776 m
+                         # FALLING at 18.250 m/s — which is what this line did for two days.
+                         # 0.85 s is the nearest wait that samples the apex tick (measured:
+                         # the apex sample is 53 ticks after the button, 0.867 s = 52.0 ticks,
+                         # and the script's own instruction stream costs ~2 ticks).
 
 mark f-007-apex
-assert height > 48.0     # 45 times the height of a jump
-assert height < 48.7
-assert speed < 2.0       # apex: what is left is the 1.2 m/s of drift from the 1 degree tilt
+assert height > 40.65    # 39 times the height of a jump. DERIVED, not read off the run:
+assert height < 41.35    #     h_apex = h0 + v0^2 / (2g) = 28.980 + 27.732^2 / 64 = 40.997 m
+                         # and h0, v0 are not free numbers either — they are the two brackets
+                         # this same script asserts eleven lines up (28.5..29.5 and 27.5..28.5).
+                         # ⚠️ THE WIDTH IS THE OLD 0.70, RE-CENTRED ON THE DERIVED APEX, NOT
+                         # WIDENED: 48.0..48.7 sat on 28.9 + 27.9^2/40 = 48.36 at g -20, the
+                         # same +-0.35 around the same formula. Measured now: 40.942, i.e. the
+                         # 0.055 m the discrete 60 Hz step loses against the continuous apex.
+assert speed < 2.0       # UNCHANGED, and that is the point — the bound was already derived, so
+                         # the constant moving did not move it. What is left at the apex is the
+                         # horizontal drift of the 1 degree tilt plus at most two ticks of the
+                         # wait landing off the apex:
+                         #     drift = boost_m_s2 * cos(89 deg) * t_boost = 46 * 0.01745 * 2.017
+                         #           = 1.619 m/s   (it was 34 * 0.01745 * 2.017 = 1.197 at 34,
+                         #            which is the "1.2 m/s" the old comment named)
+                         #     ceiling = sqrt(drift^2 + (2*g*dt)^2)
+                         #             = sqrt(1.619^2 + (2*32/60)^2) = 1.939 < 2.0
+                         # Measured 1.695 = sqrt(1.619^2 + 0.502^2), and 0.502 m/s is under one
+                         # tick of gravity (32/60 = 0.533). The drift term grew with boost_m_s2
+                         # and the tolerance term grew with gravity_m_s2, and 2.0 still holds
+                         # both — so this line is evidence at BOTH tunings, not a survivor.
 assert gas > 14963.5     # the climb after the button is free — nothing is drawn while coasting
 assert gas < 14964.0     # ⚠️ THE UPPER BOUND IS THE CLAIM, and it was missing until 2026-08-20.
                          # "Nothing is drawn while coasting" means THE NUMBER DID NOT MOVE, and

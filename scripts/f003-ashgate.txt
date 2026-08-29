@@ -17,6 +17,26 @@
 # `--screenshot` together with `--script` swallows the verdict, so the two runs are two runs:
 # the first one is the exit code, the second one is the picture.
 #
+# 🔴 **9 OF 40 RED SINCE THE HOOK STOPPED USING THE ANCHOR FIELD — AND IT IS NOT GRAVITY.**
+# Measured 2026-08-29 by running this file at `gravity_m_s2: -20` **and** `-32` against the same
+# binary: ACT 3's arc, ACT 4's crown and ACT 5's street are red at **both**, so the -20 -> -32
+# change on 2026-08-27 is not the cause. What moved is where a rope BITES. This file was
+# calibrated on 2026-08-19 against a right arm biting `(5.15, 59.42, 21.50)`; the same stand and
+# the same `hook right` today bites **`(0.00, 59.31, 21.50)`** — `ee43b4e` (F-024, "the anchor
+# field is retired, because surfaces are what you hook") and `cab7fe3` (F-021). The arc bottom
+# that this file records as **32.853 m** measures **37.690 m at -20** and **35.163 m at -32**.
+#
+# ⚠️ **DO NOT RE-AIM IT HERE.** An aim tuned against today's snap bakes today's snap in — that is
+# the FIND-096 mistake, and `docs/NEXT.md` §2D owns the re-aim as its own piece of work together
+# with `scripts/f004-towers.txt` and `scripts/w5-lane.txt`, which are red for the same reason.
+# Note the OLD symptom is gone: not one hook in this run reports `found no anchor` any more, so
+# the diagnosis in those two files' headers is itself out of date — the ropes anchor, they just
+# anchor somewhere else.
+#
+# What IS re-derived here (2026-08-29) are the two settle asserts that fire before any hook and
+# therefore measure only gravity — search this file for "DERIVED from `gravity_m_s2`". Both carry
+# the formula and both reproduce their old value at the old gravity.
+#
 # ## What it is evidence FOR
 #
 # `assets/data/missions.ron` has named `map: "ashgate"` since the first mission existed and
@@ -85,7 +105,11 @@ look 0 0                # yaw 0 = -Z, down the main street toward the wall
 wait 0.1
 mark f003-arc-start
 assert height > 57.0
-assert speed < 3.0
+# ⚠️ DERIVED from `gravity_m_s2`: the `wait 0.1` above is an 8-tick settle and nothing but
+# gravity acts in it, so the speed here is exactly |g| * 8/60 — 4.267 m/s at -32, 2.667 at -20
+# (both measured 2026-08-29). The bound is that plus ONE more simulation step, |g|/60, which is
+# the rule the old `< 3.0` encoded at -20 (2.667 + 0.333). At -32: 4.267 + 0.533 = 4.80.
+assert speed < 4.8
 assert gas == 15000
 
 hook right 4.0
@@ -207,7 +231,11 @@ wait 0.05                # lands on the roof cap opposite, ~5.9 m of rope away.
 mark f003-street-start
 assert height > 15.0     # 15.455 — airborne over the street, between two roofs
 assert height < 16.0
-assert speed < 2.0       # 1.333 — three ticks of falling, no more
+# ⚠️ DERIVED from `gravity_m_s2`, and it fires BEFORE the hook, so nothing but gravity is in
+# it: the `wait 0.05` above is a 4-tick settle, giving |g| * 4/60 — 2.133 m/s at -32, 1.333 at
+# -20 (both measured). The bound is that plus two more simulation steps, i.e. |g| * 6/60 =
+# |g|/10, which is the rule the old `< 2.0` encoded at -20. At -32 that is 3.2.
+assert speed < 3.2       # |g|/10 — 2.133 measured, four ticks of falling and no more
 
 hook right 6.0
 wait 0.2

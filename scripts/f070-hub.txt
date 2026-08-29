@@ -218,8 +218,30 @@ mark f072-deployed
 # fell one tenth of a second further, and the blade went past under the nape. The husk lived,
 # the mission was never won, and nothing in the log said "you missed" — it said `titans == 1`.
 # Whoever adds a line inside this block moves the cut.
+#
+# ⚠️ **THE DROP HEIGHT IS DERIVED, NOT MEASURED — re-derive it when `gravity_m_s2` moves.**
+# `wait 0.90` fixes the FALL TIME, so the height the blade meets the nape at is whatever
+# gravity has done to the player in that time. The cut must land on the cortex, so the warp
+# height is the unknown and the formula is free fall:
+#
+#     h0 = h_cut + 0.5 * |gravity_m_s2| * t_fall^2
+#
+#     t_fall = 1.0334 s   the script's own `wait 0.90` plus the blade's 8-tick windup, and it
+#                         is GRAVITY-INDEPENDENT: the Cortex cut lands on tick 458 at -20 and
+#                         on tick 458 at -32, measured 2026-08-29
+#     h_cut  = 7.82 m     where the blade meets the nape, read off the g = -20 run that this
+#                         file was calibrated against (20.67 m/s at the cut / 20 = 1.0335 s)
+#
+#     |g| = 32:  h0 = 7.82 + 0.5*32*1.0334^2 = 7.82 + 17.09 = 24.91  ->  **24.9**, used below
+#     |g| = 20:  h0 = 7.82 + 0.5*20*1.0334^2 = 7.82 + 10.68 = 18.50  ->  the committed value
+#                                                                       this file used to hold
+#
+# The second line is the control: the formula REPRODUCES the old number at the old gravity, so
+# it is a derivation and not a re-fit. Measured window at -32: every h0 in 24.0..27.0 kills;
+# 23.0 does not. `gravity_m_s2` went -20 -> -32 on 2026-08-27 and is PROVISIONAL — when the
+# user moves it again, evaluate the line above, do not re-measure the file.
 spawn titan husk 17.5 0 0
-warp 15.75 18.5 0.8
+warp 15.75 24.9 0.8
 look 0 0
 wait 0.90
 slash right 0.40
@@ -231,7 +253,7 @@ assert kills == 1     # ⭐ and the MISSION counted it
 mark f072-first-kill
 
 spawn titan husk 17.5 0 0
-warp 15.75 18.5 0.8
+warp 15.75 24.9 0.8
 look 0 0
 wait 0.90
 slash right 0.40

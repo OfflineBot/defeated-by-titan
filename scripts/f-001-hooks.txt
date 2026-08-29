@@ -131,6 +131,30 @@ mark f-001-reeled
 # graybox figures. The shortfall travels with the code, not with the geometry — so this is
 # `B-004`'s regression being measured twice, and not a script that was aimed at the wrong wall.
 # The day the reel is repaired, these two go green on their own and nobody has to touch them.
+# 🔴 RED ON PURPOSE — 3 OF 14, AND ALL THREE ARE ONE UNDERPOWERED REEL. Re-measured 2026-08-29
+# after `gravity_m_s2` -20 -> -32. The prose below already refused to re-aim the first two; this
+# block adds the third and makes the reason greppable instead of buried.
+#
+#   line 158  height > 12    reads 9.292   the reel-end sample, 0.6 s into a 5 s `Ctrl`
+#   line 160  speed  > 35    reads 15.569
+#   line 171  height > 11    reads 8.114   he is supposed to be STANDING on the nave roof
+#
+# ⚠️ Line 171 is NOT a fourth number to re-centre, and the probe is the whole story. Sampling
+# height every 0.6 s through the reel (scratch script, same pinned binary):
+#
+#     t=235  9.292      t=272  11.459  <- the apex of the climb
+#     t=309  8.114      t=346..519  8.114, speed 0.003   he is at rest, and stays there
+#
+# `maps.ron` puts the church nave at `center_m: (51.0, 5.75, -8.0), size_m: (26.0, 11.5, 14.0)`,
+# so its roof is at 5.75 + 11.5/2 = **11.500 m exactly**. The reel tops out at **11.459 m**.
+# HE MISSES THE ROOF BY 0.041 m and falls back onto the 8.1 m surface below it.
+# That is not a bracket that drifted — it is a binary landing decided by 4 cm, and re-aiming
+# `> 11` down to `> 8` would convert "he lands on the roof" into "he lands somewhere", which is
+# the assert this file's own header says was worse than no test.
+#
+# Gravity is the trigger and NOT the root: at -20 these read 9.881 and 19.344 and were already
+# red (13.064 / 46.414 was the last green pair). -32 pushed the apex the last 4 cm under the
+# roof. The day the reel is repaired all three go green together and nobody has to touch them.
 assert height > 12.0    # a jump reaches 1.056 m. Twelve metres is the rope, and nothing else.
 assert height < 14.0
 assert speed > 35.0     # measured 46.4 m/s [debian] — see the note below

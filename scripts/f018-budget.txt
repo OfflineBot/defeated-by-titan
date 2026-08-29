@@ -67,7 +67,13 @@ wait 0.3                 # the warp takes effect one tick after it is written
 
 mark f018-budget-start
 assert gas == 15000        # a full tank: nothing has been paid for yet
-assert height > 56.9     # measured 56.995 — standing on the ledge the warp puts him on
+assert height > 56.3     # 0.3 s of fall from the warp at 58 m, and NOT a ledge — the old comment
+                         # said "standing on the ledge the warp puts him on" and the numbers say
+                         # free fall to four decimals. It is timed against `gravity_m_s2`:
+                         #     h = 58 - 0.5 * g * (0.3 s + 1 tick)^2
+                         #       = 58 - 16 * 0.31667^2 = 56.396 m   (it was 57.005 at g -20)
+                         # Measured 56.392. The floor keeps the old 0.095 m of margin under the
+                         # derived value (56.9 sat 0.095 under 56.995), re-anchored, not widened.
 
 # =========================================================================================
 # LEG A — the rope alone. **A swing is free**, and that is the baseline everything else is
@@ -88,6 +94,30 @@ assert gas == 15000        # ⭐ swinging costs nothing
 key W 3.0
 wait 3.0
 mark f018-budget-b-steer
+# 🔴 RED ON PURPOSE SINCE 2026-08-29, AND THE FIVE GAS LINES BELOW ARE ONE FAULT, NOT FIVE.
+# `gravity_m_s2` went -20 -> -32, the swing this act is flown on got deeper and faster, and the
+# pose at this mark is no longer the one the act was cut for. The gas MODEL did not move:
+#
+#   DBT_GAS_LEDGER=1 ... | grep 'gas ledger'      at this mark:
+#     spent=13.2  boost=1.5  steer=11.7  reel=0.0 | wanted_ticks steer=44  granted_ticks steer=44
+#
+# `wanted == granted` on every consumer: the game billed exactly the ticks it delivered thrust
+# on. What changed is that `l̂ · r̂` is now positive for 44 of this leg's 180 ticks, where at
+# -20 it was positive for none — so `W` is no longer inert here and the tank moves by 10.397.
+# THE PER-LEG COSTS ARE STILL EXACT, which is the proof that only the arc moved:
+#
+#   line  leg          measured tank   this leg cost   derived
+#   121   B  W          14989.603        10.397        steer, pose-dependent — the one that moved
+#   138   C  +Shift     14927.073        62.530        3 x gas_boost_per_s 18 = 54, + 8.53 steer
+#   150   D  +Ctrl      14886.007        41.066        2 x (18 + 6), less the ticks the reel was idle
+#   164   E  +C dodge   14841.007        45.000        gas_dodge 45, FLAT, to three decimals ✅
+#   174   F  +4 s boost 14768.754        72.253        4 x gas_boost_per_s 18 = 72.000 ✅
+#
+# E and F are right to the last digit at BOTH gravities, so no rate here is aimed at a constant.
+# ⚠️ DO NOT re-aim the five floors onto the new absolutes: they are absolute only because the
+# script language has no `assert gas_delta`, and every one of them carries this leg's 10.397
+# forward. The repair is to RE-CUT THE ACT onto a stand whose swing still has `l̂ · r̂ = 0` —
+# which is what this line's own comment has asked for since it was written.
 assert gas == 15000        # ⭐ measured 300.000. THREE SECONDS OF `W` ON A TAUT ROPE, AND THE
                          # TANK HAS NOT MOVED — because in this pose the rope pull is
                          # `max(0, l̂ · r̂) = 0` and the game delivers nothing. It used to cost

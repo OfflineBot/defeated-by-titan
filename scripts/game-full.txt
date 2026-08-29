@@ -6,17 +6,25 @@
 #                     --script scripts/game-full.txt --ticks 1100 \
 #                     --screenshot docs/images/f071-won.png
 #
-# MEASURED on offlinebot, 2026-08-12, in **ashgate** — the run says, in this order:
+# MEASURED on offlinebot, **2026-08-29**, in **ashgate**, after the three cut acts were
+# re-derived from `game.ron: gravity_m_s2` -20 -> -32 — the run says, in this order:
 #
 #   t=235   reel:  speed 28.741 m/s, height 15.521 m   -> `assert speed > 25` HOLDS
 #   t=357   on the church roof: height 35.000 m, speed 0.000
-#   t=653   cut titan 2 Torso  at 30.00 m/s
-#   t=656   cut titan 2 Cortex at 30.33 m/s   -> kill: player 1 cut titan 2 — 1/3
-#   t=777   cut titan 3 Cortex at 30.33 m/s   -> 2/3
-#   t=898   cut titan 4 Cortex at 30.33 m/s   -> 3/3
-#   t=898   MISSION WON (decided_at_tick 898, deadline 19 800) — 3/3 kills, health 100
-#   headless: 24 asserts held, 1200 ticks, exit 0  (23 until 2026-08-19; the 24th is the
-#             invocation guard at line 102 and it is an ADDED claim, not a changed one)
+#   t=619   cut titan 2 Torso  at 29.87 m/s
+#   t=622   cut titan 2 Cortex at 30.40 m/s   -> kill: player 1 cut titan 2 — 1/3
+#   t=709   cut titan 3 Cortex at 30.40 m/s   -> 2/3
+#   t=796   cut titan 4 Cortex at 30.40 m/s   -> 3/3
+#   MISSION WON — 3/3 kills, and `assert health > 0` still holds at the end
+#   headless: **24 asserts held, 1098 ticks, exit 0**
+#
+# ⚠️ **The three cut ticks moved (656/777/898 -> 622/709/796) and the closing speed did not
+# (30.33 -> 30.40 m/s).** That is the whole shape of the 2026-08-29 re-derivation: the pass is
+# pinned to a SPEED and gravity decides how long it takes to get there. The graze-to-nape gap is
+# still three ticks. The four acts are 87 ticks apart instead of 121.
+#
+#   (23 asserts until 2026-08-19; the 24th is the invocation guard at line 102 and it is an
+#    ADDED claim, not a changed one)
 #
 # ⚠️ **AND ON 2026-08-26 THE CROWD RING TOOK ACT 3 AWAY — RE-AIMED AGAIN, NOT LOOSENED.**
 # Five of the 24 were red because `F-055` gives a titan a standing place to walk to as soon as
@@ -62,11 +70,14 @@
 # one (his `Recover`, lean 0) while the player arrives at the nape roughly nine metres per
 # second faster.
 #
-#   fall of n ticks at g = -20 m/s^2, semi-implicit:  v = 20 n / 60,  drop = n(n+1)/360
-#   n = 62  ->  20.7 m/s, 10.85 m   (q030, measured: `cut ... at 20.67 m/s`)
-#   n = 91  ->  30.3 m/s, 23.26 m
+#   fall of n ticks at gravity g, semi-implicit:  v = g n / 60,  drop = g n(n+1) / 7200
+#   at g = 20:  n = 62 -> 20.7 m/s, 10.85 m  (q030) ;  n = 91 -> 30.3 m/s, 23.26 m
+#   at g = 32:  n = 39 -> 20.8 m/s,  6.93 m  (q030) ;  n = 57 -> 30.4 m/s, 14.68 m
 #
-# so the drop height goes from 18.5 m to 30.8 m and the cut lands at the same nape.
+# so the drop height goes from f030's `21²/2g` to this act's `30²/2g` and the cut lands at the
+# same nape — 18.5 m to 30.8 m at the old gravity, **14.19 m to 21.36 m at the current one.**
+# **It is the two SPEEDS, 21 and 30, that are the constants here; both heights are functions of
+# `gravity_m_s2` and are re-evaluated, never re-aimed.**
 #
 # The geometry of the pass is q030's and unchanged: the cortex sits at (x, 8.9, z+0.55) —
 # `head_m / 2` behind the neck (`src/titan/rig.rs: cortex_in_head`) — the player stands
@@ -245,11 +256,25 @@ assert height > 11.5
 # ACT 2 — the first husk. 0/3 -> 1/3.
 # =========================================================================================
 
-warp -1.80 30.8 18.55   # 1.80 m to -X of the axis, on the plane of the cortex's centre
+# 🔴 **THE THREE NUMBERS IN THIS ACT ARE DERIVED FROM `game.ron: gravity_m_s2`.**
+# This is `scripts/f030-cortex.txt`'s pass with a head start, and the head start is expressed in
+# SPEED, not in seconds — the act exists to cut at 30 m/s and not at f030's 21, so that the
+# game's own flagship evidence is not all flown at one closing speed. Off that:
+#
+#     g       = -game.ron: gravity_m_s2 = 32.0
+#     drop    = v² / (2 g) = 30² / 64 = 14.0625 m      (was 22.5 m at g = 20)
+#     warp y  = cortex_height_m 8.90 - eye_height_m 1.60 + drop = 21.36   (was 30.8)
+#     wait #1 = (v - 21) / g = 9 / 32 = 0.281          the head start, IN SECONDS OF FALL
+#     wait #2 = 21 / g - 0.15          = 0.506          f030-cortex's own wait, unchanged
+#
+# **Control: put g = 20 back in and it prints `0.450` and `0.900`** — the two waits this file
+# carried from 2026-08-19 to 2026-08-29, and a drop of 22.5 m against the 23.5 it carried. So
+# `wait #1` really was "the 9 m/s", and it is 0.281 s at the new gravity and not 0.45.
+warp -1.80 21.36 18.55  # 1.80 m to -X of the axis, on the plane of the cortex's centre
 look 0 0
-wait 0.45               # 27 ticks of fall BEFORE the husk exists — that is what puts the
-spawn titan husk 0 0 18 # player 9 m/s faster at a nape in the same pose as q030's
-wait 0.90
+wait 0.281              # the head start: 9 m/s of extra fall BEFORE the husk exists — that is
+spawn titan husk 0 0 18 # what puts the player at 30 m/s at a nape, where f030 is at 21
+wait 0.506
 slash right 0.40        # SLASH_RIGHT (`src/net/local.rs`): the right blade, on +X
 wait 0.60
 mark game-cut-1
@@ -319,9 +344,13 @@ assert phase == 2       # one kill of three does not win it
 #   ACT 3 stand (8.20, -89.45) -> ACT 4 stand (-1.80, -39.45): dx 10.00, dz 50.00  =  50.99 m
 #
 # 51.91 - 45 = **6.91 m of margin**, and the only thing that eats it is the husk walking: he is
-# `speed_m_s` 3.0 and ACT 4 spends 0.92 s between its warp (t=843) and its slash (t=899), so he
-# can close at most 2.75 m. **49.16 m at the slash tick, 4.16 m clear of the ring.** He cannot
-# be half of ACT 4's crowd, whatever ACT 3 does.
+# `speed_m_s` 3.0 and ACT 4 spends `wait #1 + wait #2` = **0.7875 s** between its warp (t=741)
+# and its slash (t=788), so he can close at most **2.36 m**. **49.55 m at the slash tick, 4.55 m
+# clear of the ring.** He cannot be half of ACT 4's crowd, whatever ACT 3 does.
+# ⚠️ **That margin is a function of gravity**: the two waits are derived from it, so a heavier
+# gravity shortens the pass and WIDENS this margin, and a lighter one narrows it. At `g = 20` it
+# was 0.92 s / 2.75 m / 4.16 m of clearance. Re-evaluate it whenever `gravity_m_s2` moves — the
+# number that must stay positive is `51.91 - 45 - speed_m_s x (wait #1 + wait #2)`.
 #
 # ⚠️ **And the terrace is why it is `z = -90` and not `z = +105`.** The obvious separation is
 # northwards up the lane, and it does not work: `world::map` terraces the ground in 42 m cells,
@@ -331,15 +360,15 @@ assert phase == 2       # one kill of three does not win it
 #   z = +70  ->  1.500      z = +105 -> 3.000      z = +140 -> 3.000
 #   z = -99  ->  30.000     (that is the top of the wall, `z <= -98`)
 #
-# A stand on a 1.5 m terrace is a 30.8 m drop onto ground 1.5 m high with the husk's feet at 0,
+# A stand on a 1.5 m terrace is the same drop onto ground 1.5 m high with the husk's feet at 0,
 # which is a different pass and a different tick. **The one direction that keeps the drop is
 # south**, and south runs out at the wall — so `z = -90` is very nearly the far end of the
 # usable ground, which is exactly why it is the right end of it to stand on.
 #
 # **The pass itself is untouched**: the 1.80 m of -X offset, the 0.55 m of cortex set-back, the
-# 30.8 m drop and every wait are ACT 2's, and the cut lands on the same tick arithmetic, t=774
-# torso, t=777 cortex. **No assert was touched.** Two coordinates moved; the 24 claims are the
-# ones from 2026-08-19.
+# drop and every wait are ACT 2's, and the cut lands on the same tick arithmetic — measured
+# 2026-08-29, t=706 torso, t=709 cortex. **No assert was touched.** Two coordinates moved; the 24
+# claims are the ones from 2026-08-19.
 #
 # The positive control still fires here, so the aloneness is a fact about this stand and not a
 # rule that stopped applying: **giving this husk a neighbour at `(16, 0, -90)` deletes the
@@ -350,11 +379,11 @@ assert phase == 2       # one kill of three does not win it
 # apart.** `assert titans` cannot see either half: it read 2.000 in the failing run and 2.000
 # in the fixed one.
 
-warp 8.20 30.8 -89.45
+warp 8.20 21.36 -89.45
 look 0 0
-wait 0.45
+wait 0.281
 spawn titan husk 10 0 -90
-wait 0.90
+wait 0.506
 slash right 0.40
 wait 0.60
 mark game-cut-2
@@ -374,15 +403,17 @@ assert phase == 2       # two of three, still not won
 #
 # The pass is moved to open pavement on the main street (x -15..15 is street the whole way)
 # at z = -40, which sits between the gantry stations at z = -17.5 and z = -52.5 and so has
-# nothing overhead in the 30.8 m fall column either. **The pass itself is untouched**: the
-# 1.80 m of -X offset, the 0.55 m of cortex set-back, the 30.8 m drop and every wait are ACT
-# 2's, and the cut lands on the same tick arithmetic — t=895 torso, t=898 cortex.
+# nothing overhead in the fall column either — and the column only got shorter when the drop
+# went 30.8 → 21.36 m of start height on 2026-08-29. **The pass itself is untouched**: the
+# 1.80 m of -X offset, the 0.55 m of cortex set-back, the derived drop and every wait are ACT
+# 2's, and the cut lands on the same tick arithmetic — measured 2026-08-29, t=793 torso,
+# t=796 cortex.
 
-warp -1.80 30.8 -39.45
+warp -1.80 21.36 -39.45
 look 0 0
-wait 0.45
+wait 0.281
 spawn titan husk 0 0 -40
-wait 0.90
+wait 0.506
 slash right 0.40
 wait 0.60
 mark game-cut-3

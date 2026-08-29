@@ -319,6 +319,17 @@ supervisor. In descending order of cost:
 9. **Cap the report.** "Under 40 lines, do not summarise the docs you wrote — I can read them."
    A report that restates its own deliverable is paid for twice.
 
+🔴 **An id is claimed by WRITING the entry, not by planning to.** Measured 2026-08-29: three
+agents in one round each read the same `NEXT FREE ID` / last `## B-` line, each wrote a finding
+against it, and **two of the three writes were lost** — `B-018` and `B-019` ended up describing
+one group's bugs while two other groups had already committed scripts pointing at those ids for
+*their* bugs. The result was evidence scripts marked red on purpose citing an explanation of
+something else, which is exactly the triage cost that round existed to remove.
+**So: the supervisor assigns the id in the commission** — `CLAUDE.md` already says that for
+`FIND-` and it holds for `B-` and `Q-` too — or the agent claims it by appending the heading
+FIRST and filling it in after. **Never read a free id and hold it in your head while you do the
+work**: in a parallel round somebody else has read the same number.
+
 ### And one that is not about tokens: **never `git add -A` while an agent is still working**
 
 On 2026-08-12 a sweep commit swallowed a whole feature that was still being written — the model

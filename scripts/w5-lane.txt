@@ -24,6 +24,15 @@
 # today's snap bakes today's snap in, which is exactly how the ±28° compensation broke in
 # FIND-096.
 #
+# ⚠️ **RE-MEASURED 2026-08-29: THE SYMPTOM BELOW IS GONE AND THE FILE IS STILL RED.** `line 165:
+# assert Rope == 1 — measured 0.000` no longer happens — **every** hook in this run anchors
+# (`grep -c 'found no anchor'` = 0), leg 3 included. Twelve asserts are red at `gravity_m_s2:
+# -20` **and** at `-32` on the same binary, so the -20 -> -32 change of 2026-08-27 is not the
+# cause of any of them; what moved is the bite point (`ee43b4e`, F-024: the anchor field retired
+# in favour of surfaces). The `rope == 1` line did its job and must still not be widened.
+# The one line that WAS gravity is the ACT A settle assert — search for
+# "DERIVED from `gravity_m_s2`". Everything else waits on the re-aim in `docs/NEXT.md` §2D.
+#
 # **THE CAUSE, measured 2026-08-20: `F-024` (1450bfc, "the snap searches sideways only").**
 # This whole file is fired through the assist at `assist_strength 100`, and F-024's own commit
 # measures the thing that vanished: *"largest vertical deviation a snap can produce 9.232 deg /
@@ -133,7 +142,11 @@ look 0 0
 wait 0.1
 mark w5-gantry-start
 assert height > 57.5
-assert speed < 3.0
+# ⚠️ DERIVED from `gravity_m_s2`: the `wait 0.1` above is an 8-tick settle and nothing but
+# gravity acts in it, so the speed here is exactly |g| * 8/60 — 4.267 m/s at -32, 2.667 at -20
+# (both measured 2026-08-29). The bound is that plus ONE more simulation step, |g|/60, which is
+# the rule the old `< 3.0` encoded at -20 (2.667 + 0.333). At -32: 4.267 + 0.533 = 4.80.
+assert speed < 4.8
 
 # ⚠️ Every leg's HOLD is 0.05 s longer than its WAIT. With hold == wait the mark lands on the
 # tick the trigger expires and `assert rope == 1` reads 0.000 on a leg that swung perfectly —

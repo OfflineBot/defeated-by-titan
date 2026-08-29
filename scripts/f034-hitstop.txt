@@ -1,6 +1,6 @@
 # F-034 — hit stop: the bodies stop, the clock does not.
 #
-# cargo run -- --offscreen --script scripts/f034-hitstop.txt --ticks 161 \
+# cargo run -- --offscreen --script scripts/f034-hitstop.txt --ticks 137 \
 #              --screenshot docs/images/f034-hitstop.png
 #
 # and, as a SEPARATE run, the one that returns a usable exit code:
@@ -19,20 +19,32 @@
 #
 # **This is the same run as `scripts/f030-cortex.txt`, photographed six ticks later.** The
 # command lines below are identical to that file's, line for line — and on 2026-08-20 that stopped
-# being a claim and became a measurement: this script at `--ticks 155` writes a PNG whose
+# being a claim and became a measurement: this script at `--ticks 155` wrote a PNG whose
 # sha256 is `a6bc95ce…`, **byte for byte the same file** as `scripts/f030-cortex.txt` at
 # `--ticks 155`. Two processes, one simulation, to the pixel.
+# ⚠️ **155 was the first frozen tick at `gravity_m_s2` −20; at −32 it is 131** (see below), so the
+# sha pair has to be retaken at `--ticks 131` before it is quoted again. The two command lines
+# below are still identical line for line, which is what the claim rests on.
 #
 # | tick | image | what it shows |
 # |---|---|---|
-# | 155 | `docs/images/f030-cortex.png` | the FIRST frozen tick — the cut landed on 154 |
-# | 161 | `docs/images/f034-hitstop.png` | six ticks later — the LAST frozen tick |
+# | 131 | `docs/images/f030-cortex.png` | the FIRST frozen tick — the cut landed on 130 |
+# | 137 | `docs/images/f034-hitstop.png` | six ticks later — the LAST frozen tick |
+#
+# 🔴 **The two ticks moved on 2026-08-29 (155/161 → 131/137) and the PNGs were NOT retaken.**
+# `game.ron: gravity_m_s2` went −20 → −32, this file's pass was re-derived from it (the whole
+# derivation is in the header of `scripts/f030-cortex.txt` — one constant, 21 m/s at the nape,
+# and `drop = v²/2g`, `wait = v/g − 0.15` off it), and the crossing came 154 → 130. The screenshot
+# commands at the top are updated; **the images in `docs/images/` are the old pair and the tick
+# numbers burnt into their F3 overlays are 155 and 161.** Retaking them is a picture job on a
+# machine with a window — this file's verdict is the headless run, which is green.
 #
 # `gear.ron: feel.hit_stop_cortex_s` is 0.12 s = `round(0.12 x 60)` = **7 ticks**, so the player
-# does not advance on ticks 155..161 and moves again on 162. What the pair proves, and no single
+# does not advance on ticks 131..137 and moves again on 138. What the pair proves, and no single
 # frame can:
 #
-#   * the player's `pos` is **identical to the digit** — `15.8 7.8 0.8` in both — and `spd 0.0`
+#   * the player's `pos` is **identical to the digit** — `15.8 7.8 0.8` in the old pair, and the
+#     re-derived run holds y at **7.765** across the whole window — and `spd 0.0`
 #     in both: **the body did not move.** Six ticks of world time, zero metres of player;
 #   * the F3 overlay's own counter ran on: **`husk#1 Death 1/60` in the first frame and
 #     `husk#1 Death 7/60` in the second** — six ticks of `ticks_in_state` while the player's
@@ -46,19 +58,24 @@
 # `Time::<Virtual>::set_relative_speed(0.05)` fails — there the tick stops with the body and
 # the husk's counter would not have moved a digit.
 #
-# ⚠️ **The 7 ticks did not move on 2026-08-20; the window under them did, for the second time.**
-# `gear.ron: reach_m` went 1.60 → 2.00 (`docs/FINDINGS.md` FIND-147), the cortex crossing came
-# back 157 → **154**, and the frozen window with it: 158..164 → **155..161**. Probed per tick on
-# this run: y is 7.815 on 154 **and on 155, 156, 157, 158, 159, 160 and 161** — bit-identical,
-# seven times — and 7.468 on 162; `spd` holds at 20.667 through all of it and is 21.001 on 162.
-# **Control, rule 5 — delete the one `slash` line:** no cut line is logged and no y value is ever
-# repeated (7.815 · 7.468 · 7.115 · 6.756 · 6.392 · 6.023 · 5.648 · 5.267 across the same ticks),
-# so at 161 the unfrozen player stands **2.548 m lower**. The repeated number is the freeze.
+# ⚠️ **The 7 ticks have never moved; the window under them has, three times now.**
+# `gear.ron: reach_m` 1.60 → 2.00 (`docs/FINDINGS.md` FIND-147) carried the crossing 157 → 154
+# and the frozen window 158..164 → 155..161; `game.ron: gravity_m_s2` −20 → −32 on 2026-08-29
+# carried it 154 → **130** and the window to **131..137**. **The 7 is not a measurement that
+# happens to keep coming out the same — it is `round(feel.hit_stop_cortex_s x simulation_hz)` =
+# `round(0.12 x 60)`, and the only thing that can move it is that product.**
+#
+# Re-probed on this run (2026-08-29, `assert height > 9999` every third tick): y is 8.423 on 128,
+# then **7.765 on 131, on 134 and on 137** — bit-identical, three samples across the whole
+# window — and 6.711 on 140. The 1.054 m between 137 and 140 is three ticks at 0.35 m, i.e. the
+# full 21 m/s, so the fall resumed on **138** and not one tick earlier. **Control, rule 5 — delete
+# the one `slash` line:** no cut line is logged and no y value is ever repeated.
 #
 # ⚠️ **What the husk does between the two frames is NOT a smooth dissolve, and the second frame
 # catches the jump.** Measured on five frames out of this one run (his silhouette's share of the
-# box x 1000..1280, y 0..540): **83.6 % on 155 · 82.6 % on 158 · 82.2 % on 159 · 81.8 % on 160 ·
-# 35.4 % on 161.** He stands still for six ticks and then, on the last frozen tick, sinks out of
+# box x 1000..1280, y 0..540), **at the OLD tick numbering (gravity −20, window 155..161; the
+# same six frames are now 131..137)**: **83.6 % on 155 · 82.6 % on 158 · 82.2 % on 159 ·
+# 81.8 % on 160 · 35.4 % on 161.** He stands still for six ticks and then, on the last frozen tick, sinks out of
 # the top of the frame in one step and shows only as the tan mass in the bottom-right corner —
 # `titan::brain::dissolve` skips every tick it is frozen but reads a counter that did not stop,
 # so the first tick it runs pays back the whole backlog at once (`scale` 1.00 → 0.883, and the
@@ -77,10 +94,10 @@
 # evidence of nothing (`scripts/p1-overlay.txt` uses the same 1.5).
 wait 1.5
 spawn titan husk 17.5 0 0
-warp 15.75 18.5 0.8
+warp 15.75 14.19 0.8
 look 0 0
 key F3 0.05
-wait 0.90
+wait 0.506
 slash right 0.40
 wait 0.08
 mark cortex-cut

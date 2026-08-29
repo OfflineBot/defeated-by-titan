@@ -83,6 +83,38 @@ warp 0 58 257.5
 look 0 0
 wait 0.1
 
+# 🔴 RED ON PURPOSE SINCE 2026-08-29 — 8 of 36, AND NOT ONE OF THEM IS A DEFECT. Re-measured
+# after `gravity_m_s2` -20 -> -32. This file was staged as a DESCENT: each leg's `look` angle is
+# aimed at where the player will be a fraction of a second later, so every angle in it is a
+# function of how fast he falls. At -32 he falls 1.6x as fast and the whole chain lands early.
+#
+#   line 124  ACT1 leg1  speed < 20   28.690   leg 1 still anchors (body 109, t=105) — this is
+#                                              0.7 s of fall: g*t = 22.4 at -32 vs 14.0 at -20
+#   line 125  ACT1 leg1  height > 49  46.946   the same 0.7 s: he has fallen 1.6x as far, and
+#                                              this is the ONE bracket in the file that is a
+#                                              clean `h - 0.5*g*t^2` — it is left red with the
+#                                              other seven so the re-stage lands as one piece
+#   line 133  ACT1 leg2  rope == 1     0.000   ⚠️ NOT a hook that fails to bite. The log says
+#                                              `NothingInRange — nothing within hook range on
+#                                              that line — open sky`, and the SAME RUN anchors
+#                                              four other hooks (t=105, 197, 234, 270). The
+#                                              player is lower and faster when `look 0 25` fires
+#                                              and the ray leaves over the roofline.
+#   line 135  ACT1 leg2  speed < 32   45.038   free fall, downstream of the miss above
+#   line 145  ACT1 leg3  speed < 39   58.612   downstream
+#   line 154  ACT1 leg4  speed > 34.8 11.500   downstream — by leg 4 he is near the pavement
+#   line 164  ACT1 leg5  speed > 39.3 18.048   downstream
+#   line 229  ACT2 leg5  rope == 0     1.000   ⚠️ THE OPPOSITE of a rope that will not release.
+#                                              ACT 2 is the CONTROL and is green only *because*
+#                                              free aim MISSES here (see its own header). At -32
+#                                              leg 5's shot finds body 115 (anchored t=669,
+#                                              released t=695) where at -20 it found sky. The
+#                                              anchoring pattern shifted from legs 1+4 to 1+5.
+#
+# ⚠️ So the repair is a RE-STAGE, not a re-aim: five `look` angles and five waits have to be
+# re-derived together from `t = sqrt(2h/g)` so the chain passes the same beams it used to. One
+# bracket moved by itself here would be a number aimed at a run. Nothing in this file is
+# evidence of a broken hook, a broken rope or a broken release.
 look 0 0
 hook right 0.82
 wait 0.7

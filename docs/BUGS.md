@@ -1478,3 +1478,317 @@ clock**, every one with the identical destination, plus 60 `warn!` lines per sec
 `f012_a_recovery_whose_destination_does_not_hold_is_not_repeated_every_tick` (300 warps -> 2) ·
 `f012_nothing_that_can_rest_on_the_fence_rests_inside_the_map` (the parking measurement) ·
 `tests/data.rs::f012_the_fence_stands_within_one_body_radius_of_the_map_edge` (the bracket).
+
+---
+
+### `B-018` — a rope going taut dumps 23.7 m/s in a quarter second, with nothing to hit
+
+Found 2026-08-29 while re-deriving `scripts/f005-feel.txt` ACT 4 after `gravity_m_s2` -20 -> -32.
+The act swings on a rope with the camera 90° off it and asserts `speed > 8.0`; it reads **1.691**.
+The gravity change is only what made it visible — the loss itself is not a gravity number.
+
+**Repro** (pinned debug binary, no window):
+
+```
+wait 1.5
+warp 76 20 -70          # 20, NOT the script's 12 — this is the point: it removes the ground
+look 0 36
+wait 0.1
+hook left 4.0
+wait 0.15
+look 90 0
+key W 3.5
+# then sample `speed` and `height` every 0.25 s
+```
+
+**Measured**, and `rope` reads `1.000` on every single sample — nothing lets go:
+
+| t (s) | 0.25 | 0.50 | 0.75 | **1.00** | **1.25** | 1.50 | 1.75 | 2.00 | 2.50 | 3.00 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| speed | 15.6 | 22.4 | 28.0 | **31.745** | **8.092** | 8.535 | 8.344 | 7.530 | 4.333 | 0.455 |
+| height | 16.6 | 13.5 | 9.9 | **7.262** | **6.622** | 7.203 | 7.939 | 8.764 | 10.272 | 11.021 |
+
+**31.745 -> 8.092 m/s in 0.25 s, while the player is 6.6 m above anything.** 74 % of the speed and
+93 % of the kinetic energy leave on the tick the rope reaches full extension. A taut rope should
+REDIRECT velocity — remove the component along the rope and keep the tangential part — and the
+tangential part of a swing at that phase is most of it.
+
+**The control that rules out a collision and rules out gravity:**
+- at the script's staged `y = 12` the arc does reach the ground (`height` 0.050 at t=1.00) and
+  loses 20 m/s there — that is a real ground contact and it is a *second*, separate effect;
+- at `y = 16, 20, 24` the arc never touches anything (lowest `height` 4.010 / 6.622 / 11.809) and
+  the 3.0 s speed is **2.212 / 2.212 / 2.629** — the same collapse, three times, with no contact.
+  Raising the stand removes the collision and does **not** give the swing back.
+
+**Why no re-timing hides it:** what survives the dump is a genuine pendulum, `T ≈ 3.2 s`, so
+`wait 3.0` samples it near the top of its arc. Re-timing to the same phase
+(`3.0 · sqrt(20/32) = 2.372 s`) reads ~5.5 m/s and still fails, because the amplitude after the
+taut event is smaller and not merely shifted: **the post-taut peak anywhere in the swing is
+8.535 m/s**, against 13.334 m/s measured before the constant moved.
+
+**Not yet done:** no red unit test. The script assert stays red on purpose (its header carries
+this table). The test this wants is in `tests/vector_rope.rs` — drive a rope to full extension
+with a known tangential velocity and assert the tangential component survives — and it has to be
+written the `n = 2` way, because this game has two hooks and one anchor cannot see a two-rope
+dump. Until that test exists this entry is a measurement, not a diagnosis: the dump is confirmed,
+the line of code that does it is not.
+
+### `B-019` — a LARGE titan's nape is out of reach from the cushion every other kind is killed from: **one tick of kill window out of seven, and it closes if you give back 0.20 m**
+
+Found 2026-08-29 by the corpus round that re-derived `scripts/f030-hitbox.txt` from
+`game.ron: gravity_m_s2`. It is **not** the gravity change and **not** the map edge: it is the
+only one of that file's eight asserts that a correct pass still cannot satisfy.
+
+### The repro, on the shipped binary and shipped Ashgate
+
+```bash
+./target/debug/defeated_by_titan --headless --script scripts/f030-hitbox.txt --ticks 1600
+# line 217: assert Titans == 0 — measured 1.000     <- the lurker act. THIS one.
+# line 245 / line 252 are the same survivor counted again in the warden's two asserts.
+```
+
+The lurker act flies the same pass as the six kinds that die: 0.60 m of air between the two
+capsules, `look 0 0`, a 21 m/s fall onto the nape, the titan spawned 0.21 s before the cut. It
+reports `tick 762: cut titan 6 Torso at 20.80 m/s` and then `ArmLeft` — **never `Cortex`**.
+
+### Two controls, and they disagree with each other about nothing
+
+Both are one-variable sweeps of that act alone, everything else byte-identical.
+
+| slash tick, at the shipped 0.60 m cushion | −3 | −2 | −1 | 0 | **+1** | +2 | +3 |
+|---|---|---|---|---|---|---|---|
+| zone the blade books | Torso | Torso | Torso | Torso | **Cortex** | Torso | ArmLeft |
+
+| cushion, at the shipped tick | 0.60 | 0.40 | 0.20 | 0.00 |
+|---|---|---|---|---|
+| zone the blade books | Torso | **Cortex** | **Cortex** | **Cortex** |
+
+So the nape is reachable on **one tick in seven** at 0.60 m, and on the failing tick as soon as
+0.20 m of that air is given back. It is a reach defect, not an aim defect, and not a facing
+defect — the facing is identical in all eleven runs above.
+
+### The arithmetic, and why `FIND-147`'s band formula did not see it
+
+For a large kind the blade tip reaches
+
+    titan_x − (body_radius 1.75 + player_radius 0.35 + cushion 0.60) + reach_m 2.00 = titan_x − 0.70
+
+and `titan.ron: lurker.cortex_radius_m` is **0.77**. The tip is therefore 0.07 m inside a 0.77 m
+sphere, and the chord it can reach is `sqrt(0.77² − 0.70²)` = **0.32 m** tall — which at 21 m/s
+(0.35 m per tick) is **one tick**, exactly what the sweep measures.
+
+`FIND-147`'s band, `reach + thickness + cortex_radius − body_radius − player_radius`, evaluates
+to **0.87 m** for a large kind and so calls 0.60 m comfortable. **The band is a LATERAL bound and
+it is right; what it cannot say is that the vertical window collapses to zero at its own edge.**
+A sphere is thin near its rim. Same for a medium kind: the tip reaches `titan_x − 0.20` into a
+0.55 m sphere, chord `sqrt(0.55² − 0.20²)` = 0.51 m ≈ 3 ticks — which is why every medium kind in
+that file dies and only the large one that never turns does not.
+
+### ⚠️ The warden is not a counter-example — his act measures his rotation
+
+He is large, has the same `cortex_radius_m` 0.77 and the same cushion, and he dies. His act
+opens his guard with a first pass that turns him about 50°, and 0.77 m of cortex set-back swung
+through 50° carries the sphere `0.77 × sin 50°` = **0.59 m** toward the blade. That is more than
+the 0.20 m the second control shows is enough. **`f030-hitbox`'s warden result is therefore not
+a hitbox measurement**, and the lurker — the one kind whose `ambush` behaviour provably never
+takes a step — is the only clean large sample in the file.
+
+### Not fixed, and the fix is not mine to pick
+
+Three candidates, all in RON, all the user's or the main head's call:
+`reach_m` (2.00, and `f030-cortex.txt`'s stand-off sweep says the last raise from 1.60 widened
+that file's pass from 0.20 m to 0.80 m), `cortex_radius_m` per large kind (0.77, already raised
+once on 2026-08-20 for exactly this class of failure), or `width_fraction` (0.25, which is what
+makes `body_radius` grow three times faster than the cortex does — the term `FIND-147` names as
+the real driver). **The script assert stays RED on purpose** and its header carries this table.
+
+**What is missing:** a red unit test in `tests/combat.rs` that casts a blade at a large kind's
+cortex from `body_radius + player_radius + 0.60` and asserts `Cortex`. It does not exist, and
+until it does this entry is a measurement with two controls rather than a diagnosis of a line of
+code. ⚠️ And when it is written it must sweep the **height** — the sweep that found this varied
+the tick, and the tick is the height; a fixture that takes its height from one call would report
+`Cortex` or `Torso` depending only on which single tick it happened to pick.
+
+---
+
+## B-018 — at `gravity_m_s2: -32` a 0.30 m step is a **wall**: the district's terraces cannot be walked up at all
+
+**Found 2026-08-29** by re-running the corpus after the -20 -> -32 tuning change.
+`scripts/w2-terrain-walk.txt` line 40 (`assert height > 5.2`) reads **3.000**. It is the one
+script in the corpus whose whole job is this question, and its header already says why it
+matters: *"Terraces you cannot walk up are a wall, not terrain."*
+
+### The measurement, and the control that moves it
+
+Same binary, same script, same route (`warp 168 4.2 292`, `look 0 0`, `key W`, no gear), the
+**only** difference being `gravity_m_s2` in `assets/data/game.ron`:
+
+| walking -Z along x = 168, height in m | t = 0 s | 10 s | 20 s | 40 s | 60 s |
+|---|---|---|---|---|---|
+| `gravity_m_s2: -20` | 3.000 | **4.500** | **6.000** | 6.000 | 6.000 |
+| `gravity_m_s2: -32` (shipped) | 3.000 | 3.074 | 3.000 | 3.087 | 3.013 |
+
+At -20 he climbs both terraces in 20 s, exactly as the script documents (3.0 -> 4.5 -> 6.0 m).
+At -32 he never gets up **one** 0.30 m riser, and sixty seconds of holding `W` does not change
+it — the 0.05-0.09 m wobble is him riding the step and sliding back off it.
+
+### Repro
+
+```bash
+cargo run -- --headless --script scripts/w2-terrain-walk.txt --ticks 2000   # exit 1, line 40 reads 3.000
+```
+
+Control: copy `assets/` somewhere, set `gravity_m_s2: -20.0` in the copy, run the binary from
+that directory (`src/data/mod.rs::assets_dir` takes `assets/` from the **cwd** first) — exit 0.
+
+### The cause is named in the script's own header, and it is a ratio that stopped holding
+
+*"a 0.30 m riser is climbable only because the player capsule has a 0.35 m radius and rides over
+a box step of less than that (`src/player/mod.rs`)"*. Riding over a step is a contest between the
+horizontal push and the downward force pinning the capsule against the riser; `gravity_m_s2` went
+up 60 % and `run_speed_m_s` did not move. **Nothing in the code encodes the relationship**, which
+is why a tuning change to one number silently deleted a traversal rule.
+
+### Not fixed, and the fix is not mine to pick
+
+Three candidates, all in RON: raise `player.run_speed_m_s` (6.0 — but it is a feel number the
+user owns), give the player an explicit **step-up height** that is derived from the capsule
+radius rather than emergent from the collision resolver, or lower the terrace riser below what
+-32 can still ride. The middle one is the only one that cannot break again the next time gravity
+moves. ⚠️ **`gravity_m_s2` is PROVISIONAL** (the user changes it at his play test), so a fix that
+re-tunes a second number to match -32 buys one week.
+
+**`scripts/w2-terrain-walk.txt` stays RED on purpose** and its header carries this table.
+
+---
+
+## B-019 — once the mission has been running, a proven fall-cut hits `Torso`, `ArmLeft`, `LegLeft` — and **never the `Cortex`**
+
+**Found 2026-08-29.** `scripts/f170-objective.txt` line 92 (`assert kills == 1`) reads **0.000**,
+and it is **not** the gravity change: it is red at `gravity_m_s2: -20` too, with the file's own
+committed numbers.
+
+### The control is one line long, and it is the whole finding
+
+Two scripts, identical but for a single leading `wait`, both at `gravity_m_s2: -20`, both
+`--mission tutorial`:
+
+```
+              wait 1.5            <- present in one, absent in the other
+              warp -1.80 30.8 18.55
+              look 0 0
+              wait 0.45
+              spawn titan husk 0 0 18
+              wait 0.90
+              slash right 0.40
+```
+
+| leading wait | what the blade hits |
+|---|---|
+| *(none)* | `tick 90: cut titan 2 Torso at 30.00 m/s` · `tick 93: cut titan 2 Cortex at 30.33 m/s` · **kill 1/3** |
+| `wait 0.0` | nothing |
+| `wait 0.05` / `0.2` / `1.5` | nothing |
+
+The no-preamble row reproduces the header's recorded `30.00 / 30.33 m/s` **to the centimetre per
+second**, so the calibration was right and the geometry still is. What changed is that the cut
+only lands when the husk is spawned in the mission's **first tick**.
+
+### It is not a timing window — the window is nine ticks wide
+
+At the shipped `-32`, sweeping the pre-slash wait with **no** preamble: every value in
+`0.500 .. 0.650` (a 9-tick window) gives `cut Cortex` and a kill. With `wait 1.5` in front,
+**no** value of that wait and **no** drop height in 42.0 .. 48.0 m produces a `Cortex` — the
+blade lands on `Torso` (38.40 m/s), `ArmLeft` (39.47) and `LegLeft` (42.67) instead. So the
+blade is reaching the body and missing **the nape specifically**.
+
+### Hypothesis, explicitly UNPROVEN
+
+`src/titan/brain.rs:897-910` turns a titan toward the player a step per tick, and
+`src/titan/rig.rs` keeps *"the Cortex behind the neck"* (F-030, depth 0.55 m). A husk that has
+come about presents its nape away from a blade that sweeps `+X` at yaw 0. Why the mission's
+warmup should change a husk **spawned fresh afterwards** is exactly what is not established.
+
+**The discriminating experiment nobody has run:** log the husk's yaw at the tick of the cut in
+both runs. If they differ, it is the turn; if they do not, it is the pose clock and the culprit
+is a global animation phase rather than a per-titan age.
+
+**`scripts/f170-objective.txt` stays RED on purpose.** ⚠️ Its header says the cut is
+`scripts/game-full.txt` ACT 2 *verbatim*, so **`game-full.txt` is very likely to carry the same
+defect** — it is not in this round's group and was not checked.
+
+---
+
+## B-020 — at `gravity_m_s2: -32` three husks kill the player; at `-20` he lives
+
+**2026-08-29 · [offlinebot] · found by the adversary of the corpus re-aim round, controlled**
+
+`scripts/f032-swords.txt` ends with three husks alive and standing next to the player. Its
+`assert health > 0` had held since 2026-08-19. After the user's gravity change it reads **0**.
+
+**The control that makes this a regression and not a calibration:** the same pinned binary, the
+same unmodified script, with only `gravity_m_s2`/`boost_m_s2` reverted to `-20`/`34` through a
+working-directory `assets/` copy → **11 asserts held, exit 0, including `health > 0`.** At `-32`
+the player is dead. Probed act by act: **100 · 100 · 66 · 32 · 0**.
+
+🔴 **It was very nearly written into the assert instead of filed.** The re-aim round changed the
+line to `assert health == 0` under the derivation *"3 surviving husks × `husk.damage` 34 = 102 ≥
+`player.health` 100"*. **That arithmetic contains no gravity, so it predicts 0 at both tunings** —
+it explains the measurement either way and therefore explains nothing. `CLAUDE.md`'s rule is that
+a bracket comes out of the physics, never out of what the run printed; a derivation that cannot
+fail is the same defect wearing a formula. The line is back at `> 0` and red on purpose.
+
+### Why a heavier world makes a husk deadlier — unproven, and worth one measurement
+
+Candidates, none checked: the player falls into reach faster and eats an extra swing; the dodge and
+the flip cover less ground against `-32` so an evade that used to clear a swing no longer does
+(`flip_up_m_s` 6.0 now buys **0.5625 m** of rise where it bought 1.8 m — already flagged
+`⚠️ UNTUNED` in `game.ron`); or the recovery from a knockdown is slower relative to the swing
+cadence.
+
+**What it is NOT to be fixed with:** raising `player.health`, lowering `husk.damage`, or removing a
+husk from the script. All three are the assert change one file over.
+
+⚠️ **This is one of the three numbers waiting on his play test** (`Q-063` gravity, `Q-064` Shift,
+`Q-046` gas). If he settles gravity lower, this may close by itself — so **measure before
+designing a fix.**
+
+**Related:** `Q-063` · `Q-064` · `B-018` · `docs/NEXT.md` §3G · `F-032` `F-044` `F-009`
+
+---
+
+## B-021 — a taut rope dumps 23.7 m/s in a quarter second with 6.6 m of air underneath
+
+**2026-08-29 · [offlinebot] · measured by the movement group of the corpus re-aim; filed here
+because its own filing collided with `B-018` and was silently lost**
+
+`scripts/f005-feel.txt`: the moment the rope goes taut the player falls from **31.745 m/s to
+8.092 m/s in 0.25 s**, with `rope` reading `1.000` on every sample and **6.6 m of air still under
+him.**
+
+**The two controls that rule out the obvious answers.** A collision would explain it, and gravity
+would explain a slower version of it — neither survives:
+
+| stand height | speed at 3.0 s |
+|---|---|
+| y = 16 | 2.212 m/s |
+| y = 20 | 2.212 m/s |
+| y = 24 | 2.629 m/s |
+
+**Raising the stand removes every possible collision from the arc and does not give the swing
+back.** And it is not a sampling artefact: the post-taut peak *anywhere* in the swing is
+**8.535 m/s against 13.334 m/s before**.
+
+⚠️ **This is the swing itself losing its energy**, which is `F-004`'s whole subject — *"Spieler
+beschreibt sichtbar eine Bogenbahn; Geschwindigkeit steigt beim Ausschwingen"*. It appeared with
+the `DistanceJoint` under `Drive` (`Q-058`) and nobody has separated the joint from the two-rope
+feasibility rule (`B-013`) as its cause.
+
+**No red unit test yet, and it wants the `n = 2` shape**: this game has two hooks, and a fixture
+that passes one is a fixture for a different function (`CLAUDE.md` rule 5). Write the two-anchor
+case first and make the anchors disagree.
+
+⚠️ **Not to be re-aimed away.** `f005-feel.txt`'s bracket stays where it is and the script stays
+red on purpose; that file measures the feel of the rope and a bracket moved to fit a 60 % energy
+loss would delete the only instrument that can see it.
+
+**Related:** `B-013` · `B-020` · `Q-058` · `FIND-191` · `F-004` `F-005` `F-006`

@@ -92,13 +92,26 @@ assert rope > 0         # it bit; the log above says on which body and at what d
 
 wait 0.50               # ← THE MEASUREMENT: half a second with not one key held
 mark f006-half-a-second-with-nothing-held
-# 1.0 s since the warp. Gravity owes 20 m/s and the ROPE OWES THE REST: measured 24.217 against
-# the 21.334 the same run gives with drive_idle_speed_m_s at zero (the control above). The lower
-# band is the one that would go red if the always-on pull were ever taken back out.
-assert speed > 22
+# 1.0 s since the warp. GRAVITY OWES `g * t` AND THE ROPE OWES THE REST — and the first half of
+# that sentence is the reason this pair moved on 2026-08-29. It used to read "Gravity owes 20
+# m/s", which was `gravity_m_s2` spelled out as a literal; at -32 it owes 32 and the whole band
+# was aimed one constant behind.
+#
+#   the fall alone      34.133 m/s   the SAME run with the `hook` line deleted (rope reads 0)
+#   with the rope       36.086 m/s   the stand as written        (rope reads 1)
+#   the rope's share     1.953 m/s
+#
+# 34.133 is `g * 1.067 s` — 1.0 s of script plus the ~4 ticks the warp and the marks cost, at
+# -32. It was 21.334 at -20, and the old floor `> 22` sat 0.666 m/s above THAT control.
+# ⚠️ The floor below is that same 0.666 m/s above the CURRENT control, so it keeps exactly the
+# discriminating power it had: it is the line that goes red if the always-on pull is ever taken
+# back out. It is not a number read off the run — the run only supplies the control.
+assert speed > 34.8
 # And it is a carry, not a haul: drive_idle_speed_m_s is 12 m/s of CLOSING SPEED, so half a
-# second of it cannot put the player anywhere near the drive's own 52.
-assert speed < 30
+# second of it cannot put the player anywhere near the drive's own 52. The ceiling keeps the old
+# 5.8 m/s of headroom over the measurement (30 - 24.217 -> 42 - 36.086) and is still 10 m/s
+# clear of drive_speed_m_s.
+assert speed < 42
 
 # ---- ACT 2 · W · „dann werde ich direkt rangezogen wenn ich ran gehe" -----------------------
 key W 1.5

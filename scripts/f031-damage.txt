@@ -11,25 +11,49 @@
 # one side, a pool on the other, and nothing in between — the same shape `docs/FINDINGS.md`
 # FIND-075 records for `wear_per_hit`.
 #
-# The lines to grep for:
+# The lines to grep for — **re-measured 2026-08-29 after the gravity re-derivation**:
 #
-#   tick 155: titan 1 took 26.0 in the ArmLeft at 20.7 m/s (x1.00) — pool 74/100
-#   tick 237: titan 1 COLLAPSED — 54 ticks on the floor, 240 of refractory
-#   tick 379: cut titan 2 Cortex at 20.67 m/s
+#   tick 131: titan 1 took 28.4 in the Torso   at 20.3 m/s (x1.00) — pool 72/100
+#   tick 138: titan 1 took 33.2 in the LegLeft at 22.9 m/s (x1.15) — pool 38/100
+#   tick 189: titan 1 COLLAPSED — 54 ticks on the floor, 240 of refractory
+#   tick 291: cut titan 2 Cortex at 20.27 m/s
 #
-# **26.0 is `1.4 x 20.67 x 0.9`** — `damage_per_m_s` x the closing speed x `zone_limb_factor`,
-# because at this height the right blade meets the husk's arm before his chest. 20.67 m/s is the
-# fall this script uses for the same reason
-# `scripts/f030-cortex.txt` does: the Vector Gear reaches 30 m/s and more, but hooking and
-# boosting cannot be aimed from a script through a 1.10 m sphere. Gravity can — at -20 m/s a
-# fall of 11.2 m is 21 m/s, reproducible to the tick.
+# **28.4 is `1.4 x 20.27 x 1.00`** and **33.2 is `1.4 x 22.93 x 0.9 x 1.15`** —
+# `damage_per_m_s` x the closing speed x `zone_limb_factor` x the combo multiplier. Every one of
+# the seven damage lines this run prints closes to the last digit on that formula; it is the
+# formula and not the numbers that is the claim here.
+#
+# ⚠️ **Two things in this block moved for reasons that are NOT gravity, and neither is this
+# file's to fix.** (a) A pass now books TWO zones where the 2026-08-25 run booked one — the limb
+# boxes carry colliders today and `Torso`/`LegLeft`/`ArmLeft` are all produced, which
+# `scripts/f032-swords.txt`'s 2026-08-19 table says was not true then. (b) The husk therefore
+# COLLAPSES during pass **2** and not pass 3. The asserts do not care — they claim only that a
+# body cut never kills — but the header used to promise pass 3 and now it does not.
+#
+# ## 🔴 WHERE THE HEIGHTS AND THE WAITS COME FROM — DERIVED, NOT AIMED
+#
+# The pass speed is the constant and gravity decides the rest. The full derivation lives in the
+# header of `scripts/f030-cortex.txt`; the two lines this file needs out of it are
+#
+#     drop   = v² / (2 g)  = 21² / 64 = 6.891 m       g = -game.ron: gravity_m_s2 = 32
+#     wait   = v / g - 0.15                = 0.506 s   (0.15 = the middle of the blade's
+#                                                       active window, gear.ron 0.08..0.22)
+#
+# and the nape warp is `cortex_height_m 8.90 - eye_height_m 1.60 + drop` = **14.19**.
+# The control: feed g = 20 back in and it prints `wait 0.900` and `drop 11.03 m`, which is the
+# calibration this file shipped with. **When gravity moves again, re-evaluate those two lines —
+# do not re-aim by hand.**
 #
 # ## Why the passes start 3 m lower than `f030-cortex.txt`
 #
-# That file starts at y = 18.5 and its blade meets the **nape** at 8.9 m. Three metres lower is
+# That file starts at y = 14.19 and its blade meets the **nape** at 8.9 m. Three metres lower is
 # the chest: above `leg_m` 4.80 and well under a 0.55 m cortex sphere that `thickness_m` 0.20
-# cannot bridge. So these are BODY cuts by construction, and the last act — back at 18.5 — is
+# cannot bridge. So these are BODY cuts by construction, and the last act — back at 14.19 — is
 # the control that says the same geometry still kills when it is aimed at the nape.
+# **The `-3.00` is the whole relationship and it is what survives a gravity change**: both warps
+# are `nape warp - 3.00`, so the two acts stay exactly three metres apart on the husk whatever
+# `drop` evaluates to. 14.19 - 3.00 = **11.19**, and the crossing is the same point on the body
+# it always was (eye at 5.90 m, `leg_m` 4.80 .. cortex 8.90).
 #
 # 🔴 **Emptying the pool is not a kill and this run is what shows it.** `assert titans == 1`
 # stands after every body pass; the husk is only ever gone after the pass that reaches his
@@ -43,25 +67,25 @@ spawn titan husk 17.5 0 0
 look 0 0
 key F3 0.05
 
-# --- pass 1: the chest, at 20.67 m/s -------------------------------------------------
-warp 15.75 15.5 0.8
-wait 0.90
+# --- pass 1: the chest, at 20.27 m/s -------------------------------------------------
+warp 15.75 11.19 0.8
+wait 0.506
 slash right 0.40
 wait 0.30
 mark body-pass-1
 assert titans == 1
 
 # --- pass 2 --------------------------------------------------------------------------
-warp 15.75 15.5 0.8
-wait 0.90
+warp 15.75 11.19 0.8
+wait 0.506
 slash right 0.40
 wait 0.30
 mark body-pass-2
 assert titans == 1
 
 # --- pass 3: the pool should be empty around here, and he goes on the floor -----------
-warp 15.75 15.5 0.8
-wait 0.90
+warp 15.75 11.19 0.8
+wait 0.506
 slash right 0.40
 wait 0.30
 mark body-pass-3
@@ -69,7 +93,10 @@ assert titans == 1
 
 # --- pass 4: the same geometry, aimed at the NAPE, on a husk that has NOT been fought yet.
 #
-# 🔴 **It has to be a fresh husk, and that is measured and not tidiness.** The first version of
+# 🔴 **It has to be a fresh husk, and that is measured and not tidiness.** (The run below is the
+# 2026-08-25 one, at `gravity_m_s2` −20 — its `y = 18.5` and `20.67 m/s` are that calibration's
+# numbers, not today's 14.19 and 20.27. **The conclusion is about the titan's FACING and does not
+# depend on either.**) The first version of
 # this act warped back to the husk above and cut at x = 15.75 / y = 18.5 — `scripts/f030-cortex.txt`
 # to the centimetre — and booked `Torso` at 20.67 m/s, never a nape. The control that settles it
 # was one run: `f030-cortex.txt`'s own act with a bare `wait 4.0` inserted before the warp, same
@@ -82,15 +109,16 @@ assert titans == 1
 # you, and any script that aims at it six seconds in is aiming at a chest.
 #
 # 60 m up the −Z axis, which is outside `titan.ron: husk.aggro_radius_m` (45) from where the
-# player stands, so this one is asleep until the warp — the same 0.9 s of lead the fresh pass in
-# `f030-cortex.txt` gets, and not a second more.
+# player stands, so this one is asleep until the warp — the same 0.506 s of lead the fresh pass in
+# `f030-cortex.txt` gets, and not a tick more. (0.9 s at `gravity_m_s2` −20; the two files are
+# still the same lead because both read it off the same derivation.)
 spawn titan husk 17.5 0 -60
 # `titan::spawn_titans` runs in `PostStep`, so the body stands at the end of the NEXT tick — an
 # assert on the same line as the spawn reads 1 and says nothing about the spawn.
 wait 0.10
 assert titans == 2
-warp 15.75 18.5 -59.2
-wait 0.90
+warp 15.75 14.19 -59.2
+wait 0.506
 slash right 0.40
 wait 0.08
 mark cortex-cut

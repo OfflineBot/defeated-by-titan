@@ -83,7 +83,20 @@ spawn titan husk 0 0 0
 warp -1.80 18.5 0.55
 look 0 0
 key F3 0.05
-wait 0.90
+# THE FALL TO THE CORTEX, AND IT IS TIMED AGAINST `gravity_m_s2` — this is the one number in the
+# file that moves when the constant does. The warp is 18.5 m up, `scale.ron` puts the medium
+# class's `cortex_height_m` at 8.90 m, and the blade has to be level with it when it sweeps:
+#
+#     t = sqrt(2 * (warp_y - cortex_y) / g) = sqrt(2 * 9.6 / 32) = 0.775 s   (it was 0.980 at -20)
+#     re-timed from the old wait:  0.90 * sqrt(20 / 32) = 0.711 s
+#
+# ⚠️ It was `wait 0.90`, which is 0.980 s of fall at g -20 and 12.96 m of fall at -32 — the
+# player arrives at 4.552 m, a metre BELOW the knee, and the run cut `LegLeft` and left the
+# titan standing. That is the whole reason `assert titans == 0` below read 1.000: not a blade
+# that misses, not a cortex that rejects — a slash fired after the player had already fallen
+# past the head. Measured at 0.71: the player is at 9.887 m, 0.99 m over the cortex, and the log
+# says `cut titan 1 Cortex at 26.67 m/s` -> `KILL`.
+wait 0.71
 slash right 0.40
 wait 0.08
 mark cortex-pass

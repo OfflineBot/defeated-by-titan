@@ -40,8 +40,20 @@ wait 0.3                # the warp takes effect one tick after it is written
 key F3 0.05             # switch the overlay on — a real key, through ButtonInput
 wait 0.3                # one frame is enough; the extra ticks make the tick number settle
 
-assert height > 65       # the warp really did take effect (measured 65.98 at tick 130)
-assert height < 67       # and the player has not fallen further than one wait
+# ⚠️ **DERIVED, NOT MEASURED — re-evaluate when `gravity_m_s2` moves.** The warp lands at
+# y = 70 and the two `wait 0.3` above give it a FIXED fall window of t = 0.634 s (38 ticks,
+# the warp costs one). Nothing else touches the player, so the height here is free fall:
+#
+#     h = 70 - 0.5 * |gravity_m_s2| * t^2          t = 0.634 s
+#     |g| = 32:  70 - 6.430 = 63.57   <- today, and it measures 63.575
+#     |g| = 20:  70 - 4.019 = 65.98   <- the number this line used to carry, reproduced
+#
+# The second line is the control: the formula gives back the OLD value at the OLD gravity, so
+# this is a derivation and not a re-fit to whatever the run printed.
+# The bracket is +-2 simulation steps of free fall, 2*|g|*t*dt = 2*32*0.634/60 = 0.68 m —
+# TIGHTER than the +-1 m it replaces, because a derived centre can afford a smaller window.
+assert height > 62.9     # the warp really did take effect and he is not still at y = 70
+assert height < 64.3     # and he has fallen exactly the one window, not further
 # ⚠️ This line was `assert kills == 0` and it could not be measured: `Metric::Kills` reads the
 # per-`PlayerId` tally off the **mission entity** (`src/debug/mod.rs::measure`), and this run
 # launches without `--hub` and without a mission, so there is no tally to read. The driver

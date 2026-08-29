@@ -1,8 +1,10 @@
 # F-030 — the cut: a blade swept along one tick of the player's fall crosses the amber cortex
 # on the husk's nape, and the husk dies.
 #
-# cargo run -- --offscreen --script scripts/f030-cortex.txt --ticks 155 \
+# cargo run -- --offscreen --script scripts/f030-cortex.txt --ticks 131 \
 #              --screenshot docs/images/f030-cortex.png
+# (155 -> 131 on 2026-08-29: the crossing moved with `game.ron: gravity_m_s2`, see the
+#  derivation below. The PNG in `docs/images/` is still the one taken at 155.)
 #
 # and, as a SEPARATE run, the one that returns a usable exit code:
 #
@@ -44,19 +46,20 @@
 # `docs/images/f030-solid-husk.png`, out of `scripts/q030-reach.txt`, which turns its camera
 # **after** `assert titans == 1` and steps 17 m back to do it.
 #
-# ## The three ticks this run is read off — re-measured 2026-08-20, and they MOVED AGAIN
+# ## The three ticks this run is read off — re-measured 2026-08-29, and they MOVED AGAIN
 #
 # | tick | what happens |
 # |---|---|
-# | 154 | the blade meets the nape — `cut titan 1 Cortex at 20.67 m/s`, and the husk dies |
-# | 155..161 | the hit stop: 7 ticks, `gear.ron: feel.hit_stop_cortex_s` 0.12 s x 60 |
-# | 162 | the freeze is over and the player falls again |
+# | 130 | the blade meets the nape — `cut titan 1 Cortex at 20.27 m/s`, and the husk dies |
+# | 131..137 | the hit stop: 7 ticks, `gear.ron: feel.hit_stop_cortex_s` 0.12 s x 60 |
+# | 138 | the freeze is over and the player falls again |
 #
-# **The crossing has now sat at 154, then 157, then 154 again, and each move had a cause.**
-# It was 154 when the file was written, drifted to 157 on 2026-08-19 (FIND-113), and came back
-# to 154 on 2026-08-20 when `gear.ron: reach_m` went 1.60 → 2.00 and `thickness_m` 0.12 → 0.20
-# (`docs/FINDINGS.md` FIND-147, the user's fix for „hitboxen passen nich"). 0.40 m more blade at
-# 20.67 m/s — a tick is 0.34 m — is very nearly exactly three ticks, and that is the whole move.
+# **The crossing has now sat at 154, 157, 154 and 130, and every move had a cause.**
+# 154 when the file was written, 157 on 2026-08-19 (FIND-113), back to 154 on 2026-08-20 when
+# `gear.ron: reach_m` went 1.60 → 2.00 and `thickness_m` 0.12 → 0.20 (`docs/FINDINGS.md`
+# FIND-147, the user's fix for „hitboxen passen nich"), and **130 on 2026-08-29 when
+# `game.ron: gravity_m_s2` went −20 → −32 and this file was re-derived from it** — the whole
+# pass is 24 ticks shorter because the same 21 m/s is now reached in 0.656 s instead of 1.05.
 # **Read the crossing tick out of the log; never assume it.**
 #
 # 🔴 **And the `Torso` graze is gone with it: this run now logs exactly ONE cut line.** At
@@ -71,16 +74,41 @@
 # `gear.ron: blades.min_speed_m_s` is 8.0 and `game.ron: player.run_speed_m_s` is 6.0 — a
 # running player cannot cut anything, by design ("damage comes out of speed"). The Vector Gear
 # reaches 30 m/s and more, but hooking, reeling and boosting cannot be aimed from a script
-# accurately enough to pass a 1.10 m sphere. Gravity can: at −20 m/s² a fall of 11.2 m is
-# 21 m/s, and it is reproducible to the tick.
+# accurately enough to pass a 1.10 m sphere. Gravity can, and it is reproducible to the tick.
 #
-# **The freeze, probed per tick on this run (2026-08-20):** y is 8.157 on 153 and 7.815 on 154,
-# and then 7.815 on 155, 156, 157, 158, 159, 160 **and** 161 — bit-identical, seven times — and
-# 7.468 on 162. `spd` holds at 20.667 across the same window and is 21.001 on 162: not one tick
-# of gravity was integrated. **Control, rule 5 — delete the one `slash` line:** no cut line is
-# logged at all and no y value is ever repeated (7.815 · 7.468 · 7.115 · 6.756 · 6.392 · 6.023 ·
-# 5.648 · 5.267 on ticks 154..161), so at 161 the unfrozen player is **2.548 m lower** than the
-# frozen one. The repeated number is the hit stop and not the instrument.
+# ## 🔴 THE TWO NUMBERS BELOW ARE DERIVED FROM `game.ron: gravity_m_s2`. DO NOT RE-AIM THEM BY HAND.
+#
+# **The constant this pass is built on is the SPEED at the nape, not the height and not the wait.**
+# 21 m/s is chosen against two numbers in `gear.ron` and nothing else: it clears
+# `blades.min_speed_m_s` 8.0, and it clears `feel.strong_hit_m_s` 18.0 by 17 %, so the pass is a
+# CUT and not a GRAZE with margin on the low side. It is also a speed a Vector Gear player
+# actually holds. **Everything else follows from it and from gravity:**
+#
+#     v      = 21.0 m/s                                   the pass speed  — THE constant
+#     g      = -game.ron: gravity_m_s2  = 32.0 m/s²
+#     drop   = v² / (2 g)      = 441 / 64   = 6.891 m     (was 11.2 m at g = 20)
+#     t_fall = v / g           = 21 / 32    = 0.656 s     (was 1.05 s)
+#     warp y = cortex_height_m 8.90 - eye_height_m 1.60 + drop   = 14.19
+#     wait   = t_fall - (blades.active_from_s 0.08 + active_to_s 0.22) / 2 = 0.656 - 0.15 = 0.506
+#
+# The last line aims the nape crossing at the MIDDLE of the blade's active window, which is where
+# it has the most room on both sides — the window is 0.14 s = 8.4 ticks and the cortex sphere is
+# 1.10 m = 3.2 ticks at this speed.
+#
+# **The control that says this is the right derivation and not a fresh guess: put g = 20 back into
+# it and it prints the numbers that were shipped here for ten days.** `v/g - 0.15` = `1.05 - 0.15`
+# = **0.900**, the exact `wait 0.90` this file carried, and `v²/2g` = **11.03 m** against the 11.2
+# it carried. A re-aim that could not reproduce the old calibration would be a coincidence, not a
+# derivation.
+#
+# **So when `gravity_m_s2` moves again, change nothing here by hand: put the new number into the
+# five lines above and read off `warp y` and `wait`.**
+#
+# **The freeze, re-probed on this run (2026-08-29, `assert height > 9999` every third tick):** y
+# is 8.423 on 128, and then **7.765 on 131, on 134 and on 137** — bit-identical, three samples
+# spanning the whole seven-tick window — and 6.711 on 140. 7.765 → 6.711 is 1.054 m over ticks
+# 138, 139 and 140, i.e. 0.35 m per tick, which is exactly 21 m/s and says the fall resumed on
+# **138** and not before. The repeated number is the hit stop and not the instrument.
 #
 # ## Why x = 15.75 and z = 0.8
 #
@@ -103,6 +131,12 @@
 # |---|---|---|---|---|---|---|
 # | | red | red | green | green | green | green |
 #
+# ⚠️ That sweep was flown at the OLD drop height, and it has NOT been re-swept at the new one.
+# It is still the right table to read: the sweep varies `x` only, and `x` is the one axis the
+# gravity change does not touch — the pass speed at the nape is the same 21 m/s by construction
+# (that is what the derivation above holds fixed), so the swept blade has the same length and the
+# same per-tick travel through the same sphere. What moved is WHEN it happens, not WHERE.
+#
 # **The pass is 15.10 .. 15.90 = 0.80 m wide**, against 15.60 .. 15.80 = 0.20 m at the old reach.
 # 15.90 is the collision limit (1.25 + 0.35 = 1.60 m off the axis at 17.5), so the near half of
 # the window is bounded by the body and not by the blade. The two red runs are not near-misses:
@@ -114,13 +148,17 @@
 #
 # **`wait 0.08` after the trigger is what puts `mark cortex-cut` on the cortex tick itself.**
 # It was `wait 0.12` while the crossing sat at 157; at 154 that same line marked three ticks too
-# late, which is how a log line starts lying about what it marks.
+# late, which is how a log line starts lying about what it marks. **It did not have to move for
+# the gravity re-derivation** and that is not luck: the offset it encodes is measured from the
+# TRIGGER, and the derivation holds the crossing at a fixed offset from the trigger
+# (`(active_from_s + active_to_s) / 2`) whatever gravity is. Re-measured 2026-08-29:
+# `MARK t=130` against `tick 130: cut titan 1 Cortex`, the same tick.
 wait 1.5
 spawn titan husk 17.5 0 0
-warp 15.75 18.5 0.8
+warp 15.75 14.19 0.8
 look 0 0
 key F3 0.05
-wait 0.90
+wait 0.506
 slash right 0.40
 wait 0.08
 mark cortex-cut
