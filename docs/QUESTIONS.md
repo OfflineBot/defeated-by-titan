@@ -3518,3 +3518,31 @@ inside the world by construction — so the visible behaviour is "two ticks and 
 `if attempt > 2` arm, and `recovery::Recoveries`. The bound itself (two per episode) is what
 `tests/player.rs::f012_a_recovery_whose_destination_does_not_hold_is_not_repeated_every_tick`
 asserts; changing what happens *after* the bound does not touch the bound.
+
+---
+
+## ✅ ANSWERED 2026-08-29 — the four he could answer without the controller
+
+**B-020 · three husks kill you at `-32` — „Erst beim Playtest spüren."**
+`scripts/f032-swords.txt` stays **red on purpose** with `assert health > 0` and `B-020` open. Not a
+calibration, not yet a bug — his call, at the controller. ⚠️ **Do not re-aim it, and do not raise
+`player.health`.**
+
+**The script invariant — 🔴 „Je nachdem, was das Skript behauptet."**
+This becomes a rule, and it exists because two groups in one round pinned **different quantities
+for the same physical act** — combat pinned the *pass speed at the nape* (*"the game reads speed"*),
+world pinned the *fall time* — and both satisfied the same validity control. The consequence was
+measured: the hub loop's closing speed went **20.67 → 33.07 m/s (+60 %)**, into a different damage
+regime (`gear.ron: feel.strong_hit_m_s` 18.0 splits CUT from GRAZE), without anybody deciding it.
+
+> **Every evidence script states in its own header WHICH QUANTITY IT PINS when a constant moves** —
+> the impact speed, the fall time, the height, the tick gap — and every re-derivation in that file
+> holds that one and lets the others follow. **"It reproduces the old number at the old gravity" is
+> satisfied by any parameterisation that pins one quantity; it cannot say which.**
+
+**Next work — „Geländehöhen und Kartenrand fertig."**
+The ground gets real relief (his earlier *„Das Gelände selbst — Hügel, Terrassen"*), and the map
+edge's loose ends are closed.
+
+**Play test — „Später — bau weiter."** `Q-063` gravity, `Q-064` Shift, `Q-046` gas and `Q-077`
+"too light" stay open and provisional. **The supervisor owes him all four the moment he plays.**

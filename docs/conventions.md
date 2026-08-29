@@ -159,3 +159,26 @@ Every `docs/*.md` stands in [`docs/README.md`](README.md), every asset in the re
 
 Related: [`docs/architecture.md`](architecture.md) · [`docs/models.md`](models.md) ·
 [`docs/backlog/naming.ron`](backlog/naming.ron)
+
+## An evidence script says which quantity it pins (his rule, 2026-08-29)
+
+When a tuning constant moves — `gravity_m_s2`, `boost_m_s2`, a speed — every timed number in a
+script has to be re-derived, and **there is always more than one way to do it.** Pin the *fall
+time* and the impact speed moves; pin the *impact speed* and the timing moves. Both reproduce the
+old number when you feed the old constant back in, so **that control cannot tell you which one is
+right.**
+
+Measured 2026-08-29: two groups re-deriving in the same round chose differently for the same act,
+and `scripts/f175-loop.txt`'s closing speed went **20.67 → 33.07 m/s (+60 %)** — across
+`gear.ron: feel.strong_hit_m_s` (18.0), which is the line between a CUT and a GRAZE. Nobody decided
+that; it fell out of an unstated choice.
+
+**So every script header names its invariant**, in one line, near the top:
+
+```text
+# PINS: the pass speed at the nape (21.0 m/s). Fall time and warp height follow from it.
+# PINS: the fall time (1.0334 s). The impact speed follows and may cross a damage threshold.
+```
+
+and every re-derivation in that file holds that quantity. A script with no `PINS:` line has not
+decided, and the next person to touch it will pick the other one.
