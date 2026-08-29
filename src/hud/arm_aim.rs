@@ -577,13 +577,6 @@ pub fn layout_for(side: Side, shape: ArmShape, at: Option<Vec2>, viewport: Vec2)
     // 3. out of the middle. The cluster is the glyph plus its letter; the tether hangs inside
     // the glyph's own width, so it adds nothing horizontally and its length is already in
     // `full_h`.
-    let core = Vec2::new(vw * 0.5, vh * 0.5);
-    let over_the_core = |x: f32, y: f32| {
-        x < core.x + SIGHT_CORE_PX
-            && x + shape.glyph_w_px > core.x - SIGHT_CORE_PX
-            && y < core.y + SIGHT_CORE_PX
-            && y + full_h > core.y - SIGHT_CORE_PX
-    };
     // **A marker that carries a place is not chrome** (`docs/FINDINGS.md` FIND-129).
     //
     // FIND-098 exempted the fan from the box and left a world marker inside it, on the argument
@@ -608,13 +601,27 @@ pub fn layout_for(side: Side, shape: ArmShape, at: Option<Vec2>, viewport: Vec2)
     // it exactly on the middle), and going to the *nearer* edge keeps the glyph on the side of
     // the sight line its point really is on.
     match at {
-        Some(p) if p.is_finite() => {
-            if over_the_core(x, y) {
-                let down = core.y + SIGHT_CORE_PX;
-                let up = core.y - SIGHT_CORE_PX - full_h;
-                y = if up >= 0.0 && (y - up).abs() < (down - y).abs() { up } else { down };
-            }
-        }
+        // 🔴 **Nothing. A marker that carries a place stands on that place** — the stand-down
+        // out of [`SIGHT_CORE_PX`] was removed on 2026-08-29 and the reason is measured, not
+        // argued. `tests/hud.rs::f026_the_drawn_marker_stands_on_the_cursor_and_not_beside_it`
+        // read the drawn `ComputedNode` against the projection of the `ArmAim` `vector::aim`
+        // itself wrote and found the glyph **15.5 px off its own point and 16.00 px off the
+        // crosshair, at every stance, standing still** — `SIGHT_CORE_PX` (6) plus half a 20 px
+        // glyph, to the pixel.
+        //
+        // FIND-129 measured **0.0 px** for the same element and was not wrong: it measured the
+        // *projection*, which is exact. `f171_a_free_aim_point_projects_onto_the_crosshair`
+        // invents `eye + look_dir * d`, projects it itself, and never reads a `Node` — so no
+        // test in this repository had ever looked at the pixel the player looks at
+        // (`CLAUDE.md` rule 5, the provenance shape).
+        //
+        // The user, twice, 2026-08-19 and 2026-08-29: *„wichtig wäre nur dass diese auch genau
+        // da sind visuell wo das seil auch landen würde!"* and *„ist immernoch nicht am cursor.
+        // es bewegt sich immernoch."* His instruction beats the derivation, and the derivation
+        // here was a *taste* — how much of the cut is worth covering — dressed as a rule.
+        // [`SIGHT_CORE_PX`] survives as the constant `F-024`'s sweep is written against; what
+        // it no longer does is move a marker off the point it names.
+        Some(p) if p.is_finite() => {}
         _ => {
             let hits_box = x - lo_extra < box_max_x
                 && x + shape.glyph_w_px + hi_extra > box_min_x
@@ -805,7 +812,9 @@ pub fn sense_arm_aim(
 pub fn sense_arm_miss(
     time: Res<Time>,
     mut released: MessageReader<HookReleased>,
-    players: Query<&PlayerId, With<LocalPlayer>>,
+    // **The `Hook` and not an `ArmAimState`**: `Busy` folds `Flying` and `Retracting` into one
+    // state on purpose, and those two are exactly the pair this rule has to tell apart.
+    players: Query<(&PlayerId, &Hook), With<LocalPlayer>>,
     mut glyphs: Query<(&ArmMarker, &mut ArmMiss), Without<ArmMarkerLabel>>,
     mut labels: Query<(&ArmMarkerLabel, &mut ArmMiss), Without<ArmMarker>>,
 ) {
@@ -813,7 +822,16 @@ pub fn sense_arm_miss(
     // The freshest miss per side this frame. An array and not a lookup: two sides, and the
     // second pull of the same arm in one frame is the one the player is asking about.
     let mut fresh: [Option<ArmHint>; 2] = [None; 2];
-    if let Some(me) = players.iter().next() {
+    // Whether each arm has a rope in the world right now. `false` for both when there is no
+    // local player — then nothing is drawn either.
+    let mut caught = [false; 2];
+    if let Some((me, hook)) = players.iter().next() {
+        caught = Side::ALL.map(|side| {
+            matches!(
+                hook.arm(side).state,
+                HookState::Flying { .. } | HookState::Anchored { .. }
+            )
+        });
         for message in released.read() {
             if message.player != *me {
                 continue;
@@ -842,7 +860,7 @@ pub fn sense_arm_miss(
         .map(|(m, miss)| (m.side, miss))
         .chain(labels.iter_mut().map(|(l, miss)| (l.0, miss)))
     {
-        miss.set_if_neq(step_miss(*miss, fresh[side.index()], dt));
+        miss.set_if_neq(step_miss(*miss, fresh[side.index()], dt, caught[side.index()]));
     }
 }
 
@@ -855,9 +873,23 @@ pub fn sense_arm_miss(
 /// press is the one the player is asking about, and a hint that kept showing the first reason
 /// would answer the wrong question. It resets even when the reason is *the same*, so the word
 /// visibly reappears instead of quietly ageing out mid-press.
-pub fn step_miss(miss: ArmMiss, fresh: Option<ArmHint>, dt_s: f32) -> ArmMiss {
+pub fn step_miss(miss: ArmMiss, fresh: Option<ArmHint>, dt_s: f32, caught: bool) -> ArmMiss {
     match fresh {
         Some(why) => ArmMiss { reason: Some(why), left_s: MISS_HINT_S },
+        // 🔴 **The arm caught something: the word is over, whatever the countdown says.**
+        // The user, 2026-08-29: *„zudem steht no target selbst wenn ich ein seil dran hab.. das
+        // ist gar nicht gut."* All five words mean *this arm has nothing* — and an arm whose tip
+        // is out or whose rope is holding demonstrably has something. Until today the hint could
+        // only end by running out, so a pull at open sky followed within `MISS_HINT_S` by a pull
+        // that anchors left `Anchored`'s filled disc drawn with `NO TARGET` under it: two writers
+        // answering one question, `sense_arm_aim` off the `Hook` and `show_arm_miss` off a stale
+        // `ArmMiss` (`docs/BUGS.md` B-024, `tests/hud.rs::
+        // f028_a_hint_dies_when_the_arm_it_belongs_to_catches`).
+        //
+        // ⚠️ `Retracting` is deliberately **not** caught: a refire during the retract that finds
+        // nothing is a real miss and `vector::hook` reports it, so an arm on its way home must
+        // keep its word or `F-028` loses the case it was extended for.
+        None if caught => ArmMiss::default(),
         None => {
             let left_s = miss.left_s - dt_s.max(0.0);
             // Cleared to the exact default and not to a small remainder: `set_if_neq` then
@@ -1042,6 +1074,92 @@ pub fn paint_arm_aim(
     }
 }
 
+
+/// **The motion trace** (`DBT_AIMTRACE=1`) — one line per frame, per arm, after
+/// [`place_arm_aim`] has written the nodes.
+///
+/// It exists because every measurement this project has of the marker is a **projection at one
+/// tick**, decoded from a still screenshot (`docs/FINDINGS.md` FIND-129). The user's complaint on
+/// 2026-08-29 is about **motion** — *„ist immernoch nicht am cursor. es bewegt sich immernoch"* —
+/// and nothing here had ever read the marker on two consecutive frames.
+///
+/// What it prints, and each of the three is a different question:
+///
+/// | field | question |
+/// |---|---|
+/// | `dproj` | how far the arm's world point projects from the crosshair — **the aim's own error** |
+/// | `dglyph` | how far the drawn glyph centre is from the crosshair — **what his eye sees** |
+/// | `dgp` | glyph centre minus projection — **what the layout rule adds on top** |
+///
+/// Off by default and env-gated exactly like [`crate::render::log_frame_time`]: it costs one
+/// `var_os` per frame when it is off and it never ships in a run's normal log.
+pub fn trace_arm_aim(
+    tick: Res<crate::shared::Tick>,
+    mut frame: Local<u64>,
+    players: Query<(&Hook, &ArmAim), With<LocalPlayer>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    markers: Query<(&ArmMarker, &ArmAimState, &Node), Without<ArmMarkerLabel>>,
+) {
+    *frame += 1;
+    let Some((camera, camera_at)) = cameras.iter().next() else {
+        return;
+    };
+    let Some(viewport) = camera.logical_viewport_size() else {
+        return;
+    };
+    let Some((hook, aim)) = players.iter().next() else {
+        return;
+    };
+    let centre = viewport * 0.5;
+    for (marker, state, node) in &markers {
+        if marker.part != MarkerPart::Glyph {
+            continue;
+        }
+        let shape = shape_of(*state);
+        let (Val::Px(left), Val::Px(top)) = (node.left, node.top) else {
+            continue;
+        };
+        let glyph = Vec2::new(left + shape.glyph_w_px * 0.5, top + shape.glyph_h_px * 0.5);
+        let world = target_of(hook, aim, marker.side);
+        let proj = world.and_then(|p| camera.world_to_viewport(camera_at, p).ok());
+        let eye = camera_at.translation();
+        let fwd = camera_at.forward().as_vec3();
+        info!(
+            "AIMTRACE t={} f={} side={:?} state={:?} eye={:.3},{:.3},{:.3} fwd={:.4},{:.4},{:.4} \
+             tgt={} proj={} glyph={:.2},{:.2} dproj={} dglyph={:.2} dgp={}",
+            tick.0,
+            *frame,
+            marker.side,
+            state,
+            eye.x,
+            eye.y,
+            eye.z,
+            fwd.x,
+            fwd.y,
+            fwd.z,
+            world.map_or_else(
+                || "none".to_string(),
+                |p| format!("{:.3},{:.3},{:.3}", p.x, p.y, p.z)
+            ),
+            proj.map_or_else(
+                || "none".to_string(),
+                |p| format!("{:.2},{:.2}", p.x, p.y)
+            ),
+            glyph.x,
+            glyph.y,
+            proj.map_or_else(
+                || "none".to_string(),
+                |p| format!("{:.2}", (p - centre).length())
+            ),
+            (glyph - centre).length(),
+            proj.map_or_else(
+                || "none".to_string(),
+                |p| format!("{:.2}", (glyph - p).length())
+            ),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1087,32 +1205,32 @@ mod tests {
 
         // The press.
         let why = ArmHint::Miss(MissReason::SurfaceHoldsNothing);
-        let hinting = step_miss(quiet, Some(why), 1.0 / 60.0);
+        let hinting = step_miss(quiet, Some(why), 1.0 / 60.0, false);
         assert_eq!(hinting.reason, Some(why));
         assert_eq!(hinting.left_s, MISS_HINT_S);
 
         // It survives a full second of frames — long enough to read two words.
         let mut running = hinting;
         for _ in 0..60 {
-            running = step_miss(running, None, 1.0 / 60.0);
+            running = step_miss(running, None, 1.0 / 60.0, false);
         }
         assert_eq!(running.reason, Some(why), "it vanished too fast");
 
         // And it is gone before two seconds, back to the exact default so that `set_if_neq`
         // stops writing.
         for _ in 0..60 {
-            running = step_miss(running, None, 1.0 / 60.0);
+            running = step_miss(running, None, 1.0 / 60.0, false);
         }
         assert_eq!(running, ArmMiss::default(), "the hint outlived the situation it described");
 
         // A second press wins over a hint that is still running, even for the same reason.
         let far = ArmHint::Miss(MissReason::OutOfReach);
-        let second = step_miss(hinting, Some(far), 1.0 / 60.0);
+        let second = step_miss(hinting, Some(far), 1.0 / 60.0, false);
         assert_eq!(second, ArmMiss { reason: Some(far), left_s: MISS_HINT_S });
 
         // `F-029`: and a rope torn off a dying titan wins over a running miss hint too. The
         // rope going slack is the fact the player is standing in right now.
-        let torn = step_miss(second, Some(ArmHint::CarrierGone), 1.0 / 60.0);
+        let torn = step_miss(second, Some(ArmHint::CarrierGone), 1.0 / 60.0, false);
         assert_eq!(torn, ArmMiss { reason: Some(ArmHint::CarrierGone), left_s: MISS_HINT_S });
     }
 

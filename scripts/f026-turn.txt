@@ -1,0 +1,541 @@
+# f026-turn — THE MARKER IN MOTION. One `look` per tick, so the trace has a frame-by-frame
+# yaw and not a warp between two stills.
+#
+# PINS: the **tick numbers of the four marks**. `look <y> <p>` + `wait 0` is exactly one
+# simulation tick (`debug/mod.rs::run_script`: `wait_s > 0.0` is false at 0.0), so every
+# phase below is as long as it has lines. If `simulation_hz` moves, the DEGREES PER SECOND
+# of every phase move with it and the tick numbers do NOT — that is the quantity this file
+# holds: **degrees of yaw per tick**, 2.0 slow and 6.0 fast, not degrees per second.
+# Nothing here reads a tuning constant, so no `.ron` value can move a mark.
+#
+#   DBT_AIMTRACE=1 ./target/debug/defeated_by_titan --headless \
+#       --script scripts/f026-turn.txt --ticks 600 2>&1 | grep -E 'AIMTRACE|MARK'
+#
+# The stand is `scripts/f-001-hooks.txt`'s ashgate stand (51, 0, 13) — the one place in this
+# repository where an anchor is measured rather than assumed. A full 360 deg sweep from there
+# crosses the market-square church, open street, and sky, so the trace covers `Ready` and
+# `Free` without the file having to know which yaw is which.
+
+warp 51 0 13
+look 0 0
+wait 2.0                   # world, camera, meshes, render pipelines
+
+# ---- A: dead still, 30 ticks. The baseline every later number is read against. ----------
+mark trace-still
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+look 0 0
+wait 0
+
+# ---- B: a slow turn, 2.0 deg/tick = 120 deg/s at 60 Hz. A comfortable mouse pan. --------
+mark trace-slow
+look 2.0 0
+wait 0
+look 4.0 0
+wait 0
+look 6.0 0
+wait 0
+look 8.0 0
+wait 0
+look 10.0 0
+wait 0
+look 12.0 0
+wait 0
+look 14.0 0
+wait 0
+look 16.0 0
+wait 0
+look 18.0 0
+wait 0
+look 20.0 0
+wait 0
+look 22.0 0
+wait 0
+look 24.0 0
+wait 0
+look 26.0 0
+wait 0
+look 28.0 0
+wait 0
+look 30.0 0
+wait 0
+look 32.0 0
+wait 0
+look 34.0 0
+wait 0
+look 36.0 0
+wait 0
+look 38.0 0
+wait 0
+look 40.0 0
+wait 0
+look 42.0 0
+wait 0
+look 44.0 0
+wait 0
+look 46.0 0
+wait 0
+look 48.0 0
+wait 0
+look 50.0 0
+wait 0
+look 52.0 0
+wait 0
+look 54.0 0
+wait 0
+look 56.0 0
+wait 0
+look 58.0 0
+wait 0
+look 60.0 0
+wait 0
+look 62.0 0
+wait 0
+look 64.0 0
+wait 0
+look 66.0 0
+wait 0
+look 68.0 0
+wait 0
+look 70.0 0
+wait 0
+look 72.0 0
+wait 0
+look 74.0 0
+wait 0
+look 76.0 0
+wait 0
+look 78.0 0
+wait 0
+look 80.0 0
+wait 0
+look 82.0 0
+wait 0
+look 84.0 0
+wait 0
+look 86.0 0
+wait 0
+look 88.0 0
+wait 0
+look 90.0 0
+wait 0
+look 92.0 0
+wait 0
+look 94.0 0
+wait 0
+look 96.0 0
+wait 0
+look 98.0 0
+wait 0
+look 100.0 0
+wait 0
+look 102.0 0
+wait 0
+look 104.0 0
+wait 0
+look 106.0 0
+wait 0
+look 108.0 0
+wait 0
+look 110.0 0
+wait 0
+look 112.0 0
+wait 0
+look 114.0 0
+wait 0
+look 116.0 0
+wait 0
+look 118.0 0
+wait 0
+look 120.0 0
+wait 0
+
+# ---- C: a flick, 6.0 deg/tick = 360 deg/s. A fast look-around, still a real input. ------
+mark trace-fast
+look 126.0 0
+wait 0
+look 132.0 0
+wait 0
+look 138.0 0
+wait 0
+look 144.0 0
+wait 0
+look 150.0 0
+wait 0
+look 156.0 0
+wait 0
+look 162.0 0
+wait 0
+look 168.0 0
+wait 0
+look 174.0 0
+wait 0
+look 180.0 0
+wait 0
+look 186.0 0
+wait 0
+look 192.0 0
+wait 0
+look 198.0 0
+wait 0
+look 204.0 0
+wait 0
+look 210.0 0
+wait 0
+look 216.0 0
+wait 0
+look 222.0 0
+wait 0
+look 228.0 0
+wait 0
+look 234.0 0
+wait 0
+look 240.0 0
+wait 0
+look 246.0 0
+wait 0
+look 252.0 0
+wait 0
+look 258.0 0
+wait 0
+look 264.0 0
+wait 0
+look 270.0 0
+wait 0
+look 276.0 0
+wait 0
+look 282.0 0
+wait 0
+look 288.0 0
+wait 0
+look 294.0 0
+wait 0
+look 300.0 0
+wait 0
+look 306.0 0
+wait 0
+look 312.0 0
+wait 0
+look 318.0 0
+wait 0
+look 324.0 0
+wait 0
+look 330.0 0
+wait 0
+look 336.0 0
+wait 0
+look 342.0 0
+wait 0
+look 348.0 0
+wait 0
+look 354.0 0
+wait 0
+look 360.0 0
+wait 0
+
+# ---- D: the same slow turn while MOVING FAST. The eye travels between the tick that -----
+# casts the ray and the frame that projects its answer, and this is the only phase that
+# can see it. Boost with W held; the arms stay idle, so the marker is still the preview.
+mark trace-moving
+key W 3.0
+key Shift 3.0
+look 362.0 0
+wait 0
+look 364.0 0
+wait 0
+look 366.0 0
+wait 0
+look 368.0 0
+wait 0
+look 370.0 0
+wait 0
+look 372.0 0
+wait 0
+look 374.0 0
+wait 0
+look 376.0 0
+wait 0
+look 378.0 0
+wait 0
+look 380.0 0
+wait 0
+look 382.0 0
+wait 0
+look 384.0 0
+wait 0
+look 386.0 0
+wait 0
+look 388.0 0
+wait 0
+look 390.0 0
+wait 0
+look 392.0 0
+wait 0
+look 394.0 0
+wait 0
+look 396.0 0
+wait 0
+look 398.0 0
+wait 0
+look 400.0 0
+wait 0
+look 402.0 0
+wait 0
+look 404.0 0
+wait 0
+look 406.0 0
+wait 0
+look 408.0 0
+wait 0
+look 410.0 0
+wait 0
+look 412.0 0
+wait 0
+look 414.0 0
+wait 0
+look 416.0 0
+wait 0
+look 418.0 0
+wait 0
+look 420.0 0
+wait 0
+look 422.0 0
+wait 0
+look 424.0 0
+wait 0
+look 426.0 0
+wait 0
+look 428.0 0
+wait 0
+look 430.0 0
+wait 0
+look 432.0 0
+wait 0
+look 434.0 0
+wait 0
+look 436.0 0
+wait 0
+look 438.0 0
+wait 0
+look 440.0 0
+wait 0
+look 442.0 0
+wait 0
+look 444.0 0
+wait 0
+look 446.0 0
+wait 0
+look 448.0 0
+wait 0
+look 450.0 0
+wait 0
+look 452.0 0
+wait 0
+look 454.0 0
+wait 0
+look 456.0 0
+wait 0
+look 458.0 0
+wait 0
+look 460.0 0
+wait 0
+look 462.0 0
+wait 0
+look 464.0 0
+wait 0
+look 466.0 0
+wait 0
+look 468.0 0
+wait 0
+look 470.0 0
+wait 0
+look 472.0 0
+wait 0
+look 474.0 0
+wait 0
+look 476.0 0
+wait 0
+look 478.0 0
+wait 0
+look 480.0 0
+wait 0
+look 482.0 0
+wait 0
+look 484.0 0
+wait 0
+look 486.0 0
+wait 0
+look 488.0 0
+wait 0
+look 490.0 0
+wait 0
+look 492.0 0
+wait 0
+look 494.0 0
+wait 0
+look 496.0 0
+wait 0
+look 498.0 0
+wait 0
+look 500.0 0
+wait 0
+look 502.0 0
+wait 0
+look 504.0 0
+wait 0
+look 506.0 0
+wait 0
+look 508.0 0
+wait 0
+look 510.0 0
+wait 0
+look 512.0 0
+wait 0
+look 514.0 0
+wait 0
+look 516.0 0
+wait 0
+look 518.0 0
+wait 0
+look 520.0 0
+wait 0
+look 522.0 0
+wait 0
+look 524.0 0
+wait 0
+look 526.0 0
+wait 0
+look 528.0 0
+wait 0
+look 530.0 0
+wait 0
+look 532.0 0
+wait 0
+look 534.0 0
+wait 0
+look 536.0 0
+wait 0
+look 538.0 0
+wait 0
+look 540.0 0
+wait 0
+look 542.0 0
+wait 0
+look 544.0 0
+wait 0
+look 546.0 0
+wait 0
+look 548.0 0
+wait 0
+look 550.0 0
+wait 0
+look 552.0 0
+wait 0
+look 554.0 0
+wait 0
+look 556.0 0
+wait 0
+look 558.0 0
+wait 0
+look 560.0 0
+wait 0
+look 562.0 0
+wait 0
+look 564.0 0
+wait 0
+look 566.0 0
+wait 0
+look 568.0 0
+wait 0
+look 570.0 0
+wait 0
+look 572.0 0
+wait 0
+look 574.0 0
+wait 0
+look 576.0 0
+wait 0
+look 578.0 0
+wait 0
+look 580.0 0
+wait 0
+look 582.0 0
+wait 0
+look 584.0 0
+wait 0
+look 586.0 0
+wait 0
+look 588.0 0
+wait 0
+look 590.0 0
+wait 0
+look 592.0 0
+wait 0
+look 594.0 0
+wait 0
+look 596.0 0
+wait 0
+look 598.0 0
+wait 0
+look 600.0 0
+wait 0
+
+mark trace-done
+assert tick > 300           # the four phases really ran: mark trace-done lands at t=372
+wait 1.0

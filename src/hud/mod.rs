@@ -238,6 +238,12 @@ impl Plugin for HudPlugin {
             (
                 arm_aim::place_arm_aim,
                 catch_band::place_catch_band,
+                // The motion trace of `F-026`, off unless `DBT_AIMTRACE` is set. `.after` and
+                // not `.chain()`: it reads the nodes the placement wrote, and it must not put
+                // an order between the two placements that did not exist before it.
+                arm_aim::trace_arm_aim
+                    .after(arm_aim::place_arm_aim)
+                    .run_if(|| std::env::var_os("DBT_AIMTRACE").is_some()),
             )
                 .after(bevy::transform::TransformSystems::Propagate)
                 .after(bevy::camera::CameraUpdateSystems)

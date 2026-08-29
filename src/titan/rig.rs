@@ -157,6 +157,46 @@ impl TitanRig {
         self.leg_m + self.torso_m * 0.5
     }
 
+    /// 🔴 **The one writer of "how wide is the body a blade has to reach past".**
+    ///
+    /// Returns the vertical capsule segments the *physical* collider is made of, as
+    /// `(radius_m, y_bottom_m, y_top_m)` — the two **endpoint** heights above the feet, so the
+    /// solid reaches `y_bottom − radius` .. `y_top + radius`. `build_rig` builds the collider
+    /// out of exactly this list and nothing else, and every test asks this instead of
+    /// re-deriving `width_fraction × height / 2` for itself (`CLAUDE.md` rule 5's corollary:
+    /// *one writer decides, everyone else reads the answer*).
+    pub fn body_segments_m(&self) -> Vec<(f32, f32, f32)> {
+        let r = self.width_m * 0.5;
+        vec![(r, r, self.height_m - r)]
+    }
+
+    /// The half-width of the physical body at height `y_m` above the feet — 0.0 where the
+    /// collider does not reach. Read off [`body_segments_m`](Self::body_segments_m).
+    pub fn body_radius_at_m(&self, y_m: f32) -> f32 {
+        self.body_segments_m()
+            .into_iter()
+            .map(|(r, bottom, top)| {
+                let d = if y_m < bottom {
+                    bottom - y_m
+                } else if y_m > top {
+                    y_m - top
+                } else {
+                    0.0
+                };
+                if d >= r { 0.0 } else { (r * r - d * d).sqrt() }
+            })
+            .fold(0.0f32, f32::max)
+    }
+
+    /// How far the cortex sphere's **rearmost** point sticks out of the physical body, in
+    /// metres. Negative means the kill zone is buried inside the thing the player collides
+    /// with, and there is then no direction at all from which a blade reaches it without
+    /// passing through solid titan.
+    pub fn cortex_exposure_m(&self) -> f32 {
+        let back_m = self.head_m * 0.5 + self.cortex_radius_m;
+        back_m - self.body_radius_at_m(self.cortex_height_m)
+    }
+
     /// Where the cortex sits **inside the head's local frame**.
     ///
     /// **Y is negative**: the nape is the underside of the head, which is what a nape is.
@@ -355,10 +395,25 @@ pub fn build_rig(
                 // Endpoints, not `Collider::capsule`: that one centres the capsule on the
                 // origin and would sink the titan half his height into the ground, because a
                 // body's origin lies between its feet (the same trap as `player/mod.rs`).
-                Collider::capsule_endpoints(
-                    w * 0.5,
-                    Vec3::new(0.0, w * 0.5, 0.0),
-                    Vec3::new(0.0, rig.height_m - w * 0.5, 0.0),
+                // 🔴 **Built out of `TitanRig::body_segments_m` and nothing else** — the one
+                // writer of the body's width at a given height. Before 2026-08-29 this line
+                // held its own `capsule_endpoints(w * 0.5, ...)` and three tests re-derived
+                // the same arithmetic beside it.
+                Collider::compound(
+                    rig.body_segments_m()
+                        .into_iter()
+                        .map(|(r, bottom, top)| {
+                            (
+                                Vec3::ZERO,
+                                Quat::IDENTITY,
+                                Collider::capsule_endpoints(
+                                    r,
+                                    Vec3::new(0.0, bottom, 0.0),
+                                    Vec3::new(0.0, top, 0.0),
+                                ),
+                            )
+                        })
+                        .collect(),
                 ),
                 // Member of the body layer, colliding with **everything**. Not with
                 // `LAYER_WORLD | LAYER_PLAYER`: today nothing in the repo wears a

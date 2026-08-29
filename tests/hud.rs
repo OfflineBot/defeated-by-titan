@@ -3486,3 +3486,177 @@ fn f177_the_board_panel_stays_out_of_the_middle_of_the_screen() {
          against a box of ({box_min_x:.1}, {box_min_y:.1})..({box_max_x:.1}, {box_max_y:.1})"
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// F-026 — the marker the PLAYER looks at, and not the projection a test computes
+// ---------------------------------------------------------------------------------------
+
+/// ★ **What the player sees, measured against what the game aimed at.**
+///
+/// The user, 2026-08-29, for the second time: *„ist immernoch nicht am cursor. es bewegt sich
+/// immernoch."* — and `F-026` stood at 🟧 on `FIND-129`, which measured **0.0 px**.
+///
+/// Both are true, because they measure different things.
+/// `f171_a_free_aim_point_projects_onto_the_crosshair` invents `eye + look_dir * d`, projects it
+/// itself, and never reads a `Node`. It proves the *projection* is on the crosshair. It cannot
+/// see where the **glyph** was drawn, and the glyph is the whole element.
+/// That is `CLAUDE.md` rule 5's provenance shape: two computations of one number agreeing about a
+/// point the test invented.
+///
+/// So this one reads both ends out of the running game:
+/// * the world point comes from the `ArmAim` **`vector::aim` wrote** in `FixedUpdate`, never from
+///   a literal here;
+/// * the pixel comes from `ComputedNode` + `UiGlobalTransform` after `UiSystems::Layout`, i.e.
+///   the rectangle the renderer draws.
+///
+/// **What this fixture varies:** the stance (three of them), the look angle, and both arms.
+/// **What the placement rule reads:** `side`, `shape_of(state)` (glyph w/h), the projected point,
+/// and the viewport. Of those, `state` is held at `Ready`/`Free` here — an anchored arm's marker
+/// stands on its anchor and not on the cursor by design, and it is covered by
+/// `f026_the_marker_stands_exactly_where_that_arm_fires`. Nothing is skipped: every stance below
+/// is asserted, there is no `continue`, and the count is printed.
+#[test]
+fn f026_the_drawn_marker_stands_on_the_cursor_and_not_beside_it() {
+    let mut app = app();
+    attach_screen(&mut app);
+    let (w, h) = screen(&mut app);
+    let centre = Vec2::new(w * 0.5, h * 0.5);
+
+    // The ashgate stands this repository has actually measured an anchor from
+    // (`scripts/f-001-hooks.txt`, `scripts/f171-crosshair.txt`): the market-square church at
+    // `look 0 34`, and two neighbours of it.
+    let stances = [
+        (Vec3::new(51.0, 0.0, 13.0), 0.0_f32, 34.0_f32),
+        (Vec3::new(51.0, 0.0, 13.0), 12.0, 20.0),
+        (Vec3::new(51.0, 0.0, 13.0), -8.0, 5.0),
+    ];
+
+    let mut worst_from_cursor = 0.0_f32;
+    let mut worst_from_point = 0.0_f32;
+    let mut measured = 0;
+
+    for (at_m, yaw_deg, pitch_deg) in stances {
+        stand_and_look(&mut app, at_m, yaw_deg, pitch_deg);
+        // **The game's own aim, not a value written here.** `vector::aim` lives in `FixedUpdate`
+        // and this is the only way to get the real raycast into `ArmAim`.
+        app.world_mut().run_schedule(FixedUpdate);
+        run_hud(&mut app);
+
+        let player = local_player(&mut app);
+        let (hook, aim) = {
+            let e = app.world().entity(player);
+            (*e.get::<Hook>().unwrap(), *e.get::<ArmAim>().unwrap())
+        };
+        let (camera, cam_at) = {
+            let mut q = app
+                .world_mut()
+                .query_filtered::<(&Camera, &GlobalTransform), With<Camera3d>>();
+            let (c, t) = q.iter(app.world()).next().expect("there is a 3D camera");
+            (c.clone(), *t)
+        };
+        let logical_to_physical = w / camera.logical_viewport_size().unwrap().x;
+
+        for side in [Side::Left, Side::Right] {
+            let world = arm_aim::target_of(&hook, &aim, side)
+                .expect("the aim ray must find the church from a stand this repo measured");
+            let point_px = camera
+                .world_to_viewport(&cam_at, world)
+                .expect("the church is in front of the camera")
+                * logical_to_physical;
+            let glyph = glyph_centre(&mut app, side);
+
+            let from_point = (glyph - point_px).length();
+            let from_cursor = (glyph - centre).length();
+            worst_from_point = worst_from_point.max(from_point);
+            worst_from_cursor = worst_from_cursor.max(from_cursor);
+            measured += 1;
+            println!(
+                "f026 stance ({at_m}) yaw {yaw_deg} pitch {pitch_deg} {side:?}: \
+                 world {world:?} -> point {point_px:?}, glyph {glyph:?}, \
+                 {from_point:.2} px off its own point, {from_cursor:.2} px off the cursor"
+            );
+        }
+    }
+
+    assert_eq!(measured, 6, "every stance x arm was measured, none skipped");
+    assert!(
+        worst_from_point <= 2.0,
+        "the drawn glyph stands {worst_from_point:.1} px away from the projection of the very \
+         point its own rope flies to. The marker is not where the game says the hook lands, and \
+         no amount of agreement between two computations of that point can fix it — the player \
+         reads the GLYPH"
+    );
+    assert!(
+        worst_from_cursor <= 2.0,
+        "the drawn glyph stands {worst_from_cursor:.1} px away from the crosshair while the \
+         player stands still. He said it twice: \"ist immernoch nicht am cursor\""
+    );
+}
+
+/// ★ **„zudem steht no target selbst wenn ich ein seil dran hab"** (the user, 2026-08-29).
+///
+/// `F-028`'s hint is a 1.6 s countdown that only ever ends by running out ([`step_miss`]).
+/// Nothing cancels it when the arm it belongs to gets what it was missing — so a pull that finds
+/// nothing, followed within 1.6 s by a pull that anchors, leaves the marker drawing `Anchored`'s
+/// filled disc with the word `NO TARGET` under it. That is two writers answering one question:
+/// `sense_arm_aim` reads the `Hook` and says *anchored*, `show_arm_miss` reads a stale `ArmMiss`
+/// and says *no target*.
+///
+/// **What this fixture varies:** the arm (both), and the state the arm reaches after the miss
+/// (`Anchored` and `Flying` — the two that put a rope in the world).
+/// **What the rule reads:** the fresh hint, the countdown, `dt`, and — after this test — the
+/// arm's own `HookState`. Nothing is skipped; both arms and both states are asserted.
+#[test]
+fn f028_a_hint_dies_when_the_arm_it_belongs_to_catches() {
+    for side in [Side::Left, Side::Right] {
+        for anchored in [true, false] {
+            let mut app = app();
+            let player = local_player(&mut app);
+            let mine = *app.world().entity(player).get::<PlayerId>().unwrap();
+
+            // 1 · the pull that finds nothing — the real message `vector::hook` writes.
+            app.world_mut().write_message(HookReleased {
+                player: mine,
+                side,
+                reason: ReleaseReason::NoAnchor(MissReason::NothingInRange),
+                tick: 1,
+            });
+            app.world_mut().run_schedule(Update);
+            let (missed, _) = arm_letter(&mut app, side);
+            assert!(
+                missed.contains("NO TARGET"),
+                "the miss hint never appeared at all — this test cannot see its own subject"
+            );
+
+            // 2 · and now the arm catches. Written into the real `Hook`, so `sense_arm_aim`
+            // reads it the way it reads the game's.
+            let mut hook = *app.world().entity(player).get::<Hook>().unwrap();
+            hook.arms[side.index()].state = if anchored {
+                HookState::Anchored { body: BodyId(1), local_m: Vec3::ZERO }
+            } else {
+                HookState::Flying { body: BodyId(1), target_m: Vec3::new(3.0, 4.0, 5.0) }
+            };
+            hook.arms[side.index()].tip_m = Vec3::new(3.0, 4.0, 5.0);
+            app.world_mut().entity_mut(player).insert(hook);
+            app.world_mut().run_schedule(Update);
+
+            let (now, _) = arm_letter(&mut app, side);
+            let state = {
+                let mut q = app.world_mut().query::<(&ArmMarker, &ArmAimState)>();
+                *q.iter(app.world())
+                    .find(|(m, _)| m.side == side)
+                    .expect("the marker exists")
+                    .1
+            };
+            println!(
+                "f028 {side:?} anchored={anchored}: marker state {state:?}, label {now:?}"
+            );
+            assert!(
+                !now.contains("NO TARGET"),
+                "the {side:?} arm is {state:?} — there is a rope in the world — and the marker \
+                 still reads {now:?}. The hint outlived the thing it described: \
+                 \"zudem steht no target selbst wenn ich ein seil dran hab\""
+            );
+        }
+    }
+}

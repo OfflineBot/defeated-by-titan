@@ -1708,3 +1708,35 @@ feature of the map and the towers move to it.
 
 **Related:** `FIND-129` · `FIND-190` · `FIND-206` · `FIND-134` · `FIND-091` · `Q-002` ·
 `docs/NEXT.md` §4A · `F-026` `F-030` `F-003`
+
+### §5A/7 — the gates and the water, measured before anyone deletes anything
+
+**THE GATES ARE A PHYSICS DECISION, not decoration**, and `maps.ron` says so in its own words:
+
+> *"The bottom of the pendulum lies vertically under the ANCHOR. On a solid tower that point is
+> inside the tower, so a swing that is allowed to run its course ends in the wall you are hanging
+> from. Two columns and a crossbeam put the anchor over open ground … The player flies THROUGH the
+> gate (20 m of clear width, 56 m of clear height) instead of into it. **The columns are NOT
+> anchorable, and that is the second half of the gate idea rather than a restriction.**"*
+
+So his *„das passt GAR nicht zu attack on titan und existiert so nicht!"* is a **look** judgement
+about a shape that is carrying a **mechanic**. Both are true at once. **Whatever replaces them has
+to keep an anchor over open ground** — otherwise the swing arcs that work today end inside
+geometry, which is `F-004`'s whole subject. **Delete the shape, keep the property.**
+
+**AND THERE IS NO WATER AT ALL.** `maps.ron:564`: *"The river, in a game that has no water"* — the
+channel is a **dry lowered lane**, 4 m down, 16 m between the quays, `anchorable: false`, with
+anchorable bridges as the only hook targets across it. His *„das wasser ist auch VIEL zu klein"* is
+therefore about a ditch. **Making the water bigger means building water, which does not exist:**
+no surface, no shader, no colour in `maps.ron`'s palette, no rule for what a hook or a body does
+when it meets it.
+
+**Three questions that decision opens, none of them answered:**
+1. What happens when the player **touches** water — nothing, drag, a death, a respawn?
+2. Is water **hookable**? Today the channel is deliberately not, and the bridges are the crossing.
+3. Does water need a **surface that moves**, or is a flat coloured plane enough for now?
+
+**The order this has to happen in:** the terrain round lands first (it owns `maps.ron`), then the
+water and the towers, because the water's extent is a shape in the height field and not a block.
+
+**Related:** `docs/NEXT.md` §5A · `FIND-134` · `F-003` `F-004` · `M-002`

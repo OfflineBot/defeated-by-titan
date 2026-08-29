@@ -1010,6 +1010,29 @@ fn fly_past_a_titan(
     model_cortex: Option<Vec3>,
     turned_deg: f32,
 ) -> Pass {
+    fly_past_a_titan_aimed(kind, dir, air_m, speed_m_s, widen, tracking, model_cortex, turned_deg, 0.0)
+}
+
+/// The same pass, flown `aim_offset_m` above (positive) or below (negative) the nape.
+///
+/// It exists because **the lateral margin is not the window**. `q030_…_reachable_on_a_large_titan`
+/// reports `+0.87 m` of reach left over for a `large` kind and `scripts/f030-hitbox.txt` measured
+/// the same kind hittable on **one simulation step out of seven** — the margin is a bound along
+/// the blade, and at the edge of that bound the window ACROSS the blade goes to zero
+/// (`docs/FINDINGS.md` FIND-206, and the same shape as `CLAUDE.md` rule 5's fourth). This knob is
+/// the axis those measurements held constant.
+#[allow(clippy::too_many_arguments)]
+fn fly_past_a_titan_aimed(
+    kind: &str,
+    dir: Vec3,
+    air_m: f32,
+    speed_m_s: f32,
+    widen: Option<f32>,
+    tracking: Tracking,
+    model_cortex: Option<Vec3>,
+    turned_deg: f32,
+    aim_offset_m: f32,
+) -> Pass {
     let mut app = app_with_hits();
     if tracking == Tracking::Off {
         // **The brain, turned off in the resource and not in the file** — the same license the
@@ -1114,7 +1137,8 @@ fn fly_past_a_titan(
     // Half a step past the crossing plus two ticks of lead, the same aiming as
     // `tests/combat.rs::fly_past`.
     let along = cortex.dot(dir) - (0.5 + tick_m * 2.0);
-    let start = -right * offset_m + dir * along + Vec3::Y * (LANE_Y + rig.cortex_height_m - eye_m);
+    let start =
+        -right * offset_m + dir * along + Vec3::Y * (LANE_Y + rig.cortex_height_m - eye_m + aim_offset_m);
 
     let world = app.world_mut();
     world.entity_mut(me).insert((
