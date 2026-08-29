@@ -336,6 +336,26 @@ On 2026-08-12 a sweep commit swallowed a whole feature that was still being writ
 registry landed inside a commit whose message describes only the `init.md` carry-over, so **no
 commit in the history says that feature exists.** Nothing was lost, and the history now lies about
 what happened, which is worse than a messy diff.
+🔴 **AND IT HAPPENED AGAIN ON 2026-08-29, so the rule is now absolute: NEVER `git add -A` IN THIS
+REPOSITORY. NOT EVER.** Commit `b29c7dc` carries the message *"docs: the gates carry a mechanic and
+there is no water at all"* and contains **978 lines across seven files** — the arm-aim marker fix,
+the titan rig's neck, `scripts/f026-turn.txt` and their tests — swallowed out of two agents that
+were still writing. The history now says that work is about gates and water. **The branch is
+pushed, so by the no-rewrite rule it stays wrong.**
+
+The 2026-08-12 version of this rule said *"stage explicit paths **while agents are live**"*, and
+that qualifier is what failed: the supervisor twice believed no agent was live and twice was wrong,
+once because a workflow was between phases and once because `pgrep` counts builds and not thinking.
+**You cannot reliably know, so the condition has to go.**
+
+```bash
+git add docs/QUESTIONS.md docs/NEXT.md        # yes: every path named
+git add -A                                    # NO. not with a clean status, not ever
+git status --short --                          # and read it before every commit
+```
+⚠️ **And never chain it**: `git add -A && norms.py && git commit` reads as one safe operation and
+is three, of which the first is the dangerous one.
+
 **Stage explicit paths while agents are live** (`git add docs/ src/vector/gas.rs`), or wait for the
 round to close. `git status --short` before every commit, and if a path you did not touch is
 modified, find out whose it is first.
