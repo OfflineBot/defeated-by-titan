@@ -458,6 +458,13 @@ python3 tools/features.py            # gameplay/features.xlsx -> features.ron + 
 python3 tools/features.py --check    # only the row-count guard per sheet
 python3 tools/norms.py               # terms, dead links, orphan files, test names
 python3 tools/norms.py --commit-msg .git/COMMIT_EDITMSG
+
+# Every evidence script AT ITS OWN documented invocation, in parallel. Reads each header for
+# its own --ticks and flags, and reports CUTOFF separately from RED — a run that was cut off
+# has not failed. The supervisor hand-rolled this twice and called 43 scripts red where 26
+# were (2026-08-29).
+tools/corpus.sh                      # one line per script, then a GREEN/RED/CUTOFF/CRASH tally
+tools/corpus.sh red                  # only the ones that really failed an assert
 ```
 
 **Starting the game** — which window system gets linked is decided by the machine:
