@@ -229,8 +229,17 @@ it costs nothing in quality — the 21 lines are the whole verdict.
 
 ### 🔴 THE SECOND ONE: **never open a big doc to add a line to it**
 
-Measured the same day: `docs/FINDINGS.md` is **108 kB (~27 000 tokens)**, `docs/QUESTIONS.md`
-**68 kB**. Appending an entry with an edit tool means reading the whole file first — so a
+Measured 2026-08-12: `docs/FINDINGS.md` was **108 kB (~27 000 tokens)**, `docs/QUESTIONS.md`
+**68 kB**.
+🔴 **Re-measured 2026-08-29 and the rule had rotted by 7.5x: `FINDINGS.md` had reached 812 kB and
+209 entries** — roughly 200 000 tokens, i.e. larger than most context windows, in the one file this
+rule tells you to grep. **The rule survived; the number in it did not, and nobody re-measured it
+for seventeen days.** `FIND-001`..`FIND-184` are now in `docs/archive/FINDINGS-001-184.md` with a
+one-line index (812 kB → **100 kB** live).
+**So the rule has a second half now: a queue file that passes ~150 kB gets archived, and whoever
+notices it is over is the one who does it.** Live sizes as of 2026-08-29: `FINDINGS.md` 100 kB ·
+`QUESTIONS.md` 216 kB · `NEXT.md` 112 kB · `PLAN.md` 104 kB · `BUGS.md` 100 kB — **three of those
+are already over and are the next to go.** Appending an entry with an edit tool means reading the whole file first — so a
 five-agent round paid ~135 000 tokens to add fifty lines.
 
 ```bash
@@ -323,6 +332,65 @@ modified, find out whose it is first.
 **The one that is not a saving: do not cut the red test, the counter-check on a claim, or the
 honest paragraph.** Those are the things that made the session's output worth anything, and every
 one of them caught something real.
+
+## Speed — measured 2026-08-29, because he said it was going too slowly
+
+He asked twice: *„überlege dir wie man die dev prozess beschleunigen kann"* and *„sind zu viele
+checks drin die unnötig viel zeit fressen?"* — and then gave the observation that found the real
+answer: *„der pc ist nicht wirklich ausgelastet. dennoch ist vim am ruckeln."*
+
+### 🔴 1 · The machine was SWAPPING, not busy — and `nice` was the wrong knob all along
+
+```
+%Cpu(s): 10,3 us · 80,8 id · 5,7 wa      the CPU is IDLE
+swpd 10 274 052 KB   free 923 352 KB     10 GB in swap, under 1 GB free
+si 39 628 KB/s                           and actively paging back IN
+```
+
+Every `nice -n 15` in this project was ordering **CPU time**, which was never scarce. What stutters
+an editor here is its pages being evicted to make room for a linker. **Fixed at the source:**
+`[profile.dev]` asked for **full debug info over every dependency built at `opt-level = 3`** — the
+`dev` default, never a decision — and `target/` had grown to **91 GB**.
+
+| | before | after |
+|---|---|---|
+| `debug` | full (default) | `line-tables-only` + `split-debuginfo = "unpacked"` |
+| linker | `rust-lld` | **`mold`**, which was installed on this machine and unwired |
+| **incremental `cargo build --tests`** | **127 s** | **29 s** |
+| free memory | 900 MB | 9 GB |
+
+⚠️ **`opt-level` was NOT touched** — it is the difference between 20 and 200 fps and the reason the
+profile exists. Only the debug data went. Nothing in this repo runs a step debugger; the evidence
+is scripts, asserts and screenshots, and `line-tables-only` keeps the file and line a panic prints.
+⚠️ **Add `ionice -c 3` next to `nice -n 15`** in anything long-running. `nice` alone answers a
+question nobody asked.
+
+### 2 · The gate does not have to be the whole suite
+
+`cargo test` is **181 s at best and 530 s under contention**, and every round pays it at least
+once. **At a round gate, run `--lib` plus the integration binaries whose files the round touched.**
+The full suite runs **once**, before the push that closes the round — which is also where `git
+status --short` and the `pgrep` precondition already live. A green binary you did not touch is not
+evidence, it is a re-run.
+
+### 3 · Attack claims, not chores — this was already the rule and it was ignored
+
+`CLAUDE.md` has said *"attack claims; do not attack chores"* since 2026-08-10. Measured this week:
+**eight of ten rounds were refuted**, and the ones that found something real were attacking a
+**claim about behaviour** — a two-anchor guarantee, a sweep's coverage, a marker that names a key.
+The ones that cost the most and found the least were attacking a **number** or a **red test with a
+red-then-green control**, which is a chore and carries its own proof.
+**So: a round whose whole deliverable is a value in a `.ron`, or a fix with a captured red-then-green
+message, does not get an adversary. A round that asserts the game now BEHAVES some way does.**
+
+### 4 · The findings are 42 % of the output, and that is mine
+
+Measured over this session: **7 917 lines of code and tests against 5 737 lines of docs.** A finding
+is worth what its *measurement* and its *rule* are worth — the essay around them is paid for twice,
+once to write and once every time an agent greps past it. **A `FIND-` entry is the number, the
+control that moves it, and the one sentence somebody will act on.** If it needs a table, it earns
+one; if it needs three paragraphs of reasoning, that reasoning belongs in the code comment next to
+the thing it explains.
 
 ## Autonomous operation — when nobody is standing next to you
 
