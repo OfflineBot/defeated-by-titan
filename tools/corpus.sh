@@ -27,20 +27,40 @@ one() {
   # scripts were reported RED for it, by a tool whose header is about not guessing invocations.
   inv=$(grep -E -- '--headless' "$f" | grep -F -- "$(basename "$f")" | head -3)
   [ -n "$inv" ] || inv=$(grep -E -- '--headless' "$f" | head -3)
+  # A script with NO headless invocation is a WINDOWED script (p4-cursor.txt documents
+  # `--ticks 0` because a graphics session keeps the window open). Running it headless measures
+  # nothing; the tool's second bug was reporting exactly that as CRASH.
+  if [ -z "$inv" ]; then
+    printf "WINDOW %-24s %-6s needs a window - not runnable headless, not a failure\n" "$b" "-"
+    return
+  fi
   t=$(printf '%s\n' "$inv" | grep -oE -- '--ticks [0-9]+' | awk '{print $2}' | sort -rn | head -1)
   [ -n "$t" ] || t=$(grep -oE -- '--ticks [0-9]+' "$f" | awk '{print $2}' | sort -rn | head -1)
   [ -n "$t" ] || t=1500
+  if [ "$t" -eq 0 ]; then
+    printf "WINDOW %-24s %-6s documents --ticks 0 (a window keeps it alive), not a failure\n" "$b" "0"
+    return
+  fi
   x=""
   printf '%s\n' "$inv" | grep -qE -- '--hub' && x="$x --hub"
   m=$(printf '%s\n' "$inv" | grep -oE -- '--mission [a-z]+' | head -1)
   [ -n "$m" ] && x="$x $m"
-  out=$(timeout 180 nice -n 15 ionice -c 3 ./target/debug/defeated_by_titan \
+  # The tool's third bug: a flat 180 s timeout killed 21 000-tick missions and called the kill
+  # CRASH. The wall scales with the work — ~50 ticks/s is conservative under 6 parallel jobs —
+  # and a kill by the clock is TIMEOUT, its own verdict, never CRASH.
+  wall=$(( 120 + t / 25 ))
+  out=$(timeout "$wall" nice -n 15 ionice -c 3 ./target/debug/defeated_by_titan \
         --headless $x --script "$f" --ticks "$t" 2>&1 \
         | grep -oE '[0-9]+ of [0-9]+ asserts failed|[0-9]+ asserts held|did not finish' | tail -1)
+  rc=$?
   case "$out" in
     *"asserts held")  printf "GREEN  %-24s %-6s %s\n" "$b" "$t" "$out" ;;
     *"did not finish")printf "CUTOFF %-24s %-6s raise --ticks, this is NOT a failure\n" "$b" "$t" ;;
-    "")               printf "CRASH  %-24s %-6s no verdict line at all\n" "$b" "$t" ;;
+    "") if [ "$rc" -eq 124 ]; then
+          printf "TIMEOUT %-23s %-6s killed by the %ss wall, not by the game\n" "$b" "$t" "$wall"
+        else
+          printf "CRASH  %-24s %-6s no verdict line at all\n" "$b" "$t"
+        fi ;;
     *)                printf "RED    %-24s %-6s %s\n" "$b" "$t" "$out" ;;
   esac
 }
@@ -52,4 +72,4 @@ case "${1:-all}" in
   *)   cat /tmp/corpus-run.txt ;;
 esac
 echo "---"
-for k in GREEN RED CUTOFF CRASH; do printf "%s %s  " "$(grep -c "^$k" /tmp/corpus-run.txt)" "$k"; done; echo
+for k in GREEN RED CUTOFF TIMEOUT WINDOW CRASH; do printf "%s %s  " "$(grep -c "^$k" /tmp/corpus-run.txt)" "$k"; done; echo
