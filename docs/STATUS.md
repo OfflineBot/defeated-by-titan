@@ -11,7 +11,7 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 
 **🟧 needs three pieces of evidence:** a picture (screenshot path), a number (measured, with the machine `[debian]`/`[cachy]`) and code (a test that goes red when it breaks). If one is missing it is 🟨 — doubt moves the stage down, not up (prompts/init.md §8, §9).
 
-**Tally:** 227 ⬜ · 22 🟨 · 8 🟧 · 0 ✅ of 257 rows.
+**Tally:** 226 ⬜ · 23 🟨 · 8 🟧 · 0 ✅ of 257 rows.
 
 ## combat
 
@@ -52,7 +52,7 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 | Menuestruktur | F-175 | 🟨 | scripts/f175-loop.txt 19 asserts held, exit 0 — the whole hub ring, hub to pad to Active to Won to Debrief to hub and round again [offlinebot 2026-09-01] | 2026-09-01 THE LEDGER WAS WRONG, corrected against the tree. This is the ring the mission board and the pads both feed, and it has been green for days. |
 | Vollstaendige Tastenbelegung | F-172 | ⬜ | — | — |
 | Grafikeinstellungen | F-177 | ⬜ | — | — |
-| Barrierefreiheit | F-176 | ⬜ | — | — |
+| Barrierefreiheit | F-176 | ⬜ | — | 2026-09-01 ⚠️ NAMING COLLISION, and it has misled twice. This row is 'Barrierefreiheit'. Everything in the tree called f176 - scripts/f176-pull.txt, the f176_* tests - is the ROPE spec of docs/NEXT.md 3D, which has no row of its own. Same shape one row up: F-177 is 'Grafikeinstellungen' while scripts/f177-board.txt is the mission board. Work with no row has no acceptance criterion and no stopping condition, which docs/PLAN.md section 3 names as one of six causes of seven circling rounds. Whoever next edits gameplay/features.xlsx should give the rope and the board their own ids. |
 | Ladebildschirme mit Tipps | F-178 | ⬜ | — | — |
 
 ## mission
@@ -301,13 +301,13 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 | Flips (seitlich) | F-009 | 🟨 | double-tap edge detection in tests/input.rs (f009_two_a_taps_...), 26 tests in that binary green · src/vector/dodge.rs flip_velocity_m_s and flip · game.ron flip_impulse_m_s 18, flip_iframes_s 0.35, gas_flip 20 | 2026-08-27 THE LEDGER WAS WRONG, corrected against the tree - same family as F-008. 'Built' and not 'Proven': no picture, and the acceptance sentence ('Flip vermeidet einen Titanengriff, wenn im Fenster ausgeloest') has never been tested against a real titan grab. |
 | Gas-Ressource | F-018 | 🟨 | tests/vector_gas.rs 11 green · 0 cyan pixels of 921600 in f-018-gas.png [debian] | 2026-08-09 [debian] — counter-check verdict: HOLDS PARTLY. Rates and the per-player tank are well measured. But gas_priority is a fall-through attempt order nobody agreed to, and its degenerate case (a tank smaller than one consumer's tick cost) is untested (FIND-006). 'Im HUD ablesbar' cannot be met |
 | Nachschub-Stationen | F-019 | 🟨 | scripts/f019-supply.txt 3 asserts held · scripts/f019-hq.txt 13 asserts held, both exit 0 [offlinebot 2026-09-01] | 2026-09-01 THE LEDGER WAS WRONG, corrected against the tree. It read Unbuilt while eight files in tests/ and scripts/ named it and both evidence scripts run green. One of 15 such rows found by re-auditing after docs/PLAN.md section 3 named ledger staleness as a root cause of seven circling rounds. |
+| Ziel-Assist-Regler | F-016 | 🟨 | assist_catch_pct and assist_strength_pct are user-facing settings with a script verb; a 192-stance A/B sweep reads 84 anchors at catch 0 and 111 at catch 100, strictly monotone at 84/95/97/105/109/111 · scripts/f016-band.txt 9 asserts held [offlinebot 2026-09-01] | 2026-09-01 THE LEDGER WAS WRONG. This row survived the Q-078 cancellation of the anchor-point line and is the thing he asked for twice ('es soll in der ui angezeigt werden von wo bis wo gesearched wird'): the assist sweeps the RAY sideways for a surface and never read the authored point list. Built, not Proven: the search band's own pixels are drawn on the reach alone, so a frame cannot tell a live search from a dead one - an adversary proved that with a strength-0 control. |
 | Slide-Dodge am Boden | F-010 | ⬜ | — | — |
-| Velocity-Clamp gegen Fling | F-012 | ⬜ | — | — |
+| Velocity-Clamp gegen Fling | F-012 | ⬜ | — | 2026-09-01 STILL UNBUILT, and now with an argument rather than an omission. Its subject is fling exploits, and the guard the tag rule used to provide went away with Q-078 ('wirklich ALLES hakbar'). An adversary then attacked it directly - hooking the ground under his feet at terminal velocity with Ctrl held, 75 m/s into a corner, two ropes on objects moving apart - and found NO fling: vector.max_speed_m_s 75 held in every case and nothing tunnelled. So the row waits on a measurement that says it is needed, not on someone's time. |
 | Kollisionsdaempfung | F-013 | ⬜ | — | — |
 | Momentum-Chaining | F-014 | ⬜ | — | — |
 | Geschwindigkeits-Feedback | F-017 | ⬜ | — | — |
 | Hook-Break (Notbremse) | F-011 | ⬜ | — | — |
-| Ziel-Assist-Regler | F-016 | ⬜ | — | — |
 | Wall-Run und Wall-Kick | F-015 | ⬜ | — | — |
 | Tragbarer Notvorrat | F-020 | ⬜ | — | — |
 
@@ -331,7 +331,7 @@ Stages: ⬜ unbuilt · 🟨 built (built, untested, unseen) ·
 | The Fallow | M-004 | ⬜ | — | — |
 | Titanwood | M-005 | ⬜ | — | — |
 | Trainingsgelaende | M-011 | ⬜ | — | — |
-| Dynamische Ankerpunkte | F-029 | ⬜ | — | — |
+| Dynamische Ankerpunkte | F-029 | ⬜ | — | 2026-09-01 STILL UNBUILT, and a test name says otherwise - read FIND-202 before believing it. Since Q-078 a titan carries a Body and can be hooked, which was described as F-029 arriving as a side effect. It did not: attach_ropes spawns a RigidBody::Static marker at the hit point and NOTHING ever writes it again, so Hook::tip_m rides the carrier while DistanceJoint.limits.max is enforced against the ground he left. tests/titan.rs::f029_a_rope_bites_a_walking_titan_and_rides_him compares tip_before against tip_after and never looks at the joint - it proves the arm and not the physics. |
 | Trainingsanzeige fuer Ankerpunkte | F-032a | ⬜ | — | — |
 | Hollowkeep | M-006 | ⬜ | — | — |
 | Saltpier | M-007 | ⬜ | — | — |

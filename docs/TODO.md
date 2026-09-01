@@ -306,7 +306,7 @@ before `Could` is the order, not a recommendation (prompts/init.md §2).
 | 🟨 | F-019 | Nachschub-Stationen | 1 | F-018 | needs F-018 |
 | ⬜ | F-015 | Wall-Run und Wall-Kick | 3 | F-013 | needs F-013 |
 | ⬜ | F-020 | Tragbarer Notvorrat | 3 | F-019 | needs F-019 |
-| ⬜ | F-016 | Ziel-Assist-Regler | 2 | F-024 | needs F-024 |
+| 🟨 | F-016 | Ziel-Assist-Regler | 2 | F-024 | needs F-024 |
 
 ## world (24 open)
 
