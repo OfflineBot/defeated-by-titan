@@ -468,6 +468,38 @@ def check_tests(b: Report) -> None:
 
 # --------------------------------------------------------------------------
 
+# The live queue files. A cap in BYTES, because the cost that matters is what an agent pays to
+# find one entry in it, and that is bytes and not entries.
+#
+# 🔴 Why this is a CHECK and not a sentence in CLAUDE.md: the sentence existed. It said
+# "a queue file past ~150 kB gets archived" and quoted `FINDINGS.md` at 108 kB — while the file
+# had reached **812 kB**, seven and a half times its own rule, for seventeen days. Nobody
+# re-measured, because nothing made them. `docs/archive/` holds the overflow with a one-line
+# index per entry, so archiving costs nothing and loses nothing.
+QUEUE_CAPS_KB = {
+    "docs/FINDINGS.md": 150,
+    "docs/QUESTIONS.md": 150,
+    "docs/BUGS.md": 120,
+    "docs/NEXT.md": 120,
+    "CLAUDE.md": 45,       # every agent reads this one WHOLE — the cap that costs the most
+}
+
+
+def check_queue_sizes(b: Report) -> None:
+    """A queue file that outgrows its cap stops being greppable and starts being carried."""
+    for rel, cap_kb in QUEUE_CAPS_KB.items():
+        p = ROOT / rel
+        if not p.exists():
+            continue
+        b.checked += 1
+        kb = p.stat().st_size / 1024
+        if kb > cap_kb:
+            b.errors.append(
+                f"{rel} is {kb:.0f} kB against a {cap_kb} kB cap — archive the closed entries "
+                f"into docs/archive/ with a one-line index (tools/norms.py QUEUE_CAPS_KB). "
+                f"A file nobody can grep gets carried instead, and every agent pays for it")
+
+
 def main() -> int:
     b = Report()
 
@@ -483,6 +515,7 @@ def main() -> int:
         check_orphans(b)
         check_asset_packs(b)
         check_tests(b)
+        check_queue_sizes(b)
 
     if b.errors:
         print(f"NORMS: {len(b.errors)} violation/violations "
