@@ -42,6 +42,7 @@ use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::shared::{
     AnchorSurface, Block, Body, BodyGone, BodyId, BodyMask, Cli, IdCounter, SpatialIndex,
+    WaterVolume,
 };
 use defeated_by_titan::world::index::mask_from;
 use defeated_by_titan::data::{Model, ModelSource};
@@ -3683,5 +3684,662 @@ fn f003_the_ground_is_a_continuous_field_and_not_a_flight_of_terraces() {
         lo < -3.0,
         "the lowest ground of Ashgate is at {lo:.2} m: the field only ever climbs, and *und \
          deutlich hoeher UND NIEDRIGER als jetzt* is half unanswered"
+    );
+}
+
+// =========================================================================================
+// 12. The river — `assets/data/water.ron`, `src/world/water.rs`
+//
+// `maps.ron` still carries the heading these three tests were written against: **"The river,
+// in a game that has no water"**. The channel was a dry lowered lane — 4 m down, 10 m between
+// the quays, no surface, no colour and no rule for what happens when a body falls in.
+// The user, 2026-08-29, gave three answers, and these tests hold the first and the third:
+//   *„Man schwimmt / wird langsam."*   *„Nein — Wasser haelt keinen Haken."*
+//   *„das wasser ist auch VIEL zu klein"*
+// The second lives in `src/vector/hookable.rs`; the swim rule lives in `tests/player.rs`.
+// =========================================================================================
+
+/// Every body of water in the built world, as `(name, centre, half extent)`.
+fn built_waters(app: &mut App) -> Vec<(String, Vec3, Vec3)> {
+    let mut q = app.world_mut().query::<(&Name, &Transform, &WaterVolume)>();
+    let mut all: Vec<(String, Vec3, Vec3)> = q
+        .iter(app.world())
+        .map(|(n, t, w)| (n.to_string(), t.translation, w.half_size_m))
+        .collect();
+    all.sort_by(|a, b| a.0.cmp(&b.0));
+    all
+}
+
+#[test]
+fn f003_the_map_that_ships_has_water_in_it_at_all() {
+    // The whole of *"a game that has no water"*, as one number. Red for an empty
+    // `world::water::build_water`, red for a `water.ron` with no key for this map, and red for
+    // a volume that is spawned twice — which is the failure `f003_the_city_comes_from_the_file_
+    // and_not_twice` exists for one component further along.
+    let mut app = built_world();
+    let waters = built_waters(&mut app);
+    assert!(
+        !waters.is_empty(),
+        "the map that ships has no water at all — `water.ron: volumes` has no key for {:?}",
+        data().maps.current
+    );
+    for (name, _, half) in &waters {
+        let volume = 8.0 * half.x * half.y * half.z;
+        assert!(volume > 0.0, "{name} is a water volume of {volume} m3 — a plane, not a river");
+    }
+    // And it does not grow: `build_water` belongs in `Startup`, like the city beside it.
+    for _ in 0..3 {
+        app.update();
+    }
+    assert_eq!(built_waters(&mut app).len(), waters.len(), "the river grows every frame");
+}
+
+#[test]
+fn f003_the_canal_water_lies_inside_the_channel_and_between_its_floor_and_the_quay_tops() {
+    // ⭐ **The pin.** `water.ron` names four numbers out of `maps.ron` in its own comment, and
+    // this is what makes that comment a test instead of a hope. It goes red the day somebody
+    // widens the channel — which is exactly what the user asked for
+    // (*„das wasser ist auch VIEL zu klein"*) and exactly the moment the water has to move
+    // with it, or the river stops touching its own banks.
+    //
+    // The four, out of `maps.ron: maps.ashgate.blocks`:
+    //   channel floor (-70, -4.1, 0) size (10, 0.2, 700) -> top    y = -4.00
+    //   quay west     (-80, -1.8, 0) size (10, 4.4, 700) -> inner  x = -75.00, top y = +0.40
+    //   quay east     (-60, -1.8, 0) size (10, 4.4, 700) -> inner  x = -65.00, top y = +0.40
+    let d = data();
+    if d.maps.current != "ashgate" {
+        return; // this one is about Ashgate's canal and says so in its name
+    }
+    let map = d.current_map().expect("current map");
+    let quay_inner_west = map
+        .blocks
+        .iter()
+        .find(|b| b.center_m.0 == -80.0)
+        .map(|b| b.center_m.0 + b.size_m.0 * 0.5)
+        .expect("maps.ron: the west quay at x = -80 is gone — the channel moved");
+    let quay_inner_east = map
+        .blocks
+        .iter()
+        .find(|b| b.center_m.0 == -60.0)
+        .map(|b| b.center_m.0 - b.size_m.0 * 0.5)
+        .expect("maps.ron: the east quay at x = -60 is gone — the channel moved");
+    let quay_top = map
+        .blocks
+        .iter()
+        .find(|b| b.center_m.0 == -80.0)
+        .map(|b| b.center_m.1 + b.size_m.1 * 0.5)
+        .expect("the west quay");
+    let bed = map
+        .blocks
+        .iter()
+        .find(|b| b.center_m.1 == -4.1)
+        .map(|b| b.center_m.1 + b.size_m.1 * 0.5)
+        .expect("maps.ron: the channel floor at y = -4.1 is gone");
+
+    let mut app = built_world();
+    let waters = built_waters(&mut app);
+    let (name, centre, half) = waters
+        .iter()
+        .find(|(n, _, _)| n == "water_canal")
+        .expect("no volume called `canal` on Ashgate");
+
+    assert!(
+        centre.x - half.x >= quay_inner_west && centre.x + half.x <= quay_inner_east,
+        "{name} spans x {:.2}..{:.2} and the channel is {quay_inner_west:.2}..{quay_inner_east:.2} \
+         — water that reaches into a quay z-fights with it from every angle",
+        centre.x - half.x,
+        centre.x + half.x
+    );
+    // ⭐ **At or BELOW the channel floor, never above it**, and that direction was measured
+    // rather than chosen (`docs/FINDINGS.md` FIND-216). A water box that stops 0.05 m above the
+    // floor looks identical and is a trap: a body that punches through to the bottom — which a
+    // 20 m drop does, because drag alone needs `v / drag_per_s` = 3.33 m to stop 20 m/s and the
+    // channel is 3.4 m deep — lands *under* the volume, `depth_m` answers dry, and he lies on
+    // the floor for ever with no buoyancy. The floor slab is 0.2 m thick, so the water may
+    // reach into it and no further.
+    let floor_underside = map
+        .blocks
+        .iter()
+        .find(|b| b.center_m.1 == -4.1)
+        .map(|b| b.center_m.1 - b.size_m.1 * 0.5)
+        .expect("the channel floor");
+    assert!(
+        centre.y - half.y <= bed,
+        "{name}'s bed is at {:.2} and the channel floor at {bed:.2} — a body that sinks to the \
+         bottom would be OUTSIDE the water and would never float back up",
+        centre.y - half.y
+    );
+    assert!(
+        centre.y - half.y >= floor_underside,
+        "{name}'s bed is at {:.2}, under the channel floor's own underside {floor_underside:.2} \
+         — the water hangs below the map",
+        centre.y - half.y
+    );
+    let surface = centre.y + half.y;
+    assert!(
+        surface < quay_top,
+        "{name}'s surface is at {surface:.2} and the quay top at {quay_top:.2} — the river is \
+         flooding the street"
+    );
+    assert!(
+        quay_top - surface > 0.5,
+        "only {:.2} m from the quay to the surface — a drop you cannot see is not a drop",
+        quay_top - surface
+    );
+    // And it is a RIVER: it has to run the channel, not sit in a corner of it.
+    assert!(
+        half.z * 2.0 > 500.0,
+        "{name} is {:.0} m long in a 700 m channel",
+        half.z * 2.0
+    );
+}
+
+#[test]
+fn f003_water_carries_no_block_no_body_and_no_collider_and_each_absence_is_a_decision() {
+    // The four absences, and every one of them is load-bearing (`src/shared/water.rs`):
+    //   no `Collider`  -> the hook ray passes through, so a shot fired FROM the water works.
+    //                     avian clamps `tmin` to 0 for an origin inside a shape, so a sensor
+    //                     here would answer every escape shot at distance 0.
+    //   no `RigidBody` -> nothing to attach it to.
+    //   no `Block`     -> `f003_the_city_comes_from_the_file_and_not_twice` counts those.
+    //   no `Body`      -> `f003_every_body_lands_in_the_index` counts those, and the index's
+    //                     `cast_ray`/`aabb_overlaps` are still stubs anyway.
+    let mut app = built_world();
+    let mut q = app.world_mut().query_filtered::<(
+        &Name,
+        Option<&Block>,
+        Option<&Body>,
+        Option<&Collider>,
+        Option<&RigidBody>,
+    ), With<WaterVolume>>();
+    let rows: Vec<(String, bool, bool, bool, bool)> = q
+        .iter(app.world())
+        .map(|(n, b, y, c, r)| {
+            (n.to_string(), b.is_some(), y.is_some(), c.is_some(), r.is_some())
+        })
+        .collect();
+    assert!(!rows.is_empty(), "no water — the three absences below would be vacuously true");
+    for (name, block, body, collider, rigid) in rows {
+        assert!(!block, "{name} carries a `Block` — the city's own block count would move");
+        assert!(!body, "{name} carries a `Body` — it would land in the SpatialIndex");
+        assert!(
+            !collider,
+            "{name} carries a `Collider` — a hook fired from inside the water would answer at \
+             distance 0 and the player could never get out"
+        );
+        assert!(!rigid, "{name} carries a `RigidBody` with no collider to attach it to");
+    }
+}
+
+// =========================================================================================
+// THE WALL IS THE STRUCTURE AND THE GATE IS A PASSAGE THROUGH IT — the user, 2026-08-29
+// =========================================================================================
+//
+// > *„aktuell sind immernoch die grossen tuerme /gates beim eingang. das passt GAR nicht zu
+// >   attack on titan und existiert so nicht!"*
+//
+// and, asked what should stand there instead: **„Echte AoT-Mauer mit Toren drin."**
+// (`docs/QUESTIONS.md`, ANSWERED 2026-08-29 · `docs/NEXT.md` §5A/5 and §5A/7).
+//
+// Two shapes were carrying that verdict, and both existed in `maps.ron` for a *mechanical*
+// reason, not a decorative one:
+//
+//   * **fourteen freestanding gantries** over the main street — two 56 m columns and a 44 m
+//     crossbeam at 60 m, i.e. a torii. `maps.ron` in its own words: *"The bottom of the
+//     pendulum lies vertically under the ANCHOR. On a solid tower that point is inside the
+//     tower, so a swing that is allowed to run its course ends in the wall you are hanging
+//     from. Two columns and a crossbeam put the anchor over open ground."*
+//   * **four 120 m gatehouse towers**, 20 x 120 x 55 m, flanking the two gate openings and
+//     standing 5 m proud of the wall's own plinth on both faces.
+//
+// **Delete the shape, keep the property.** The three tests below are that sentence as
+// geometry: (1) nothing freestanding spans the street any more, (2) what stands on the wall
+// line is the wall and never a tower beside it, and (3) the ledges that replace the
+// crossbeams really do hang over open ground — which is the only reason a crossbeam was ever
+// preferable to a tower.
+//
+// All three read `assets/data/maps.ron` directly (`map.blocks`), not the planned world: the
+// claim is about what the FILE places by hand, and the generated houses are a different
+// subject with their own tests above.
+
+/// One of the four runs of Ashgate's wall, as `maps.ron` builds it.
+///
+/// `half_plinth_m` is **45.0 / 2**, the `base_thickness_m` the file writes out as its own
+/// widest course, and it is the number every "over open ground" question on this wall turns
+/// on: the wall is battered inward with height, so the plinth is the widest thing a plumb
+/// line can meet on the way down.
+struct WallRun {
+    what: &'static str,
+    /// `true` = the wall runs along X and its thickness is measured in Z (the two cross
+    /// walls); `false` = it runs along Z and its thickness is in X (the two flanks).
+    along_x: bool,
+    /// Where the wall's centre line stands on its normal axis.
+    centre_m: f32,
+    /// Half of `base_thickness_m` — the plinth face.
+    half_plinth_m: f32,
+    /// The run's extent along its own length, from `maps.ron`.
+    span_m: (f32, f32),
+}
+
+fn ashgate_wall_runs() -> [WallRun; 4] {
+    [
+        WallRun { what: "main wall (z = -120)", along_x: true, centre_m: -120.0,
+                  half_plinth_m: 22.5, span_m: (-350.0, 350.0) },
+        WallRun { what: "outer wall (z = -300)", along_x: true, centre_m: -300.0,
+                  half_plinth_m: 22.5, span_m: (-142.5, 142.5) },
+        WallRun { what: "west flank (x = -120)", along_x: false, centre_m: -120.0,
+                  half_plinth_m: 22.5, span_m: (-322.5, -97.5) },
+        WallRun { what: "east flank (x = +120)", along_x: false, centre_m: 120.0,
+                  half_plinth_m: 22.5, span_m: (-322.5, -97.5) },
+    ]
+}
+
+/// A hand-placed box out of `maps.ron`, reduced to the six numbers these three tests read.
+#[derive(Clone, Copy)]
+struct PlacedBox {
+    lo: Vec3,
+    hi: Vec3,
+    anchorable: bool,
+}
+
+impl PlacedBox {
+    /// Where this box reaches on a wall run's normal axis, as a distance from the centre
+    /// line — `(nearest, furthest)`.
+    fn offsets(&self, w: &WallRun) -> (f32, f32) {
+        let (lo, hi) = if w.along_x { (self.lo.z, self.hi.z) } else { (self.lo.x, self.hi.x) };
+        let (a, b) = ((lo - w.centre_m).abs(), (hi - w.centre_m).abs());
+        // A box that straddles the centre line reaches 0 on the near side.
+        let near = if (lo - w.centre_m) * (hi - w.centre_m) <= 0.0 { 0.0 } else { a.min(b) };
+        (near, a.max(b))
+    }
+    /// How deep the box is across the wall — a wall-attached element is thin here, a block
+    /// that merely crosses the wall's line on its way somewhere else is not.
+    fn depth_across(&self, w: &WallRun) -> f32 {
+        if w.along_x { self.hi.z - self.lo.z } else { self.hi.x - self.lo.x }
+    }
+    /// Does the footprint touch the wall's own plan band at all?
+    fn on_the_run(&self, w: &WallRun) -> bool {
+        let (along_lo, along_hi) =
+            if w.along_x { (self.lo.x, self.hi.x) } else { (self.lo.z, self.hi.z) };
+        let (near, _) = self.offsets(w);
+        near <= w.half_plinth_m + 1e-3
+            && along_hi >= w.span_m.0 - 1e-3
+            && along_lo <= w.span_m.1 + 1e-3
+    }
+}
+
+/// The one wall run a block belongs to: the nearest of the runs it stands on.
+///
+/// Four runs meet at two corners and a block there is on two of them at once. Judging it
+/// against both makes the outer wall's own west band report itself as an 11.5 m bulge on the
+/// west flank — see `f003_the_gate_is_a_hole_in_the_wall_and_not_two_towers_beside_it`.
+fn nearest_run<'a>(b: &PlacedBox, runs: &'a [WallRun]) -> (Option<&'a WallRun>, usize) {
+    let (mut mine, mut best, mut hits) = (None, f32::INFINITY, 0usize);
+    for w in runs {
+        if !b.on_the_run(w) {
+            continue;
+        }
+        hits += 1;
+        let c = if w.along_x { (b.lo.z + b.hi.z) * 0.5 } else { (b.lo.x + b.hi.x) * 0.5 };
+        let d = (c - w.centre_m).abs();
+        if d < best {
+            best = d;
+            mine = Some(w);
+        }
+    }
+    (mine, hits)
+}
+
+fn ashgate_placed_boxes() -> Vec<PlacedBox> {
+    let d = data();
+    let map = d.map("ashgate").expect("maps.ron: ashgate");
+    map.blocks
+        .iter()
+        .map(|k| {
+            let c = Vec3::new(k.center_m.0, k.center_m.1, k.center_m.2);
+            let h = Vec3::new(k.size_m.0, k.size_m.1, k.size_m.2) * 0.5;
+            PlacedBox { lo: c - h, hi: c + h, anchorable: k.anchorable }
+        })
+        .collect()
+}
+
+#[test]
+fn f003_nothing_freestanding_spans_the_main_street_the_way_a_gate_would() {
+    // ★ The user's sentence, as one rule: **over the main street there is the wall and there
+    // is nothing else.** A block that hangs in the air over the carriageway is legitimate
+    // only when it is part of the wall it hangs off — that is what "die Mauer mit Toren
+    // drin" means and it is what the fourteen crossbeams were not.
+    //
+    // ## What this fixture VARIES and what it HOLDS CONSTANT (the rule that has cost this
+    // ## project seven rounds)
+    //
+    // The predicate reads five things about a block: its `x` extent, its `z` extent, its
+    // **bottom** edge, and — through `on_the_run` — the wall runs' centre lines and spans.
+    // This fixture varies **all five**, because it does not sample: it enumerates **every**
+    // block `maps.ron` places in `ashgate`, one by one, with no `continue` that drops a
+    // class. The two thresholds it fixes are named constants below and both are argued.
+    // **Nothing is skipped, so the denominator is the whole file** and the count is printed
+    // either way.
+    let boxes = ashgate_placed_boxes();
+    let runs = ashgate_wall_runs();
+
+    // 20.0 m — above the gate opening (0..20) and above every roof, ridge cap, tree, bridge,
+    // stall and quay in the district (the residential band tops out at 11.5 m, the church
+    // and the bell towers stand on the ground). A block whose UNDERSIDE is above this is
+    // hanging in the air by definition.
+    const AIRBORNE_M: f32 = 20.0;
+    // 18.0 m — half the main street's apron (x = -15..15) plus the 3 m a gantry column stood
+    // outside it. Anything narrower would let a beam dodge the rule by being 1 m shorter.
+    const CARRIAGEWAY_M: f32 = 18.0;
+
+    let mut over_the_street = 0usize;
+    let mut freestanding: Vec<String> = Vec::new();
+    for b in &boxes {
+        if b.lo.y < AIRBORNE_M {
+            continue; // it stands ON something; this rule is about what hangs over the road
+        }
+        if b.hi.x < -CARRIAGEWAY_M || b.lo.x > CARRIAGEWAY_M {
+            continue; // not over the carriageway at all
+        }
+        over_the_street += 1;
+        if !runs.iter().any(|w| b.on_the_run(w)) {
+            freestanding.push(format!(
+                "x {:.1}..{:.1}  y {:.1}..{:.1}  z {:.1}..{:.1}",
+                b.lo.x, b.hi.x, b.lo.y, b.hi.y, b.lo.z, b.hi.z
+            ));
+        }
+    }
+
+    // The denominator, printed whether the test passes or not: a rule that finds nothing
+    // because it looked at nothing is the failure mode this line exists against.
+    assert!(
+        over_the_street >= 8,
+        "only {over_the_street} of {} placed blocks hang over the main street at all — this \
+         rule has stopped measuring anything",
+        boxes.len()
+    );
+    assert!(
+        freestanding.is_empty(),
+        "{} of {over_the_street} things hanging over the main street are carried by nothing \
+         but their own columns — the user: „die grossen tuerme /gates beim eingang. das passt \
+         GAR nicht zu attack on titan und existiert so nicht!\":\n{freestanding:#?}",
+        freestanding.len()
+    );
+}
+
+#[test]
+fn f003_the_gate_is_a_hole_in_the_wall_and_not_two_towers_beside_it() {
+    // ★ The second shape: the four 20 x 120 x 55 m gatehouses. They stood ON the wall line,
+    // so the test above waves them through — and that is the point of having two tests.
+    // What makes them towers rather than wall is that they are **deeper than the wall's own
+    // widest course** and **tall**: 27.5 m of half-depth against the plinth's 22.5, over the
+    // full 120 m. A wall may not bulge; a LEDGE may, and must (see the third test).
+    //
+    // ## What this fixture VARIES and what it HOLDS CONSTANT
+    //
+    // The predicate reads: the block's extent on the wall's normal axis, its extent along
+    // the wall, its height, and the run's `centre_m` / `half_plinth_m` / `span_m`. All of
+    // them vary — every block of the file against every one of the four runs, 4 x N pairs,
+    // no sampling. **Two exclusions, and both are counted and asserted non-trivial below:**
+    //
+    //   * **a block is measured against ONE run, the nearest.** Four runs meet at two
+    //     corners, and there a block is legitimately on two of them at once: the outer
+    //     wall's west band reaches `x = -86`, which is 34 m off the WEST FLANK's centre line
+    //     and would report itself as an 11.5 m bulge — while against its own run it is
+    //     21.97 m and exactly the wall. The first draft of this test said `depth_across
+    //     <= 60 m` instead, and that let the same band through at 56.5 m deep: **a threshold
+    //     invented to exclude corners excludes whatever else happens to be that size.**
+    //     Nearest-run needs no threshold and cannot be tuned.
+    //   * `hi.y - lo.y <= LEDGE_M` — a cornice, a gallery, a corbel, a cannon barrel. Six
+    //     metres is one storey of `scale.ron: architecture.heights_m` and every ledge on this
+    //     wall is 2 or 3 m; the shortest thing this rule wants to catch is 120 m.
+    let boxes = ashgate_placed_boxes();
+    let runs = ashgate_wall_runs();
+    const LEDGE_M: f32 = 6.0;
+
+    let (mut tested, mut on_two_runs, mut skipped_ledge) = (0usize, 0usize, 0usize);
+    let mut towers: Vec<String> = Vec::new();
+    for b in &boxes {
+        let (mine, hits) = nearest_run(b, &runs);
+        if hits > 1 {
+            on_two_runs += 1;
+        }
+        let Some(w) = mine else { continue };
+        if b.hi.y - b.lo.y <= LEDGE_M {
+            skipped_ledge += 1;
+            continue;
+        }
+        tested += 1;
+        let (_, far) = b.offsets(w);
+        if far > w.half_plinth_m + 1e-3 {
+            towers.push(format!(
+                "{}: a {:.0} m tall mass reaching {:.2} m off the centre line, {:.2} m \
+                 proud of the plinth — x {:.1}..{:.1} y {:.1}..{:.1} z {:.1}..{:.1}",
+                w.what, b.hi.y - b.lo.y, far, far - w.half_plinth_m,
+                b.lo.x, b.hi.x, b.lo.y, b.hi.y, b.lo.z, b.hi.z
+            ));
+        }
+    }
+
+    // The two classes this rule narrows itself with are both real and both non-empty on this
+    // map — a `continue` nobody counts is the shape that reported `0 of N` for a defect it
+    // never reached. `on_two_runs` is the corner class the nearest-run choice exists for; if
+    // it were ever 0, the choice would be untested and could be silently wrong.
+    assert!(tested >= 20, "only {tested} wall masses measured — the rule stopped biting");
+    assert!(on_two_runs > 0 && skipped_ledge > 0,
+        "{on_two_runs} corner blocks / {skipped_ledge} ledges — if either is empty the rule \
+         narrowing beside it is dead code and should go");
+    assert!(
+        towers.is_empty(),
+        "{} mass{} stand{} proud of the wall instead of being the wall (tested {tested}, \
+         {on_two_runs} on two runs at a corner, {skipped_ledge} ledges):\n{towers:#?}",
+        towers.len(),
+        if towers.len() == 1 { "" } else { "es" },
+        if towers.len() == 1 { "s" } else { "" }
+    );
+}
+
+#[test]
+fn f003_every_cornice_on_the_wall_hangs_over_open_ground() {
+    // ★ **The mechanic the deleted crossbeams were carrying**, and the whole reason this
+    // round is not a cosmetic one. `maps.ron`: *"The bottom of the pendulum lies vertically
+    // under the ANCHOR. On a solid tower that point is inside the tower, so a swing that is
+    // allowed to run its course ends in the wall you are hanging from."*
+    //
+    // So a ledge on this wall is only worth hooking if there is a strip of it with **stone
+    // under nothing but air**. Because the wall is battered — 45.0 m at the plinth down to
+    // 28.0 m at the coping — that reduces to one number per ledge: how far its outer edge
+    // reaches past `half_plinth_m`.
+    //
+    // ## What "under it" means here, exactly, and what it deliberately does not
+    //
+    // A plumb line from a cornice may pass **other ledges** — the 60 m gallery stands under
+    // the 90 m course, and a swing that ends there ends standing on a gallery, which is a
+    // landing and not a crash. What it may not pass is the **mass**: anything over
+    // `LEDGE_M` tall. That is the distinction `maps.ron` draws in the sentence above, and
+    // the strict margin (any block at all) is measured too and printed beside it, so the
+    // stacking is visible rather than assumed away.
+    //
+    // ## What this fixture VARIES and what it HOLDS CONSTANT
+    //
+    // The predicate reads a cornice's outer offset and the offsets of every mass below it.
+    // Both vary over the whole file: every ledge on all four runs against every other placed
+    // block, and the two margins are computed, not sampled — there is no grid to miss a
+    // boundary on. **The height axis is what the last four defects were hiding in**, so it
+    // is not held constant anywhere: `below` is decided by the two boxes' y ranges.
+    let boxes = ashgate_placed_boxes();
+    let runs = ashgate_wall_runs();
+    const LEDGE_M: f32 = 6.0;
+    // `base_thickness_m` out of this same file's wall block. A wall ELEMENT is never deeper
+    // than the wall — a cornice, a gallery, a corbel, a cannon barrel are all under 15 m.
+    // What is deeper and still crosses the wall's line is the canal: its floor and quays run
+    // the whole map and reported themselves as ledges "reaching 470 m off the centre line"
+    // in the first draft of this test, which is how a rule about a wall starts measuring a
+    // river. The number is the map's, not a threshold invented here.
+    const WALL_THICK_M: f32 = 45.0;
+    // DERIVED, not chosen: `game.ron: player.radius_m` is 0.35, so a body is 0.70 m across.
+    // A strip narrower than two bodies is not somewhere a swing can bottom out.
+    let need_m = 4.0 * data().game.player.radius_m;
+
+    let mut rows: Vec<(String, f32, f32)> = Vec::new();
+    let mut too_tight: Vec<String> = Vec::new();
+    let (mut not_on_a_wall, mut deeper_than_the_wall) = (0usize, 0usize);
+    for b in &boxes {
+        let (Some(w), _) = nearest_run(b, &runs) else {
+            not_on_a_wall += 1;
+            continue;
+        };
+        if b.depth_across(w) > WALL_THICK_M {
+            deeper_than_the_wall += 1;
+            continue;
+        }
+        let (_, far) = b.offsets(w);
+        let is_cornice =
+            b.anchorable && b.hi.y - b.lo.y <= LEDGE_M && far > w.half_plinth_m + 1e-3;
+        if !is_cornice {
+            continue;
+        }
+        // How far out does stone reach under this ledge, and how far out does anything?
+        let (mut mass_under, mut any_under) = (w.half_plinth_m, w.half_plinth_m);
+        let mut considered = 0usize;
+        for o in &boxes {
+            // 🔴 **`o.lo.y`, not `o.hi.y`, and the difference is the whole point of the rule**
+            // (measured 2026-09-01, `docs/FINDINGS.md` FIND-219). Until then this line read
+            // `if o.hi.y > b.lo.y { continue }` — an obstruction only counted when it lay
+            // ENTIRELY below the ledge. A mass that *passes* the ledge is under it as well,
+            // over its whole lower part, and that is the exact shape of the thing this rule
+            // exists to forbid. **The control, run both ways:** grow the inner-gate pier out
+            // of the face — `center_m: (-17, 60, -115), size_m: (6, 120, 44)`, so it reaches
+            // 27.00 m off the centre line against the 30 m rung's own 25.99, and stays under
+            // `WALL_THICK_M` so the deep-block exclusion below cannot answer for it. With
+            // `o.hi.y` this test flagged **2 of 51** cornices; with `o.lo.y`, **11 of 51**, on
+            // both faces. The eight it used to miss were every rung under 120 m, because a
+            // 120 m pier's `hi.y` reads as "not below" a ledge whose floor is at 28.
+            if o.lo.y > b.lo.y - 1e-3 {
+                continue; // it starts at or above this ledge, so it is not under it
+            }
+            let (Some(ow), _) = nearest_run(o, &runs) else { continue };
+            if !std::ptr::eq(ow, w) || o.depth_across(w) > WALL_THICK_M {
+                continue;
+            }
+            // It has to stand under this ledge along the wall, too.
+            let (a_lo, a_hi) = if w.along_x { (b.lo.x, b.hi.x) } else { (b.lo.z, b.hi.z) };
+            let (o_lo, o_hi) = if w.along_x { (o.lo.x, o.hi.x) } else { (o.lo.z, o.hi.z) };
+            if o_hi <= a_lo + 1e-3 || o_lo >= a_hi - 1e-3 {
+                continue;
+            }
+            // And on the SAME SIDE of the wall — a ledge on the field face says nothing
+            // about what a plumb line meets on the district face. `offsets` returns a
+            // distance and has no sign, so the side is read here and nowhere else.
+            //
+            // 🔴 **The ledge is placed by its CENTRE and the mass by its REACH**, and that
+            // asymmetry is the rule (measured 2026-09-01, `docs/FINDINGS.md` FIND-219). A
+            // ledge never straddles the centre line; the things this rule is looking FOR do —
+            // the gate piers are `z = -142.5..-97.5` about a centre line at `z = -120`, and
+            // so is every course of the wall itself. Reading a centre for both put every
+            // straddling mass on the `>=` side, so the two inward-face gate hoods were
+            // compared against **nothing at all** and reported `far - half_plinth` as if that
+            // were a measurement. The `considered` count below is what caught it.
+            let cross =
+                |k: &PlacedBox| if w.along_x { (k.lo.z, k.hi.z) } else { (k.lo.x, k.hi.x) };
+            let (b_lo_c, b_hi_c) = cross(b);
+            let b_outward = (b_lo_c + b_hi_c) * 0.5 >= w.centre_m;
+            let (o_lo_c, o_hi_c) = cross(o);
+            let reaches_b_side =
+                if b_outward { o_hi_c >= w.centre_m } else { o_lo_c <= w.centre_m };
+            if !reaches_b_side {
+                continue;
+            }
+            let (_, o_far) = o.offsets(w);
+            considered += 1;
+            any_under = any_under.max(o_far);
+            if o.hi.y - o.lo.y > LEDGE_M {
+                mass_under = mass_under.max(o_far);
+            }
+        }
+        // **Count what you skip.** Five `continue`s stand between `boxes` and this line, and a
+        // margin computed over an empty inner loop is `far - half_plinth` for every rung — a
+        // number that says the ladder is fine because nothing was ever compared to it.
+        // ⚠️ The exception is measured and not assumed: `outer wall (z = -300) y -0.2..0.1` is
+        // an APRON, a 0.3 m paving slab lying on the ground and reaching past the plinth. There
+        // is nothing under it but the ground, which is not a wall block, so its inner loop is
+        // legitimately empty. Everything with a floor over 1 m has the wall under it.
+        assert!(
+            considered > 0 || b.lo.y <= 1.0,
+            "{} y {:.1}..{:.1}: not one placed block was compared to this ledge — the five \
+             `continue`s above have emptied the inner loop and the margin below is arithmetic \
+             about nothing",
+            w.what, b.lo.y, b.hi.y
+        );
+        let margin = far - mass_under;
+        let strict = far - any_under;
+        rows.push((
+            format!(
+                "{} {} y {:.1}..{:.1}, reaches {far:.2}",
+                w.what,
+                if (if w.along_x { (b.lo.z + b.hi.z) * 0.5 } else { (b.lo.x + b.hi.x) * 0.5 })
+                    >= w.centre_m { "outward face" } else { "inward face" },
+                b.lo.y, b.hi.y
+            ),
+            margin,
+            strict,
+        ));
+        if margin < need_m {
+            too_tight.push(format!(
+                "{} y {:.1}..{:.1} z {:.1}..{:.1} x {:.1}..{:.1}: reaches {far:.2} m off \
+                 the centre line but stone reaches {mass_under:.2} — {margin:.2} m of \
+                 free strip, and a body is {:.2} m across",
+                w.what, b.lo.y, b.hi.y, b.lo.z, b.hi.z, b.lo.x, b.hi.x,
+                2.0 * data().game.player.radius_m
+            ));
+        }
+    }
+    // The denominator this rule is arithmetic over. Most of `maps.ron` is not on the wall at
+    // all, and a version of this test that quietly counted those as passing rungs would read
+    // green while the wall had none.
+    assert!(
+        not_on_a_wall * 3 >= boxes.len(),
+        "only {not_on_a_wall} of {} placed blocks are off the wall — `on_the_run` has \
+         stopped discriminating and this rule is measuring the whole district",
+        boxes.len()
+    );
+    // The canal class, counted rather than assumed: a `continue` nobody counts is exactly
+    // the shape that reported `0 of N` for a defect it never reached.
+    assert!(
+        deeper_than_the_wall > 0,
+        "nothing crosses the wall's line and is deeper than the wall — the WALL_THICK_M \
+         exclusion is dead code and should go"
+    );
+
+    // A wall with no cornices passes every line above vacuously, which is exactly how this
+    // round could fake itself green. The ladder has to EXIST: four runs, and on the main
+    // wall a rung within 35 m of the ground, one at the top, and no gap over 35 m between
+    // two consecutive rungs — 35 m being the pitch the deleted gantry lane was built at.
+    let mut main: Vec<f32> = rows
+        .iter()
+        .filter(|(k, _, _)| k.starts_with("main wall"))
+        .map(|(k, _, _)| {
+            k.split("y ").nth(1).unwrap().split("..").nth(1).unwrap()
+                .split(',').next().unwrap().parse::<f32>().unwrap()
+        })
+        .collect();
+    main.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    main.dedup();
+    assert!(
+        !main.is_empty() && main[0] <= 35.0,
+        "the main wall's lowest cornice is at {:?} — nothing to reach from the boulevard",
+        main.first()
+    );
+    let biggest_gap = main.windows(2).map(|p| p[1] - p[0]).fold(0.0f32, f32::max);
+    assert!(
+        biggest_gap <= 35.0,
+        "the main wall's cornice ladder has a {biggest_gap:.1} m gap in it — rungs at {main:?}"
+    );
+    assert!(
+        too_tight.is_empty(),
+        "{} of {} cornices bottom out inside the wall they hang off:\n{too_tight:#?}\n\
+         all rungs (mass margin / strict margin): {rows:#?}",
+        too_tight.len(),
+        rows.len()
     );
 }

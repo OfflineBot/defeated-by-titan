@@ -50,6 +50,7 @@ pub mod bounds;
 pub mod index;
 pub mod map;
 pub mod supply;
+pub mod water;
 
 use bevy::prelude::*;
 
@@ -73,7 +74,18 @@ impl Plugin for WorldPlugin {
         // `F-012` — the fence. Beside `build_map` and not inside it: it is not a block of the
         // district, it is the district's limit, and it deliberately carries neither `Block`
         // nor `Body` (`src/world/bounds.rs`).
-        app.add_systems(Startup, (map::build_map, supply::build_stations, bounds::build_bounds))
+        app.add_systems(
+            Startup,
+            (
+                map::build_map,
+                supply::build_stations,
+                bounds::build_bounds,
+                // The river. Beside `build_map` and not inside it, for the reason
+                // `bounds::build_bounds` is beside it too: it is not a block of the district.
+                // It carries no `Block`, no `Body` and no collider at all (`world::water`).
+                water::build_water,
+            ),
+        )
             .add_systems(
                 FixedUpdate,
                 (

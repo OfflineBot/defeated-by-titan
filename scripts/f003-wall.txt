@@ -1,0 +1,151 @@
+# f003-wall — THE WALL IS THE STRUCTURE AND THE GATE IS A PASSAGE THROUGH IT.
+#
+# The user played the district on 2026-08-29 and rejected the entrance in one sentence:
+#
+#   „aktuell sind immernoch die grossen tuerme /gates beim eingang. das passt GAR nicht zu
+#    attack on titan und existiert so nicht!"
+#
+# and, asked what should stand there instead, chose **„Echte AoT-Mauer mit Toren drin."**
+# (`docs/QUESTIONS.md`, ANSWERED 2026-08-29). What stood there was two shapes that exist in
+# no AoT frame: **fourteen freestanding gantries** over the main street — two 56 m columns
+# and a crossbeam, a torii — and **four 120 m gatehouse towers** flanking the two gates.
+#
+#   cargo run -- --headless --script scripts/f003-wall.txt --ticks 900
+#   cargo run -- --offscreen --screenshot docs/images/f003-wall-street.png \
+#                --script scripts/f003-wall.txt --ticks 103
+#   cargo run -- --offscreen --screenshot docs/images/f003-wall-aerial.png \
+#                --script scripts/f003-wall.txt --ticks 114
+#
+# 🔴 **The two ticks are the two MARKs and they are written out, not left as a placeholder.**
+# The first version of this header said `--ticks <tick of f003-wall-street>` for both, and what
+# was committed as `f003-wall-street.png` was a **second copy of the aerial** — one tick off it
+# and mean 39.96 away from the street vantage it is named after (`docs/FINDINGS.md` FIND-219).
+# A screenshot triggers at a tick, so a header that does not name the tick cannot be re-run.
+#
+# PINS: **the two vantages** (`warp` + `look` of ACT 0 and ACT 1) — they are a before/after
+# pair and re-aiming either of them makes the pair meaningless — and **the stand and the aim
+# of ACT 2**, which is the swing. When a constant moves under this file, the heights and
+# speeds are re-measured against the same stand; the stand is never moved to recover a number.
+#
+# ## The mechanic the deleted shape was carrying, and it is not decoration
+#
+# `maps.ron` in its own words: *"The bottom of the pendulum lies vertically under the ANCHOR.
+# On a solid tower that point is inside the tower, so a swing that is allowed to run its
+# course ends in the wall you are hanging from. Two columns and a crossbeam put the anchor
+# over open ground."* So the gantry was a physics decision wearing a bad costume. **Delete the
+# shape, keep the property** — and the property is now carried by the wall's own cornices.
+#
+# ## What "over open ground" MEASURES on this wall, exactly
+#
+# The main wall is battered and its widest course is the **plinth: 45.0 m thick**, i.e. its
+# face stands at `|z + 120| = 22.5`. A pendulum bottom lies vertically under its anchor, so an
+# anchor is over open ground **iff its outward offset from the wall's centre line exceeds
+# 22.5 m** — anything less and the arc ends on the wall, whatever the height. That single
+# number is what the cornice ladder is designed against and it is what ACT 2 measures.
+
+wait 1.5                # world, camera, meshes and the render pipelines come up
+
+# ---------------------------------------------------------------------------------------
+# ACT 0 — STREET LEVEL AT THE ENTRANCE. The picture he is judging.
+# On the main street 55 m north of the spawn, looking down the two-gate axis (yaw 0 = -Z).
+# Before: three gantries straddle the street and two 120 m towers flank the gate behind them.
+# After: an empty street, the wall across the whole frame, and one gate in it.
+# ---------------------------------------------------------------------------------------
+warp 0 3 55
+look 0 -1
+wait 0.15
+mark f003-wall-street
+assert height > 0.0     # standing on the main street apron, not inside anything
+assert height < 6.0
+
+# ---------------------------------------------------------------------------------------
+# ACT 1 — THE AERIAL. 110 m up over the main street, 160 m out from the wall, looking at it.
+# The wall crown is at 120 m, so from BELOW the crown at -12 degrees the wall has a FACE in
+# frame and not a lid — and the district's roofs run away underneath it.
+# ---------------------------------------------------------------------------------------
+warp 0 140 110
+look 0 -16
+wait 0.15
+mark f003-wall-aerial
+assert height > 138.0
+assert height < 141.0
+
+# ---------------------------------------------------------------------------------------
+# ACT 2 — ⭐ THE SWING OFF THE GATE CORNICE, and it runs its course over open ground.
+#
+# This is the act the round exists for. The deleted crossbeam's whole argument was *"two
+# columns and a crossbeam put the anchor over open ground"*, and the block that inherits the
+# job is the **gate cornice**: `(0, 35.5, -96.83) 52 x 3 x 9.66`, i.e. y = 34..37 and reaching
+# **28.00 m** off the wall's centre line against the plinth's 22.50 — 5.50 m of free strip
+# with nothing under it but the boulevard.
+#
+# He steps off 40 m up on the main street, 24 m short of the wall, and hooks the cornice
+# **off the gate axis** (yaw 60, not 0) so the pendulum runs ALONG the wall instead of into
+# it. That distinction is not decoration and it was measured both ways on the same binary:
+#
+#   yaw  0  straight at the wall   bottom 12.185 m at 44.602 m/s, then 43.640 -> 2.025 m/s
+#                                  in one step at 18.199 m: the far half of the arc ends
+#                                  against the gate hood. A pendulum whose anchor is on a
+#                                  wall and whose swing plane is normal to it always does.
+#   yaw 60  along the wall         bottom 15.318 m at 42.282 m/s, up the far side to
+#                                  26.110 m, and a second swing after it. **Nothing struck.**
+#
+# So the AoT move is the sideways one, and the wall rewards it. For scale: the fourteen
+# deleted gantries gave 31.4 m/s on a 32.9 m arc bottom (`FIND-041`); this is **42.3 m/s**
+# on a 15.3 m one, on zero gas.
+# ---------------------------------------------------------------------------------------
+warp 0 40 -80
+look 60 -11             # yaw +60 = 60 degrees off -Z toward +X, so the swing plane runs
+wait 0.1                # along the wall face and not into it; -11 clears the cornice lip
+mark f003-wall-stand
+assert height > 39.0     # 39.714 — airborne over the main street, 24 m short of the wall
+assert height < 40.5
+# ⚠️ DERIVED from `gravity_m_s2`, and it fires BEFORE the hook so nothing but gravity is in
+# it: `wait 0.1` is an 8-tick settle, |g| * 8/60 = 4.267 m/s at -32. The bound is that plus
+# one more simulation step, |g|/60 = 0.533, i.e. 4.80.
+assert speed < 4.8
+assert gas == 15000
+
+hook right 6.0
+wait 0.25
+mark f003-wall-hooked
+assert rope == 1         # the gate cornice, and it holds
+assert height > 36.5     # 37.105
+assert height < 38.0
+
+wait 0.25
+mark f003-wall-quarter
+assert height > 31.0     # 31.799 m at 24.989 m/s — falling into the arc
+assert speed > 24.0
+wait 0.25
+mark f003-wall-half
+assert height > 24.0     # 24.309 m at 33.938 m/s
+assert speed > 33.0
+
+wait 0.25
+mark f003-wall-threequarter
+assert height > 17.0     # 17.470 m at 40.352 m/s
+assert speed > 40.0
+
+wait 0.25
+mark f003-wall-arc-bottom
+# ★ THE MEASUREMENT THIS ROUND EXISTS FOR. 15.318 m over the boulevard at 42.282 m/s — the
+# bottom of a pendulum hanging off a ledge on the wall, and it is in AIR. The proof that it
+# is air and not stone is the line after the next mark: he comes back UP to 26.110 m. A swing
+# that ends inside geometry does not; `f003-ashgate.txt` ACT 5 measures that failure mode on
+# a house facade and reads 18.909 -> 7.033 m/s in a single tick.
+assert height > 14.8
+assert height < 16.0
+assert speed > 41.5      # 42.282 = 7.0x running speed (6.0 m/s, game.ron)
+assert speed < 43.0
+
+wait 0.25
+mark f003-wall-rising
+assert height > 19.0     # 19.384 m at 38.941 — past the bottom and climbing again
+assert speed > 38.0
+
+wait 0.25
+mark f003-wall-far-apex
+assert height > 25.5     # 26.110 m at 29.149 m/s: 10.8 m of the fall given back, and the
+assert speed > 28.0      # rope is still on. NOTHING WAS STRUCK.
+assert gas == 15000      # not one unit spent — the whole act is the rope

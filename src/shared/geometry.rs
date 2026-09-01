@@ -58,6 +58,21 @@ impl BodyMask {
     pub const ANCHORABLE: BodyMask = BodyMask(1 << 1);
     /// Takes blade hits (`blades`, `combat`).
     pub const SLICEABLE: BodyMask = BodyMask(1 << 2);
+    /// **Water.** The user, 2026-08-29, asked whether a hook may bite it:
+    /// *„Nein — Wasser haelt keinen Haken."*
+    ///
+    /// This bit is what `vector::hookable::SurfaceKind::of` reads to answer that, and it is
+    /// the **first** category the `Q-078` switch turns off — the toggle he asked for in the
+    /// same breath as *„grundsetzlich erstmal ales"*.
+    ///
+    /// ⚠️ **Nothing in the shipped world wears it yet, and that is on purpose.** A body of
+    /// water carries no `Body` at all today (`shared::water::WaterVolume` explains all four
+    /// absences), because `SpatialIndex::cast_ray` and `::aabb_overlaps` are still stubs and a
+    /// water body in the index is a body nobody can find. The rule stands **in front of** its
+    /// wearer deliberately: the day water becomes castable — a filled-in index, a sensor, a
+    /// titan wading — it has to arrive un-hookable rather than have somebody remember.
+    /// `LAYER_WORLD` in `shared::layers` is a label without a wearer for the identical reason.
+    pub const WATER: BodyMask = BodyMask(1 << 3);
 
     pub fn contains(self, other: BodyMask) -> bool {
         self.0 & other.0 == other.0 && other.0 != 0

@@ -28,6 +28,7 @@ pub mod layers;
 pub mod anchors;
 pub mod terrain;
 pub mod settings;
+pub mod water;
 
 pub use schedule::{IntentSystems, SimulationSystems, Tick};
 pub use geometry::{player_aabb, AnchorSurface, Block, Ground, Body, BodyMask};
@@ -58,3 +59,4 @@ pub use anchors::{
     is_anchor_name, ModelAnchors, ModelName, ANCHOR_NAMES, CORTEX_ANCHOR, HOOK_PREFIX,
 };
 pub use terrain::{CellRole, TerrainField};
+pub use water::{Submerged, WaterVolume};

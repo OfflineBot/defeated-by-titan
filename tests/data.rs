@@ -369,10 +369,19 @@ fn t005_the_gas_tank_is_the_value_the_user_asked_for_and_names_its_dependents() 
 // `t005_every_script_that_asserts_gas_is_on_the_tank_checklist`, so this cannot fall behind
 // the directory again — which is the whole of what FIND-073 complained about.
 const TANK_SCRIPTS_EXACT: &[&str] = &[
+    // The river (2026-09-01). ACT 1 asserts `gas == 15000` on the tick before the water, so
+    // this file goes RED on any move of the tank and can never go quiet — which is why it is
+    // here and not in one of the two dangerous groups, even though ACT 3b's
+    // `assert gas < 14990` is a delta off the same number (15000 - 26.98 measured).
+    "f-water.txt",
     "f-007-boost.txt",
     "f-018-gas.txt",
     "f003-ashgate.txt",
     "f003-ruins.txt",
+    // The wall (2026-09-01). ACT 2 brackets the swing with `assert gas == 15000` at the
+    // stand and again at the far apex: the whole act is the rope and not one unit is
+    // spent, so the pair is what says so. Both go RED on any move of the tank.
+    "f003-wall.txt",
     "f004-towers.txt",
     "f018-budget.txt",
     "f025-chain.txt",
