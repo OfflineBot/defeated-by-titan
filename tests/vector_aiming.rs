@@ -1120,3 +1120,137 @@ fn f003_the_tag_survives_as_a_switch_that_can_take_the_untagged_surfaces_back_ou
     look(&mut app, id, 0.0, 0.0);
     assert!(aim_of(&app, e).anchorable, "the switch does not switch back");
 }
+
+// ---------------------------------------------------------------------------------------
+// 11. F-002 — **which eye**, and it is a schedule question, not a geometry one
+// ---------------------------------------------------------------------------------------
+
+/// ★ **The ray has to start at the eye the frame is drawn from, not at the one before it.**
+///
+/// `f002_the_ray_starts_at_the_eye_and_not_between_the_feet` (in `src/vector/aim.rs`) pins the
+/// **offset**: `translation + Y·eye_height_m`. It cannot see *when* that translation is read, and
+/// that is the whole of `FIND-217` / `B-029`: with `aim` in `SimulationSystems::World` the ray
+/// started at the position from **before** `Integrate` while `render::attach_camera`'s camera —
+/// a child of the player at exactly the same offset — rendered from the position **after** it.
+/// One fixed step of eye travel between the two, an error in **angle** (`v·dt/d`) that diverges
+/// as the player closes on his target, and every measurement this repository had was taken
+/// standing still, where it is exactly zero.
+///
+/// So this test asks the camera, not the arithmetic. It compares the game's `AimPoint` against
+/// the camera's own propagated `GlobalTransform` — the transform the picture is made from — and
+/// nothing here recomputes either one. That is `CLAUDE.md` rule 5's provenance clause: the two
+/// things that have to agree are both produced by the game.
+///
+/// **What `vector::aim` reads:** the player's `Transform`, `eye_height_m`, `Intent::look_dir()`,
+/// `Velocity` (assist scoring only), `hook_range_m`, `HookableSurfaces`, the spatial world,
+/// `PlayerSettings`.
+/// **What this fixture varies:** the tick (120), the eye **speed** (0 → boost — the axis the
+/// still fixtures hold), the yaw (2 °/tick), and the distance to whatever is ahead.
+/// **What it holds constant, and why:** the pitch (0 — `rotate_camera` clamps pitch and
+/// `vector::aim` does not, which would be a second, unrelated difference) and the two aim-assist
+/// knobs (0 by default, and 0 **is** the absence of the assist — a bent aim is off the look axis
+/// on purpose, `F-024`).
+/// **What it skips: nothing.** Ticks with no hit are counted in their own bucket and the count is
+/// asserted, so the verdict is not arithmetic over the survivors.
+#[test]
+fn f002_the_ray_starts_at_the_eye_the_frame_is_drawn_from() {
+    use bevy::input::ButtonInput;
+    use defeated_by_titan::shared::{LookOverride, LocalPlayer, Velocity, WarpPlayer};
+
+    let mut app = app_on_current_map();
+    app.update();
+    app.update();
+
+    let player = {
+        let mut q = app.world_mut().query_filtered::<Entity, With<LocalPlayer>>();
+        q.iter(app.world()).next().expect("there is a local player")
+    };
+    let id = *app.world().get::<PlayerId>(player).expect("he carries his id");
+
+    // The stand `scripts/f026-turn.txt` boosts from, driven through the two channels the script
+    // driver uses — `WarpPlayer` and `ButtonInput`/`LookOverride`. Nothing writes an `Intent`
+    // onto the local player behind `net::local::read_input`'s back.
+    app.world_mut()
+        .write_message(WarpPlayer { player: id, pos_x: 51.0, pos_y: 0.0, pos_z: 13.0 });
+    app.update();
+    {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.press(KeyCode::KeyW);
+        keys.press(KeyCode::ShiftLeft);
+    }
+
+    let mut hits = 0usize;
+    let mut misses = 0usize;
+    let mut worst_rad = 0.0_f32;
+    let mut worst = (0u32, 0.0_f32, 0.0_f32);
+
+    for step in 0..120u32 {
+        app.world_mut().resource_mut::<LookOverride>().0 =
+            Some(((step as f32 * 2.0).to_radians(), 0.0));
+        app.update();
+
+        let Some(point) = aim_of(&app, player).point_m else {
+            misses += 1;
+            continue;
+        };
+        let speed = app.world().get::<Velocity>(player).expect("he has a velocity").0.length();
+        // **The camera's own transform, propagated** — the one `hud::arm_aim::place_arm_aim`
+        // projects through and the one the image is rendered from. Not `translation + eye`.
+        let cam = {
+            let mut q = app
+                .world_mut()
+                .query_filtered::<&GlobalTransform, With<Camera3d>>();
+            *q.iter(app.world()).next().expect("the camera hangs on the local player")
+        };
+        let to_point = point - cam.translation();
+        let distance = to_point.length();
+        assert!(distance > 0.01, "the aim point sits inside the camera at step {step}");
+        // ⚠️ **Not `Vec3::angle_between`.** It is `acos` of a dot product, and near zero that
+        // formulation throws away half the mantissa: two vectors that differ by nothing
+        // measurable come out at `sqrt(2 * f32::EPSILON)` = **4.88e-4 rad**, which is 0.30 px
+        // and would have been read as a residual defect. The perpendicular component over the
+        // along component is the same angle's tangent and it is exact in the small.
+        let along = to_point.dot(cam.forward().as_vec3());
+        let off = (to_point - cam.forward().as_vec3() * along).length() / along.max(1e-6);
+        if off > worst_rad {
+            worst = (step, speed, distance);
+        }
+        worst_rad = worst_rad.max(off);
+        hits += 1;
+    }
+
+    // The angle in the unit the player reads it in: a 1280 px screen through `game.ron`'s
+    // 60° vertical FOV is 2 * 640 / tan(fov_h/2) — computed from the file, never a literal.
+    let fov_v = data(&app).game.camera.fov_deg.to_radians();
+    let half_w = 640.0_f32;
+    let tan_half_h = (fov_v * 0.5).tan();
+    let tan_half_w = tan_half_h * (1280.0 / 720.0);
+    let worst_px = half_w * worst_rad / tan_half_w;
+
+    println!(
+        "f002 eye: {hits} hits + {misses} without a target = {} samples; worst {:.6} \
+         of tangent = {:.2} px at step {} ({:.1} m/s, {:.2} m away)",
+        hits + misses,
+        worst_rad,
+        worst_px,
+        worst.0,
+        worst.1,
+        worst.2
+    );
+
+    assert_eq!(hits + misses, 120, "every tick lands in a bucket, none is dropped");
+    assert!(
+        hits >= 60,
+        "only {hits} of 120 ticks found anything — this fixture is not flying at surfaces and \
+         cannot see the defect it exists for"
+    );
+    assert!(
+        worst_px < 1.0,
+        "the aim point sits {worst_px:.1} px ({worst_rad:.6} rad of tangent) off the axis of the \
+         camera the frame is drawn from, at {:.1} m/s and {:.2} m from the surface. The ray was \
+         cast from an eye the camera has already left — move `vector::aim` back to \
+         `SimulationSystems::World` and this is what it looks like",
+        worst.1,
+        worst.2
+    );
+}

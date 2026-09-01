@@ -37,7 +37,7 @@ use bevy::prelude::*;
 use crate::data::GameData;
 use avian3d::prelude::LinearVelocity;
 
-use crate::shared::{Block, LocalPlayer, PlayerSettings, SupplyStation};
+use crate::shared::{Block, LocalPlayer, PlayerSettings, SupplyStation, WaterVolume};
 
 pub struct RenderPlugin;
 
@@ -60,6 +60,9 @@ impl Plugin for RenderPlugin {
                     attach_camera,
                     apply_field_of_view,
                     build_block_meshes,
+                    // The river (`world::water`). Beside `build_block_meshes` and not inside
+                    // it: water carries no `Block`, on purpose (`shared::water`).
+                    build_water_meshes,
                     // `.chain()`: the material has to exist before the colour is written into
                     // it, and Bevy's sync point between two chained systems is what makes
                     // that true in the same frame.
@@ -420,6 +423,44 @@ fn mark_supply_stations(
         if let Some(mut material) = materials.get_mut(&handle.0) {
             material.base_color = want;
         }
+    }
+}
+
+/// **Draws the river**, because nothing else does.
+///
+/// Its own builder and not [`build_block_meshes`], for the same reason
+/// [`build_station_meshes`] is its own: `Block` means *a cuboid of the city*, and
+/// `tests/world.rs::f003_the_city_comes_from_the_file_and_not_twice` counts `Block` entities
+/// against `world::map::plan_blocks`. Four supply poles once made that count 2875 against
+/// 2871; a 700 m river would do it again.
+///
+/// The colour comes off the [`WaterVolume`] and not out of `maps.ron: palette`, because
+/// `render` may not know `world` and the palette lives in a map file that has no water in it
+/// (`assets/data/water.ron` carries the hue and says why).
+///
+/// ⚠️ **`alpha_mode` stays `Opaque` and the surface is deliberately dark.** Transparency here
+/// would buy one thing (seeing the channel floor) and cost two: every transparent surface in
+/// the game sorts against every other one, and a river you can see through reads as a hole
+/// rather than as water from the 60 m the player actually flies at. Low poly, flat colour —
+/// the same rule the rest of the world is built under (`docs/conventions.md`).
+fn build_water_meshes(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    fresh: Query<(Entity, &WaterVolume), Without<Mesh3d>>,
+) {
+    for (e, water) in &fresh {
+        let size = water.half_size_m * 2.0;
+        let mesh = meshes.add(Cuboid::new(size.x, size.y, size.z));
+        let material = materials.add(StandardMaterial {
+            base_color: Color::linear_rgb(water.color[0], water.color[1], water.color[2]),
+            // Not chrome (`docs/models.md`, glTF trap 2) — and smoother than stone, because a
+            // water surface is the one thing in this map that is allowed to catch the sun.
+            metallic: 0.0,
+            perceptual_roughness: 0.35,
+            ..default()
+        });
+        commands.entity(e).insert((Mesh3d(mesh), MeshMaterial3d(material)));
     }
 }
 

@@ -1923,3 +1923,379 @@ file pins. Shifting the slash by the extra `8.90 / 28 = 0.318 s` of climb makes 
 **0.25 m inside** a torso capsule of radius 2.00 m (it was 1.25 m). The fix is to move the stand
 out to `titan_x − 2.60` and re-measure the gas bounds, and that is the rope stream's file and the
 rope stream's ledger. Diagnosed, not guessed: `1 of 25`, `assert titans == 0` at line 277.
+
+---
+
+## FIND-217 — the marker moved because the ray was cast from **last tick's eye**, and the instrument printed `none` for its own worst case
+
+*(measured 2026-09-01 · `src/vector/mod.rs:88` · `src/hud/arm_aim.rs::trace_arm_aim` ·
+`scripts/f026-turn.txt` · pinned binaries, one script, one machine)*
+
+He said it twice: *„es bewegt sich immernoch also die target seile"*. FIND-212 removed a constant
+16 px stand-down and left the moving half open. This is the moving half.
+
+### 1 · The instrument first, because without it the number is over the wrong set
+
+`trace_arm_aim` took its projection with `.ok()`, so **every point `Camera::world_to_viewport`
+refuses — behind the near plane — printed the literal `none`** for `proj`, `dproj` and `dgp`. That
+is exactly the sample where the marker is clamped to a screen edge and the error is largest.
+Measured on `scripts/f-001-hooks.txt --ticks 400`: **347 of 1650 samples**, the worst of them
+standing **350.00 px** from the crosshair with nothing printed. It now takes the same
+[`edge_pixel`] fallback `place_arm_aim` takes and says which of the two it was in `clamp=`.
+**A sample that carries no number leaves the denominator, and `0 of N` over the survivors is
+arithmetic about the wrong set.**
+
+### 2 · The defect: `aim` ran one whole fixed step ahead of the camera that draws its answer
+
+`vector::aim` casts from `translation + Y·eye_height_m` in `SimulationSystems::World`, i.e.
+**before** `Integrate`. `render::attach_camera` hangs the camera on the player at exactly that
+offset, and the HUD projects the answer in `PostUpdate` — from the position **after** `Integrate`.
+The error is one step of eye travel expressed as an **angle**, `v·dt/d`, so it diverges as the
+player closes on the surface he is aiming at. At t = 432 the aim point is a wall **0.35 m** ahead
+of an eye moving at 29.4 m/s: `tgt=45.113,0.850,32.128` from the previous eye, `proj=220.02` —
+**419.98 px** from a crosshair at 640.
+
+`scripts/f026-turn.txt`, Left arm, whole boost `t = 252..435`, 723 / 679 samples, pinned binaries:
+
+| `dglyph` | median | p95 | max | worst single-frame jump |
+|---|---|---|---|---|
+| `World` (before) | 14.00 | 48.74 | **419.98** | **392.92** (t 431 → 432) |
+| `PostStep` (after) | **0.00** | **0.00** | **0.01** | 0.01 |
+
+The still, slow-pan and flick phases read 0.00 both ways — **the fixture that could see this had
+to move the player**, and every earlier measurement of this element was taken standing still.
+
+**The control that makes the table attributable:** over the **384 ticks both runs share**, `eye`
+and `fwd` are printed identically to every decimal — 0 ticks differ on either — while `tgt`
+differs on **182**. The schedule move changed the aim and provably nothing about the simulation,
+so the pixels above are the aim's and not a physics divergence between two binaries.
+
+The picture: `docs/images/f026-marker-in-flight-before.png` and `f026-marker-in-flight.png`
+(`--ticks 432`, same script, both pinned binaries). **626 pixels differ**, all in rows 350..369:
+the letter and the 20 px ring leave `x 192..229` and arrive at `x 612..663`, and the band
+`x 600..680, y 350..370` holds **no cyan at all** before and `maps.ron`'s exact (63, 237, 249)
+after.
+
+### 3 · The fix is one line, and it costs the rope nothing
+
+`app.add_systems(FixedUpdate, aim::aim.in_set(SimulationSystems::PostStep))`.
+`hook::update_hooks` reads `ArmAim` in `Intent`, which is after `World` **and** after the previous
+tick's `PostStep`; `Integrate` is the only writer of a player's `Transform` and it does not sit
+between those two points, so **the eye the ray starts from is the same `Vec3` either way**. What
+changes is that the rope now flies at the aim of the tick whose picture the player was looking at
+when he pressed, instead of one no frame ever showed him.
+
+### 4 · Three things it moved that were not the target
+
+* `tests/hud.rs::f026_the_rope_flies_at_the_point_the_marker_stood_on` went red on an 11 mm drift:
+  the `ArmAim` the shot used is now the one standing **before** the step, not after it. The test
+  reads the other snapshot; the claim is unchanged and stronger.
+* `tests/hud.rs::f024_a_snap_moves_the_marker_sideways_on_the_screen_and_never_up_or_down` carried
+  a **compensation for this very defect** — a second `stand_and_look` after the step, put there to
+  warp the eye back to where `aim` had cast from (1.4 px residual with the velocity zeroed, 8.6 px
+  without). With `aim` in `PostStep` the compensation re-opens the gap from the other side and the
+  test read 2.26 px. Deleted: worst vertical movement **0.001 px** over 144 pairs.
+* `hud::crosshair` and `hud::catch_band` need no change — both read the answer rather than
+  re-deriving it, which is the corollary rule, and both are now fed a point that agrees with the
+  frame they are drawn into.
+
+### 5 · And a measurement trap that cost a round of confusion
+
+`Vec3::angle_between` is `acos` of a dot product, and near zero that formulation throws away half
+the mantissa: two vectors that differ by nothing measurable come out at `sqrt(2·f32::EPSILON)` =
+**4.88e-4 rad = 0.30 px**, which reads exactly like a residual defect. `|a − b·(a·b)| / (a·b)` is
+the same angle's tangent and it is exact in the small. **Do not measure a small angle with
+`angle_between`.**
+
+**Evidence:** `tests/hud.rs::f026_the_marker_stays_on_the_cursor_while_he_is_flying` (240 samples,
+`50.00 px → 0.00 px`) · `tests/vector_aiming.rs::f002_the_ray_starts_at_the_eye_the_frame_is_drawn_from`
+(120 samples, `54.48 px → 0.00 px`). Both go red on the one-line revert to `World`, measured.
+
+---
+
+## FIND-216 — the game had no water at all, and the box that fixes it has to reach INTO the riverbed
+
+**2026-09-01 · `[offlinebot]` · `assets/data/water.ron`, `src/world/water.rs`,
+`src/player/swim.rs`, `src/shared/water.rs`**
+
+`maps.ron:577` carried its own heading for eighteen days — **"The river, in a game that has no
+water"**. The Ashgate canal was a dry lowered lane: 10 m between the quays, floor 4 m down,
+`anchorable: false`, bridges as the only crossings. No surface, no colour, no rule for a body
+that falls in. The user, 2026-08-29, answered the three questions that opens:
+
+| | his words | where it lives now |
+|---|---|---|
+| on contact | *„Man schwimmt / wird langsam."* | `player::swim`, `water.ron: swim` |
+| hookable | *„Nein — Wasser haelt keinen Haken."* | `vector::hookable::SurfaceKind::Water` |
+| size | *„das wasser ist auch VIEL zu klein"* | **half open** — see §3 |
+
+### 1 · The measurement: a water box that stops 0.05 m above the riverbed is a trap
+
+The first version put the bed at **-3.95**, 0.05 m above the channel floor (-4.00), by the same
+z-fight argument the x axis uses. `tests/player.rs::f003_a_body_dropped_into_the_canal…` went red
+with **`the body sits 0.000 m under the surface`** after four seconds in the river.
+
+The cause is arithmetic, and it is the whole finding: **exponential drag needs `v / drag_per_s`
+metres to stop a body**, and a 20 m drop enters at `sqrt(2·32·20.6) = 36.3 m/s`, so it needs
+**6.05 m** — against a channel that is **3.4 m** deep. So the body punches through to the floor,
+lands at `y = -4.00`, and that is **below `min.y` of the water box**: `depth_m` answers *dry*, the
+buoyancy never fires, and he lies on the bed for ever with no way out but the gear.
+
+**The rule: a water volume must reach at or below the solid floor under it, never above.**
+Fixed by putting the bed at **-4.15**, 0.15 m *inside* the 0.2 m floor slab — invisible, because
+those faces are inside stone. `tests/world.rs::f003_the_canal_water_lies_inside_the_channel…`
+now asserts the direction (`bed <= floor top` **and** `bed >= floor underside`), so the next map
+cannot repeat it.
+
+### 2 · The evidence, one run, `scripts/f-water.txt`, 11 asserts, exit 0
+
+| t | moment | y | speed | gas |
+|---|---|---|---|---|
+| 19 | over the channel, dry | 18.392 | — | 15000.000 |
+| 66 | the last tick before the water | 0.628 | **35.200** | — |
+| 218 | in the river | -1.292 | **0.195** | — |
+| 237 | rope on, **fired from inside the water** | -1.291 | rope 1 | — |
+| 385 | out, on gas | **9.814** | — | **14973.018** |
+
+**35.200 → 0.195 m/s is 180x in 2.5 s**, and he floats at `-1.292` — 0.692 m under the surface
+against the 0.727 m the two files predict (`-gravity_m_s2 · surface_band_m / buoyancy_m_s2`).
+Picture: `docs/images/f003-water.png`.
+
+### 3 · What is NOT done: *„VIEL zu klein"* is half answered, and the diff is one file away
+
+The water can be no wider than the hole in the ground it lies in, and that hole is
+`maps.ron: blocks` — **another stream's file this round**. What is needed, exactly:
+
+```
+-  (center_m: (-70.0, -4.1, 0.0), size_m: (10.0, 0.2, 700.0), color: "stone_gray", …)   channel floor
+-  (center_m: (-80.0, -1.8, 0.0), size_m: (10.0, 4.4, 700.0), …)                        quay west
+-  (center_m: (-60.0, -1.8, 0.0), size_m: (10.0, 4.4, 700.0), …)                        quay east
++  (center_m: (-70.0, -4.1, 0.0), size_m: (40.0, 0.2, 700.0), color: "stone_gray", …)   channel floor
++  (center_m: (-95.0, -1.8, 0.0), size_m: (10.0, 4.4, 700.0), …)                        quay west
++  (center_m: (-45.0, -1.8, 0.0), size_m: (10.0, 4.4, 700.0), …)                        quay east
+```
+
+and then **two numbers in `water.ron`**: `size_m: (39.9, 3.55, 700.0)`. ⚠️ `maps.ron` argues at
+:996 that the quays are 10 m apart *because* a 12 x 11 m row house must not fit into the gap —
+at 40 m that argument is gone and the aprons have to carry it instead, or the layout will roll
+houses over the water. The towers he asked for beside it (*„adde andere tuerme beim wasser"*) are
+`maps.ron` rows as well and are not in this round.
+
+### 4 · Two absences that are decisions, not omissions
+
+* **Water carries no `Collider`.** A collider you can swim through is a `Sensor`, and a sensor
+  answers `SpatialQuery::cast_ray` like anything else — avian clamps `tmin` to 0 for an origin
+  **inside** a shape (`bevy_math-0.19.0/src/bounding/raycast3d.rs:64`), so the one shot the player
+  needs to get out would be the one shot that answers at distance 0.
+  `tests/player.rs::f003_a_hook_fired_from_inside_the_water_still_finds_the_quay_above_it` is
+  the guard.
+* **Water carries no `Body`, so it is not in the `SpatialIndex`** — and it would buy nothing if it
+  were: **`SpatialIndex::cast_ray` and `::aabb_overlaps` are both still stubs**
+  (`src/shared/spatial.rs`, "filled in by job R — T-036a") that answer `default()` and clear the
+  output buffer. `player::swim` therefore reads a `Query<&WaterVolume>` (**one entity** on the
+  shipped map), and the day the index answers, that is the one line that changes.
+
+## FIND-218 — the 25 GB was not the map: it was bevy formatting 2 290 028 cycles
+
+**2026-09-01 `[offlinebot]` · `B-030` · refutes the `n²`-over-blocks hypothesis outright**
+
+The standing hypothesis was quadratic-in-block-count: the map grew 2901 → **8073 blocks**
+yesterday, and `8073² · 76 B = 4.61 GB` against the 4.63 GB that failed — a 0.5 % match. It is a
+coincidence, and here is the control that kills it.
+
+| map | blocks | peak RSS, test green | peak RSS, cycle present | cycles enumerated |
+|---|---|---|---|---|
+| graybox | **101** | 166 / 168 MB | **529 624 kB** | **2 290 028** |
+| ashgate | **8073** | 244 / 251 MB | **529 128 kB** | **2 290 028** |
+
+A/B/A/B, one pinned binary, `ulimit -v 6291456`. **80× the blocks moves peak RSS by 1.5×**, and
+the explosion is *bit-for-bit the same size on a map with 101 blocks* — it fires before the map
+is built at all. The failing allocation is **4 966 055 936 = 37 · 2²⁷**, a `Vec` doubling, not
+`n² · 76`; 4966055936 / 8073² = 76.2, not an integer. The arithmetic matched because two large
+numbers were multiplied until they did.
+
+**What it actually is:** a dependency cycle in `FixedUpdate` (`B-030`), and bevy's report about
+it. `dependency_cycle_to_string` (`bevy_ecs-0.19.0/src/schedule/error.rs:174-206`) formats
+**every simple cycle in the strongly connected component** into one `String`. The count of simple
+cycles is combinatorial in the SCC, not linear in anything visible: 10 nodes here, 2.29 million
+cycles, and the `String` doubles 155 MB → 310 → 620 → 1.24 G → 2.48 G → **4.96 G**.
+
+**Complexity, before and after.** Before: `O(number of simple cycles in the SCC)` × the length of
+each — unbounded in practice, and *no* map size makes it safe. After: the cycle is gone, so the
+enumeration never runs (`O(1)`); and where a future cycle appears, the printed message is bounded
+by `MAX_CYCLES_SHOWN · MAX_NODES_PER_CYCLE` = 3 × 12 node names, a constant. The residual
+529 MB is bevy's own `Vec<Vec<SystemKey>>` of cycles, which we cannot bound without patching
+bevy — but 0.53 GB does not kill a machine, and `tools/test.sh`'s cap covers it.
+
+**Three rules this earned:**
+
+1. 🔴 **`ulimit -v` and `mold` do not compose.** `( ulimit -v 6291456; cargo test ... )` — the
+   invocation prescribed as the *safe* one — fails at the **linker** with
+   `mold: cannot reserve 8589934592 bytes of virtual memory` whenever anything needs rebuilding.
+   The guard reports a link error where you are looking for a memory error. **Compile uncapped,
+   run capped** (`tools/test.sh`).
+2. 🔴 **A test-only schedule edge is production code for the machine.** Neither
+   `.after(aim)` line is shipped, the game runs fine, and `grep`ping `src/world/` for a nested
+   loop found nothing because there was nothing to find. The suspect list was drawn from the
+   *changed data* and the bug was in the *unchanged test*.
+3. **Instrument, and instrument the allocator, not the loop.** A 30-line `#[global_allocator]`
+   in the test binary that aborts with `Backtrace::force_capture()` above 200 MB named the site
+   — `bevy_ecs::schedule::error::dependency_cycle_to_string` — on the first run. Bisecting
+   Startup systems or reading `src/world/` would never have reached it: the allocation is not in
+   our code at all.
+
+---
+
+## FIND-219 — the refute pass on the wall, the water and the marker: two hold, and the evidence for the third was a duplicate of the wrong picture
+
+*(2026-09-01 · adversary round on the uncommitted three-stream build · `tools/corpus.sh` before
+and after)*
+
+**Which binary measured what, because two of these rounds need different answers.** Every
+`maps.ron` and every `water.ron` control ran against **one pinned binary** (`dbt-round2`, copied
+before the first edit) — the data moved and the code did not. The marker's A/B is the opposite by
+construction: its control **is** a one-line source change, so the two runs are two binaries, and
+what pins them is that nothing else in the tree moved between the builds and both traces come
+from the same script and the same map.
+
+### 1 · The marker — **HOLDS**, and it holds on a fixture FIND-217 never used
+
+`f026-turn` reproduces FIND-217 exactly. The new fixture is a **rope-driven flight into the
+gate hood** (`f003-wall.txt` ACT 2 at yaw 0 instead of 60): a target **0.354 m** in front of the
+eye at 33 m/s, which is the `v·dt/d` geometry the finding said would diverge.
+
+| fixture, Left arm, target under 5 m | `PostStep` (as built) | one-line revert to `World` |
+|---|---|---|
+| `f026-turn` t 0..620 | med 0.000 · **max 0.01 px** | med 27.06 · **max 419.98 px** · 392.92 jump |
+| flight into the gate hood | med 0.010 · **max 0.010 px** | med 0.010 · **max 169.01 px** · 152.93 jump |
+
+Both arms measured, not one (`ALL` and `d<5m` split, `n = 1800` per arm). Split by state, every
+`Ready` / `Free` / `Busy` sample on both arms is **0.00 px**; the only non-zero rows are
+`Anchored`, where the marker is supposed to sit on the anchor and not on the crosshair.
+
+The two shipped pictures reproduce: **all** differing pixels lie in rows **350..369**, the cyan
+`(63, 237, 249)` count in `x 600..680` goes **0 → 147** and in `x 192..229` goes **142 → 0**,
+exactly as FIND-217 says. Only its total is off — **641** by a plain per-pixel comparison against
+its **626**, and no threshold reproduces 626 (624 at `>16`, 630 at `>8`). A stated count should be
+reproducible by the obvious instrument or say which one it used.
+
+🔴 **But `clamp=0` still does not mean "a sane pixel".** `Camera::world_to_viewport` returns
+`Ok` with coordinates thousands of pixels off-screen for a point just inside the near plane, and
+`place_arm_aim` clamps the glyph to the rim anyway. On `f-001-hooks` the flag counts **532**
+clamped Left-arm samples, while **352** more carry `clamp=0` with `dgp` up to **4672.87 px** —
+i.e. the layout clamped them and the instrument says it did not. FIND-217 closed the `none` hole
+and left this one; it does not move any number above, because those samples are all `Anchored`.
+
+### 2 · The water — **HOLDS**, and the drowning trap it was built against does not reproduce
+
+Four drop heights, one channel, `z = 60` (FIND-216 predicted a body needs `v / drag_per_s`
+metres to stop against 3.55 m of water):
+
+| drop | entry speed | after 2.5 s | height after 2.5 s | still there 6 s later |
+|---|---|---|---|---|
+| 4.6 m | — | 0.259 | **−1.295** | — |
+| 20 m | 34.667 | 0.188 | **−1.293** | — |
+| 60 m | 60.265 | 0.209 | **−1.291** | −1.294 |
+| 200 m | **75.000** (terminal) | 0.154 | **−1.312** | — |
+
+He floats at −1.29 every time; **he never lies on the bed**, which is the failure the bed at
+−4.15 was moved to prevent. Warped into the corner of bed and quay at (−65.4, −3.9, 60) he rises
+out of it. `player::swim` works: same key, two media — **6.000 m/s dry against 2.679 m/s wet**,
+45 % of walking, which is *„Man schwimmt / wird langsam"* in one line.
+⚠️ **My own first swim measurement said 0.256 m/s and was wrong**: the mark stood on the tick
+`key w 4.0` expired, so it measured the release and not the hold. *Sample the middle of a hold,
+never its last tick.*
+
+**Each of the three water claims has its own knob and each knob moves its own number**, with the
+dry control unmoved at 6.000 m/s in all three runs:
+
+| knob | shipped | control | floating, no key | swimming |
+|---|---|---|---|---|
+| `drag_per_s` | 6.0 | 0.5 | 0.252 → **3.572** | 2.679 → 4.323 |
+| `swim_speed_m_s` | 2.5 | 0.0 | 0.252 (unmoved) | 2.679 → **0.433** |
+| `gas_cost_factor` | 2.0 | 1.0 | — | gas 14973.018 → **14977.814** |
+
+🔴 **The gas surcharge is the one that does not survive being looked at.** Doubling the price of
+working under water costs **4.796 units of a 15 000 tank — 0.032 %** — because only the part of
+the climb that is still submerged is billed, and that is a fraction of a second. `f-water.txt`'s
+`assert gas < 14990` holds at *both* settings, so the act does not measure the factor it says it
+measures. Either the number is much larger than 2.0 or the assert should stop claiming it
+(`docs/QUESTIONS.md` Q-084 owns the value).
+
+### 3 · The wall — the mechanic holds, **the street picture did not exist**
+
+`docs/images/f003-wall-street.png` was a **second copy of the aerial**, one tick off: against my
+own render of its own documented tick it differed by mean 39.96 (862 569 px), against the aerial
+by mean **1.60**. The aerial is genuine — my render of tick 114 is **bit-identical** to it. The
+missing picture is the one the user's sentence is about (*„die grossen tuerme /gates beim
+eingang… passt GAR nicht"*), and it is now rendered from ACT 0's mark tick, t = 103.
+
+The swing is real and attributable. Deleting **one line** of `maps.ron` moves every number of
+ACT 2, which is the control the round did not have:
+
+| ACT 2 mark | shipped | gate cornice deleted | gate hood deleted | 30 m rung deleted |
+|---|---|---|---|---|
+| arc bottom | **15.318 m @ 42.282** | 4.371 @ 50.006 | unchanged | unchanged |
+| far apex | **26.110 m @ 29.149** | 0.398 @ 42.417 (the ground) | unchanged | unchanged |
+
+And against the **old map at the same stand**, which is the comparison that says whether the
+wall gave the property back: yaw 60 was `30.481 m @ 8.558`, dying to 2.441 m/s; it is now
+`15.318 m @ 42.282` and it comes back up. **The wall is a better swing than the gantry lane
+was.** ⚠️ Only in the plane *along* it — see `B-031`, which is not a regression: the old map
+read 38.407 → 0.346 m/s at the same stand and yaw. Sampled one tick apart, the strike is
+**37.456 → 0.026 m/s in a single step**, then 29 ticks pinned at `y = 20.533` until the rope
+lets go.
+
+**And the headline "2901 → 8073 blocks" is not this round's number.** Measured: `8278 blocks
+(243 placed, 8035 generated)` at `HEAD` against **`8073` (229 placed, 7844 generated)** in the
+working tree. The map got *smaller*; 2901 is from some earlier map entirely.
+
+### 4 · `f003_every_cornice_on_the_wall_hangs_over_open_ground` was measuring the wrong set — twice
+
+Two defects, both found by **counting what the inner loop skips** rather than by reading it:
+
+* **`o.hi.y > b.lo.y → continue`** treated an obstruction as "below" a ledge only when it lay
+  *entirely* below it. A mass that **passes** the ledge is under it over its whole lower part —
+  which is exactly the shape of a tower. Control: widen the inner-gate pier to reach 27.00 m off
+  the centre line (`center_m: (-17, 60, -115), size_m: (6, 120, 44)` — deliberately 44 m deep, so
+  that the `WALL_THICK_M` exclusion cannot answer for it instead). Old predicate: **2 of 51**
+  cornices flagged. Fixed (`o.lo.y > b.lo.y - 1e-3`): **11 of 51**, on both faces. The eight it
+  used to miss were every rung under 120 m.
+  ⚠️ **The first control I tried did not isolate this** — putting a whole 20 x 120 x 55 m
+  gatehouse tower back left the test green for a *different* reason (55 m deep > `WALL_THICK_M`
+  45). A control that moves the number for the wrong reason proves nothing; it has to be the one
+  variable.
+* **the side test read a centre for the mass as well as for the ledge**, so every block centred
+  *on* the wall line — the gate piers, every course of the wall itself — landed on the `>=` side
+  and the two inward-face gate hoods were compared against **nothing at all**, reporting
+  `far − half_plinth` as though it were a measurement. Now the ledge is placed by its centre and
+  the mass by its **reach**. The `considered > 0` assert added beside it is what surfaced both.
+
+**The rule: a `continue` in an inner loop needs a counter, and the counter needs its own assert.**
+`0 of N` was never printed here — the test printed a *margin*, computed over an empty set.
+
+### 5 · Four things the gate turned up in the tree — two of them this round's, two not
+
+* `tests/data.rs::t005_every_script_that_asserts_gas_is_on_the_tank_checklist` was **red**:
+  `scripts/f003-wall.txt` asserts `gas == 15000` twice and was on no group of the list. Fixed
+  (`TANK_SCRIPTS_EXACT`).
+* `scripts/f-water.txt` documented its own picture as `--image docs/images/f003-water.png`
+  **twice**, and `--image` is not a flag — `unknown launch arguments: --image`. `corpus.sh` only
+  ever reads the `--headless` line, so it never ran. Fixed to `--screenshot`, and the tick
+  corrected from 260/400 to **399**, which is where the `VIEW` mark actually lands.
+* `src/world/map.rs` warns `dead_code` on `Rect::grown`, `Rect::real`, `without` and `cut` — left
+  behind by the committed terrain change, not by this round. Not touched.
+* 🔴 **`tests/hud.rs::f177_the_board_panel_lists_exactly_what_missions_ron_offers` is
+  load-flaky**, and it is not this round's: it failed at `the prompt does not name the board`
+  inside a seven-binary gate at `-j 3` under `ulimit -v 6291456`, then passed **alone in 1.23 s**
+  and **49 of 49 in its own binary in 7.59 s**, same tree, same binary, no rebuild between. Its
+  warm-up is `for _ in 0..4 { app.update() }` with the default `TimeUpdateStrategy`, so how many
+  fixed steps it gets is decided by how busy the machine is — which is the exact hazard
+  `tests/hud.rs`'s own module doc states the rule against
+  (`TimeUpdateStrategy::FixedTimesteps(1)`), applied to one test in the file and not to this one.
+  **A gate failure you cannot reproduce twice trains you to skim the next real one.** Foreign
+  territory (the hub board), so it is written here and not fixed.
+* **`--test vector_rope` is 498.63 s of the gate's ~11 minutes**, at 460–490 % CPU and a flat
+  2.93 GB RSS — one binary is three quarters of the wall clock. It also reports **6 ignored**,
+  all deliberate `#[ignore = "measurement, not a criterion"]` probes; `FIND-218` reported this
+  binary as "29" without them, and an ignored test is a skip like any other.

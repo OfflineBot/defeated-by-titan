@@ -15,6 +15,13 @@
 //! `vector` would then write `Gas` and `AimPoint` underneath a test that just set them, and
 //! the result would measure the machine. `Update` alone is deterministic; `PostUpdate` alone
 //! is what lays the UI out.
+//!
+//! **One test here is the exception, and it says so at its own call site.**
+//! `f026_the_marker_stays_on_the_cursor_while_he_is_flying` pins
+//! `TimeUpdateStrategy::FixedTimesteps(1)` and then uses `app.update()`, because what it measures
+//! **is** the order of `FixedMain` → `Update` → `PostUpdate` around a moving player
+//! (`docs/FINDINGS.md` FIND-217). With the strategy pinned there is exactly one fixed step per
+//! frame, so the machine's mood is out of it again and the reason for the rule does not apply.
 
 use bevy::camera::RenderTarget;
 use bevy::ecs::system::RunSystemOnce;
@@ -1729,14 +1736,21 @@ fn f026_the_rope_flies_at_the_point_the_marker_stood_on() {
     // ground. Any test with a tolerance loose enough to swallow those 18 mm is loose enough to
     // swallow a real mismatch, which is why this one has none.
     //
-    // Within the step the order is fixed by `SimulationSystems`: `vector::aim` writes `ArmAim`
-    // in `World`, `vector::hook` reads it in `Intent`. So the `ArmAim` standing after the step
-    // **is** the one the shot used, and it is the one `hud::arm_aim` draws in the same frame.
-    // `Hook::default()` is the arm as the marker saw it at the instant the key went down: idle.
+    // Within the step the order is fixed by `SimulationSystems`, and it changed on 2026-09-01:
+    // `vector::aim` writes `ArmAim` in **`PostStep`**, at the end of the step, and
+    // `vector::hook` reads it in `Intent` at the start of the **next** one (`FIND-217`). So the
+    // `ArmAim` standing **before** the step is the one the shot used — and it is also the one
+    // the frame in front of the player's eyes was drawn from when he pressed the key, which is
+    // the whole reason the system moved. `Hook::default()` is the arm as the marker saw it at
+    // the instant the key went down: idle.
+    //
+    // ⚠️ The two snapshots really do differ — 11.071174 → 11.060021 m here, 11 mm of settling —
+    // so reading the wrong one is not a formality: with `after` this assertion fails, and it
+    // failed exactly that way while the move was being landed.
     let before = aim_snapshot(&mut app).1;
     sim_step(&mut app);
     let (hook, after) = aim_snapshot(&mut app);
-    let previewed = Side::ALL.map(|side| arm_aim::target_of(&Hook::default(), &after, side));
+    let previewed = Side::ALL.map(|side| arm_aim::target_of(&Hook::default(), &before, side));
     println!("f026 aim drift between two ticks: {before:?} -> {after:?}");
 
     let mut fired = 0;
@@ -2597,29 +2611,27 @@ fn f024_a_snap_moves_the_marker_sideways_on_the_screen_and_never_up_or_down() {
             for (catch_pct, strength_pct) in assists {
                 set_assist(&mut app, catch_pct, strength_pct);
                 stand_and_look(&mut app, stand, yaw_deg, pitch_deg);
-                // ⚠️ **At rest, and the fixture has to say so.** `vector::aim` casts from the
-                // eye *before* avian integrates and the camera renders from the eye *after*,
-                // so a moving player carries one step of parallax between the ray and the
-                // picture — 0.5 m at 30 m/s. That parallax is distance-dependent, so it moves
-                // a near point and a far point by different amounts and would show up here as
-                // a vertical jump the snap did not cause. Left uncontrolled it was 8.6 px, and
-                // all of it was a 60 m stand in free fall accelerating across the sweep.
-                // The parallax is real and it is `docs/FINDINGS.md` FIND-133's second half;
-                // it is not the axis this test is about.
+                // ⚠️ **At rest, so that every one of the five assist settings is the same
+                // stance.** `LinearVelocity` survives from the previous sample, and a player
+                // who is already falling when the step runs ends it somewhere else — which
+                // would move a near point and a far point by different amounts and read as a
+                // vertical jump the snap did not cause. That is the axis this test is NOT
+                // about, and it was 8.6 px uncontrolled (a 60 m stand in free fall).
                 let me = local_player(&mut app);
                 app.world_mut()
                     .entity_mut(me)
                     .insert(avian3d::prelude::LinearVelocity(Vec3::ZERO));
                 sim_step(&mut app);
-                // Put the eye back exactly where `vector::aim` cast from, before the camera is
-                // asked where the point projects. Without it the two are one integration step
-                // apart and the difference is **distance-dependent**, so it moves a near point
-                // and a far point by different amounts and reads as a vertical jump the snap did
-                // not cause: 8.6 px uncontrolled (a 60 m stand in free fall), 1.4 px with the
-                // velocity zeroed but the step still taken. The parallax is real in the running
-                // game and it is `docs/FINDINGS.md` FIND-133's last section; it is not the axis
-                // this test is about, and a guard that measures both cannot tell them apart.
-                stand_and_look(&mut app, stand, yaw_deg, pitch_deg);
+                // 🔴 **A second `stand_and_look` stood here until 2026-09-01, and it was a
+                // compensation for a defect that no longer exists.** While `vector::aim` ran in
+                // `SimulationSystems::World` it cast from the eye *before* `Integrate` and the
+                // camera rendered from the eye *after*, so the fixture had to warp the player
+                // back onto the stand to make the two agree — 1.4 px of residual with the
+                // velocity zeroed, 8.6 px without. `aim` now runs in `PostStep` (`FIND-217`) and
+                // the ray's origin **is** the camera's position, so the warp is not merely
+                // unnecessary: putting it back re-opens the gap from the other side and this
+                // assertion reads 2.26 px. The parallax this comment used to describe is gone;
+                // the control that replaced it is the zeroed velocity above.
                 run_hud(&mut app);
                 let (hook, arms) = aim_snapshot(&mut app);
                 let (camera, camera_at) = camera_of(&mut app);
@@ -3603,6 +3615,173 @@ fn f026_the_drawn_marker_stands_on_the_cursor_and_not_beside_it() {
         worst_from_cursor <= 2.0,
         "the drawn glyph stands {worst_from_cursor:.1} px away from the crosshair while the \
          player stands still. He said it twice: \"ist immernoch nicht am cursor\""
+    );
+}
+
+/// ★ **The same claim as the test above, with the one axis that fixture holds constant: SPEED.**
+///
+/// `f026_the_drawn_marker_stands_on_the_cursor_and_not_beside_it` varies three stances, the yaw
+/// and the pitch, reads the glyph off `ComputedNode`, and **passes**. It also stands the player
+/// dead still — and standing still is the one state in which this defect cannot appear.
+///
+/// `vector::aim` casts its ray from the eye at the **start** of a fixed step
+/// (`SimulationSystems::World`, before `Integrate`); the HUD projects the answer it wrote through
+/// the camera at the **end** of that same step. The difference is one step of eye travel, it is
+/// exactly zero at `v = 0`, and it is an **angle** — `v · dt / d` — so it grows as he closes on
+/// the surface he is aiming at. That is every approach in this game
+/// (`docs/FINDINGS.md` FIND-217, `docs/BUGS.md` B-029).
+///
+/// **What the code under test reads.** `vector::aim`: the player's `Transform`, `game.ron`'s
+/// `eye_height_m`, `Intent::look_dir()` (yaw and pitch), `Velocity` (aim-assist scoring only),
+/// `hook_range_m`, the spatial world, `PlayerSettings`. `hud::arm_aim::place_arm_aim`: the `Hook`
+/// state, `ArmAim`, the camera's `GlobalTransform`, the viewport size, and the glyph's shape.
+/// **What this fixture varies**: the tick (120 of them), the **eye speed** (0 → boost, the axis
+/// above), the yaw (2 °/tick, the script's phase D), the distance to the surface — which closes
+/// as he flies — and both arms.
+/// **What it holds constant, deliberately**: the stand; the pitch (0, so the fixture never runs
+/// into `rotate_camera`'s pitch clamp, which `vector::aim` does not apply and which would be a
+/// second difference); the arm state — both arms stay idle, because an anchored marker stands on
+/// its **anchor** and not on the cursor by design
+/// (`f026_the_marker_stands_exactly_where_that_arm_fires`); and `PlayerSettings`' two assist
+/// knobs, which are 0 by default and where **0 is the absence of the feature**
+/// (`shared::settings`). A bent aim is off the crosshair on purpose — that is `F-024`, and it has
+/// its own test (`f024_a_snap_moves_the_marker_sideways_on_the_screen_and_never_up_or_down`).
+/// **What it skips: nothing.** Every tick × arm falls into exactly one of three buckets, all
+/// three counts are printed, and each is asserted. There is no `continue` that leaves the
+/// denominator — the last four defects in this repository were an axis held constant, a class a
+/// `continue` skipped, a body sitting on a line, and an instrument that printed `none` for its
+/// own worst case.
+#[test]
+fn f026_the_marker_stays_on_the_cursor_while_he_is_flying() {
+    use bevy::time::TimeUpdateStrategy;
+    use defeated_by_titan::shared::{LookOverride, Velocity, WarpPlayer};
+
+    let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    // One fixed step per `update()`, and the real frame order around it: `FixedMain` →
+    // `Update` → `PostUpdate`. This is the one test in this file that may **not** run its
+    // schedules by hand — the whole defect is *where inside `FixedUpdate`* the ray is cast
+    // relative to the camera the frame is drawn from, and a hand-run schedule is a different
+    // order from the game's.
+    app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    app.update();
+    app.update();
+    attach_screen(&mut app);
+    let (w, h) = screen(&mut app);
+    let centre = Vec2::new(w * 0.5, h * 0.5);
+
+    let player = local_player(&mut app);
+    let id = *app.world().get::<PlayerId>(player).expect("the local player carries his id");
+
+    // The ashgate stand `scripts/f026-turn.txt` boosts from, and its phase D: one `look` per
+    // tick, 2 °/tick, pitch 0. Warped through `WarpPlayer` and driven through
+    // `ButtonInput`/`LookOverride` — the same two channels the script driver uses, so nothing
+    // here writes an `Intent` onto a player behind `net::local::read_input`'s back.
+    app.world_mut()
+        .write_message(WarpPlayer { player: id, pos_x: 51.0, pos_y: 0.0, pos_z: 13.0 });
+    app.update();
+    {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.press(KeyCode::KeyW);
+        keys.press(KeyCode::ShiftLeft);
+    }
+
+    // The three buckets. `no_target` is a real answer — the ray found nothing within
+    // `hook_range_m`, the marker parks in its side slot and has no cursor to stand on — and it
+    // is counted rather than dropped, because a `0 of N` computed over the survivors is
+    // arithmetic about the wrong set.
+    let mut on_ray = 0usize;
+    let mut clamped = 0usize;
+    let mut no_target = 0usize;
+    let mut worst_from_cursor = 0.0_f32;
+    let mut worst_from_point = 0.0_f32;
+    let mut worst_at = (0u64, 0.0_f32, 0.0_f32);
+
+    for step in 0..120u32 {
+        app.world_mut().resource_mut::<LookOverride>().0 =
+            Some(((step as f32 * 2.0).to_radians(), 0.0));
+        app.update();
+
+        let speed = app.world().get::<Velocity>(player).expect("the player has a velocity").0.length();
+        let (hook, aim) = {
+            let e = app.world().entity(player);
+            (*e.get::<Hook>().unwrap(), *e.get::<ArmAim>().unwrap())
+        };
+        let (camera, cam_at) = {
+            let mut q = app
+                .world_mut()
+                .query_filtered::<(&Camera, &GlobalTransform), With<Camera3d>>();
+            let (c, t) = q.iter(app.world()).next().expect("there is a 3D camera");
+            (c.clone(), *t)
+        };
+        let logical_to_physical = w / camera.logical_viewport_size().unwrap().x;
+
+        for side in [Side::Left, Side::Right] {
+            let Some(world) = arm_aim::target_of(&hook, &aim, side) else {
+                no_target += 1;
+                continue;
+            };
+            let Ok(point_px) = camera.world_to_viewport(&cam_at, world) else {
+                // Both arms are idle for the whole run, so this arm's point is a **preview**:
+                // a point the ray found in front of the eye. One that comes back behind the
+                // near plane is the defect in its loudest form, not a state to skip past.
+                clamped += 1;
+                continue;
+            };
+            let point_px = point_px * logical_to_physical;
+            let glyph = glyph_centre(&mut app, side);
+            let from_point = (glyph - point_px).length();
+            let from_cursor = (glyph - centre).length();
+            on_ray += 1;
+            if from_cursor > worst_from_cursor {
+                worst_at = (step as u64, speed, from_cursor);
+            }
+            worst_from_cursor = worst_from_cursor.max(from_cursor);
+            worst_from_point = worst_from_point.max(from_point);
+        }
+    }
+
+    println!(
+        "f026 flying: {on_ray} projectable + {clamped} behind the near plane + {no_target} \
+         without a target = {} samples; worst {:.2} px off the cursor at step {} ({:.1} m/s), \
+         worst {:.2} px off its own point",
+        on_ray + clamped + no_target,
+        worst_from_cursor,
+        worst_at.0,
+        worst_at.1,
+        worst_from_point
+    );
+
+    assert_eq!(
+        on_ray + clamped + no_target,
+        240,
+        "every one of 120 ticks x 2 arms has to land in a bucket, or the counts below are \
+         arithmetic about the wrong set"
+    );
+    assert!(
+        on_ray >= 120,
+        "only {on_ray} of 240 samples had a point in front of the camera — this fixture is not \
+         flying past anything and cannot see the defect it exists for"
+    );
+    assert_eq!(
+        clamped, 0,
+        "{clamped} samples of an IDLE arm's landing preview came back behind the near plane. \
+         A preview is a point the ray found in front of the eye this very tick; one that no \
+         longer projects was cast from an eye the camera has already left"
+    );
+    assert!(
+        worst_from_point <= 2.0,
+        "the drawn glyph stands {worst_from_point:.1} px from the projection of its own point \
+         while he flies"
+    );
+    assert!(
+        worst_from_cursor <= 2.0,
+        "the marker stands {:.1} px away from the crosshair at {:.1} m/s (step {}), and 0.0 px \
+         when he stands still. He said it twice: „es bewegt sich immernoch also die target \
+         seile\". `vector::aim` casts from the eye at the START of the fixed step and the HUD \
+         projects that point through the camera at the END of it",
+        worst_from_cursor,
+        worst_at.1,
+        worst_at.0
     );
 }
 

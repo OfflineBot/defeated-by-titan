@@ -61,7 +61,31 @@ impl Plugin for VectorPlugin {
         // reader of, and a switch that can be missing is a switch whose default is invisible.
         app.init_resource::<hookable::HookableSurfaces>();
 
-        app.add_systems(FixedUpdate, aim::aim.in_set(SimulationSystems::World))
+        // 🔴 **`PostStep` and not `World`, and the reason is the picture** (`docs/FINDINGS.md`
+        // FIND-217, `docs/BUGS.md` B-029). The aim ray is cast from
+        // `translation + Y·eye_height_m`; `render::attach_camera` hangs the camera on the player
+        // at exactly that offset, and the HUD projects the ray's answer through the camera at the
+        // **end** of the step. In `World` — before `Integrate` — the ray started at LAST tick's
+        // eye and the marker was drawn through THIS tick's, so the two disagreed by one step of
+        // eye travel. The error is an **angle**, `v·dt/d`, so it diverges as he closes on the
+        // surface he is aiming at: measured over the whole boost of `scripts/f026-turn.txt`,
+        // median 14.00 px, p95 48.74 px, **max 419.98 px** and a 392.92 px jump in one frame.
+        // *„es bewegt sich immernoch also die target seile"* — the user, twice.
+        //
+        // ⚠️ **It costs the rope nothing, and that is checked and not argued.** `hook::update_
+        // hooks` reads `ArmAim` in `Intent`, which is after `World` and after the previous
+        // tick's `PostStep`; between those two points nothing writes a player's `Transform`
+        // (`Integrate` is the only writer and it sits between them the other way round), so the
+        // eye the ray starts from is the **same `Vec3`** either way. What does change is the
+        // look direction: the rope now flies at the aim of the tick whose picture the player was
+        // looking at when he pressed, instead of one the frame never showed him
+        // (`tests/vector_aiming.rs::f002_the_ray_starts_at_the_eye_the_frame_is_drawn_from`,
+        // `tests/hud.rs::f026_the_marker_stays_on_the_cursor_while_he_is_flying`).
+        //
+        // `PostStep` also means the ray sees avian's dynamic tree as `Integrate` left it rather
+        // than as the previous tick left it — a strict improvement for the day a titan limb
+        // becomes an anchor (`F-029`), and the one-tick lag `aim`'s own header warns about.
+        app.add_systems(FixedUpdate, aim::aim.in_set(SimulationSystems::PostStep))
             // `.chain()`: the tank is topped up BEFORE this tick's spending is booked, and the
             // gas budget is booked BEFORE the hook switches — otherwise it hangs on system
             // order whether a freshly set hook already costs gas in the same tick.

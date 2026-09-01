@@ -1090,6 +1090,17 @@ pub fn paint_arm_aim(
 /// | `dproj` | how far the arm's world point projects from the crosshair — **the aim's own error** |
 /// | `dglyph` | how far the drawn glyph centre is from the crosshair — **what his eye sees** |
 /// | `dgp` | glyph centre minus projection — **what the layout rule adds on top** |
+/// | `clamp` | `0` a real pixel · `1` [`edge_pixel`]'s bearing, the point is behind the near plane · `-` this arm has no target at all |
+///
+/// 🔴 **`clamp` exists because the instrument used to go silent on its own worst case.** Until
+/// 2026-09-01 the projection was taken with `.ok()`, so every point `Camera::world_to_viewport`
+/// refuses printed the literal `none` for `proj`, `dproj` **and** `dgp` — and that is precisely
+/// the sample in which the glyph is clamped to a screen edge and the error is largest. Measured
+/// on `scripts/f-001-hooks.txt --ticks 400`: **347 of 1650** samples, the worst of them standing
+/// **350.00 px** from the crosshair with nothing printed. A sample that carries no number leaves
+/// the denominator, and a `0 of N` over the survivors is arithmetic about the wrong set
+/// (`CLAUDE.md` rule 5, the fourth shape). `scripts/f026-turn.txt` produces **zero** of them,
+/// which is why the round that used only that script never saw the hole.
 ///
 /// Off by default and env-gated exactly like [`crate::render::log_frame_time`]: it costs one
 /// `var_os` per frame when it is off and it never ships in a run's normal log.
@@ -1121,12 +1132,33 @@ pub fn trace_arm_aim(
         };
         let glyph = Vec2::new(left + shape.glyph_w_px * 0.5, top + shape.glyph_h_px * 0.5);
         let world = target_of(hook, aim, marker.side);
-        let proj = world.and_then(|p| camera.world_to_viewport(camera_at, p).ok());
+        // 🔴 **The instrument's own blind spot, closed 2026-09-01 (`docs/FINDINGS.md`
+        // FIND-217).** Until today this line was `.ok()`, so every sample whose point
+        // `Camera::world_to_viewport` refuses — behind the near plane — printed the literal
+        // string `none` for `proj`, `dproj` **and** `dgp`. That is exactly the sample where the
+        // glyph is clamped to a screen edge and the error is largest: **347 of 1650** samples of
+        // `scripts/f-001-hooks.txt --ticks 400`, the worst standing 350.00 px from the crosshair
+        // with nothing printed. An instrument that goes quiet on its own worst case measures the
+        // cases that were already fine.
+        //
+        // So it takes **the same fallback [`place_arm_aim`] takes** — [`edge_pixel`]'s bearing —
+        // and says which of the two it was in `clamp=`. `clamp=1` means "there is no pixel, this
+        // is the bearing the glyph was placed on"; the number is then a lower bound on the error
+        // rather than the error, and it is a number instead of a hole. `clamp=-` is the one
+        // honest absence left: this arm has no world target at all.
+        let projected = world.map(|p| match camera.world_to_viewport(camera_at, p) {
+            Ok(px) => (px, false),
+            Err(_) => (
+                edge_pixel(camera_at.affine().inverse().transform_point3(p), viewport, marker.side),
+                true,
+            ),
+        });
+        let proj = projected.map(|(px, _)| px);
         let eye = camera_at.translation();
         let fwd = camera_at.forward().as_vec3();
         info!(
             "AIMTRACE t={} f={} side={:?} state={:?} eye={:.3},{:.3},{:.3} fwd={:.4},{:.4},{:.4} \
-             tgt={} proj={} glyph={:.2},{:.2} dproj={} dglyph={:.2} dgp={}",
+             tgt={} proj={} clamp={} glyph={:.2},{:.2} dproj={} dglyph={:.2} dgp={}",
             tick.0,
             *frame,
             marker.side,
@@ -1145,6 +1177,7 @@ pub fn trace_arm_aim(
                 || "none".to_string(),
                 |p| format!("{:.2},{:.2}", p.x, p.y)
             ),
+            projected.map_or_else(|| "-".to_string(), |(_, clamped)| u8::from(clamped).to_string()),
             glyph.x,
             glyph.y,
             proj.map_or_else(

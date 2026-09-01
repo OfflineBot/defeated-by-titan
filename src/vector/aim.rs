@@ -313,8 +313,20 @@ pub fn pick_best(
 
 /// Writes [`AimPoint`] and [`ArmAim`] for every player, once per fixed step.
 ///
-/// Runs in `SimulationSystems::World`: a question to the world, asked **before** anything
-/// moves, so that every system in that stage sees the same world (`shared::schedule`).
+/// Runs in `SimulationSystems::PostStep` — **after** `Integrate`, and that is not a detail.
+///
+/// The ray starts at [`eye`], which is `translation + Y·eye_height_m`, and
+/// `render::attach_camera` hangs the camera on the player at exactly that offset. So the ray's
+/// origin **is** the camera's position and its direction **is** the camera's forward — but only
+/// if both are read at the same instant. In `World`, before `Integrate`, they were one step of
+/// eye travel apart, the HUD drew the answer through a camera that had already moved, and the
+/// error was an angle that diverged as the player closed on the surface: median 14 px and up to
+/// **420 px** over one boost (`docs/FINDINGS.md` FIND-217, `docs/BUGS.md` B-029).
+///
+/// `vector::hook` reads [`ArmAim`] in `Intent`, i.e. one stage after this system ran at the end
+/// of the previous tick — from a `Transform` no system has touched in between, because
+/// `Integrate` is the only writer of it and it does not sit between those two points. The rope
+/// therefore fires at the very point the frame the player was looking at had drawn.
 ///
 /// **One writer:** [`AimPoint`] and [`ArmAim`] are written here and nowhere else. `hud` reads
 /// the centre point for the crosshair; `vector::hook` reads **only** [`ArmAim`], so what the

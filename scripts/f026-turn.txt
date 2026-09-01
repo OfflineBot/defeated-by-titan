@@ -22,7 +22,21 @@
 #
 # `AIMTRACE` prints, per frame and per arm: `dproj` (the arm's world point against the crosshair
 # — the aim's own error), `dglyph` (the drawn glyph centre against the crosshair — what the
-# player sees) and `dgp` (glyph minus projection — what the layout rule adds).
+# player sees), `dgp` (glyph minus projection — what the layout rule adds) and `clamp` (`0` a real
+# pixel · `1` a bearing, the point is behind the near plane · `-` no target at all).
+#
+# ⚠️ **Read the whole boost, not the window between the marks.** `key W 3.0` at `mark
+# trace-moving` (t = 252) holds for 180 ticks, so phase D runs to **t = 432** while the last
+# `look` line lands at t = 372. A table that stops at the last mark stops 64 ticks early, and
+# those 64 ticks were where the number lived: median 23.98 px, max 419.98 px, measured
+# 2026-08-30 (`docs/FINDINGS.md` FIND-217). `--ticks 620` covers all of it.
+#
+# 🔴 **And `clamp` is why that table is trustworthy at all.** Until 2026-09-01 the trace printed
+# the literal `none` for `proj`, `dproj` and `dgp` whenever `Camera::world_to_viewport` refused
+# the point — which is precisely when the marker is at a screen edge and the error is largest. On
+# `scripts/f-001-hooks.txt --ticks 400`, **347 of 1650** samples were that case and the worst of
+# them stood **350.00 px** from the crosshair with nothing printed. An instrument that goes quiet
+# on its own worst case measures the samples that were already fine.
 #
 # The stand is `scripts/f-001-hooks.txt`'s ashgate stand (51, 0, 13) — the one place in this
 # repository where an anchor is measured rather than assumed. A full sweep from there crosses the
@@ -305,6 +319,15 @@ wait 0
 # ---- D: the same slow turn while MOVING FAST. The eye travels between the tick that -----
 # casts the ray and the frame that projects its answer, and this is the only phase that
 # can see it. Boost with W held; the arms stay idle, so the marker is still the preview.
+#
+# This phase is the whole reason the file exists, and it is the one that was red. Over
+# t = 252..435, `dglyph` measured **median 14.00 px, p95 48.74, max 419.98**, with a 392.92 px
+# jump between two consecutive frames (t = 431 -> 432) — against **0.00 / 0.00 / 0.01 px** after
+# `vector::aim` moved from `SimulationSystems::World` to `PostStep` (`FIND-217`, `B-029`). The
+# frame at the worst tick, both ways: `--ticks 432` -> `docs/images/f026-marker-in-flight.png`
+# and `docs/images/f026-marker-in-flight-before.png`. 626 pixels differ between them, all in
+# rows 350..369: the letter and the 20 px ring leave x 192..229 and arrive at x 612..663, i.e.
+# the marker moves from 420 px left of the crosshair onto it.
 mark trace-moving
 key W 3.0
 key Shift 3.0

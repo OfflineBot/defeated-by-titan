@@ -1922,3 +1922,118 @@ edge — a 5.40 m flight at one corner of each 42 m cell instead of a bank along
 
 ---
 
+
+## Q-085 — the rope now flies at the picture you saw, one tick later than it used to (2026-09-01)
+
+`vector::aim` moved from `SimulationSystems::World` to `PostStep` so the marker stops drifting off
+the crosshair while you fly (`FIND-217`, `B-029`, up to 420 px). The **position** the ray starts
+from is bit-for-bit the same for the rope — `Integrate` does not run between the two points. The
+**look direction** is not: `hook::update_hooks` in `Intent` now reads an `ArmAim` cast with the
+yaw and pitch of the previous tick instead of this one's.
+
+`ASSUMPTION:` **that is the better of the two, and not merely acceptable.** The frame you were
+looking at when you pressed `Q` was drawn from that same tick's aim, so the rope now flies at the
+marker you actually saw. The alternative — the aim of the tick your press lands in — is a point no
+image ever showed you. At 360 °/s (the flick phase of `scripts/f026-turn.txt`, a fast real
+look-around) the two differ by **6°**; at the 120 °/s of an ordinary pan, by 2°.
+
+**What you would notice if the assumption is wrong:** a fast flick-and-fire would feel like it
+lags your hand by one frame. Nothing else changes — the marker, the crosshair and the search band
+all read the same number the rope does.
+
+`ROLLBACK:` one line, `src/vector/mod.rs:88` — `PostStep` back to `World`. It costs the fix:
+`tests/hud.rs::f026_the_marker_stays_on_the_cursor_while_he_is_flying` and
+`tests/vector_aiming.rs::f002_the_ray_starts_at_the_eye_the_frame_is_drawn_from` both go red, and
+the marker is 420 px off the crosshair again in `scripts/f026-turn.txt` phase D. If you want the
+fresher look direction **and** the marker on the cursor, the shape is a second, cheap ray cast in
+`Intent` for the rope only — two rays per player per tick instead of one (0.21 µs each), and two
+answers to one question, which `FIND-217`'s corollary says is where drift starts.
+
+---
+
+## Q-084 — the river's six numbers are mine, not yours, and one of them you already answered and I could not obey (2026-09-01)
+
+You asked for water and gave the three rules that decide what it *is*
+(*„Man schwimmt / wird langsam"* · *„Nein — Wasser haelt keinen Haken"* ·
+*„das wasser ist auch VIEL zu klein"*). The rules are built. **What no one has decided is how much
+of each**, and the six values below are provisional in exactly the way `gravity_m_s2 -32` and
+`boost_m_s2 46` are — they wait on a play test, not on an argument.
+
+### The six, all in `assets/data/water.ron`
+
+| key | value | what it buys, measured |
+|---|---|---|
+| `drag_per_s` | 6.0 | a 35.2 m/s dive is **0.195 m/s** 2.5 s later, half-life 0.116 s |
+| `buoyancy_m_s2` | 44.0 | against gravity -32: net +12, you float **0.69 m** under the surface |
+| `surface_band_m` | 1.0 | the ramp that makes it a float instead of a switch |
+| `swim_speed_m_s` | 2.5 | 42 % of `run_speed_m_s` 6.0 — wading, not swimming laps |
+| `swim_accel_m_s2` | 8.0 | 0.31 s to reach that, against 0.1 s on stone |
+| `gas_cost_factor` | 2.0 | the way out of the channel cost **26.98 gas** of a 15000 tank |
+
+**ASSUMPTION:** water is a *cost*, not a *threat* — you never drown, you never take damage, and
+the only thing it takes is time and gas. Nothing in the code can kill you in it.
+**Rollback point:** all six are one file. A lethal river would be a new system (a timer, a
+`Health` writer) and nothing built this round would have to be undone.
+
+### And the one that is yours and is still open: **how much bigger?**
+
+*„das wasser ist auch VIEL zu klein"* is **half answered.** The water now fills the channel — but
+the channel is 10 m wide, and it is 10 m because `maps.ron:996` argues that a 12 x 11 m row house
+must not fit into the gap between the quays. Widening it is `maps.ron`, which another stream owns
+this round; the exact diff (10 m → 40 m, three rows) and the apron warning that goes with it are
+in `docs/FINDINGS.md` FIND-216 §3, and the water then follows in **two numbers**.
+
+**ASSUMPTION:** 40 m is the target — four times the width, still a canal a good swing crosses and
+not a lake that cuts the district in half.
+**Rollback point:** `water.ron: volumes.ashgate[0].size_m` and three rows of `maps.ron: blocks`.
+Nothing in `src/` depends on the width; `tests/world.rs::f003_the_canal_water_lies_inside_the_
+channel_and_between_its_floor_and_the_quay_tops` reads the quays out of the file and will move
+with them — it goes red if the water is widened and the quays are not, which is the point of it.
+
+⚠️ **Your towers are not built.** *„adde andere tuerme beim wasser"* is `maps.ron` rows as well
+and belongs to the same diff. Nothing in this round put an anchor beside the river.
+
+---
+
+---
+
+## Q-087 — a rope fired straight down into the river lands on the riverbed and holds (2026-09-01)
+
+You said *„Nein — Wasser haelt keinen Haken."* The rule is built — `src/vector/hookable.rs` has a
+`SurfaceKind::Water` and the default switch turns it off — but it **can never fire**: the water
+carries no `Collider` and no `Body`, on purpose (`docs/FINDINGS.md` FIND-216 §4), so no ray ever
+meets it to be refused. What a ray *does* meet is the **stone under the water**, and that holds.
+
+Measured, `docs/images/f003-water.png`'s channel, 12 m over the middle of it, `look 0 -89`:
+
+```
+B-fired-straight-down-into-the-river   rope = 1.000   height 10.445
+B-later (the hold ran out)             rope = 0.000   height -1.398   # floating
+```
+
+So: aim at the river, fire, and you get a rope — on the bed, 3.5 m under the surface, and it
+pulls you in. From the quay at a shallow angle (`look -90 -25`) nothing catches, because the ray
+leaves the channel before it reaches the floor.
+
+**Which is right?**
+
+1. **As built** — the rule is about the *material*, and stone under water is still stone. A hook
+   into a riverbed is a legal, slow, wet way to move.
+2. **The river refuses everything through it** — water becomes an opaque medium for the hook, and
+   the escape shot has to leave the surface first.
+
+**ASSUMPTION: (1), as built.** It is the reading your sentence supports literally and it is the
+one that already works; option 2 would make the one shot that gets you *out* of the channel
+(`scripts/f-water.txt` ACT 3a, the east quay face from a floating eye) the shot most likely to be
+refused, which is the trap FIND-216 §4 spent the round avoiding.
+**Rollback point:** one clause in `hookable::is_hookable` plus a ray-length test against
+`WaterVolume` in `vector::aim`. Nothing in `player::swim`, nothing in `maps.ron`, nothing in
+`water.ron`. `scripts/f-water.txt` ACT 3a is the run that would have to change.
+
+### And beside it, the wall's swing plane — `docs/BUGS.md` B-031
+
+The new wall gives a **better** swing than the fourteen gantries it replaced (42.282 m/s against
+29.540 at the same stand), but only *along* the wall. Straight at it, the far half of the arc
+ends in the gate hood and 37.210 m/s vanishes in one tick, silently. That is not new — the old
+map did the same — and whether a strike like that should have a verdict (a sound, a stagger, a
+wall-run) is a design call, not a bug fix.
