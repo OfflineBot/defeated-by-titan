@@ -481,6 +481,7 @@ QUEUE_CAPS_KB = {
     "docs/QUESTIONS.md": 150,
     "docs/BUGS.md": 120,
     "docs/NEXT.md": 120,
+    "docs/PLAN.md": 60,
     "CLAUDE.md": 45,       # every agent reads this one WHOLE — the cap that costs the most
 }
 
