@@ -41,6 +41,7 @@ pub mod integrator;
 pub mod locomotion;
 pub mod recovery;
 pub mod rope;
+pub mod swim;
 
 use avian3d::prelude::{
     CoefficientCombine, Collider, CollisionLayers, Friction, LinearVelocity, LockedAxes,
@@ -53,6 +54,7 @@ use crate::shared::{
     AimPoint, Blades, BoostAccel, Cli, DodgeCharges, Gas, GasGrant, Hook, IdCounter, Intent,
     Invulnerable, LocalPlayer,
     MovementState, PlayerId, PrevButtons, ReelSpeed, RopeLength, RunAccel, SeatPlayer, Slide,
+    Submerged,
     SimulationSystems, UnseatPlayer, Velocity, WarpPlayer, LAYER_PLAYER, PLAYER_COLLIDES_WITH,
 };
 
@@ -76,7 +78,19 @@ impl Plugin for PlayerPlugin {
                     // `ground_locomotion`, so a slide that begins this tick already drives
                     // this tick's velocity. A one-tick delay on an evasive move is a blow
                     // that lands.
-                    (apply_warps, locomotion::start_slides, locomotion::ground_locomotion)
+                    // `swim` is chained LAST of the four and before every avian system, and
+                    // both halves of that are the rule: it must see the velocity the legs
+                    // produced, and what it writes is the input to this tick's step. It
+                    // touches a player only while he is in water — the state in which the
+                    // ground has nothing to say, because there is no ground under him. One
+                    // writer per field per state, exactly as `docs/architecture.md` splits
+                    // `player` and `vector` over `MovementState`.
+                    (
+                        apply_warps,
+                        locomotion::start_slides,
+                        locomotion::ground_locomotion,
+                        swim::swim_in_water,
+                    )
                         .chain()
                         .before(PhysicsSystems::First),
                     // After the writeback, so that what is read back is this step's result
@@ -198,6 +212,11 @@ pub fn spawn_player_with_id(
             // exactly what a recovery whose first destination did not hold needs
             // (`recovery::Recoveries`).
             recovery::Recoveries::at_spawn(pos),
+            // The river. Dry at spawn, and present from tick 1 for the same reason as the
+            // four above it: `player::swim` and `vector::gas` both filter on it, and a
+            // player a filter skips is a player for whom water costs nothing at all
+            // (`shared::water::Submerged`).
+            Submerged::default(),
         ),
         // The physics body. See the module header for why each of these is here.
         (

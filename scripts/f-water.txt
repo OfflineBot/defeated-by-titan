@@ -1,0 +1,109 @@
+# f-water — THE RIVER. Falls in, slows down, floats, and climbs out with the gear.
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/f-water.txt --ticks 700
+#   ./target/debug/defeated_by_titan --headless --script scripts/f-water.txt --ticks 700 >/dev/null 2>&1; echo $?
+#   ./target/debug/defeated_by_titan --offscreen --script scripts/f-water.txt --ticks 399 \
+#       --screenshot docs/images/f003-water.png
+#
+# PINS: **the four numbers of the Ashgate channel**, out of `maps.ron: maps.ashgate.blocks`,
+# and the surface out of `water.ron: volumes.ashgate`. Move any of them and this file is wrong:
+#
+#   channel floor  (-70.0, -4.1, 0.0)  (10.0, 0.2, 700.0)  -> top    y = -4.00
+#   quay west      (-80.0, -1.8, 0.0)  (10.0, 4.4, 700.0)  -> inner  x = -75.00, top y = +0.40
+#   quay east      (-60.0, -1.8, 0.0)  (10.0, 4.4, 700.0)  -> inner  x = -65.00, top y = +0.40
+#   water surface                                          -> y = -0.60
+#   bridges at z = -240 -180 -60 20 110 190 — this run drops at z = 60, 40 m clear of two.
+#
+# PINS: **`water.ron: swim`** — `drag_per_s` 6.0 decides ACT 2's `speed < 3`, and
+# `buoyancy_m_s2` 44.0 against `game.ron: gravity_m_s2` -32.0 decides that he floats at
+# `32 * surface_band_m / 44 = 0.727 m` under the surface rather than lying on the bed.
+#
+# ## What the user asked for, and which act answers it (2026-08-29)
+#
+#   *„Man schwimmt / wird langsam."*      ACT 2 — the speed, and ACT 3 — the gas
+#   *„Nein — Wasser haelt keinen Haken."* NOT here: it is a unit rule
+#                                         (`src/vector/hookable.rs`), because water carries no
+#                                         collider and therefore no ray can reach it to ask.
+#   *„das wasser ist auch VIEL zu klein"* half answered: the water fills the channel it has,
+#                                         and the channel is 10 m wide until `maps.ron` says
+#                                         otherwise (`docs/FINDINGS.md` FIND-216).
+#
+# ## ⚠️ ACT 1's `assert speed` is what makes ACT 2 mean anything
+#
+# Without it, "the body moves at under 3 m/s in the river" is a statement about a body that
+# never moved at all. The drop is 20 m over the surface, so the entry speed is
+# `sqrt(2 * 32 * 20.6) = 36.3 m/s` and the assert asks for 25.
+
+# ---------------------------------------------------------------------------------------
+# ACT 1 — 20 m over the channel, dry, and accelerating
+# ---------------------------------------------------------------------------------------
+warp -70 20 60
+wait 0.3
+mark ACT1 over the channel, dry
+assert height > 12
+assert gas == 15000
+
+wait 0.75
+mark ACT1 the last tick before the water
+assert speed > 25
+assert height > -0.6
+
+# ---------------------------------------------------------------------------------------
+# ACT 2 — in the river. *„wird langsam"*, and it floats instead of drowning.
+# ---------------------------------------------------------------------------------------
+wait 2.5
+mark ACT2 in the river
+assert speed < 3
+assert height < -0.5
+assert height > -4.1
+
+# ---------------------------------------------------------------------------------------
+# ACT 3 — the gear works from inside the river. Two halves, and they are two different
+# claims.
+#
+# 3a  A HOOK FIRED FROM THE WATER STILL BITES. The east quay face is 5 m away and spans
+#     y -4.00 .. +0.40; `look -90 0` is +X (`shared::Intent::look_dir`: yaw 0 is -Z), so a
+#     level ray from a floating eye at y = 0.27 meets stone. This is the assert that would
+#     have caught the `Sensor` version of the water: avian clamps `tmin` to 0 for a ray whose
+#     origin is inside a shape, so a collider on the river would answer every escape shot at
+#     distance 0 and the player could never leave (`src/shared/water.rs`).
+# ---------------------------------------------------------------------------------------
+look -90 0
+hook left 1.0
+wait 0.3
+mark ACT3a the rope is on, fired from inside the water
+assert rope == 1
+assert height < -0.5
+
+# ---------------------------------------------------------------------------------------
+# 3b  AND HE GETS OUT, ON GAS. The rope is let go first (`boost_direction` blends the look
+#     direction with the rope's while an arm holds, `game.ron: vector.boost_rope_fraction`,
+#     and a blended boost would not be a statement about looking up). Then look up and burn:
+#     `boost_m_s2` 46.0 against `gravity_m_s2` -32.0 is +14 m/s² net, less the water's drag.
+#
+# ⚠️ The gas assert is the point of the act and not decoration. `water.ron:
+# swim.gas_cost_factor` is 2.0, so this climb is billed at `gas_boost_per_s * 2` for as long
+# as he is under the surface — *„wird langsam"* has a price as well as a speed.
+# ---------------------------------------------------------------------------------------
+wait 1.2
+look -90 85
+key shift 2.0
+wait 1.2
+mark ACT3b out of the water, on gas
+assert height > -0.5
+assert gas < 14990
+
+# ---------------------------------------------------------------------------------------
+# EPILOGUE — the frame. No assert in it, on purpose: this act exists so that the run which
+# PROVES the river is the same run that SHOWS it, and a picture is not evidence of a rule.
+# 22 m over the channel at z = 30, looking north and 30 deg down: the water runs away from
+# the camera between its quays, with the bridges at z = 20 and z = -60 across it.
+#
+#   ./target/debug/defeated_by_titan --offscreen --script scripts/f-water.txt --ticks 399 \
+#       --screenshot docs/images/f003-water.png
+# ---------------------------------------------------------------------------------------
+warp -70 22 30
+look 0 -30
+wait 0.2
+mark VIEW the channel from above, looking north
+end

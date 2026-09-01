@@ -82,7 +82,7 @@ use bevy::prelude::*;
 use crate::data::{GameData, GasConsumer};
 use crate::shared::{
     Buttons, DodgeCharges, Gas, GasGrant, Hook, Intent, MovementState, PlayerId, RefuelRequest,
-    Tick,
+    Submerged, Tick,
 };
 
 /// Puts gas back — **the only thing in the game that ever raises a tank** (Q-033).
@@ -223,6 +223,10 @@ pub fn gas_budget(
         &Transform,
         Option<&DodgeCharges>,
         Option<&MovementState>,
+        // `Option` for the same reason as the two above it: a fixture player that carries no
+        // `Submerged` must still be billed, and `None` means dry. Every real body gets one at
+        // spawn (`player::spawn_player_with_id`).
+        Option<&Submerged>,
     )>,
 ) {
     let vector = &data.game.vector;
@@ -252,7 +256,7 @@ pub fn gas_budget(
     // so it must never be multiplied by `dt` and must never grow a `_per_s` in its name.
     let flip_cost = vector.gas_flip;
 
-    for (intent, hook, mut gas, mut grant, transform, charges, state) in &mut players {
+    for (intent, hook, mut gas, mut grant, transform, charges, state, submerged) in &mut players {
         // **The hand and the two rope directions, once**, for the three verbs below that all
         // need them. Hoisted above `wants_reel_in` on 2026-08-25 — it used to sit further down,
         // next to `wants_steer`, and the reel could not see it.
@@ -377,12 +381,27 @@ pub fn gas_budget(
                 dodge: wants_dodge,
                 flip: wants_flip,
             },
-            Costs {
-                boost: boost_cost,
-                reel_in: reel_cost,
-                steer: steer_cost,
-                dodge: dodge_cost,
-                flip: flip_cost,
+            // The land prices, and then the water surcharge — one call, all five verbs.
+            // `Submerged` is written by `player::swim` and read here; `vector` never decides a
+            // second time whether the player is wet, which is the FIND-, `CLAUDE.md` rule 5
+            // corollary: one writer decides, everyone else reads the answer.
+            if submerged.is_some_and(|s| s.wet()) {
+                Costs {
+                    boost: boost_cost,
+                    reel_in: reel_cost,
+                    steer: steer_cost,
+                    dodge: dodge_cost,
+                    flip: flip_cost,
+                }
+                .under_water(data.water.swim.gas_cost_factor)
+            } else {
+                Costs {
+                    boost: boost_cost,
+                    reel_in: reel_cost,
+                    steer: steer_cost,
+                    dodge: dodge_cost,
+                    flip: flip_cost,
+                }
             },
             &mut tank,
         );
@@ -524,6 +543,35 @@ pub struct Costs {
     pub dodge: f32,
     /// `F-009`, and flat like `dodge`: `vector.gas_flip`, never multiplied by `dt`.
     pub flip: f32,
+}
+
+impl Costs {
+    /// **What the gear costs while it is working under water**, `water.ron:
+    /// swim.gas_cost_factor` on every one of the five.
+    ///
+    /// The user, 2026-08-29, on what the river does to a body: *„Man schwimmt / wird
+    /// langsam."* Losing speed is `player::swim`; this is the other half, and it is the half
+    /// the player pays to **leave** — getting out of the channel is a hook and a reel, and
+    /// both cost double while he is in it.
+    ///
+    /// ⚠️ **All five, rates and impulses alike, and one factor for all of them.** Two
+    /// arguments, both of which were nearly got wrong here:
+    ///
+    /// * A factor and not a second set of prices, because five water prices beside five land
+    ///   prices is five pairs waiting to disagree the next time one of them moves.
+    /// * It multiplies `dodge` and `flip` too, which are **impulses** and are never multiplied
+    ///   by `dt` (see the field docs above). That is exactly why this is a method on `Costs`
+    ///   and not a factor slipped into the three `_per_s` lines in [`gas_budget`]: applied
+    ///   there it would have silently exempted the two most expensive verbs in the file.
+    pub fn under_water(self, factor: f32) -> Self {
+        Self {
+            boost: self.boost * factor,
+            reel_in: self.reel_in * factor,
+            steer: self.steer * factor,
+            dodge: self.dodge * factor,
+            flip: self.flip * factor,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -713,6 +761,74 @@ mod tests {
             (gas.current - (100.0 - BOOST)).abs() < 1e-6,
             "one boost costs one boost — the tank holds {}",
             gas.current
+        );
+    }
+
+    // -----------------------------------------------------------------------------------
+    // Water — the other half of *„Man schwimmt / wird langsam"* (the user, 2026-08-29).
+    // Losing speed is `player::swim`; this is what the gear costs while it is under water,
+    // and it is what the player pays to LEAVE the river.
+    // -----------------------------------------------------------------------------------
+
+    #[test]
+    fn f018_the_gear_costs_more_under_water_and_the_two_impulses_are_not_exempt() {
+        // 🔴 **All five, and the two flat ones are the point of this test.** The obvious place
+        // to put a water factor is next to the three `_per_s` lines in `gas_budget` — and that
+        // version would have silently exempted `dodge` (45 gas) and `flip` (20 gas), the two
+        // most expensive verbs in the file, because they are impulses and never touch `dt`.
+        let dry = costs();
+        let wet = dry.under_water(2.0);
+        assert!((wet.boost - dry.boost * 2.0).abs() < 1e-6, "boost {} -> {}", dry.boost, wet.boost);
+        assert!((wet.reel_in - dry.reel_in * 2.0).abs() < 1e-6);
+        assert!((wet.steer - dry.steer * 2.0).abs() < 1e-6);
+        assert!(
+            (wet.dodge - dry.dodge * 2.0).abs() < 1e-6,
+            "the dodge is an impulse and was left dry at {} against {}",
+            wet.dodge,
+            dry.dodge
+        );
+        assert!(
+            (wet.flip - dry.flip * 2.0).abs() < 1e-6,
+            "the flip is an impulse and was left dry at {} against {}",
+            wet.flip,
+            dry.flip
+        );
+        // A factor of 1 is water that is free — a legal value, and the control that says the
+        // five lines above are about the factor and not about the constant 2.
+        let free = dry.under_water(1.0);
+        assert_eq!(free, dry, "gas_cost_factor 1.0 changed a price");
+    }
+
+    #[test]
+    fn f018_a_tank_that_covers_one_reel_on_the_quay_covers_none_in_the_river() {
+        // What the surcharge actually *does*, through `book` and not through arithmetic: a
+        // tank holding exactly one dry reel-in serves it on land and refuses it in the water.
+        // That is the whole of "the way out costs you something".
+        let priority = [GasConsumer::Boost, GasConsumer::ReelIn];
+        let mut on_the_quay = Gas::full(REEL);
+        let dry = book(&priority, wants(false, true), costs(), &mut on_the_quay);
+        assert!(dry.reel_in, "one reel's worth of gas did not buy one reel on land");
+
+        let mut in_the_river = Gas::full(REEL);
+        let wet = book(&priority, wants(false, true), costs().under_water(2.0), &mut in_the_river);
+        assert!(!wet.reel_in, "the same tank bought the same reel under water — water is free");
+        assert!(
+            (in_the_river.current - REEL).abs() < 1e-6,
+            "a refused reel still took {} out of the tank",
+            REEL - in_the_river.current
+        );
+    }
+
+    #[test]
+    fn f018_the_factor_the_game_ships_with_really_makes_water_cost_more() {
+        // The number itself, out of `water.ron` and not out of a literal here: a factor of 1.0
+        // or 0.0 would leave every test above green and the feature switched off.
+        let data = crate::data::GameData::load(&crate::data::assets_dir().join("data"));
+        let factor = data.water.swim.gas_cost_factor;
+        assert!(
+            factor > 1.0,
+            "water.ron: swim.gas_cost_factor is {factor} — the gear costs no more in the river \
+             than on the quay, and half of what he asked for is missing"
         );
     }
 }

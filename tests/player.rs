@@ -48,9 +48,11 @@ use defeated_by_titan::player::locomotion::{
     DriveTuning, SteerTuning, WinchTuning, air_thrust, rope_drive, rope_steer, rope_winch,
 };
 use defeated_by_titan::player::spawn_player;
+use defeated_by_titan::player::swim::{depth_in, swim_step};
+use defeated_by_titan::data::SwimTuning;
 use defeated_by_titan::shared::{
     Block, BodyId, Buttons, Cli, Gas, Hook, HookState, IdCounter, Intent, LocalPlayer, MovementState,
-    LookOverride, PlayerId, RunAccel, Side, SpatialIndex, Velocity,
+    LookOverride, PlayerId, RunAccel, Side, SpatialIndex, Submerged, Velocity, WaterVolume,
 };
 
 /// Builds the **real** app, headless, one simulation step per `update()`, on the map named
@@ -4152,4 +4154,352 @@ fn f012_the_gear_climbs_higher_than_the_fence_and_the_number_is_pinned() {
             map.bounds.fence_top_m
         );
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// 8. Water — `src/player/swim.rs`, `assets/data/water.ron`
+//
+// The user, 2026-08-29, asked what happens when a body meets the river:
+//
+//   > *„Man schwimmt / wird langsam."*
+//
+// So water is terrain with a cost: not lethal, not a wall. You fall in, it takes your speed,
+// it holds you at the surface, and you work your way out with the gear — which costs more gas
+// while it is under water (`vector::gas`, and its own tests in `src/vector/gas.rs`).
+//
+// The volume itself and its four deliberate absences are `tests/world.rs` §12; whether a hook
+// may bite it is `src/vector/hookable.rs`. What is measured here is the RULE.
+// ---------------------------------------------------------------------------------------
+
+/// The tuning the game ships with, out of `water.ron` — never a literal in this file, so that
+/// a number moving in the file moves these tests with it (`CLAUDE.md` rule 2).
+fn swim_tuning() -> SwimTuning {
+    GameData::load(&defeated_by_titan::data::assets_dir().join("data")).water.swim
+}
+
+/// A pool 10 m wide, 4 m deep, 100 m long with its surface at y = -0.6 — the Ashgate channel
+/// at a hundredth of its length. `(volume, centre)`, the pair `depth_in` takes.
+fn pool(centre_x: f32) -> (WaterVolume, Vec3) {
+    (
+        WaterVolume { half_size_m: Vec3::new(5.0, 1.7, 50.0), color: [0.06, 0.16, 0.22] },
+        Vec3::new(centre_x, -2.275, 0.0),
+    )
+}
+
+#[test]
+fn f003_a_dry_body_is_not_touched_by_the_swim_rule_at_all() {
+    // The first line of `swim_step`, and the one that decides whether this feature is a
+    // feature or a global drag on the whole game. Both sides of the boundary AND the boundary
+    // itself: `depth_m == 0.0` is dry, and it is the value the classifier writes for every
+    // player on the quay on every one of the sixty ticks.
+    let t = swim_tuning();
+    let v = Vec3::new(12.0, -30.0, 4.0);
+    for depth in [-5.0f32, -1e-6, 0.0] {
+        assert_eq!(
+            swim_step(v, depth, Vec3::X, &t, 1.0 / 60.0),
+            v,
+            "depth {depth} moved a dry body"
+        );
+    }
+    // And one micron under the surface it is NOT untouched — without this the line above
+    // would also pass for a `swim_step` that does nothing at all.
+    let wet = swim_step(v, 1e-6, Vec3::X, &t, 1.0 / 60.0);
+    assert_ne!(wet, v, "one micron of submersion changed nothing — is the rule wired in?");
+}
+
+#[test]
+fn f003_water_takes_a_thirty_metre_dive_down_to_walking_pace_inside_a_second() {
+    // *„wird langsam"*, as a number. Drag is exponential, so the claim is exact rather than a
+    // feeling: `v * exp(-drag_per_s * t)`, and at `drag_per_s` 6.0 half a second is `e^-3`.
+    //
+    // ⚠️ The body is held at a FIXED depth here on purpose — this measures the drag and
+    // nothing else. What happens when the depth is allowed to move is the float test below,
+    // and lumping the two together would leave neither measured.
+    let t = swim_tuning();
+    let dt = 1.0 / 60.0;
+    let mut v = Vec3::new(0.0, -30.0, 0.0);
+    for _ in 0..30 {
+        v = swim_step(v, 1.7, Vec3::ZERO, &t, dt);
+        // Gravity is avian's and is added after this function every tick, so a test of the
+        // rule alone has to add it too or it is measuring half a step.
+        v.y += -32.0 * dt;
+    }
+    let speed = v.length();
+    assert!(
+        speed < 6.0,
+        "half a second under water and the body still moves at {speed:.2} m/s — that is faster \
+         than `game.ron: player.run_speed_m_s` and nothing about it says water"
+    );
+    // And it is the water that did it, not the arithmetic: the same half second with
+    // `drag_per_s` at zero.
+    let mut control = SwimTuning { drag_per_s: 0.0, ..t };
+    control.buoyancy_m_s2 = 0.0;
+    let mut w = Vec3::new(0.0, -30.0, 0.0);
+    for _ in 0..30 {
+        w = swim_step(w, 1.7, Vec3::ZERO, &control, dt);
+        w.y += -32.0 * dt;
+    }
+    assert!(
+        w.length() > 40.0,
+        "the control run without drag ends at {:.2} m/s — if it does not accelerate, the number \
+         above is not about water (`CLAUDE.md` rule 5: delete the thing you are measuring and \
+         check the number moves)",
+        w.length()
+    );
+}
+
+#[test]
+fn f003_a_body_dropped_into_water_floats_where_the_two_files_say_it_floats() {
+    // The equilibrium is arithmetic between two files and nothing else:
+    //
+    //     depth = -gravity_m_s2 * surface_band_m / buoyancy_m_s2 = 32 * 1.0 / 44 = 0.727 m
+    //
+    // Below it the buoyancy wins and the body rises, above it gravity wins and it sinks. What
+    // this integrates is that loop, with avian's gravity added by hand exactly where avian
+    // adds it — after the rule, once per tick.
+    let t = swim_tuning();
+    let dt = 1.0 / 60.0;
+    let predicted = 32.0 * t.surface_band_m / t.buoyancy_m_s2;
+
+    let mut y = -6.0f32; // starting well under: dropped in, on the bed
+    let mut v = Vec3::ZERO;
+    let surface = -0.6f32;
+    for _ in 0..600 {
+        let depth = (surface - y).max(0.0);
+        v = swim_step(v, depth, Vec3::ZERO, &t, dt);
+        v.y += -32.0 * dt;
+        y += v.y * dt;
+    }
+    let settled = surface - y;
+    assert!(
+        (settled - predicted).abs() < 0.05,
+        "the body settled {settled:.3} m under the surface, the two files predict \
+         {predicted:.3} m (gravity 32 x surface_band_m {} / buoyancy_m_s2 {})",
+        t.surface_band_m,
+        t.buoyancy_m_s2
+    );
+    // He floats — head out, not eyes under. The origin is between the feet, so a 1.8 m body
+    // with 0.73 m submerged has a metre of himself in the air.
+    assert!(settled < 1.0, "a body that floats {settled:.2} m under water is a body that drowns");
+    assert!(settled > 0.05, "a body sitting ON the surface is not floating, it is standing");
+}
+
+#[test]
+fn f003_the_swim_rule_reads_the_deepest_of_two_overlapping_waters_and_not_the_first() {
+    // 🔴 **The n = 2 case, and the elements DISAGREE** — `CLAUDE.md` rule 5: a fixture that
+    // passes ONE element cannot see a TWO-element bug, and `max` over a collection is exactly
+    // where a per-element promise goes to die, invisible at n = 1 because there the aggregate
+    // IS the element.
+    //
+    // Two pools whose footprints overlap at x = -70 and whose surfaces differ: the point is
+    // 1.7 m under the first and 0.2 m under the second. `depth_in` must answer 1.7 — taking
+    // whichever the query yielded first would make a body's buoyancy depend on spawn order.
+    let deep = pool(-70.0);
+    let shallow = (
+        WaterVolume { half_size_m: Vec3::new(5.0, 0.2, 50.0), color: [0.0, 0.0, 0.0] },
+        Vec3::new(-70.0, -2.075, 0.0),
+    );
+    let point = Vec3::new(-70.0, -2.275, 0.0);
+    let a = depth_in(&[deep, shallow], point);
+    let b = depth_in(&[shallow, deep], point);
+    assert_eq!(a, b, "the answer depends on the order the two volumes arrived in");
+    assert!((a - 1.7).abs() < 1e-4, "two overlapping waters answered {a} instead of 1.7");
+    // And with only ONE of them the number is different — or the assertion above would hold
+    // for an implementation that ignores the second volume entirely.
+    assert!((depth_in(&[shallow], point) - 0.0).abs() < 1e-4);
+    assert!((depth_in(&[deep], point) - 1.7).abs() < 1e-4);
+    // Two pools that do NOT overlap: a body in one is not in the other.
+    let far = pool(100.0);
+    assert_eq!(depth_in(&[far], point), 0.0, "a pool 170 m away made the body wet");
+}
+
+#[test]
+fn f003_the_swim_rule_answers_the_same_way_over_the_whole_channel_and_skips_nothing() {
+    // ## The sweep, and what it holds constant (`CLAUDE.md` rule 5, the fourth shape)
+    //
+    // **What `swim_step` reads:** `velocity_m_s` (x, y, z), `depth_m`, `wish_dir` (x, z; y is
+    // ignored by contract), `dt_s`, and five numbers out of `water.ron`.
+    // **What this sweep varies:** `depth_m` (13 values, from -0.5 through exactly 0.0 to past
+    // `surface_band_m` and down to the bed), `velocity_m_s` (7, including zero, a 75 m/s dive
+    // at `vector.max_speed_m_s`, and a pure sideways run), `wish_dir` (5, including zero and a
+    // half-held stick).
+    // **What it holds constant, and why:** `dt_s` — the fixed step is the one thing the game
+    // never varies (`game.ron: simulation_hz`), and a rule that depended on it would be a bug
+    // this test could not name anyway; and the five tuning numbers, which are the file's and
+    // are covered by the four tests above that move them one at a time.
+    // **What it skips: nothing.** 455 of 455 samples are asserted, and the count is printed in
+    // the failure message so that a `continue` added later cannot hide in the denominator.
+    let t = swim_tuning();
+    let dt = 1.0 / 60.0;
+    let depths = [
+        -0.5, -1e-6, 0.0, 1e-6, 0.01, 0.2, t.surface_band_m * 0.5, t.surface_band_m,
+        t.surface_band_m + 1e-6, 1.0, 1.7, 2.5, 3.35,
+    ];
+    let velocities = [
+        Vec3::ZERO,
+        Vec3::new(0.0, -75.0, 0.0),
+        Vec3::new(0.0, -30.0, 0.0),
+        Vec3::new(30.0, 0.0, 0.0),
+        Vec3::new(0.0, 12.0, 0.0),
+        Vec3::new(-8.0, -8.0, -8.0),
+        Vec3::new(0.0, 0.0, 45.0),
+    ];
+    let wishes = [
+        Vec3::ZERO,
+        Vec3::X,
+        Vec3::new(0.0, 0.0, -1.0),
+        Vec3::new(0.5, 0.0, 0.0),
+        Vec3::new(0.7, 0.0, 0.7),
+    ];
+
+    let mut checked = 0usize;
+    let mut wet_samples = 0usize;
+    for depth in depths {
+        for v in velocities {
+            for wish in wishes {
+                let out = swim_step(v, depth, wish, &t, dt);
+                checked += 1;
+                assert!(out.is_finite(), "depth {depth} v {v:?} wish {wish:?} -> {out:?}");
+                if depth <= 0.0 {
+                    assert_eq!(out, v, "a dry sample at depth {depth} was changed");
+                    continue;
+                }
+                wet_samples += 1;
+                // The one promise that has to hold at EVERY depth and for EVERY velocity:
+                // water never makes a body faster than it was, sideways.
+                let before = Vec2::new(v.x, v.z).length();
+                let after = Vec2::new(out.x, out.z).length();
+                let allowed = before + t.swim_accel_m_s2 * dt + 1e-4;
+                assert!(
+                    after <= allowed,
+                    "depth {depth} v {v:?} wish {wish:?}: horizontal {before:.4} -> {after:.4}, \
+                     more than the legs may add ({:.4})",
+                    t.swim_accel_m_s2 * dt
+                );
+                // And the lift is never downward: buoyancy may be zero at the surface, never
+                // negative — gravity is avian's job and is not in this function.
+                let damped_y = v.y * (-t.drag_per_s * dt).exp();
+                assert!(
+                    out.y >= damped_y - 1e-4,
+                    "depth {depth} v {v:?}: the rule pushed the body DOWN ({:.4} -> {:.4})",
+                    damped_y,
+                    out.y
+                );
+            }
+        }
+    }
+    assert_eq!(checked, depths.len() * velocities.len() * wishes.len());
+    assert_eq!(checked, 455, "the sweep changed size — say so in the comment above");
+    assert_eq!(
+        wet_samples,
+        10 * velocities.len() * wishes.len(),
+        "10 of the 13 depths are wet by construction; {wet_samples} samples reached the water"
+    );
+}
+
+#[test]
+fn f003_a_body_dropped_into_the_canal_slows_down_floats_and_does_not_drown() {
+    // 🟧 **The real game, on the map that ships** — not a fixture pool and not a hand-written
+    // `Vec3`. The body is dropped 20 m over the channel between the bridges at z = 20 and
+    // z = 110, and everything measured below comes out of the app: the water was spawned by
+    // `world::water::build_water` out of `water.ron`, the fall is avian's, and the depth is
+    // whatever `player::swim` computed from the volume it found.
+    //
+    // That is the FIND-215 shape avoided on purpose (`CLAUDE.md` rule 5): a test that hands
+    // the pure function a point it invented, and an oracle fed the same invented point, cannot
+    // disagree about which point it is.
+    let mut app = app_on_current_map();
+    if data(&app).maps.current != "ashgate" {
+        return;
+    }
+    let me = me(&mut app);
+    put_body_at(&mut app, me, Vec3::new(-70.0, 20.0, 60.0));
+
+    // Fall. 20 m at 32 m/s² is 1.12 s; give it two seconds and watch the whole thing.
+    let mut peak_speed = 0.0f32;
+    let mut wettest = 0.0f32;
+    let mut lowest = f32::INFINITY;
+    for _ in 0..120 {
+        app.update();
+        let v = app.world().get::<Velocity>(me).expect("velocity").0.length();
+        let depth = app.world().get::<Submerged>(me).expect("submerged").depth_m;
+        let y = at(&app, me).y;
+        if depth == 0.0 && y > -0.6 {
+            peak_speed = peak_speed.max(v);
+        }
+        wettest = wettest.max(depth);
+        lowest = lowest.min(y);
+    }
+    assert!(
+        peak_speed > 15.0,
+        "the body only reached {peak_speed:.2} m/s on the way down — it never fell into \
+         anything and the numbers below are about standing still"
+    );
+    assert!(wettest > 0.5, "the deepest this body ever got was {wettest:.3} m — it missed the \
+         water, or `build_water` put none there");
+
+    // Two more seconds to settle.
+    for _ in 0..120 {
+        app.update();
+    }
+    let settled_depth = app.world().get::<Submerged>(me).expect("submerged").depth_m;
+    let settled_speed = app.world().get::<Velocity>(me).expect("velocity").0.length();
+    let y = at(&app, me).y;
+
+    assert!(
+        settled_speed < 2.0,
+        "four seconds in the river and the body still moves at {settled_speed:.2} m/s"
+    );
+    assert!(
+        settled_depth > 0.05 && settled_depth < 1.5,
+        "the body sits {settled_depth:.3} m under the surface — floating is neither 0 nor the \
+         bed of the channel"
+    );
+    assert!(
+        y > -3.9,
+        "the body is at y = {y:.2} and the channel floor is at -4.00: it sank to the bottom"
+    );
+    // Not lethal: *„Man schwimmt"*, and nothing in this game drowns yet.
+    assert_eq!(
+        state(&app, me),
+        MovementState::Airborne,
+        "a floating body is not `Downed` and not `Grounded`"
+    );
+}
+
+#[test]
+fn f003_a_hook_fired_from_inside_the_water_still_finds_the_quay_above_it() {
+    // *„Nein — Wasser haelt keinen Haken"* must not turn into *"no hook works in water"*: the
+    // river is escapable, and the shot that escapes it is fired from inside it. This is the
+    // test that would have caught the `Sensor` version of the water — avian clamps `tmin` to
+    // 0 for a ray whose origin is inside a shape (`raycast3d.rs:64`), so a collider here would
+    // answer every escape shot at distance 0, with the crosshair on the quay.
+    let mut app = app_on_current_map();
+    if data(&app).maps.current != "ashgate" {
+        return;
+    }
+    let me = me(&mut app);
+    put_body_at(&mut app, me, Vec3::new(-70.0, 20.0, 60.0));
+    for _ in 0..180 {
+        app.update();
+    }
+    let depth = app.world().get::<Submerged>(me).expect("submerged").depth_m;
+    assert!(depth > 0.05, "the body is not in the water ({depth:.3} m) — nothing below is a \
+         statement about a shot from the water");
+
+    // Look at the east quay, 5 m away and 1.0 m above the surface, and fire. `yaw = -90 deg`
+    // is +X (`shared::Intent::look_dir`: yaw 0 is -Z), pitch level — the eye of a floating
+    // body sits at 0.27 m and the quay face spans -4.00 .. +0.40, so a level ray meets stone.
+    hold(&mut app, KeyCode::KeyQ);
+    for _ in 0..12 {
+        app.world_mut().resource_mut::<LookOverride>().0 =
+            Some((-std::f32::consts::FRAC_PI_2, 0.0));
+        app.update();
+    }
+    let hook = app.world().get::<Hook>(me).expect("the player has a hook");
+    assert!(
+        hook.anchored_count() > 0,
+        "a hook fired from inside the water anchored nothing — the river has become a wall the \
+         rope cannot get through"
+    );
 }

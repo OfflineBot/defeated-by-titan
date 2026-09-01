@@ -1,0 +1,118 @@
+// water.ron — THE RIVER, and the game had none until 2026-09-01.
+//
+// `maps.ron` still carries the heading it was written under — "The river, in a game that has
+// no water" — and it describes the channel exactly: a **dry lowered lane**, 4 m below the
+// paving, 10 m between the quays, `anchorable: false`, with the bridges as the only hook
+// targets over it. There was no surface, no colour and no rule for what happens when a body
+// falls in. This file is that rule.
+//
+// ## The three answers this file is built on (the user, 2026-08-29)
+//
+//   1. on contact  *„Man schwimmt / wird langsam."*  -> terrain with a cost. Not lethal.
+//   2. hookable     *„Nein — Wasser haelt keinen Haken."*
+//   3. size         *„das wasser ist auch VIEL zu klein"*
+//
+// Answer 2 is **not in this file** and must never be added to it: it is a
+// `vector::hookable::SurfaceKind`, the first category the `Q-078` switch turns off, and a
+// second flag here would be two spellings of one rule.
+//
+// Answer 3 is **only half done here**, and the half that is missing is not this file's to
+// give. The water can be no wider than the hole in the ground it lies in, and that hole is
+// `maps.ron: blocks` — the channel floor and the two quays, which belong to another stream
+// this round. The exact widening diff is in `docs/FINDINGS.md` FIND-216; the day it lands,
+// this file changes by two numbers.
+//
+// ⚠️ Every number here is read with `deny_unknown_fields` and **no `serde(default)`**: a key
+// that goes missing crashes on load (`CLAUDE.md` rule 2). `src/data/water.rs` says what each
+// one means; what stands here is why it has the value it has.
+(
+    // ================================================================================
+    // What water does to a body. NOT per map — how fast water slows you is a property of
+    // water, the way `game.ron: gravity_m_s2` is a property of the world.
+    // ================================================================================
+    swim: (
+        // `v *= exp(-drag_per_s * dt)`. Two figures follow from it and both were chosen, not
+        // inherited:
+        //   terminal sink   -gravity_m_s2 / drag_per_s = 32 / 6 = **5.33 m/s**
+        //   half-life       ln 2 / drag_per_s          = **0.116 s**
+        // A dive at 30 m/s is down to 1.49 m/s after half a second — *„wird langsam"*, and
+        // fast enough that the player feels the water arrive rather than a slope.
+        // ⚠️ UNTUNED, like `gravity_m_s2` and `boost_m_s2` above it, and waiting on the same
+        // play test.
+        drag_per_s: 6.0,
+        // GROSS, before gravity: avian adds `game.ron: gravity_m_s2` (-32.0) in the same step
+        // and after this. So a fully submerged body feels **+12 m/s²** and rises at a terminal
+        // 12 / 6 = **2.0 m/s**. Below 32 and the river is a hole you drown in — that is the
+        // one value in this file with a hard floor, and `tests/data.rs` holds it.
+        buoyancy_m_s2: 44.0,
+        // The ramp that makes a body FLOAT instead of shooting out. Equilibrium sits at
+        // `-gravity_m_s2 * surface_band_m / buoyancy_m_s2` = 32 * 1.0 / 44 = **0.727 m** below
+        // the surface. A 1.8 m body therefore floats with a metre of himself out of the water,
+        // and his eyes (`player.eye_height_m` 1.6) at 0.87 m above the surface — he can see the
+        // quay he has to hook.
+        surface_band_m: 1.0,
+        // Against `game.ron: player.run_speed_m_s` 6.0. Wading is 42 % of walking; you can
+        // cross the 10 m channel in four seconds and you cannot outrun anything in it.
+        swim_speed_m_s: 2.5,
+        // Water is what you push against. Reaching `swim_speed_m_s` from a standstill takes
+        // 0.31 s, against the 0.1 s the legs take on stone.
+        swim_accel_m_s2: 8.0,
+        // The other half of the cost, and the one the player pays to leave: getting out is a
+        // hook and a reel, and both cost double while the gear is working under water. At
+        // `gas_reel_per_s` 6.0 that is 12/s, and a 3 s climb out of the channel is 36 gas of a
+        // 15000 tank — noticeable in the ledger, not punishing. It is a FACTOR and not a
+        // second rate so that it cannot drift away from the four prices it multiplies.
+        gas_cost_factor: 2.0,
+    ),
+
+    // ================================================================================
+    // Where the water is. Keyed by `maps.ron: maps` — a map with no water has NO KEY here.
+    // ================================================================================
+    volumes: {
+        // ------------------------------------------------------------------------------
+        // Ashgate's canal. It runs the whole 700 m of the map at x = -70, through both walls.
+        //
+        // ⚠️ THE FOUR NUMBERS IT HAS TO AGREE WITH, all out of `maps.ron: maps.ashgate.blocks`:
+        //
+        //   channel floor  (-70.0, -4.1, 0.0)  (10.0, 0.2, 700.0)  -> its TOP is y = -4.00
+        //   quay west      (-80.0, -1.8, 0.0)  (10.0, 4.4, 700.0)  -> inner face x = -75.00
+        //   quay east      (-60.0, -1.8, 0.0)  (10.0, 4.4, 700.0)  -> inner face x = -65.00
+        //   both quay tops                                          -> y = +0.40
+        //
+        // `world::map` turns every placed block whose top is below y = 0 into a
+        // `CellRole::Hole` (src/world/map.rs), which is why there is no terrain in the channel
+        // and the water has somewhere to be. `tests/world.rs` measures this volume against
+        // those four numbers, so widening the channel makes the RIVER go red and not just the
+        // city — which is the point of pinning it.
+        //
+        //   x   9.9 of the 10.0 gap: 0.05 m clear of each quay face, or the coplanar side
+        //       walls z-fight from every angle the player swings past at.
+        //   y   surface -0.60, bed **-4.15**. 1.00 m below the quay top, so the drop into the
+        //       water reads as a drop — and the bed is 0.15 m UNDER the channel floor (-4.00),
+        //       which is a measurement and not a margin. At -3.95 (0.05 m ABOVE the floor, by
+        //       the same z-fight argument the x axis uses) a body that punches through to the
+        //       bottom lands at y = -4.00, i.e. **below** the water box, and `depth_m` answers
+        //       *dry*: no buoyancy, and he lies on the channel floor for ever. Measured
+        //       2026-09-01 — a 20 m drop enters at 20 m/s and drag alone needs `v/drag` = 3.33 m
+        //       to stop it, which is the whole depth of the channel. `docs/FINDINGS.md`
+        //       FIND-216. The 0.15 m of box under the floor is invisible: the floor slab spans
+        //       y -4.20..-4.00 over the full width of the channel, so those faces are inside
+        //       stone.
+        //   z   the full 700 m, exactly the floor block's own extent.
+        // ------------------------------------------------------------------------------
+        "ashgate": [
+            (
+                name: "canal",
+                center_m: (-70.0, -2.375, 0.0),
+                size_m: (9.9, 3.55, 700.0),
+                // Linear RGB. Dark, desaturated and blue-green: it has to read as *water* from
+                // 60 m up against `grass_green` (0.22, 0.35, 0.16) and `stone_gray`
+                // (0.42, 0.43, 0.40), and it has to be nothing like the three signal colours,
+                // which are gameplay and appear nowhere else (`docs/conventions.md` §3).
+                // Darker than every hue in the palette on purpose: a channel is a shadow in
+                // the roofscape before it is a colour.
+                color: (0.06, 0.16, 0.22),
+            ),
+        ],
+    },
+)

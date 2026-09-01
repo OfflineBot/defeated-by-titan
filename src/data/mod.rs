@@ -29,6 +29,9 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+pub mod water;
+pub use water::{SwimTuning, WaterData, WaterVolumeSpec};
+
 pub struct DataPlugin;
 
 impl Plugin for DataPlugin {
@@ -89,6 +92,9 @@ pub struct GameData {
     /// The **one truth about sizes**, laid down by the user. Every other file only mirrors it;
     /// `tests/data.rs` falls over the moment one of them deviates from this.
     pub scale: Scale,
+    /// `water.ron` — the river: where the water is, and what being in it costs.
+    /// Its own file and not a `maps.ron` block; the reasoning is in [`water`].
+    pub water: WaterData,
 }
 
 impl GameData {
@@ -103,6 +109,7 @@ impl GameData {
             maps: load_ron(dir, "maps.ron"),
             progress: load_ron(dir, "progress.ron"),
             scale: load_ron(dir, "scale.ron"),
+            water: load_ron(dir, "water.ron"),
         }
     }
 

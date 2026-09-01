@@ -68,16 +68,32 @@ pub enum SurfaceKind {
     /// **Hookable since Q-078**, and the only reason this variant is not merged into the one
     /// above is that it is the switch's handle.
     Untagged,
+    /// **Water** — `BodyMask::WATER`. The user, 2026-08-29, asked what a hook does to the
+    /// river and answered: *„Nein — Wasser haelt keinen Haken."*
+    ///
+    /// ⭐ **The first category this switch has ever turned off**, and it is exactly the use
+    /// Q-078 was left open for: *„spaeter soll man auch bestimmte sachen toggeln koennen. also
+    /// an bestimmte sachen ran haken an andere nicht"*. It is one variant, one line in
+    /// [`Self::of`] and one clause in [`HookableSurfaces::default`] — no second flag, no
+    /// per-body `bool`, nothing in `maps.ron`.
+    Water,
 }
 
 impl SurfaceKind {
     /// Every kind, so that a test cannot forget the one that was added last.
-    pub const ALL: [SurfaceKind; 2] = [SurfaceKind::Tagged, SurfaceKind::Untagged];
+    pub const ALL: [SurfaceKind; 3] =
+        [SurfaceKind::Tagged, SurfaceKind::Untagged, SurfaceKind::Water];
 
     /// Which kind a body is. **The one place the `ANCHORABLE` bit is still read**, so that
     /// the tag has exactly one meaning in the game and not two spellings of it.
     pub fn of(body: &Body) -> Self {
-        if body.mask.contains(BodyMask::ANCHORABLE) {
+        // ⚠️ **Water is asked FIRST**, and the order is the rule and not a style: a volume that
+        // was ever tagged anchorable as well would otherwise come back `Tagged` and hold a
+        // hook. The one answer the user gave about water is that it holds none, so no other
+        // bit may overrule it.
+        if body.mask.contains(BodyMask::WATER) {
+            Self::Water
+        } else if body.mask.contains(BodyMask::ANCHORABLE) {
             Self::Tagged
         } else {
             Self::Untagged
@@ -94,6 +110,7 @@ impl SurfaceKind {
         match self {
             Self::Tagged => "tagged",
             Self::Untagged => "untagged",
+            Self::Water => "water",
         }
     }
 }
@@ -106,9 +123,15 @@ impl SurfaceKind {
 pub struct HookableSurfaces(u32);
 
 impl Default for HookableSurfaces {
-    /// *„grundsetzlich erstmal ales"* — everything.
+    /// *„grundsetzlich erstmal ales"* — everything **except water**.
+    ///
+    /// The exception is his too, and it is the newer of the two sentences (2026-08-29,
+    /// against 2026-08-27): *„Nein — Wasser haelt keinen Haken."* His instruction beats my
+    /// derivation and beats his own earlier number (`CLAUDE.md`, and `Q-002`), so the default
+    /// is `EVERYTHING` minus one bit and not a new constant beside it — [`Self::EVERYTHING`]
+    /// still means everything, and it is still what a *new* kind arrives inside of.
     fn default() -> Self {
-        Self::EVERYTHING
+        Self::EVERYTHING.with(SurfaceKind::Water, false)
     }
 }
 
@@ -177,15 +200,51 @@ mod tests {
     }
 
     #[test]
-    fn f003_everything_is_hookable_today_whatever_the_map_tagged() {
-        // Q-078, and the reason this file exists. **Both** kinds, not one: a predicate tested
-        // only against the tagged surface is a test of the rule that was just deleted.
+    fn f003_everything_solid_is_hookable_today_whatever_the_map_tagged() {
+        // Q-078, and the reason this file exists. **Both** solid kinds, not one: a predicate
+        // tested only against the tagged surface is a test of the rule that was just deleted.
+        //
+        // ⚠️ Water is deliberately not in this loop and has its own test below. It went out of
+        // it on 2026-09-01 with the river, when the user answered *„Nein — Wasser haelt keinen
+        // Haken."* — the first time this switch has ever been anything but wide open.
         let rules = HookableSurfaces::default();
-        for kind in SurfaceKind::ALL {
+        for kind in [SurfaceKind::Tagged, SurfaceKind::Untagged] {
             assert!(rules.allows(kind), "{} refuses a hook by default", kind.name());
         }
         assert!(is_hookable(rules, Some(&body(true))));
         assert!(is_hookable(rules, Some(&body(false))));
+    }
+
+    fn water_body() -> Body {
+        // Exactly what a water body would carry: solid enough to be hit, marked as water.
+        Body { half_size_m: Vec3::splat(1.0), mask: BodyMask::SOLID.with(BodyMask::WATER) }
+    }
+
+    #[test]
+    fn f003_water_holds_no_hook_and_it_is_this_switch_that_refuses_it() {
+        // The user, 2026-08-29: *„Nein — Wasser haelt keinen Haken."* — the FIRST category the
+        // Q-078 switch turns off, and the whole of the mechanism he asked for in the same
+        // breath as *„spaeter soll man auch bestimmte sachen toggeln koennen"*.
+        let rules = HookableSurfaces::default();
+        assert!(!rules.allows(SurfaceKind::Water), "the default lets a hook bite the river");
+        assert!(!is_hookable(rules, Some(&water_body())), "a water body answered a hook");
+        // And it is the SWITCH that refuses, not the absence of a category: turn the bit back
+        // on and the very same body holds. Without this line the test above would still pass
+        // if `SurfaceKind::of` had simply stopped recognising water.
+        let permissive = rules.with(SurfaceKind::Water, true);
+        assert!(is_hookable(permissive, Some(&water_body())), "the switch does not reach water");
+    }
+
+    #[test]
+    fn f003_the_water_bit_outranks_the_anchorable_bit_on_one_body() {
+        // A volume that was ALSO tagged anchorable — the shape a copy-pasted map row would
+        // have. Water is asked first, so the tag cannot buy it back.
+        let both = Body {
+            half_size_m: Vec3::splat(1.0),
+            mask: BodyMask::SOLID.with(BodyMask::ANCHORABLE).with(BodyMask::WATER),
+        };
+        assert_eq!(SurfaceKind::of(&both), SurfaceKind::Water);
+        assert!(!is_hookable(HookableSurfaces::default(), Some(&both)));
     }
 
     #[test]
