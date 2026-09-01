@@ -161,6 +161,12 @@ impl Plugin for MenuPlugin {
                     // one, or the two overlap for a frame and the player clicks the wrong one.
                     despawn_menu,
                     spawn_menu,
+                    // ⭐ **After `spawn_menu`, and that ordering is the whole system.** The
+                    // ledger's node is spawned by `spawn_menu` in this very frame, so a fill
+                    // that ran before it would find no node on the frame the debrief comes up
+                    // and leave the report blank for exactly the frame the player starts
+                    // reading it. `.chain()` above is what guarantees the order.
+                    debrief::fill_the_ledger,
                 )
                     .chain()
                     .run_if(there_is_a_window),

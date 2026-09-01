@@ -50,7 +50,9 @@ pub mod profile;
 use bevy::prelude::*;
 
 pub use file::{profile_path, render, LoadNote, Loaded, SaveDir, PROFILE_FIELDS, SCHEMA};
-pub use profile::{xp_earned, xp_of_a_bare_career, Profile, SortieOutcome};
+pub use profile::{
+    xp_earned, xp_of_a_bare_career, GearChange, GearRequest, Profile, SortieOutcome,
+};
 
 use crate::data::GameData;
 use crate::shared::PlayerId;
@@ -71,10 +73,11 @@ impl Plugin for SavePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(SaveDir::discover());
         app.add_message::<SortieOutcome>();
+        app.add_message::<GearRequest>();
         // `Update` and not `FixedUpdate`: file I/O is not simulation. It must not sit in the
         // fixed step, where a slow disk would stretch a tick and change how the game moves —
         // and nothing in the simulation reads a `Profile`.
-        app.add_systems(Update, (load_profiles, record_outcomes).chain());
+        app.add_systems(Update, (load_profiles, record_outcomes, spend_gear_points).chain());
     }
 }
 
@@ -190,6 +193,65 @@ fn record_outcomes(
                 "save: a sortie outcome arrived for player {} but no such player is here — \
                  nothing recorded",
                 outcome.player.0
+            );
+        }
+    }
+}
+
+/// `F-125` — **books what the armoury asked for**, and writes the file it changed.
+///
+/// The twin of [`record_outcomes`] and the same shape exactly: `progress` asks with a
+/// [`GearRequest`], this is the only thing that moves [`Profile::gear`], and the save is written
+/// the moment it moves. A loadout that survived only until the next launch would be a loadout
+/// nobody bothers to set.
+///
+/// **Refusals are loud and change nothing.** An overspend, an axis `progress.ron` no longer
+/// defines, a reset of an empty build: each is a `warn!` with the reason in it and no write at
+/// all — not a panic, because losing a keypress is bad and losing the running game on top of it
+/// is worse, and not silence, because a screen that does nothing when you press a key is the
+/// bug this whole round exists to end.
+fn spend_gear_points(
+    mut asks: MessageReader<GearRequest>,
+    dir: Res<SaveDir>,
+    data: Res<GameData>,
+    mut players: Query<(&PlayerId, &mut Profile, &ProfileFile)>,
+) {
+    for ask in asks.read() {
+        let mut anybody = false;
+        for (player, mut profile, on_disk) in &mut players {
+            if *player != ask.player {
+                continue;
+            }
+            anybody = true;
+            match profile.spend_gear(&ask.change, ask.budget, &data.progress.gear) {
+                Err(why) => {
+                    warn!("save: player {} — {why}", player.0);
+                    continue;
+                }
+                Ok(what) => info!("save: player {} — {what}", player.0),
+            }
+            let Some(dir) = dir.path() else { continue };
+            if !on_disk.may_write {
+                warn!(
+                    "save: player {} changed his build, but his file belongs to a newer build \
+                     — nothing written",
+                    player.0
+                );
+                continue;
+            }
+            if let Err(e) = file::write_profile(dir, *player, &profile) {
+                error!(
+                    "save: could not write the profile of player {} to {}: {e}",
+                    player.0,
+                    dir.display()
+                );
+            }
+        }
+        if !anybody {
+            warn!(
+                "save: a gear request arrived for player {} but no such player is here — \
+                 nothing changed",
+                ask.player.0
             );
         }
     }

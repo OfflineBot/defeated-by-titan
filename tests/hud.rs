@@ -45,6 +45,7 @@ use defeated_by_titan::hud::{HudElement, KEEP_OUT_HIGH_PCT, KEEP_OUT_LOW_PCT};
 use defeated_by_titan::menu::board::Board;
 use defeated_by_titan::menu::lobby::{chosen, entries, LobbyChoice};
 use defeated_by_titan::mission::{KillTally, MissionPhase};
+use defeated_by_titan::progress::Career;
 use defeated_by_titan::shared::{
     ArmAim, BodyId, Blades, Cli, Gas, Health, HitZone, Hook, HookReleased, HookState, LocalPlayer,
     MissReason, PlayerId, PlayerSettings, ReleaseReason, Side, TitanHit, TitanId,
@@ -525,8 +526,10 @@ fn f170_nothing_covers_the_middle_of_the_screen() {
     {
         let data = app.world().resource::<GameData>().clone();
         let list = entries(&data);
-        let widest = board::board_text(true, true, &list, list.first())
-            .expect("in range and open has to say something");
+        let full = a_career_that_has_cleared_everything(&data);
+        let widest =
+            board::board_text(true, true, &list, list.first(), &data.progress, Some(&full))
+                .expect("in range and open has to say something");
         let mut q = app
             .world_mut()
             .query_filtered::<(&mut Text, &mut Node), With<board::BoardPanel>>();
@@ -3467,6 +3470,41 @@ fn f177_the_board_panel_lists_exactly_what_missions_ron_offers() {
 /// standing guard — but it panics on the first offender, so an element added today can hide
 /// behind one that is already red (it is, `docs/FINDINGS.md`: `hud_arm_marker_Left` stands in
 /// the box in the tree this landed in, and it is not this element's doing). This one asks the
+/// 🔴 **The widest the mission board can ever be**, and the career is what makes it so.
+///
+/// Since 2026-09-01 each row can carry a ladder marker — `hud::board::CLEARED` for a rung this
+/// career has won (`docs/FINDINGS.md` FIND-222). A `None` career draws **no markers at all**, so
+/// the two keep-out tests below were measuring a panel narrower than the one a real player sees:
+/// exactly the blind spot `docs/lessons/fixtures.md` is about — *name what the code reads, name
+/// what the fixture varies, the difference is the bug.* This career clears **every** entry the
+/// file offers, which is the widest state reachable with the shipped `progress.ron`
+/// (`gates: {}`, so no row can say `LOCKED`, which is longer still — and
+/// `src/hud/board.rs::f121_the_shipped_ladder_takes_no_playable_content_away` is what goes red
+/// the day that stops being true).
+fn a_career_that_has_cleared_everything(data: &GameData) -> Career {
+    let cleared = entries(data)
+        .into_iter()
+        .map(|(template, level)| match level {
+            Some(l) => format!("{template}/{l}"),
+            None => template,
+        })
+        .collect();
+    Career {
+        level: 100,
+        xp: 999_999,
+        xp_into_level: 0,
+        xp_for_the_next_level: None,
+        skill_points: 99,
+        gear_points: 204,
+        gear_points_spent: 0,
+        cleared,
+        gear: std::collections::BTreeMap::new(),
+        rank: "S".to_string(),
+        last_sortie_xp: 0,
+        levelled_up_to: None,
+    }
+}
+
 /// question about `F-177` alone and cannot be masked by anybody else's node.
 #[test]
 fn f177_the_board_panel_stays_out_of_the_middle_of_the_screen() {
@@ -3478,7 +3516,10 @@ fn f177_the_board_panel_stays_out_of_the_middle_of_the_screen() {
     {
         let data = app.world().resource::<GameData>().clone();
         let list = entries(&data);
-        let widest = board::board_text(true, true, &list, list.first()).expect("open says something");
+        let full = a_career_that_has_cleared_everything(&data);
+        let widest =
+            board::board_text(true, true, &list, list.first(), &data.progress, Some(&full))
+                .expect("open says something");
         let mut q = app
             .world_mut()
             .query_filtered::<(&mut Text, &mut Node), With<board::BoardPanel>>();

@@ -382,6 +382,11 @@ const TANK_SCRIPTS_EXACT: &[&str] = &[
     // stand and again at the far apex: the whole act is the rope and not one unit is
     // spent, so the pair is what says so. Both go RED on any move of the tank.
     "f003-wall.txt",
+    // The river towers (2026-09-01). Same shape as the wall and for the same reason: five
+    // `assert gas == 15000` bracket both crossings, because the whole claim is that a rope
+    // over the river costs nothing and the CLIMB to the deck is what costs. All five are
+    // exact and all five go RED on any move of the tank.
+    "f-towers.txt",
     "f004-towers.txt",
     "f018-budget.txt",
     "f025-chain.txt",

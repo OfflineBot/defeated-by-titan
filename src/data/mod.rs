@@ -2494,6 +2494,19 @@ pub struct Progress {
     /// `"<template>"` or `"<template>/<difficulty>"` -> the lowest rank that may fly it.
     /// **Empty ships nothing locked** (`assets/data/progress.ron` says why).
     pub gates: BTreeMap<String, String>,
+    /// `F-125` — the armoury: how the budget is actually spent.
+    pub loadout: LoadoutTuning,
+}
+
+/// `F-125` — **the armoury's one number.** The screen itself is `hud::career` and its grammar
+/// is `progress::loadout`; all either of them needs from a file is how long a hold has to be.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoadoutTuning {
+    /// How long `Tab` stays down before the highlighted row is committed. The mission board's
+    /// own `hub.board.hold_s`, deliberately: two holds in one hub that wanted different
+    /// durations would be a thing to learn twice.
+    pub hold_s: f32,
 }
 
 /// `F-120` — what one finished sortie earns. Facts in, experience out.

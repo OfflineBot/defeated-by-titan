@@ -128,4 +128,24 @@
     // playable content off a player to demonstrate a rank is the wrong trade while the Vector
     // Gear gate is still open. One line here locks one door, the moment somebody wants it.
     gates: {},
+
+    // ---- F-125: the armoury -------------------------------------------------------------
+    //
+    // Where the budget above is actually spent. The screen is `hud::career`'s panel and the
+    // grammar is `Tab` — tap to step a row, hold to commit it — which is the mission board's
+    // grammar with a different key, on purpose: a player who has learned one has learned both.
+    //
+    // ⚠️ **Why a key and not a mouse.** `--headless` and `--offscreen` build no window, so a
+    // plate cannot exist and no script can click one (`FIND-189`). A loadout reachable only by
+    // mouse would have evidence that dies in a unit test — the exact hole `F-177` climbed out
+    // of by making the mission board a place and a key. `Tab` is the only key the script parser
+    // already knows (`src/debug/script.rs::parse_key`) whose game meaning is free: it sets
+    // `Buttons::MARK`, which **nothing in `src/` reads**.
+    loadout: (
+        // The same 0.35 s as `missions.ron: hub.board.hold_s`. Long enough that leaning on the
+        // key does not spend a point, short enough that whoever is slow is never locked out —
+        // a hold has a floor and no ceiling, which is the accessibility argument
+        // `src/net/local.rs` makes against double-taps.
+        hold_s: 0.35,
+    ),
 )

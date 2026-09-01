@@ -2790,3 +2790,81 @@ fn f177_the_board_reaches_the_same_distance_on_every_axis_including_height() {
     assert!(in_reach > 0, "not one sample of {checked} was inside the board's circle");
     assert!(in_reach < checked, "every sample of {checked} was inside — the grid is too small");
 }
+
+// ---------------------------------------------------------------------------
+// F-120 / F-122 — the debrief reports the CAREER, not just the sortie (2026-09-01)
+// ---------------------------------------------------------------------------
+//
+// > *„Ganz ausbauen"* — the user, 2026-09-01, choosing to build the progression out
+// > (`docs/QUESTIONS.md`, the Q-062 override).
+//
+// `menu::debrief::DebriefLedger` was spawned as a **named, documented, empty node** on
+// 2026-08-24 and stayed empty. Meanwhile `progress::Career` computed the level, the rank, the
+// gear budget and what each sortie earned, every sortie, and wrote them to `info!` and nowhere
+// else. Measured 2026-09-01 (`docs/FINDINGS.md` FIND-222): the shipped save had flown **419
+// sorties** and spent **0 of 122** gear points, because no surface in the game had ever
+// mentioned that a gear point existed.
+
+/// ★★ **What the sortie earned lands on the screen the player reads.**
+///
+/// ⚠️ **The two halves are asserted separately on purpose**, and that split IS the finding: the
+/// first half passed for a week before this test existed — `Career::last_sortie_xp` was right
+/// all along — and only the second half was ever broken. A single combined assert would have
+/// reported "the debrief is wrong" for a number that was already correct, and pointed the fix
+/// at the wrong domain (`docs/lessons/fixtures.md`: name what the code reads, name what the
+/// fixture varies, the difference is the bug).
+#[test]
+fn f120_the_debrief_says_what_the_sortie_earned() {
+    use defeated_by_titan::progress::Career;
+    use defeated_by_titan::shared::LocalPlayer;
+
+    let (mut app, _window) = a_windowed_hub();
+    onto_the_first_pad(&mut app);
+    run_for(&mut app, 0.5);
+    assert_eq!(
+        *app.world().resource::<State<MissionPhase>>().get(),
+        MissionPhase::Active,
+        "the pad did not deploy — the rest of this test would measure nothing"
+    );
+    win_it(&mut app);
+    run_for(&mut app, 0.3);
+    assert_eq!(*app.world().resource::<State<MissionPhase>>().get(), MissionPhase::Won);
+    run_for(&mut app, 6.0);
+
+    // ---- half one: the number EXISTS. This half has always passed. -------------------
+    let mut q = app.world_mut().query_filtered::<&Career, With<LocalPlayer>>();
+    let career: Career = q.iter(app.world()).next().cloned().expect(
+        "the local player has no Career at all — then this test is measuring the absence of a \
+         component and not the absence of a line on a screen",
+    );
+    println!("career after the sortie: {}", career.one_line());
+    assert!(
+        career.last_sortie_xp > 0,
+        "the sortie earned nothing, so the debrief has nothing to report and this test cannot \
+         tell a missing LINE from a missing NUMBER: {career:?}"
+    );
+    assert!(career.gear_points > 0, "a level-1 career still has a budget: {career:?}");
+
+    // ---- half two: the number is ON THE SCREEN. This half was red. -------------------
+    let text = plate_text(&mut app).join(" | ");
+    println!("debrief plate: {text}");
+    assert!(
+        text.contains(&format!("+{} XP", career.last_sortie_xp)),
+        "the debrief does not say what the sortie earned. The number exists ({} xp) and the \
+         screen that exists to report it is silent: {text:?}",
+        career.last_sortie_xp
+    );
+    assert!(
+        text.contains(&format!("LEVEL {}", career.level)),
+        "the debrief does not say what level he is: {text:?}"
+    );
+    assert!(
+        text.contains(&format!("RANK {}", career.rank)),
+        "the debrief does not say what rank he is: {text:?}"
+    );
+    assert!(
+        text.contains(&format!("{} GEAR POINTS", career.gear_points)),
+        "the debrief does not say there is a budget to spend — which is why 122 of them sat \
+         unspent for 419 sorties: {text:?}"
+    );
+}

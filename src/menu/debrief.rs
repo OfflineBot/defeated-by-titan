@@ -40,20 +40,22 @@
 //! phase itself now says `DEBRIEF` and a second spelling of the verdict is how a game ends up
 //! telling the player two different things about the same sortie.
 //!
-//! ## The ledger: the named place progression goes
+//! ## The ledger: what the sortie earned
 //!
-//! Levels, XP and gear rank are `progress`' and they are being built in a parallel round; this
-//! screen does not compute a single one of them. What it leaves is [`DebriefLedger`] — a named,
-//! empty column between the sortie's numbers and the buttons — and the contract is written on
-//! it. **It draws nothing today**: a heading with nothing under it is the row-that-does-nothing
-//! this domain refuses to spawn anywhere else.
+//! Levels, XP and gear rank are `progress`' and this screen computes none of them. [`Career`] is
+//! read, [`progress::ledger`](crate::progress::ledger) turns it into lines, and
+//! [`fill_the_ledger`] hangs them under [`DebriefLedger`] between the sortie's numbers and the
+//! two buttons. **The same lines are drawn by `hud::career`** in the runs that have no window
+//! and therefore no plate at all — one list, two surfaces, exactly as `hud::board` draws
+//! `menu::lobby::entries`.
 
 use bevy::prelude::*;
 
 use super::{plate, PauseElement, Screen};
 use crate::data::GameData;
 use crate::mission::{KillTally, Mission, MissionClock, Verdict};
-use crate::shared::{AbandonSortie, DeployRequest};
+use crate::progress::{ledger, Career};
+use crate::shared::{AbandonSortie, DeployRequest, LocalPlayer};
 
 /// What a button on the debrief does.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,30 +68,70 @@ pub enum DebriefAction {
     Lobby,
 }
 
-/// **The place `progress` draws into**, and it is empty on purpose.
+/// **The place `progress` draws into** — filled since 2026-09-01, and this is the record of
+/// what it cost.
 ///
-/// The debrief is where a career becomes visible: what the sortie earned, which level it moved,
-/// which gear rank it unlocked. None of that is computed here and none of it is computed by
-/// `menu` at all — `progress` already reads the finished mission and writes one
-/// `save::SortieOutcome` per player (`src/progress/mod.rs`), and `save::Profile` already holds
-/// `sorties_flown`, `sorties_won`, `titans_felled`, `best_kills_in_a_sortie`,
-/// `seconds_in_the_field` and `cleared`.
+/// It was spawned as a named, documented, **empty** node on 2026-08-24 with three preconditions
+/// written on it. All three are now met, in exactly the shape it asked for:
 ///
-/// **What has to exist before rows appear under this marker:**
+/// 1. **a read that is not a `&mut` of anybody's field** — [`Career`], a component `progress`
+///    already recomputes on `Changed<Profile>`. Read-only here, and nothing in `menu` derives a
+///    level, a threshold or a rank. `save` stays the one writer of `Profile` and `progress`
+///    stays the one writer of `Career`;
+/// 2. **one line on the allow list** — `menu -> progress` in `docs/architecture.md`, carrying
+///    the same argument `menu -> mission` does: a screen has to be right in the frame it is
+///    drawn in, so it needs the STATE and not a message that fired three ticks ago;
+/// 3. **`plate::note`s as children of this node**, between the sortie's numbers and the two
+///    buttons — [`fill_the_ledger`], and no other line of `spawn_debrief_screen` moved.
 ///
-/// 1. a **read** of what the sortie changed that is not a `&mut` of anybody's field — the
-///    obvious shape is the one `mission` uses for its own numbers: a component on the finished
-///    mission entity, or a `Resource` written once by `progress` in the same `OnEnter` it
-///    already runs in;
-/// 2. one line on the allow list of `docs/architecture.md` (`menu -> progress`, read-only,
-///    with the same reason `menu -> mission` carries);
-/// 3. nothing else. The rows are `plate::note`s spawned as children of this node, between the
-///    sortie's own numbers and the two buttons, and no other line of this file moves.
+/// ⚠️ **The words are `progress::ledger`'s and not this file's.** `hud::career` draws the same
+/// list where a plate cannot exist (`--headless`/`--offscreen` build no window, `FIND-189`), and
+/// two screens formatting one career is the drift rule 5's corollary is about. This file chooses
+/// where the rows go; it does not choose what they say.
 ///
-/// It carries no colour, no height and no child. It is a hole with a name, and it is here so
-/// that the shape is decided **before** two rounds decide it differently.
+/// **What it was worth, measured** (`docs/FINDINGS.md` FIND-222): the shipped save had flown
+/// **419 sorties** and spent **0 of 122** gear points. The numbers had been right the whole
+/// time — `Career::last_sortie_xp` was correct in the very run that proved the screen was
+/// silent — and there had never been a surface that said them.
 #[derive(Component, Clone, Copy, Debug, Default)]
 pub struct DebriefLedger;
+
+/// **Puts the career under the marker**, once per plate.
+///
+/// The filter is `Without<Children>` and not `Added<DebriefLedger>`, and that is not a
+/// preference: the plate is built the frame [`Screen`] becomes `Debrief`, and there is no rule
+/// that says `progress::refresh_careers` has run its `Changed<Profile>` pass by then. `Added`
+/// fires exactly once and would lose the race silently — an empty column under a heading, which
+/// is the one thing this node's own doc says it must never be. This retries until there is
+/// something to draw and then stops, because a filled node has children.
+///
+/// It costs nothing to run every frame: outside a debrief the archetype it matches is empty
+/// (`CLAUDE.md` rule 6), and the query is two components deep.
+///
+/// **No `.single()`** (rule 4). The career drawn is the **local** player's — a plate is this
+/// machine's surface, the same reason `menu::board::work_the_board` filters `LocalPlayer` for a
+/// key off this machine's keyboard. Twenty people fly one sortie and each reads his own report.
+pub fn fill_the_ledger(
+    mut commands: Commands,
+    careers: Query<&Career, With<LocalPlayer>>,
+    ledgers: Query<Entity, (With<DebriefLedger>, Without<Children>)>,
+) {
+    if ledgers.is_empty() {
+        return;
+    }
+    // No career means no player in the world — a plate over a run that has nobody in it. The
+    // column stays empty rather than inventing a level, and the node is still there, so the
+    // moment a career exists the next frame fills it.
+    let Some(career) = careers.iter().next() else { return };
+    let lines = ledger::debrief_lines(career);
+    for node in &ledgers {
+        commands.entity(node).with_children(|column| {
+            for line in &lines {
+                column.spawn(plate::note(line.clone()));
+            }
+        });
+    }
+}
 
 /// Builds the plate out of the mission that just ended.
 ///
@@ -133,8 +175,22 @@ pub fn spawn_debrief_screen(
             clock_face(clock.duration_ticks as f64 / hz)
         )));
 
-        // The ledger. Named, empty, and documented — see `DebriefLedger`.
-        screen.spawn((Name::new("debrief_ledger"), PauseElement, DebriefLedger, Node::default()));
+        // The ledger. Named, and filled by [`fill_the_ledger`] rather than here — see
+        // `DebriefLedger`. A column with a gap, so the rows read as a block and not as more
+        // sortie numbers; empty until the career is read, and empty forever in the one case
+        // that is not a bug (no `Career` on the local player, which is a run with no player).
+        screen.spawn((
+            Name::new("debrief_ledger"),
+            PauseElement,
+            DebriefLedger,
+            Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(4.0),
+                margin: UiRect::vertical(Val::Px(10.0)),
+                ..default()
+            },
+        ));
 
         row(screen, DebriefAction::Redeploy, "Redeploy", false);
         row(screen, DebriefAction::Lobby, "To the lobby  (Esc)", true);

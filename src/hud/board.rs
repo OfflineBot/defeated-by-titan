@@ -62,15 +62,31 @@
 //! pitch down, and nothing else in the column moves. The right edge of the whole panel is
 //! `x 346` against a keep-out box that starts at `x 512`. The shot is bit-identical over two
 //! runs (`sha256 55132df4…`).
+//!
+//! ## The ladder, since 2026-09-01
+//!
+//! Each row can now carry a marker: [`CLEARED`] for a rung this career has won, `LOCKED <rank>`
+//! for one `progress.ron: gates` refuses it. **[`Career::cleared`] is `Profile::cleared`'s first
+//! reader** — it had been written on every won sortie since 2026-08-19 and read by nothing
+//! (`docs/FINDINGS.md` FIND-222). Picture: `docs/images/f121-ladder-cleared.png`
+//! (`scripts/f120-progress.txt --ticks 1155`), one `*` on `skirmish recruit`, which is the
+//! rung that run had just won, and no `LOCKED` anywhere because the shipped `gates` is empty
+//! (`docs/QUESTIONS.md` Q-090).
+//!
+//! ⚠️ **The decode above predates the markers** and was measured with an empty career. The
+//! panel is wider now — `tests/hud.rs::a_career_that_has_cleared_everything` is what keeps the
+//! keep-out claim honest against the widest state rather than the narrowest.
 
 use bevy::prelude::*;
 use bevy::text::FontSize;
 
-use crate::data::GameData;
+use crate::data::{GameData, Progress};
 use crate::hud::{signal, HudElement};
 use crate::menu::board::Board;
 use crate::menu::lobby::{chosen, entries, LobbyChoice};
 use crate::menu::pause::MISSION_SELECT_ROW;
+use crate::progress::{career, Career};
+use crate::shared::LocalPlayer;
 
 /// Marker on the board panel.
 #[derive(Component, Clone, Copy, Debug, Default)]
@@ -99,6 +115,16 @@ pub const NO_CURSOR: &str = "  ";
 /// The board's own name on the panel's first line.
 pub const HEADING: &str = "MISSION BOARD";
 
+/// What marks a rung the player has **won** at least once.
+///
+/// A glyph and not a colour, the same rule the cursor follows — and a glyph rather than the
+/// word "cleared" because it has to sit at the end of thirteen rows without making the widest
+/// of them wider than the panel.
+pub const CLEARED: &str = "  *";
+
+/// What marks a rung `progress.ron: gates` will not let this rank fly.
+pub const LOCKED: &str = "  LOCKED";
+
 /// **What the panel says.** `None` means draw nothing at all.
 ///
 /// Pure, and it takes the two answers rather than the world: everything it needs has already
@@ -113,6 +139,8 @@ pub fn board_text(
     open: bool,
     list: &[(String, Option<String>)],
     picked: Option<&(String, Option<String>)>,
+    progress: &Progress,
+    standing: Option<&Career>,
 ) -> Option<String> {
     if !in_range {
         return None;
@@ -132,9 +160,47 @@ pub fn board_text(
         out.push('\n');
         out.push_str(if Some(entry) == picked { CURSOR } else { NO_CURSOR });
         out.push_str(&row(entry));
+        out.push_str(&standing_on(entry, progress, standing));
     }
     out.push_str("\n\nF   next        hold F   deploy");
     Some(out)
+}
+
+/// **Where this career stands on this rung** — the difficulty ladder, said out loud.
+///
+/// Three answers and they are exclusive: a door this rank may not open is `LOCKED` and says
+/// which rank it wants; a door already won carries [`CLEARED`]; everything else says nothing,
+/// because a row that reads "not yet cleared" on eleven of thirteen lines is noise.
+///
+/// 🔴 **The key is `save::SortieOutcome::cleared_key`'s and it is not rebuilt here.** That
+/// function decides what `("skirmish", Some("veteran"))` is called in the save file
+/// (`"skirmish/veteran"`, and a bare `"tutorial"` for a template with no tier), and a second
+/// spelling of it in this file would be two implementations of one question — the drift rule 5's
+/// corollary is about. The one thing this file does is put the same two strings together the
+/// same way, which is why `tests/hud.rs` compares it against a real `Profile`'s own set rather
+/// than against a literal.
+fn standing_on(
+    entry: &(String, Option<String>),
+    progress: &Progress,
+    standing: Option<&Career>,
+) -> String {
+    let Some(career) = standing else { return String::new() };
+    let key = match &entry.1 {
+        Some(level) => format!("{}/{level}", entry.0),
+        None => entry.0.clone(),
+    };
+    // Locked beats cleared: a rank that has fallen (it cannot today — the rank is derived from
+    // XP, which never goes down) would otherwise show a door as both won and shut.
+    if !career::may_fly(progress, &career.rank, &key) {
+        return match progress.gates.get(&key) {
+            Some(rank) => format!("{LOCKED} {rank}"),
+            None => LOCKED.to_string(),
+        };
+    }
+    if career.cleared.contains(&key) {
+        return CLEARED.to_string();
+    }
+    String::new()
 }
 
 /// One sortie, as one line: the template key and the difficulty key out of `missions.ron`.
@@ -185,6 +251,7 @@ pub fn update_board_panel(
     board: Res<Board>,
     data: Res<GameData>,
     choice: Res<LobbyChoice>,
+    careers: Query<&Career, With<LocalPlayer>>,
     mut panels: Query<(&mut Text, &mut Node), With<BoardPanel>>,
 ) {
     // Out of range is the overwhelmingly common case — the player is in a sortie, or 200 m up
@@ -192,7 +259,14 @@ pub fn update_board_panel(
     let text = if board.in_range {
         let list = entries(&data);
         let picked = chosen(&data, &choice);
-        board_text(board.in_range, board.open, &list, picked.as_ref())
+        board_text(
+            board.in_range,
+            board.open,
+            &list,
+            picked.as_ref(),
+            &data.progress,
+            careers.iter().next(),
+        )
     } else {
         None
     };
@@ -221,7 +295,18 @@ pub fn update_board_panel(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
     use super::*;
+
+    /// **The shipped `progress.ron`**, read the way `data::GameData::load` reads it — not a
+    /// hand-built stand-in. The ladder's whole point is that it reflects the file: a gate added
+    /// to `gates: {}` has to appear on the board without a line of Rust moving, and a fixture
+    /// with its own ranks would prove the opposite of that.
+    fn progress() -> Progress {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/data");
+        crate::data::GameData::load(&dir).progress
+    }
 
     fn list() -> Vec<(String, Option<String>)> {
         vec![
@@ -231,13 +316,32 @@ mod tests {
         ]
     }
 
+    /// A career at a named rank with a named set of clears. Everything else is a placeholder —
+    /// this file draws two of `Career`'s fields and no others.
+    fn career_at(rank: &str, cleared: &[&str]) -> Career {
+        Career {
+            level: 1,
+            xp: 0,
+            xp_into_level: 0,
+            xp_for_the_next_level: Some(300),
+            skill_points: 0,
+            gear_points: 6,
+            gear_points_spent: 0,
+            cleared: cleared.iter().map(|s| s.to_string()).collect::<BTreeSet<String>>(),
+            gear: BTreeMap::new(),
+            rank: rank.to_string(),
+            last_sortie_xp: 0,
+            levelled_up_to: None,
+        }
+    }
+
     /// The case that keeps the element honest: **an empty corner, not an invented prompt.**
     #[test]
     fn f177_a_player_who_is_not_at_the_board_is_told_nothing() {
-        let l = list();
+        let (l, p) = (list(), progress());
         for open in [false, true] {
             assert_eq!(
-                board_text(false, open, &l, Some(&l[1])),
+                board_text(false, open, &l, Some(&l[1]), &p, None),
                 None,
                 "out of range with open = {open}"
             );
@@ -248,8 +352,8 @@ mod tests {
     /// happens when a HUD carries its own copy of a label.
     #[test]
     fn f177_the_prompt_names_the_key_and_quotes_the_row_it_opens() {
-        let l = list();
-        let said = board_text(true, false, &l, Some(&l[1])).expect("in range, shut");
+        let (l, p) = (list(), progress());
+        let said = board_text(true, false, &l, Some(&l[1]), &p, None).expect("in range, shut");
         assert!(said.contains(MISSION_SELECT_ROW), "the prompt has to name the row: {said:?}");
         assert!(said.contains('F'), "the prompt has to name the key: {said:?}");
         // Shut means shut: no sortie is offered before the board has been opened.
@@ -259,9 +363,10 @@ mod tests {
     /// The cursor stands on the entry that would fly, and on exactly one of them.
     #[test]
     fn f177_the_open_board_marks_exactly_the_sortie_that_would_fly() {
-        let l = list();
+        let (l, p) = (list(), progress());
         for (i, entry) in l.iter().enumerate() {
-            let said = board_text(true, true, &l, Some(entry)).expect("in range, open");
+            let said =
+                board_text(true, true, &l, Some(entry), &p, None).expect("in range, open");
             assert_eq!(
                 said.matches(CURSOR).count(),
                 1,
@@ -281,7 +386,80 @@ mod tests {
     /// "bar that is a picture of a bar" with no pixels.
     #[test]
     fn f177_a_file_with_no_templates_is_said_out_loud() {
-        let said = board_text(true, true, &[], None).expect("in range, open");
+        let said =
+            board_text(true, true, &[], None, &progress(), None).expect("in range, open");
         assert!(said.contains("missions.ron"), "{said:?}");
+    }
+
+    /// ★★ 🔴 **THE DIFFICULTY LADDER, and the control is the same call with no career.**
+    ///
+    /// `Profile::cleared` had been written on every won sortie since 2026-08-19 and read by
+    /// **nothing** — 419 sorties into a set nobody opened (`docs/FINDINGS.md` FIND-222). This
+    /// is the reader.
+    ///
+    /// ⚠️ The `n = 2` case with the elements DISAGREEING: two skirmish rungs, one cleared and
+    /// one not, in the same panel. A marker that simply appeared on every row, or on none,
+    /// passes a one-row test and fails this one.
+    #[test]
+    fn f121_a_cleared_rung_is_marked_and_an_unflown_one_beside_it_is_not() {
+        let (l, p) = (list(), progress());
+        let career = career_at("E", &["skirmish/recruit"]);
+        let said = board_text(true, true, &l, Some(&l[1]), &p, Some(&career)).expect("open");
+
+        let recruit = said.lines().find(|x| x.contains("recruit")).expect("a recruit row");
+        let veteran = said.lines().find(|x| x.contains("veteran")).expect("a veteran row");
+        assert!(recruit.contains(CLEARED), "the won rung is not marked: {recruit:?}");
+        assert!(!veteran.contains(CLEARED), "an unflown rung is marked: {veteran:?}");
+        assert_eq!(
+            said.matches(CLEARED).count(),
+            1,
+            "one clear, one marker — anything else and the ladder is decoration: {said:?}"
+        );
+
+        // The control: the identical call with no career shows no ladder at all, which is what
+        // every run made before this change looked like.
+        let blind = board_text(true, true, &l, Some(&l[1]), &p, None).expect("open");
+        assert!(!blind.contains(CLEARED), "a run with no career invents a clear: {blind:?}");
+    }
+
+    /// ★ **A gate that is set is a gate the board shows** — and it names the rank it wants,
+    /// because "LOCKED" with no reason is a wall a player cannot plan against.
+    ///
+    /// The gate is injected into the **loaded** file rather than into a stand-in: this is the
+    /// exact call `update_board_panel` makes, so the day somebody fills `gates: {}` the panel
+    /// already says so.
+    #[test]
+    fn f121_a_gated_rung_names_the_rank_it_wants_and_the_open_ones_stay_quiet() {
+        let mut p = progress();
+        p.gates.insert("skirmish/veteran".to_string(), "C".to_string());
+        let l = list();
+        let career = career_at("E", &["skirmish/recruit"]);
+        let said = board_text(true, true, &l, Some(&l[1]), &p, Some(&career)).expect("open");
+
+        let veteran = said.lines().find(|x| x.contains("veteran")).expect("a veteran row");
+        assert!(veteran.contains(LOCKED), "a gated rung is not marked shut: {veteran:?}");
+        assert!(veteran.contains('C'), "and it has to name the rank it wants: {veteran:?}");
+        assert_eq!(said.matches(LOCKED).count(), 1, "only the gated rung is shut: {said:?}");
+
+        // And a career that HAS the rank walks through the same door.
+        let ranked = career_at("C", &[]);
+        let open = board_text(true, true, &l, l.get(1), &p, Some(&ranked)).expect("open");
+        assert!(!open.contains(LOCKED), "rank C is refused its own gate: {open:?}");
+    }
+
+    /// 🔴 **The shipped file locks nothing, and that is a decision worth a guard.**
+    /// `progress.ron: gates` is empty on purpose (`docs/QUESTIONS.md` Q-051, Q-090). If a round
+    /// ever fills it, this test goes red and whoever filled it has to say so out loud.
+    #[test]
+    fn f121_the_shipped_ladder_takes_no_playable_content_away() {
+        let p = progress();
+        let l = list();
+        let beginner = career_at("E", &[]);
+        let said = board_text(true, true, &l, Some(&l[0]), &p, Some(&beginner)).expect("open");
+        assert!(
+            !said.contains(LOCKED),
+            "the shipped progress.ron has started locking doors — that is a design change and \
+             it needs a line in docs/QUESTIONS.md, not a green test: {said:?}"
+        );
     }
 }

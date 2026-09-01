@@ -41,8 +41,11 @@
 
 pub mod career;
 pub mod gear;
+pub mod ledger;
+pub mod loadout;
 
 pub use career::Career;
+pub use loadout::Loadout;
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -58,11 +61,18 @@ impl Plugin for ProgressPlugin {
     fn build(&self, app: &mut App) {
         // Two thin systems and one function: a Bevy system cannot take the verdict as an
         // argument, and duplicating the body is how the two halves drift apart.
-        app.add_systems(OnEnter(MissionPhase::Won), record_a_win)
+        app.init_resource::<Loadout>()
+            .add_systems(OnEnter(MissionPhase::Won), record_a_win)
             .add_systems(OnEnter(MissionPhase::Lost), record_a_loss)
             // `Update` and not `FixedUpdate`: a career is not simulation, nothing in the fixed
             // step reads it, and it only ever recomputes when the profile behind it moved.
-            .add_systems(Update, refresh_careers);
+            // ⭐ `F-125`, and it is the one system in this domain that reads a key. It runs
+            // in every launch mode on purpose: a `--headless` or `--offscreen` run has no
+            // window, therefore no menu, therefore no way to press a button — and a loadout
+            // reachable only by mouse is a loadout no script can ever show to exist
+            // (`FIND-189`). `refresh_careers` runs FIRST so the armoury reads the career the
+            // last frame's spend produced, not the one before it.
+            .add_systems(Update, (refresh_careers, loadout::work_the_armoury).chain());
     }
 }
 

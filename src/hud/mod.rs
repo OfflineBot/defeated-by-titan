@@ -153,6 +153,7 @@
 pub mod arm_aim;
 pub mod blade_pips;
 pub mod board;
+pub mod career;
 pub mod catch_band;
 pub mod crosshair;
 pub mod gas_bar;
@@ -177,6 +178,7 @@ impl Plugin for HudPlugin {
                 health_bar::spawn_health_bar,
                 objective::spawn_objective,
                 board::spawn_board_panel,
+                career::spawn_career_panel,
                 crosshair::spawn_crosshair,
                 arm_aim::spawn_arm_aim,
                 catch_band::spawn_catch_band,
@@ -195,6 +197,12 @@ impl Plugin for HudPlugin {
                 // measures nothing itself. That is the corollary of rule 5 and it is the whole
                 // reason this element is four lines of decision and no geometry.
                 board::update_board_panel,
+                // `F-120`/`F-121`/`F-122`. The other half of `menu::debrief`'s plate: a run
+                // with no window has no plate at all, so this is the only surface that can
+                // ever report a sortie to a screenshot (`FIND-189`). It formats nothing —
+                // `progress::ledger` owns the words, exactly as `menu::lobby::entries` owns
+                // the mission list the element above draws.
+                career::update_career_panel,
                 // `F-043`: sense, then show — the same two-step split the crosshair and the
                 // arm markers use, and for the same reason. What a hit *is* (word, size,
                 // colour) is then testable against a `HitFlash` set by hand, without a titan,

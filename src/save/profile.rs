@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::data::XpTuning;
+use crate::data::{GearTuning, XpTuning};
 use crate::shared::PlayerId;
 
 /// One player's career. **Written by `save` and by nothing else** (`docs/architecture.md`,
@@ -270,5 +270,92 @@ mod tests {
         let mut p = Profile::default();
         p.record(&outcome(false, 0, -50.0), &xp_tuning());
         assert_eq!(p.seconds_in_the_field, 0.0);
+    }
+}
+
+/// `F-125` — **"spend a point on this axis", asked of the one domain that may write it.**
+///
+/// The identical seam as [`SortieOutcome`] and for the identical reason (`FINDINGS.md`
+/// FIND-063): [`Profile`] has exactly one writer. `progress` owns the armoury — the key, the
+/// cursor, the rows and what a legal build is — and says so with a message; `save` owns the
+/// field and the file. A `progress` that reached into a `&mut Profile` would be a second
+/// authority on the one piece of state a career hangs on, and over a wire two machines
+/// disagreeing about somebody's build.
+///
+/// It lives in `save/` rather than `shared/` for the same reason [`SortieOutcome`] does: `save`
+/// is the one domain that reads it, so `shared/` would widen the type's audience for nothing.
+///
+/// ## Why the **budget** travels with the request
+///
+/// Because the budget is a fact about the career, and the career is `progress`' — it is
+/// `gear_points(levels, level)` off a level `save` does not derive. Putting it in the message
+/// is the same choice [`SortieOutcome::kills`] makes: the asker sends the facts it owns, and
+/// the writer still checks them. `save` does **not** take it on trust — [`Profile::spend_gear`]
+/// refuses anything that would exceed it, so a request built from a stale career cannot
+/// overspend a real one.
+#[derive(Message, Clone, Debug, PartialEq)]
+pub struct GearRequest {
+    pub player: PlayerId,
+    pub change: GearChange,
+    /// What the asking career had **earned** at the moment it asked. An upper bound, checked
+    /// again on arrival.
+    pub budget: u32,
+}
+
+/// What a [`GearRequest`] wants done.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GearChange {
+    /// One more point on this axis.
+    Spend(String),
+    /// Give every point back. **The reason a spend can be a single tap and not a confirmation
+    /// dialogue**: a mistake costs one press to undo, so the screen never has to ask "are you
+    /// sure" — which is a row nothing in this game can click in a `--headless` run anyway.
+    ResetAll,
+}
+
+impl Profile {
+    /// Applies a [`GearChange`], or says why it did not.
+    ///
+    /// **Both refusals are doors from outside**, exactly as [`crate::progress::gear::is_legal`]
+    /// documents: the save file is a file on a disk a player can edit, and an axis renamed in
+    /// `progress.ron` leaves every existing save quoting a name that means nothing. So the axis
+    /// is checked against the file and the total against the budget, on every single spend,
+    /// and the error is a sentence because its only consumers are a log line and a test.
+    ///
+    /// ⚠️ **It clamps rather than trusts.** `budget` arrives in the message from `progress`; a
+    /// request built one frame before a career changed must not be able to overspend the career
+    /// it lands on.
+    pub fn spend_gear(
+        &mut self,
+        change: &GearChange,
+        budget: u32,
+        gear: &GearTuning,
+    ) -> Result<String, String> {
+        match change {
+            GearChange::ResetAll => {
+                if self.gear.is_empty() {
+                    return Err("there is nothing allocated to give back".to_string());
+                }
+                let had: u32 = self.gear.values().copied().fold(0, u32::saturating_add);
+                self.gear.clear();
+                Ok(format!("the build is cleared — {had} point(s) back in the budget"))
+            }
+            GearChange::Spend(axis) => {
+                if !gear.axes.contains_key(axis.as_str()) {
+                    return Err(format!(
+                        "progress.ron defines no axis {axis:?} — nothing was spent"
+                    ));
+                }
+                let spent: u32 = self.gear.values().copied().fold(0, u32::saturating_add);
+                if spent >= budget {
+                    return Err(format!(
+                        "the budget of {budget} point(s) is fully allocated — nothing was spent"
+                    ));
+                }
+                let now = self.gear.entry(axis.clone()).or_insert(0);
+                *now += 1;
+                Ok(format!("{axis} is now at {now} — {}/{budget} allocated", spent + 1))
+            }
+        }
     }
 }

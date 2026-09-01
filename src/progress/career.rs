@@ -22,6 +22,8 @@
 //! sortie and each of them walks away with his own level. `tests/progress.rs` queries it per
 //! player and never calls `.single()`.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use bevy::prelude::*;
 
 use crate::data::{LevelTuning, Progress, RankTier};
@@ -49,6 +51,22 @@ pub struct Career {
     /// `F-122`'s budget, in full — what the career has *earned*, not what is left.
     pub gear_points: u32,
     pub gear_points_spent: u32,
+    /// **Which sorties have been won**, copied from [`Profile::cleared`] —
+    /// `"skirmish/veteran"`, or a bare `"tutorial"`.
+    ///
+    /// 🔴 **This field is the difficulty ladder, and until 2026-09-01 nothing read it.**
+    /// `Profile::cleared` had been written on every won sortie since 2026-08-19 and had
+    /// **zero** readers anywhere in `src/` — 419 sorties booked into a set nothing ever
+    /// opened (`docs/FINDINGS.md` FIND-222). It is mirrored here for the same reason `gear` is:
+    /// `hud::board` draws the rungs and must not need a second door into the save game.
+    pub cleared: BTreeSet<String>,
+    /// **The allocation itself**, axis -> points, copied from [`Profile::gear`].
+    ///
+    /// It is here so that a screen can draw the build without an edge into `save`: `hud` and
+    /// `menu` both read `Career` already, and giving them a second door to the save game for
+    /// one `BTreeMap` would widen `Profile`'s audience for nothing. `save` remains the one
+    /// **writer**; this is the same read-only mirror the level and the rank already are.
+    pub gear: BTreeMap<String, u32>,
     /// `F-121`, E..S.
     pub rank: String,
     /// What the sortie that just ended was worth. **Zero except in the frames right after a
@@ -175,6 +193,8 @@ impl Career {
             skill_points: skill_points(&p.levels, level),
             gear_points: earned,
             gear_points_spent: gear::spent_points(&profile.gear),
+            cleared: profile.cleared.clone(),
+            gear: profile.gear.clone(),
             rank: rank_for(&p.ranks, earned).to_string(),
             last_sortie_xp: 0,
             levelled_up_to: None,

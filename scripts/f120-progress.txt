@@ -1,0 +1,242 @@
+# f120-progress — ⭐ THE CAREER, end to end: fly a sortie, win it, and READ THE EARNINGS BACK.
+#
+# PINS: `scripts/f177-board.txt`'s walk to the board (bearing -40.6, `key W 1.20`) and its kill
+#       arrangement (`spawn 17.5 0 0` / `warp 15.80 27.4 1.35` / `slash right 0.40`), both
+#       already re-derived there for `scale.ron`'s doubled classes and `gravity_m_s2 -32`.
+#       Nothing here re-aims anything: this file changes WHAT IS READ AFTERWARDS, not the
+#       flying. If the husk's geometry moves again, it moves in f177 first and this follows.
+#       Also pinned: `missions.ron: hub.verdict_s 3.0` + `hub.debrief_s 1.2`, which is what
+#       ACT 5's two waits are counted against, and `skirmish/recruit.kill_target 2`.
+#
+#   the verdict:  DBT_SAVE_DIR=off ./target/debug/defeated_by_titan --headless --hub \
+#                     --script scripts/f120-progress.txt --ticks 1400
+#   the exit:     DBT_SAVE_DIR=off ./target/debug/defeated_by_titan --headless --hub \
+#                     --script scripts/f120-progress.txt --ticks 1400 >/dev/null 2>&1; echo $?
+#   the earnings: ... --ticks 1400 2>&1 | grep -E 'progress: player|save: player'
+#   ⚠️ the picture is at tick 701, NOT the verdict's 900: by 900 the player is back in the
+#   hub with the ARMOURY open, and the frame decodes as f125's panel — measured 2026-09-01,
+#   8 text bands where the ledger has 6. Two recipes for one picture had drifted.
+#   the picture:  DBT_SAVE_DIR=off ./target/debug/defeated_by_titan --offscreen \
+#                     --screenshot docs/images/f120-debrief-ledger.png --hub \
+#                     --script scripts/f120-progress.txt --ticks 900
+#
+# ⚠️ The exit code needs its OWN run: a pipeline's `$?` is the LAST command's (`CLAUDE.md`).
+# ⚠️ The picture run is CUT OFF on purpose and reports red — a screenshot is taken at the last
+#    tick of its run, so it has to be aimed at a moment. The verdict is the first line, never
+#    the last. Same split as `scripts/f177-board.txt` and `scripts/f070-hub.txt`.
+#
+# 🔴 **`DBT_SAVE_DIR=off` is not optional and it is not tidiness.** Without it the run books its
+#    sortie into the real `saves/player-1.ron`, so the level and the rank on the picture depend
+#    on how many times anybody has ever run a script — i.e. the screenshot is not reproducible
+#    and the numbers below are wrong by the next run. With it every run starts from the empty
+#    career and the ledger reads the same five lines every time (`src/save/file.rs::discover`).
+#
+# ---------------------------------------------------------------------------------------
+# WHY THIS RUN EXISTS AT ALL
+#
+# `menu::debrief`'s plate is what a PLAYER reads, and no run on this machine can ever contain
+# it: `src/lib.rs` builds `primary_window: None` for both `--headless` and `--offscreen`, so
+# `menu`'s whole Update chain is gated off (`FIND-189`). The report therefore has a second
+# surface — `hud::career`, the same lines from the same `progress::ledger` — and that is what
+# this file walks to and what the picture above shows. Same one-list-two-surfaces shape as the
+# mission board, and the same reason.
+#
+# ---------------------------------------------------------------------------------------
+# WHAT THIS FILE CLAIMS — and the earnings are read back, not assumed
+#
+#   1. a cold `--hub` start stands in the HUB                          (`assert phase == 5`)
+#   2. the board is reached and deployed from with NOTHING but look, W and F  (ACT 2 + 3)
+#   3. the default door is skirmish/**recruit** — two cortex cuts win it
+#                                                    (`assert kills >= 2`, `assert phase == 3`)
+#   4. and the career is then readable, in three places that have to agree:
+#        * the log:     `progress: player 1 earned <N> xp — level 1 (<N>/300 xp), rank E, ...`
+#        * the log:     `save: player 1 — +<N> xp, 1 sorties (1 won), ...`
+#        * the picture: `hud::career`'s panel, five lines, decoded in `docs/FINDINGS.md`
+#
+# ⚠️ **There is no `assert xp` verb** — `Metric` knows speed, height, gas, titans, tick, health,
+#    kills, phase, rope, blades, sharpness and nothing about a career (`src/debug/script.rs`).
+#    So the earnings are read out of the log line and off the panel, and both are quoted above.
+#    A metric would be better and it is `src/debug/`'s to add — recorded, not quietly patched
+#    in from here (`docs/FINDINGS.md` FIND-222).
+#
+# ⚠️ **What this file cannot claim:** that the debrief PLATE said any of it. A run with no
+#    window has no menu at all. The windowed half is
+#    `tests/menu.rs::f120_the_debrief_says_what_the_sortie_earned`, which asserts the same five
+#    lines on the plate — and the two surfaces share `progress::ledger`, which is what makes
+#    one run evidence about the other.
+
+# =========================================================================================
+# ACT 1 — the cold start. An empty career, because DBT_SAVE_DIR is off.
+# =========================================================================================
+wait 1.5
+assert phase == 5
+assert titans == 0
+mark f120-in-the-hub-fresh-career
+
+# =========================================================================================
+# ACT 2 — the walk to the board. No `warp`: he goes there on his feet.
+# =========================================================================================
+#
+# `missions.ron: hub.spawn_m` is (0, 2, 0) and `hub.board` is (3.6, 1.8, -4.2) — 5.53 m away
+# against a reach of 4.0. The bearing is atan2(-3.6, 4.2) = -40.6 deg (`look 0` faces -Z).
+look -40.6 0
+key W 1.20
+wait 0.60
+mark f120-at-the-board
+
+# =========================================================================================
+# ACT 3 — F opens the overview, a HELD F deploys what it shows.
+# =========================================================================================
+#
+# ⚠️ **No tap between them, and that is deliberate.** The press that opens cannot deploy
+# (`menu::board::Board::spent`), so the hold below flies the entry the board came up on — the
+# default, `hub.deployments[0]` = skirmish/**recruit**, "the door you find without looking for
+# it". recruit's `kill_target` is 2, which is what ACT 4 counts to.
+key F 0.10
+wait 0.40
+mark f120-board-open
+key F 0.60
+wait 2.20
+assert phase == 2
+assert kills == 0
+mark f120-deployed-recruit
+
+# =========================================================================================
+# ACT 4 — the sortie, won with two cortex cuts out of a fall (recruit wants 2)
+# =========================================================================================
+#
+# The arrangement is `scripts/f177-board.txt` ACT 6's, unchanged.
+spawn titan husk 17.5 0 0
+warp 15.80 27.4 1.35
+look 0 0
+wait 0.72
+slash right 0.40
+wait 1.60
+assert kills >= 1
+mark f120-kill-one
+
+spawn titan husk 17.5 0 0
+warp 15.80 27.4 1.35
+look 0 0
+wait 0.72
+slash right 0.40
+wait 1.60
+assert kills >= 2
+wait 0.40
+assert phase == 3      # ⭐ WON at two. That is recruit, and it is the door nobody had to pick.
+mark f120-won
+
+# =========================================================================================
+# ACT 5 — ⭐ THE EARNINGS. The panel is up from the verdict, 3.0 s before the debrief phase.
+# =========================================================================================
+#
+# `hud::career` draws the ledger in Won, Lost AND Debrief, so the window a picture can be aimed
+# at is `verdict_s + debrief_s` = 4.2 s = 252 ticks wide, not the 72 the debrief alone leaves.
+# This mark is inside the WON half; `f120-ledger-at-the-debrief` below is inside the other.
+wait 0.40
+assert phase == 3
+mark f120-ledger-at-the-verdict
+
+# ⚠️ **Both waits are aimed, and the aim is MEASURED — a first cut of this act read the debrief
+# at t = 750 and got the hub.** `missions.ron: hub` holds the verdict for 3.0 s and the debrief
+# for 1.2 s, both counted off the deciding tick, so the two windows are
+# `Won = [decided, decided+180]` and `Debrief = [decided+180, decided+252]`. Measured
+# 2026-09-01 from the run above: `phase == 3` still held at t = 649 and `phase == 5` already
+# held at t = 750, which brackets the deciding tick to **decided in (469, 498)** — a 29-tick
+# uncertainty this script cannot remove, because the cut lands when the blade lands.
+#
+# Taken at BOTH ends of that bracket the debrief window is [649, 721] at the early end and
+# [678, 750] at the late one, so the only ticks that are inside it for **every** decided tick
+# are **[678, 721]** — 43 ticks wide. The read below lands at t ≈ 698, its middle, with 20
+# ticks of margin on each side. The verdict read above lands at t ≈ 623, against a Won window
+# whose earliest end is 649.
+wait 1.25
+assert phase == 6
+mark f120-ledger-at-the-debrief
+
+# =========================================================================================
+# ACT 6 — home, and the panel becomes the STANDING: level and rank, no delta.
+# =========================================================================================
+wait 1.30
+assert phase == 5
+assert height < 3
+mark f120-home-with-a-standing
+
+# =========================================================================================
+# ACT 7 — ⭐ THE ARMOURY. Tab opens it, a tap steps a row, a HELD Tab spends a point.
+# =========================================================================================
+#
+# `progress.ron: loadout.hold_s` is 0.35, so `key tab 0.60` is a commit and `key tab 0.10` is a
+# tap — the mission board's grammar with the one key whose game meaning was free
+# (`Buttons::MARK`, which nothing in `src/` reads).
+#
+# ⚠️ **The press that OPENS cannot spend** (`progress::loadout::Loadout::spent`), so the first
+# `key tab` below only opens. If that guard ever broke, the run would spend on `speed` a press
+# early and the two `save:` lines this act is read by would name the wrong totals.
+#
+# The rows are `progress.ron: gear.axes` in file order, then RESET:
+#   0 speed · 1 control · 2 power · 3 endurance · 4 RESET
+# The cursor starts at 0, so the first commit is SPEED and the tap after it steps to CONTROL.
+#
+# What the log has to say, and it is the evidence for this act:
+#   armoury: open — 0 of 6 point(s) spent, 5 rows
+#   save: player 1 — speed is now at 1 — 1/6 allocated
+#   save: player 1 — control is now at 1 — 2/6 allocated
+# 🔴 **EVERY `wait` HERE IS LONGER THAN THE `key` HOLD ABOVE IT, and that is not style.**
+# Measured 2026-09-01 while writing this act (`docs/FINDINGS.md` FIND-222): `key tab 0.60`
+# followed by `wait 0.40` advances the script while Tab is **still down**, and Bevy's
+# `ButtonInput::press` sets `just_pressed` only for a key that was not already pressed
+# (`bevy_input`: `if self.pressed.insert(k) { self.just_pressed.insert(k) }`). So the next
+# `key tab` produces **no press edge at all**: the two presses merge into one long hold, the
+# tap that was supposed to STEP never happens, and the run spends twice on the same axis while
+# looking perfectly healthy in the log. `scripts/f177-board.txt` never hit this because every
+# one of its waits already exceeds its hold — by luck of authorship, not by a rule.
+key tab 0.10
+wait 0.40
+assert phase == 5
+mark f120-armoury-open
+
+# The cursor is on row 0. A held Tab commits it: SPEED.
+key tab 0.60
+wait 0.80
+mark f120-spent-on-speed
+
+# A tap steps row 0 -> row 1, and the next hold commits CONTROL. Two different axes out of two
+# different presses is what makes this act a test of the CURSOR and not just of the spend.
+key tab 0.10
+wait 0.40
+key tab 0.60
+wait 0.80
+mark f120-spent-on-control
+
+# =========================================================================================
+# ACT 8 — ⭐ THE LADDER. Back to the board, and the rung he just won is MARKED.
+# =========================================================================================
+#
+# `save::Profile::cleared` gained `"skirmish/recruit"` in ACT 4 and, until 2026-09-01, **nothing
+# anywhere read it** — 419 sorties booked into a set nobody opened (`docs/FINDINGS.md`
+# FIND-222). `hud::board` is the reader, and this act is what shows it in a running game.
+#
+# The rows step past CLOSE first: rows are `speed control power endurance RESET CLOSE`, the
+# cursor is on `control` after ACT 7, so four taps and a hold reach CLOSE and shut the panel.
+# ⚠️ Every wait is again longer than the hold above it — see ACT 7's note.
+key tab 0.10
+wait 0.40
+key tab 0.10
+wait 0.40
+key tab 0.10
+wait 0.40
+key tab 0.10
+wait 0.40
+key tab 0.60
+wait 0.80
+mark f120-armoury-shut
+
+# The same walk as ACT 2, from the same spawn point — `mission::hub::open_hub` put him back on
+# it after the sortie (`assert height < 3` in ACT 6 is what says he is standing on the floor).
+look -40.6 0
+key W 1.20
+wait 0.60
+key F 0.10
+wait 0.60
+mark f120-board-with-a-cleared-rung

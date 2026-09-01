@@ -487,3 +487,38 @@ fn f120_the_career_is_derived_and_carries_nothing_the_profile_does_not_have() {
     assert_eq!(maxed.level, d.progress.levels.max_level);
     assert_eq!(maxed.xp_for_the_next_level, None, "there is nothing above the ceiling");
 }
+
+/// 🔴 **The two collections a screen draws are MIRRORED, not defaulted.**
+///
+/// `hud::board` draws the difficulty ladder off [`Career::cleared`] and `hud::career` draws the
+/// build off [`Career::gear`], because `hud` has no edge into `save` and must not grow one for
+/// two collections (`docs/architecture.md`, the `hud -> progress` line). That makes
+/// `Career::of` the seam — and every other test of the ladder and the armoury builds a `Career`
+/// **by hand**, so not one of them would notice if the mirror were quietly a `default()`.
+/// Measured gap, closed here: `docs/FINDINGS.md` FIND-222.
+#[test]
+fn f121_the_career_mirrors_the_two_collections_a_screen_draws() {
+    let d = data();
+    let profile = Profile {
+        xp: 5_000,
+        cleared: BTreeSet::from([
+            "skirmish/recruit".to_string(),
+            "tutorial".to_string(),
+        ]),
+        gear: BTreeMap::from([("speed".to_string(), 3)]),
+        ..Profile::default()
+    };
+    let career = Career::of(&profile, &d.progress);
+
+    assert_eq!(career.cleared, profile.cleared, "the ladder is read off a copy of `cleared`");
+    assert_eq!(career.gear, profile.gear, "the armoury is read off a copy of `gear`");
+    assert_eq!(career.gear_points_spent, 3, "and the total agrees with the map it came from");
+
+    // ⚠️ **The control, and it is the point of writing this test at all.** Two empty
+    // collections compare equal, so the assertions above would pass on a `Career::of` that
+    // ignored the profile entirely — if and only if the fixture were empty. It is not: this
+    // one carries two clears and a spend, and an empty mirror fails the first assert.
+    let fresh = Career::of(&Profile::default(), &d.progress);
+    assert!(fresh.cleared.is_empty(), "a fresh career has cleared nothing");
+    assert!(fresh.gear.is_empty(), "and has spent nothing");
+}

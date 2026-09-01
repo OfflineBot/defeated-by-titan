@@ -106,6 +106,36 @@ titan -> mission   # a titan's LIFETIME is his sortie: `titan::spawn_titan` hang
                    #  points BACKWARDS along the plugin order below — harmless, because a
                    #  component name creates no init-order requirement, and named here so that
                    #  nobody has to rediscover it.
+hud -> progress    # `F-120`/`F-121`/`F-122`, the career panel: what the sortie earned, the
+                   #  level, the rank and the gear budget still to spend (`hud::career`). It is
+                   #  the SAME report `menu::debrief`'s plate draws and it exists because a run
+                   #  with no window has no plate at all — `src/lib.rs` builds
+                   #  `primary_window: None` for `--headless` and `--offscreen`, so a debrief
+                   #  that were only a `Screen` could never be asserted on or screenshot
+                   #  (`FIND-189`). One list of words, two surfaces, exactly as `hud::board`
+                   #  draws `menu::lobby::entries`.
+                   #  It reads `progress::Career` and `progress::ledger` and measures nothing
+                   #  itself: no curve, no threshold, no `progress.ron`. **Read-only** — same
+                   #  argument as `hud -> mission` and no other: a HUD has to be right in the
+                   #  frame it is drawn in, so it needs the STATE and not a message that fired
+                   #  three ticks ago.
+menu -> progress   # the DEBRIEF reports the CAREER: what the sortie earned, the level it
+                   #  moved, the rank and the gear budget still to spend
+                   #  (`menu::debrief::fill_the_ledger`, `menu::lobby`'s standing line). It
+                   #  reads `progress::Career` — a component `progress` recomputes on
+                   #  `Changed<Profile>` — and `progress::ledger` for the WORDS, so that `menu`
+                   #  and `hud` cannot format one career two ways (rule 5's corollary: one
+                   #  writer decides, everyone else reads the answer). **Read-only** — `save`
+                   #  stays the one writer of `Profile`, `progress` the one writer of `Career`,
+                   #  and nothing in `menu` derives a level, a threshold or a rank.
+                   #  Same argument as `menu -> mission` and no other: a screen has to be right
+                   #  in the frame it is drawn in, so it needs the STATE and not a message that
+                   #  fired three ticks ago — and mirroring a career into shared/ would give it
+                   #  a second writer for the sake of five lines of text.
+                   #  ⚠️ Measured 2026-09-01 (`docs/FINDINGS.md` FIND-222): without this edge the
+                   #  whole progression was computed correctly and read by nothing — 419 sorties
+                   #  flown, 0 of 122 gear points spent, and `Career` never named outside
+                   #  `src/progress/`.
 progress -> save   # `progress` decides what a finished sortie MEANS and says so with one
                    #  `save::SortieOutcome` per player; `save` is the only writer of `Profile`
                    #  and the only thing that opens a file (authority table below, the row that
