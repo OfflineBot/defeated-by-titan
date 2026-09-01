@@ -12,6 +12,8 @@ linked or deleted — there is nothing in between ([`conventions.md`](convention
 |---|---|
 | *Where do we actually stand?* | [`STATUS.md`](STATUS.md) — the four stages, generated |
 | *What do I do first, right now?* | [`NEXT.md`](NEXT.md) — the queue the last session left, in order, with the reason for each |
+| [`lessons/fixtures.md`](lessons/fixtures.md) | **six ways a test measured the wrong thing**, each with its number — read before trusting a sweep |
+| [`lessons/token-cost.md`](lessons/token-cost.md) | where the tokens actually went, with the measurements behind the rules |
 | [`PLAN.md`](PLAN.md) | **⭐ the complete survey, the build order and every open question** — written 2026-08-27 after seven rounds circled |
 | *What is next to do?* | [`TODO.md`](TODO.md) — open work in buildable order, generated |
 | *How does this project work?* | [`../CLAUDE.md`](../CLAUDE.md) — the index of the rules, under 150 lines |

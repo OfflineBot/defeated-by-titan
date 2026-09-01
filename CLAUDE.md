@@ -61,73 +61,25 @@ went unseen.**
 5. **A bug without evidence is a rumor; a fix without a red test is a guess.**
    First the test that falls over; then the fix; then take the fix back out and watch the test
    go red again. **No repro, no fix.** → [`docs/BUGS.md`](docs/BUGS.md)
-   🔴 **And the assertion has to be able to tell the two apart.** Measured 2026-08-19: a chain
-   test read `32 → 36 → 42 m/s` and looked like proof that the rope accelerates — until a control
-   run with the third `hook` line **deleted** reproduced the same numbers to three decimals. Legs
-   2 and 3 had anchored **nothing**; it was measuring gravity. **`assert speed` cannot tell a
-   swing from a fall.** The fix was one more assert (`rope == 1` on every leg), and the habit is
-   the cheap part: **before believing a measurement, delete the thing it is supposed to be
-   measuring and check the number moves.** Same shape as `FIND-103` — *a test that asks the
-   screen and the function the same question passes when both are wrong.*
-   🔴 **And the third shape, measured 2026-08-26: a fixture that passes ONE element cannot see a
-   TWO-element bug.** `rope_drive(to_anchors_m: &[Vec3], ...)` was given a per-arm guarantee —
-   *"the outbound half is projected out, so `target · r̂ >= 0` on every tick and for every key"* —
-   and implemented against `unit(Sum r̂_i)`, which bounds the **sum** of the distances and not
-   **each** of them. With two anchors 120° apart the player flies `40.00 -> 69.33 m` **away** from
-   an anchor: the exact symptom the round existed to fix. Of **21** `rope_drive(&[` call sites in
-   `tests/player.rs`, **exactly one passed two anchors — and it set `move_x = 0.0` and asserted
-   only magnitude.** `rope_taut_brake` was *never* called with more than one. The suite was
-   271 + 65 green and every number in the report was honest; **what it measured was not the whole
-   function.**
-   **This game has two hooks. Two is not an edge case here, it is the premise** — and the same trap
-   sits in every signature taking a slice, a `Vec` or an iterator. **When a function takes a
-   collection, a test that passes one element is a test of a different function.** Write the
-   `n = 2` case *first* and make the elements **disagree** — two anchors at 120°, two players
-   pulling opposite ways, two writers on one field. An aggregate (`Sum`, `mean`, `max`) is exactly
-   where a per-element promise goes to die, and it is invisible at `n = 1` because there the
-   aggregate **is** the element.
-   🔴 **The fourth shape, and it has now hidden three rounds in a row: A SWEEP'S SIZE IS NOT ITS
-   COVERAGE — ask what it HOLDS CONSTANT.** `f177_no_stance_in_the_hub_names_a_door_and_opens_another`
-   swept **2 361 960 stances** and reported **0** lies while the shipped game lied deterministically
-   at `(0, 2, 0)` yaw 140, photographed. It varied `x`, `z` and `yaw`, and took its **height** from
-   one `stand()` call — and height is the single axis the rule under test depended on, because the
-   miss-distance was three-dimensional. It is also the axis the game moves the player along at the
-   exact moment he enters the hub (`open_hub` warps to `y = 2.0`, an 11.5-tick fall). **A million
-   samples of the wrong slice measure the slice, not the function.**
-   The same round earlier reported `0` for a defect its sweep skipped by construction:
-   `let Some(walked) = ... else { continue; }` dropped every stance where nothing starts — which
-   was **55.8 %** of the stances whose line promised something. **A `continue` in a sweep is a
-   silent exclusion, and it is invisible in the denominator.**
-   **So, before believing any sweep:** name every variable the function reads, then name every
-   variable the sweep varies. **The difference is the bug.** Write both lists into the test's own
-   comment — if a variable the code reads is not in the sweep, say why in that comment or add it.
-   And **count what you skipped**: a sweep that reports `0 of N` must also report how many samples
-   it never reached, or the `0` is arithmetic about the wrong set.
-   ⚠️ **And the sharpest version of it, measured 2026-08-29: the sweep ASSERTED its own blind spot
-   was non-empty.** A fence test `continue`d past every sample lying exactly on the boundary,
-   named them `on_the_line`, justified the skip with the unmeasured sentence *"a body cannot rest
-   on a line"* — and then asserted `on_the_line > 0`, treating the exclusion as a feature. **Those
-   64 of 648 samples were the defect**, and a body put there rests for ten seconds. **A skip you
-   are proud of is still a skip.** When a sweep names a class it does not test, that class is the
-   first place to look, not the last.
-   🔴 **And the axis is not always a number — measured 2026-08-27, the fourth instance: THE
-   PROVENANCE OF THE INPUT IS AN AXIS TOO.** A sweep of **9 447 840** stances stated in its own
-   comment *"what this fixture holds constant: nothing that the rule reads"* — and it was wrong,
-   because every stance was a `Vec3` **the test invented** and handed to the pure function, while
-   its oracle was a hand-copy of the shipping code **fed the same invented `Vec3`**. **Two
-   functions asked about the same invented point cannot disagree about which point it is**, so the
-   real defect — the HUD reading a *stale* position, one schedule ahead of the code it agreed
-   with — was unreachable by construction. The bug was never in the geometry; it was in **where
-   the number came from.**
-   **So when two pieces of code are supposed to agree, the test must make them agree about
-   something the GAME produced**, not about a literal the test wrote. Drive the real transition.
-   If nothing in your test file ever enters the state under test *the way the game enters it*,
-   your sweep is a unit test of arithmetic wearing an integration test's numbers.
-   ⚠️ **Corollary, and it is the cheaper rule: do not re-derive another domain's decision — read
-   it.** The HUD asked `deploy_on_contact`'s question a second time, in a different schedule, from
-   a different `Transform`. Two implementations of one question drift, and no amount of sweeping
-   finds it, because both implementations are yours. **One writer decides, everyone else reads
-   the answer.**
+   🔴 **And the fixture is the half nobody attacks.** A green test proves the fixture and the code
+   agree; it says nothing about whether either is right. Six ways that has cost this project a
+   round, each with its measurement, are in
+   [`docs/lessons/fixtures.md`](docs/lessons/fixtures.md) — **read it before you trust a sweep.**
+   The six-line version:
+   - **delete the thing you are measuring** and check the number moves;
+   - name every variable the code reads, name every variable the fixture varies — **the difference
+     is the bug**, and both lists belong in the test's own comment;
+   - **count what you skip**: a `continue` is invisible in the denominator, and `0 of N` about the
+     wrong set is not a zero;
+   - **write the `n = 2` case first** and make the elements disagree — this game has two hooks, so
+     an aggregate over one arm is a test of a different function;
+   - **sample the boundary itself**, at 0 and at ±1 ULP;
+   - **ask what your instrument does with its own worst case** — the last one printed `none`
+     exactly where the error was largest.
+   ⚠️ **And do not re-derive another domain's decision — read it.** Two implementations of one
+   question drift, and no amount of sweeping finds it, because both are yours. One writer decides,
+   everyone else reads the answer.
+
 6. **Nothing changes per frame, everything per second**, and nothing runs over all entities to
    answer a question about the ten meters in front of your nose.
    → [`docs/lessons/performance.md`](docs/lessons/performance.md)
@@ -204,165 +156,61 @@ one finding for 400 000 tokens is a *bad round*, and the supervisor is the one s
   re-derived over a day that the backlog had already specified, and the re-derived version was
   worse.
 
-### 🔴 THE BIGGEST ONE, and it dwarfs the rest: **never read raw `cargo` output**
 
-Measured 2026-08-12: **one `cargo test` in this repo writes 629 952 bytes / 3 482 lines. The signal
-in it is 21 lines.** An agent that reads that raw pays roughly **150 000 tokens for a single test
-run** — and a round has several. This one line item was most of the session's spend.
+### The five that carry almost all of it — each one measured, each one a rule
 
-**Every `cargo` and every game run gets filtered. No exceptions.**
+🔴 **1 · NEVER READ RAW `cargo` OUTPUT.** One `cargo test` here writes **629 952 bytes / 3 482
+lines**, and the signal in it is **21 lines**. Reading that raw costs ~**150 000 tokens per test
+run**. Filter every cargo and every game run, no exceptions:
 
 ```bash
 cargo test --test world 2>&1 | grep -E '^test result|^error|panicked|FAILED' | head -30
 cargo check                2>&1 | grep -E '^error' | head -20
-# a failure? ask for that ONE test's detail, not the suite's:
-cargo test --test world <one_test> 2>&1 | grep -A6 'panicked' | head -20
-# the game prints a full Bevy startup log on every run:
 ./target/debug/defeated_by_titan --headless --script scripts/x.txt --ticks 900 2>&1 \
   | grep -E 'MARK|assert|script run finished|ERROR' | tail -25
-# and the exit code needs its OWN run — a pipeline's $? is the LAST command's:
+# the exit code needs its OWN run — a pipeline's $? is the LAST command's:
 ./target/debug/defeated_by_titan --headless --script scripts/x.txt --ticks 900 >/dev/null 2>&1; echo $?
 ```
 
-**Put this in every commission.** It is the difference between a 200 k round and a 20 k round, and
-it costs nothing in quality — the 21 lines are the whole verdict.
+🔴 **2 · NEVER OPEN A BIG DOC TO ADD A LINE.** `cat >>` to append; `grep -n` for the anchor and
+`sed -n 'a,bp'` for the slice. **And a queue file past ~150 kB gets archived** — `FINDINGS.md`
+reached 812 kB while the rule about it still said 108, and nobody re-measured for seventeen days.
 
-### 🔴 THE SECOND ONE: **never open a big doc to add a line to it**
+🔴 **3 · A MEASUREMENT ROUND PINS ITS OWN BINARY *AND* ITS DATA.**
+`cp target/debug/defeated_by_titan "$SCRATCH/dbt-pinned"` before any A/B, and interleave
+A/B/A/B on a shared machine. *"Same binary"* is a claim, and it is false by default while other
+agents are live — twice on 2026-08-13 one was rebuilt underneath a round mid-run.
 
-Measured 2026-08-12: `docs/FINDINGS.md` was **108 kB (~27 000 tokens)**, `docs/QUESTIONS.md`
-**68 kB**.
-🔴 **Re-measured 2026-08-29 and the rule had rotted by 7.5x: `FINDINGS.md` had reached 812 kB and
-209 entries** — roughly 200 000 tokens, i.e. larger than most context windows, in the one file this
-rule tells you to grep. **The rule survived; the number in it did not, and nobody re-measured it
-for seventeen days.** `FIND-001`..`FIND-184` are now in `docs/archive/FINDINGS-001-184.md` with a
-one-line index (812 kB → **100 kB** live).
-**So the rule has a second half now: a queue file that passes ~150 kB gets archived, and whoever
-notices it is over is the one who does it.** Live sizes as of 2026-08-29: `FINDINGS.md` 100 kB ·
-`QUESTIONS.md` 216 kB · `NEXT.md` 112 kB · `PLAN.md` 104 kB · `BUGS.md` 100 kB — **three of those
-are already over and are the next to go.** Appending an entry with an edit tool means reading the whole file first — so a
-five-agent round paid ~135 000 tokens to add fifty lines.
+🔴 **4 · ATTACK CLAIMS, NOT CHORES.** A round whose deliverable is a value in a `.ron`, or a fix
+with a captured red-then-green message, carries its own proof and does **not** get an adversary.
+A round that asserts the game now BEHAVES some way does.
 
-```bash
-cat >> docs/FINDINGS.md <<'EOF'      # append: costs nothing to read
-...
-EOF
-grep -n '^## FIND-041' docs/FINDINGS.md && sed -n '820,860p' docs/FINDINGS.md   # read ONE entry
-```
+🔴 **5 · AUDIT THE ROUND'S SPEND BEFORE STARTING THE NEXT.** Name the largest line item, say
+whether it was necessary, and **fix the cause as a rule** so it cannot recur. Measure, do not
+estimate — every entry in the lessons file below was one `wc` away the whole time.
 
-Both files carry an explicit append marker at the bottom for this. Same rule for any file over
-~20 kB: **`grep -n` for the anchor, `sed -n 'a,bp'` for the slice.** Never `Read` a 100 kB file to
-change three lines.
+**The full record, with the numbers and the seven cheap fixes of 2026-08-10:**
+→ [`docs/lessons/token-cost.md`](docs/lessons/token-cost.md)
 
-### A measurement round pins its own binary — twice on 2026-08-13 one was rebuilt mid-run
-
-Two agents measuring before/after had `target/debug/defeated_by_titan` **rebuilt underneath them**
-by another agent's landing commit: one saw a new `PlayerTuning` field appear between two runs and
-the old binary stop loading, another saw the map grow **2048 → 2059 blocks** between its A and its B.
-A serial before/after would have reported both as a regression.
-
-**So, for any A/B measurement:**
+🔴 **AND ONE THAT IS NOT ABOUT TOKENS AND IS ABSOLUTE: NEVER `git add -A` IN THIS REPOSITORY.**
+**Not with a clean status. Not ever.** Twice a sweep commit has swallowed work an agent was still
+writing — most recently `b29c7dc`, whose message is about gates and water and which contains
+**978 lines** of the marker fix and the titan rig. The history now lies about what happened, and
+the branch is pushed, so by the no-rewrite rule it stays wrong.
+The 2026-08-12 version said *"stage explicit paths **while agents are live**"* and that qualifier
+is what failed: the supervisor twice believed no agent was live and twice was wrong. **You cannot
+reliably know, so the condition is gone.**
 
 ```bash
-cp target/debug/defeated_by_titan "$SCRATCH/dbt-pinned"   # both halves run against THIS
+git add docs/QUESTIONS.md src/vector/gas.rs   # yes: every path named
+git add -A                                    # NO
+git status --short                            # and read it before every commit
 ```
+⚠️ **And never chain it** — `git add -A && norms.py && git commit` reads as one safe operation
+and is three, of which the first is the dangerous one.
 
-and where the thing being measured is noisy or the machine is shared, **interleave A/B/A/B** rather
-than running all the As then all the Bs — that is what let W1 report `+0.09 %` honestly while a
-render job was running beside it.
-
-**"Same binary" is a claim, and it is false by default while other agents are live.**
-
-### The standing rule: **audit the round's spend before starting the next one**
-
-The user asked for this on 2026-08-12 and it is now part of closing a round, next to the gate:
-
-1. **Where did this round's tokens go?** Name the largest line item, not a feeling.
-2. **Was it necessary?** A bug hunt, a refutation round, a measurement sweep — expensive and worth
-   it. A chore that cost six figures — not.
-3. **Fix the cause, in this file, as a rule** — so it cannot recur. Both entries above came out of
-   exactly this audit, and each was a ~300x and a ~30x saving that had been invisible for a day.
-4. **Measure, do not estimate.** `wc -c` on what agents read, `wc -l` on what they run. Both of the
-   findings above were one `wc` away the whole time.
-
-### Where the tokens actually went on 2026-08-10, and the seven cheap fixes
-
-Measured against that session, the waste was **not** in the agents doing the work. It was in the
-supervisor. In descending order of cost:
-
-1. **The double round-trip on every finding.** Agent measures → writes a long report → the
-   supervisor rewrites it into `docs/FINDINGS.md`. That pays for the same prose twice.
-   **Fix: the agent writes its own `FIND-` entry directly**, with an id the supervisor assigns in
-   the commission so two agents cannot collide. The supervisor then verifies and integrates
-   instead of transcribing. Roughly halves the cost of a finding.
-2. **Commissions that paste what the agent could read.** A briefing does not need forty lines of
-   measurements quoted into it. **Name the file and the id** — `docs/FINDINGS.md` FIND-035 — plus
-   the two or three numbers the agent needs to start. It reads faster than I can paste.
-3. **Narrating whole agent reports back to the user.** He needs the decision, the number and what
-   is still unknown — not the transcript. **One screen, not five.**
-4. **Re-running the whole gate.** Four full `cargo test` runs in one session at ~17 min of linking
-   each. **One per round, at the round gate, and only after the agents have landed.**
-5. **Reading whole files to change three lines.** `grep -n` and `sed -n 'a,bp'` first; `Read` the
-   range, not the file.
-6. **Counter-checking mechanical work.** The refutation rounds paid for themselves three times out
-   of three — but each time on a **claim or a measurement**. A rebinding or a doc repair with a red
-   test does not need one. **Attack claims; do not attack chores.**
-7. **Screenshots taken out of habit.** A picture is required for 🟧 and for nothing else. Two runs
-   per script (verdict + image) is the rule *when a stage needs the image*, not per run.
-
-8. **Four big agents at once is the expensive mistake, not any one of them.** Each re-derives the
-   same context and each writes a full report. **Prefer one stream at a time, finished and
-   verified, then the next.** Parallel is still the default *for cheap, well-cut work* (one file
-   each, one criterion each) — but a round with two 100 k-token jobs running beside each other buys
-   nothing that running them in sequence would not, and it makes integration worse.
-   **Rule of thumb: parallel when the cut is by file and the criterion is mechanical; serial when
-   the agent has to think.**
-9. **Cap the report.** "Under 40 lines, do not summarise the docs you wrote — I can read them."
-   A report that restates its own deliverable is paid for twice.
-
-🔴 **An id is claimed by WRITING the entry, not by planning to.** Measured 2026-08-29: three
-agents in one round each read the same `NEXT FREE ID` / last `## B-` line, each wrote a finding
-against it, and **two of the three writes were lost** — `B-018` and `B-019` ended up describing
-one group's bugs while two other groups had already committed scripts pointing at those ids for
-*their* bugs. The result was evidence scripts marked red on purpose citing an explanation of
-something else, which is exactly the triage cost that round existed to remove.
-**So: the supervisor assigns the id in the commission** — `CLAUDE.md` already says that for
-`FIND-` and it holds for `B-` and `Q-` too — or the agent claims it by appending the heading
-FIRST and filling it in after. **Never read a free id and hold it in your head while you do the
-work**: in a parallel round somebody else has read the same number.
-
-### And one that is not about tokens: **never `git add -A` while an agent is still working**
-
-On 2026-08-12 a sweep commit swallowed a whole feature that was still being written — the model
-registry landed inside a commit whose message describes only the `init.md` carry-over, so **no
-commit in the history says that feature exists.** Nothing was lost, and the history now lies about
-what happened, which is worse than a messy diff.
-🔴 **AND IT HAPPENED AGAIN ON 2026-08-29, so the rule is now absolute: NEVER `git add -A` IN THIS
-REPOSITORY. NOT EVER.** Commit `b29c7dc` carries the message *"docs: the gates carry a mechanic and
-there is no water at all"* and contains **978 lines across seven files** — the arm-aim marker fix,
-the titan rig's neck, `scripts/f026-turn.txt` and their tests — swallowed out of two agents that
-were still writing. The history now says that work is about gates and water. **The branch is
-pushed, so by the no-rewrite rule it stays wrong.**
-
-The 2026-08-12 version of this rule said *"stage explicit paths **while agents are live**"*, and
-that qualifier is what failed: the supervisor twice believed no agent was live and twice was wrong,
-once because a workflow was between phases and once because `pgrep` counts builds and not thinking.
-**You cannot reliably know, so the condition has to go.**
-
-```bash
-git add docs/QUESTIONS.md docs/NEXT.md        # yes: every path named
-git add -A                                    # NO. not with a clean status, not ever
-git status --short --                          # and read it before every commit
-```
-⚠️ **And never chain it**: `git add -A && norms.py && git commit` reads as one safe operation and
-is three, of which the first is the dangerous one.
-
-**Stage explicit paths while agents are live** (`git add docs/ src/vector/gas.rs`), or wait for the
-round to close. `git status --short` before every commit, and if a path you did not touch is
-modified, find out whose it is first.
-
-**The one that is not a saving: do not cut the red test, the counter-check on a claim, or the
-honest paragraph.** Those are the things that made the session's output worth anything, and every
-one of them caught something real.
+**The one that is not a saving:** do not cut the red test, the counter-check on a claim, or the
+honest paragraph. Those are what made the output worth anything, and each caught something real.
 
 ## Speed — measured 2026-08-29, because he said it was going too slowly
 
