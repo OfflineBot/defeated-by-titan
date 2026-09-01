@@ -47,6 +47,12 @@ fi
 # command of the pipeline — because a pipeline's own `$?` is the LAST command's and `grep`
 # succeeds whenever it matched anything at all.
 echo "== running (ulimit -v ${CAP_KB} KB per process) =="
+# ⚠️ NO DBT_SAVE_DIR here, and that is a decision with a test behind it: a test binary already
+# refuses a save directory on its own (`save::file::in_a_test_binary` detects `target/*/deps`),
+# and `a_test_binary_does_not_get_a_save_directory` PINS that. Exporting a scratch dir from here
+# overrode the refusal and turned that guard's assertion vacuous — measured 2026-09-01, it went
+# red the first run. The processes that really do write the player's save are SCRIPT runs of the
+# real binary, and `tools/corpus.sh` isolates those per run (B-036).
 ( ulimit -v "$CAP_KB"; nice -n 15 ionice -c 3 cargo test -j 3 "${ARGS[@]}" 2>&1 ) | tee "$log" \
   | grep -E '^test result|^error|panicked|FAILED|memory allocation|does not build'
 rc=${PIPESTATUS[0]}

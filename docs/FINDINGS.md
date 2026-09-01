@@ -1366,3 +1366,213 @@ Two defects, both found by **counting what the inner loop skips** rather than by
   all deliberate `#[ignore = "measurement, not a criterion"]` probes; `FIND-218` reported this
   binary as "29" without them, and an ignored test is a skip like any other.
 
+
+---
+
+## FIND-222 — the progression was computed correctly and **read by nothing**
+
+*(2026-09-01 · `F-120`/`F-121`/`F-122`/`F-125` · the "Ganz ausbauen" round)*
+
+**The measurement.** `grep -rn "Career" src/ | grep -v "^src/progress/"` returned **0 lines**.
+`Profile::cleared` had exactly two mentions outside its own declaration, both in `save/file.rs`
+serde plumbing. `progress::career::may_fly` — the rank gate — was called from `tests/progress.rs`
+and **from nowhere in `src/`**. The shipped save says why that mattered:
+
+| | shipped `saves/player-1.ron` |
+|---|---|
+| sorties flown / won | **419 / 352** |
+| xp | 80 618 → level 59, rank A |
+| gear points earned / **spent** | 122 / **0** |
+| `cleared` entries written / **read** | 5 (419 writes) / **0** |
+
+Nothing was broken. Every number was right. `Career::last_sortie_xp` was correct in the very run
+that proved the screen was silent — which is why the red test asserts the two halves separately
+(`tests/menu.rs::f120_the_debrief_says_what_the_sortie_earned`), and the captured red is:
+
+```
+career after the sortie: level 1 (210/300 xp), rank E, 6 gear points (0 spent)
+debrief plate: ... | 2 / 2 cortex kills | Ashgate Skirmish · Recruit | WON | DEBRIEF |
+the debrief does not say what the sortie earned. The number exists (210 xp) and the
+screen that exists to report it is silent
+```
+
+**The rule.** *A derived value with no reader is not a feature, it is a liability that tests
+green.* Nine unit tests and four integration tests covered this curve, and not one of them could
+fail for the reason that mattered. **The cheap check is one `grep` for the type name outside its
+own folder**, and it takes a second.
+
+**What closed it.** `progress::ledger` (the words, one place), `menu::debrief::fill_the_ledger`
+(the plate), `hud::career` (the same words where no plate can exist), `progress::loadout` +
+`save::GearRequest` (spending), and `hud::board`'s ladder markers (`cleared`'s first reader).
+Evidence: `scripts/f120-progress.txt` (12 asserts, exit 0), `docs/images/f120-debrief-ledger.png`,
+`docs/images/f125-armoury.png`, `docs/images/f121-ladder-cleared.png`.
+
+### §2 — a plate cannot be evidence on this machine, and that is structural
+
+`src/lib.rs` builds `primary_window: None` for **both** `--headless` and `--offscreen`, so
+`menu`'s whole `Update` chain is gated off. The commission asked for *"an `--offscreen` frame of
+the debrief"* and **that frame cannot exist**: the debrief is a `Screen`. Same wall `FIND-189`
+records. So the report got the mission board's own treatment — one word list
+(`progress::ledger`), two renderers — and the screenshot is `hud::career`'s panel.
+Decoded against a mid-sortie control from the same run: **1 382 amber px** in the panel rect
+(`x 819..1228, y 187..720`) against **0** in the control, resolving into **6 text bands** whose
+widths track the six strings at 8.8–9.5 px/char; keep-out box holds 0; bit-identical over two
+runs (`sha256 52779beb…`).
+
+**The rule:** *if a surface only exists behind a window, it is 🟨 on this machine for ever —
+give it a second renderer or do not claim it.*
+
+### §3 🔴 A script whose `wait` is shorter than its own `key` hold silently merges two presses
+
+Measured while writing `scripts/f120-progress.txt` ACT 7. `key tab 0.60` followed by `wait 0.40`
+advances the script **while Tab is still down**, and Bevy's `ButtonInput::press` sets
+`just_pressed` only for a key that was not already pressed:
+
+```rust
+pub fn press(&mut self, input: T) { if self.pressed.insert(input) { self.just_pressed.insert(input); } }
+```
+
+So the next `key tab` produces **no press edge at all**. The two presses become one long hold:
+the tap that was supposed to step the cursor never happens, and the run spent **twice on `speed`**
+while every line in the log looked healthy — `save: player 1 — speed is now at 2 — 2/6 allocated`
+is a perfectly plausible sentence for a run that has just done the wrong thing. It cost a probe
+build to find, and the code was never at fault.
+
+`scripts/f177-board.txt` survives only because every one of its waits already exceeds its hold —
+**by luck of authorship, not by a rule.** There is no guard for this anywhere.
+
+**The rule:** *in any script, `wait` after a `key`/`hook`/`slash` must be longer than that
+command's own duration.* Cheap check before trusting a key-driven run:
+`awk '/^(key|hook|slash) /{h=$NF} /^wait /{if (h!="" && $2+0 <= h+0) print NR": wait "$2" after a "h" hold"; h=""}' scripts/x.txt`
+
+**Related:** `FIND-189` · `FIND-063` · `FIND-155` · `Q-051` · `Q-062` · `Q-090`
+
+---
+
+## FIND-220 — 34 of 456 houses stood in mid-air over the river, and the veto that was supposed to stop them had never run
+
+**2026-09-01 · `[offlinebot]` · `assets/data/maps.ron`, `assets/data/water.ron`,
+`src/world/map.rs`, `tests/world.rs`, `scripts/f-towers.txt`**
+
+The user asked for two things in one sentence — *„adde andere tuerme beim wasser (das wasser ist
+auch VIEL zu klein)"* — and the second decides the first, so both landed together. Three
+measurements came out of it.
+
+### 1 · The widening is capped at 25 m by two buildings, and the second one only showed up in a script
+
+`FIND-216 §3` specified 40 m centred on x = -70. Neither number survives contact:
+
+* **west** — the pocket's flank wall stands at x = -120 with a 45.0 m plinth, so its face is at
+  **x = -97.5**. A 40 m channel puts the west quay's outer edge at -100: 2.5 m *inside* that
+  wall, for the 225 m the flank runs.
+* **east** — and this one was found by a **regression, not by inspection**. At 30 m the corridor
+  reached x = -45, and `scripts/f019-hq.txt` went from GREEN to RED with one line:
+  `assert height < 0.3 — measured 0.400`. 0.400 is a quay top. The garrison headquarters' hall
+  runs to **x = -47.0** (`block` at `(-46.25, 5.0, 0.0) 1.5 x 10 x 26` — the back wall the whole
+  script is about), and the new quay had swallowed it, so the walk that is supposed to stop at
+  the back wall climbed the embankment instead.
+
+**With 2.5 m and 3.0 m of margin the corridor is x -95..-50 — 45 m, less two 10 m quays, so
+25 m of water**, centred on x = -72.5 and not -70. Bridges 36 → 47 m. ⚠️ **A map change that
+touches a 700 m run has to be A/B'd against the corpus, not reasoned about**: the flank wall was
+found by reading, the HQ was not, and only the script found it.
+
+### 2 · ⭐ The veto against houses over the channel had never fired, and nobody could tell
+
+`plan_blocks` takes its veto over a house box that runs **from y = 0 upward**
+(`ridge_center.y = veto_m * 0.5`). The channel floor's top is at **y = -4.00**. So the floor slab
+has never vetoed anything: what kept houses off the water was the two **quays**, 0.4 m proud of
+the paving, and `maps.ron`'s argument that *"a 12 x 11 m row house does not fit into a 10 m gap"*.
+Widen the gap and the argument dies with it — **34 of 456 generated houses** appeared hanging
+over the river, and no test in the repository said so.
+
+**The fix is the rule `CellRole::Hole` already states for the ground: a placed block whose TOP is
+below y = 0 vetoes by its FOOTPRINT, at any height** — a house may not stand where there is no
+ground. Six lines in `plan_blocks`. Red-then-green control: `< 0.0` → `< -99.0` puts all 34 back.
+Guard: `tests/world.rs::f003_no_grid_house_is_generated_over_the_open_channel`.
+
+### 3 · The towers, and what one 17 × 2 × 10 block is worth
+
+Twelve towers, six pairs, one per gap between the crossings the river already had that a single
+crossing swing (2d = 22 m) cannot span, skipping the gaps a wall bounds — the two walls' cornice
+ladders already cross the channel at 29 / 59 / 89 m. 35.0 m
+(`scale.ron: church`), shaft 10 × 10 = the quay it stands on, three rungs corbelled **7.0 m inward
+over the water** with tops at 12 / 23 / 35 m — one rung per 11.5 m, which is
+`scale.ron: house_large`, the roofscape's own ridge.
+
+`scripts/f-towers.txt`, 36 asserts, exit 0, `docs/images/f003-towers.png`:
+
+| the same stand, the same tick | lowest point | ends |
+|---|---|---|
+| with the hook | **14.572 m** at 39.459 m/s | **12.000 m, speed 0.000** — the far tower's rung 1 |
+| **no hook** | — | **-1.294 m, drifting at 0.255** — floating in the river |
+| hook, and the far rung 1 **deleted** | 14.572 m | **-1.306 m, drifting at 0.509** — floating |
+
+A body at rest reads its surface **exactly** (12.000 on a 12.00 deck, 23.000 on a 23.00 deck,
+both measured); a floating one sits at -1.29 and never stops moving. So the third row is the
+finding: **one deck is the difference between the far bank and a swim.** Gas 15000 → 15000 both
+ways — the rope is free and the **climb** is the price: the two facing decks are 11.0 m apart, so
+`bottom = H - d` gives 24.0 m at rung 3 and **1.0 m at rung 1** — 1.6 m over the water, inside the
+1.8 m a body is long. You climb, or you swim.
+
+### 4 · And one wrong word that cost two runs
+
+`scripts/f003-wall.txt` said *"yaw +60 = 60 degrees off -Z toward +X"*. `shared::Intent::look_dir`
+is `(-sin yaw, sin pitch, -cos yaw)`, so **+yaw is -X**. Aiming `f-towers.txt` from that comment
+hooked the wrong bank of the river twice, and the swing looked plausible both times. Comment
+fixed; every number measured under it stands.
+
+**Related:** `FIND-216` · `FIND-041` · `FIND-042` · `Q-036` · `Q-088`
+
+---
+
+## FIND-221 — `B-021` is not an energy loss in the rope. **The player flies into the wall.**
+
+**2026-09-01 · `[offlinebot]` · refutes `B-021`, merges it into `B-031`**
+
+`B-021` says *"a taut rope dumps 23.7 m/s in a quarter second with 6.6 m of air underneath"* and
+names two suspects: the `DistanceJoint` under `Drive` (`Q-058`) and the two-rope feasibility rule
+(`B-013`). **Neither is in the causal path, and it is not a quarter second — it is one tick.**
+One instrumented run of `scripts/f005-feel.txt` ACT 4 at the y = 20 stand:
+
+| tick | p = (x, y, z) | \|v\| | v·r̂ | \|v_t\| | contact |
+|---|---|---|---|---|---|
+| 474 | (68.638, 6.520, **−97.202**) | 33.074 | 0.0219 | 33.074 | — |
+| 475 | (68.503, 6.512, **−97.680**) | **7.898** | −0.0721 | **7.898** | **n = 1** |
+
+1. **The loss is TANGENTIAL** — 33.074 → 7.898 across the rope while the radial part is 0.0219.
+   A `DistanceJoint` applies its impulse **along** the rope. It cannot do this at all.
+2. avian reports a contact on the player on **exactly that tick** and on every tick after it.
+3. `z` is **pinned at −97.680** for the next 70 samples. `maps.ron`: *"z = +350 .. −97.5 the
+   district"* — the main wall.
+4. `rope_drive`'s look gate is **0.0000** for the whole act, so the drive contributes nothing.
+5. **One** arm is anchored, so `hold_the_pair` never runs.
+
+**The rule this earns.** `B-021`'s controls raised the stand to y = 16 / 20 / 24 and concluded
+*"removing every possible collision does not give the swing back"*. They varied **height** against
+a **vertical** face and could not move it — `docs/lessons/fixtures.md` §4 exactly, one bug later.
+**Name the axis the obstacle lies on before you sweep the one you can reach.** The 6.6 m of air is
+real; it is under the wrong direction. Two rounds were spent on an `F-004` energy bug that does not
+exist, and the "fix" `B-021` asked for — separating the joint from the pair rule — would have
+changed a mechanism that was never involved.
+
+**Related:** `B-021` · `B-031` · `Q-058` · `B-013` · `F-004` `F-005`
+
+---
+
+## FIND-221b — `S` on a taut rope cannot brake, and the latch is `ground_top_speed_m_s`
+
+**Measured 2026-09-01, `scripts/f176-pull.txt` line 133: `assert speed < 2 — measured 7.630`.**
+
+`ground_top_speed_m_s` = `run_speed_m_s − gravity/hz` = 6.0 + 0.5333 = **6.533 m/s**, and
+`integrator::movement_state` returns `Tethered` for an **anchored** player the moment his ground
+speed passes it. `Tethered` takes him out of `ground_locomotion` (which is what `S` acts through)
+and puts him **into** `locomotion::air_control`'s `in_the_air`, where `rope_winch`'s always-on pull
+runs — free, keyless, up to `drive_idle_speed_m_s` = 12 m/s of closing speed. So the pull holds him
+over the latch, and over the latch the legs are not allowed to brake him. 7.630 sits between 6.533
+and 12.0, which is where the loop settles. **🟨 — the mechanism is derived from the two numbers and
+the two predicates; `MovementState` itself was not sampled at that tick.**
+
+Two of the user's own instructions meet here and disagree: *„ich will dass es immer ranzieht. nicht
+nur wenn ich w drücke!"* (`FIND-172`) against §3F R1 *„seil ist vorne und ich laufe zurueck"*.
+→ `docs/BUGS.md` B-034, `docs/QUESTIONS.md` Q-089.

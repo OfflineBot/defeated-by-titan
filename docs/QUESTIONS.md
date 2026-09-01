@@ -2037,3 +2037,138 @@ The new wall gives a **better** swing than the fourteen gantries it replaced (42
 ends in the gate hood and 37.210 m/s vanishes in one tick, silently. That is not new — the old
 map did the same — and whether a strike like that should have a verdict (a sound, a stagger, a
 wall-run) is a design call, not a bug fix.
+
+---
+
+## Q-090 — the difficulty ladder: **signpost it, or lock it?**
+
+*(2026-09-01 · `F-121` · out of the "Ganz ausbauen" round · open)*
+
+The round was asked to make the difficulty ladder *real*, on the observation that in 321 sorties
+only Recruit had ever been cleared. **The commission's two candidate causes were "the harder
+tiers are unreachable" or "nothing tells him they exist". Measured: it is the second, and more
+narrowly than that.** The tiers were never gated at all:
+
+* `progress.ron: gates` is `{}` — nothing has ever been locked;
+* all three skirmish pads stand 16 m in front of the hub spawn (`missions.ron: hub.deployments`);
+* the mission board lists **all 13** sorties and `F` steps to any of them;
+* and `progress::career::may_fly`, the gate function, **was called from no line of `src/`**.
+
+So the ladder was not a wall. It was **invisible**: `Profile::cleared` had been written on every
+won sortie since 2026-08-19 and read by nothing (`docs/FINDINGS.md` FIND-222), so the game never
+once said *"you have done this one"* or *"this is the next rung"*.
+
+**What was built** is the signpost half only: `hud::board` now marks a won rung with `*` and a
+gated rung with `LOCKED <rank>`, reading `Career.cleared` and `may_fly`. Picture:
+`docs/images/f121-ladder-cleared.png`.
+
+### The half that is NOT built, because it is yours
+
+**Should a rung ever be locked?** Two shapes, and they are different games:
+
+1. **Rank gate** — `gates: {"skirmish/elite": "C"}`. Ties tiers to the XP curve. ⚠️ At level 59
+   you are rank A already, so every gate below A would be invisible **to you** and would only
+   ever bite a new career.
+2. **Cleared gate** — "Elite opens when you have won Veteran". The classic ladder, and the one
+   that reads as progression rather than as grind. ⚠️ It would **take content away from you
+   today**: your save has `breach/recruit` unwon, so `breach/veteran` would lock.
+
+**ASSUMPTION: neither. The shipped `gates` stays `{}` and nothing is locked.**
+Taking playable content off a player to demonstrate a rank is the wrong trade while the Vector
+Gear gate is still open (the same argument `progress.ron` has carried since Q-051), and the
+override that authorised this round was about making progression *visible*, not about making it
+*restrictive*. The mechanism is live and one line of RON turns it on.
+
+**Rollback point:** `assets/data/progress.ron: gates` — one line per door, no Rust change. The
+guard that will notice is
+`src/hud/board.rs::f121_the_shipped_ladder_takes_no_playable_content_away`, which goes **red**
+the moment anything is locked, on purpose: it forces whoever locks a door to say so here.
+
+### And the enforcement is still not wired — deliberately, as foreign territory
+
+`may_fly` is read by the **panel** (so a gate is visible) but nothing refuses a deploy: the
+deploy path is `menu::board::fly_it` → `mission::take_orders_from_the_menu`, and neither file
+belongs to this round. **So with `gates` non-empty today, a door would say `LOCKED` and still
+open if you held `F` on it.** That is one `if` in whoever owns `mission`, and it must land in the
+same change as the first non-empty gate.
+
+---
+
+## Q-088 — how wide is the river, and how tall are the towers beside it?
+
+**2026-09-01 · `assets/data/maps.ron`, `assets/data/water.ron` · open**
+
+He asked for both in one sentence and gave a direction, not a number:
+*„adde andere tuerme beim wasser (das wasser ist auch VIEL zu klein)"*.
+
+**ASSUMPTION (the work continued under it):**
+
+* **The river is 25 m of water**, up from 10, and centred on x = -72.5 instead of -70. Two and a
+  half times what he called *VIEL zu klein*, and the ceiling is not taste: the pocket's **west
+  flank wall** (face x = -97.5) and the **garrison HQ's hall** (back wall x = -47.0) leave a 45 m
+  corridor, less two 10 m quays (`docs/FINDINGS.md` FIND-220 §1). If he wants more river than
+  that, something has to **move** — the quays could go from 10 m to 6 m and buy 8 m of water at
+  the cost of a narrower foundation under every tower, or the HQ moves east. Both are bigger
+  changes than a number.
+* **The towers are 35.0 m**, because that is `scale.ron: architecture.heights_m.church` and the
+  only legal height between the 11.5 m house and the 120 m wall. **This rides on `Q-036`**, which
+  is still his: the moment there is a legal height between 35 and 120, the towers are the first
+  thing that should use it — a 35 m tower on a 120 m wall's river reads short from the crown.
+* **Six pairs**, one in the middle of every gap between the crossings the river already had that
+  a single crossing swing (32 m) cannot span, skipping the two gaps a wall bounds.
+
+**ROLLBACK POINT:** all of it is `assets/data/maps.ron`, one contiguous block
+(`---- The river towers`, 48 rows) plus three rows in `---- Ground, canal and paving`, six bridge
+rows, and two numbers in `water.ron: volumes.ashgate`. No Rust depends on any of it. What *would* have to
+be re-measured: `scripts/f-towers.txt` (its stands are pinned to the z = 65 pair),
+`scripts/f-water.txt`'s PINS block, and the two river tests in `tests/world.rs`.
+
+**What would answer it:** he plays the crossing once. The question is not the width in metres, it
+is whether **two rungs of climb** is the right price for the river — that is what the towers
+charge, and it is the only number in the design that is a feel and not an arithmetic.
+
+---
+
+## Q-089 — the rope always pulls, and `S` is supposed to be a brake. Only one of those can win. (2026-09-01)
+
+You said both, and they meet on a taut rope with your feet on the ground:
+
+> *„ich will dass es immer ranzieht. nicht nur wenn ich w drücke!"* (2026-08-26, `FIND-172` — this
+> is why `rope_winch` has no key and costs no gas)
+
+> *„seil ist vorne und ich laufe zurueck"* (§3F R1 — `scripts/f176-pull.txt` ACT 2 asserts that
+> holding `S` leaves you under 2 m/s)
+
+**It reads 7.630 m/s, and it is a latch, not a leak** (`docs/BUGS.md` B-034, `FIND-221b`). An
+anchored player becomes `Tethered` the moment his ground speed passes `ground_top_speed_m_s`
+= 6.533 m/s. `Tethered` takes him out of the system `S` acts through and puts him into the one the
+always-on pull runs in. So the pull holds him over the line, and over the line the legs are not
+allowed to brake him. 7.630 sits between the latch (6.533) and the pull's own ceiling (12.0).
+
+**ASSUMPTION the work continues under:** *the always-on pull wins, and `f176-pull.txt` ACT 2 stays
+red until you say otherwise.* Nothing has been changed to make it green — the script and the bug
+both now name the mechanism instead of the symptom. Chosen this way because the always-on pull is
+the newer instruction, it is the one you gave in a full sentence about how the gear should feel,
+and it is load-bearing for `F-005` (*„Spieler kann aus dem Tiefpunkt Hoehe gewinnen"*), whereas R1
+is one line in a requirements list.
+
+**The three answers, and what each costs:**
+
+* **The pull wins** (today). `S` on a taut rope near the ground does nothing you can feel. Cost:
+  one evidence script stays red forever and R1 is not true.
+* **`S` wins while you are touching the ground.** `rope_winch` gets a "not while `S` is held and
+  grounded" clause. Cost: a second condition on a term whose whole point is that it has none, and
+  the first thing that goes wrong is a player who cannot leave the floor by reeling — which is
+  `F-005`'s acceptance sentence.
+* **The latch moves.** `movement_state` stops calling a grounded, anchored, slow player `Tethered`
+  below some higher speed. Cost: this is the line that fixed `scripts/f-001-hooks.txt`'s headline
+  number (`integrator::movement_state`), and moving it re-opens that.
+
+**ROLLBACK POINT:** nothing to roll back — no code was changed for this. The three candidates are
+`src/player/locomotion.rs::rope_winch`'s guard in `air_control`, `src/player/integrator.rs::
+movement_state`'s threshold, and `scripts/f176-pull.txt` ACT 2's bracket. Whichever you pick,
+`FIND-172`'s own tests (`tests/vector_rope.rs::f172_*`) are the ones that go red first.
+
+**What would answer it:** hook something in front of you, stand on the street, hold `S`. If the
+rope dragging you forward at walking pace is *right*, the pull wins and R1 goes. If it feels like
+the game ignoring your key, it does not.

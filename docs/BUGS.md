@@ -61,6 +61,32 @@ That is exactly what the script driver in stage 1 is built for.
 ## B-014 — `Ctrl` is billed for rope the pair rule refuses to give: **59.766 gas for 0.4985 m**
 
 **2026-08-27 · [offlinebot] · found by an adversarial verifier, self-controlled in one table**
+**⚠️ HALF-FIXED 2026-09-01, and the ✅ that stood here for an hour was over-broad.** An adversary
+confirmed the PAIR half independently in the running game — a real two-anchor stand-off costs
+**0.398 gas and billing stops after 4 ticks** — and then reproduced the headline symptom **to the
+exact table number on ONE rope**: hooked to the wall, resting on the stone, `Ctrl` held 10 s costs
+**59.766 gas** while height and speed sit at 37.000 / 0.000 for 9.05 s unchanged. `DBT_GAS_LEDGER`
+attributes every tick of it to `reel`. Cause: `src/vector/gas.rs:219` rule 1 still asks
+`to_anchor.length() > min_rope_m` — the DISTANCE — while `limits.max` is already pinned at
+`min_rope_m` and cannot shrink; the stone holds the player 3 m off, so the test stays true forever.
+**The fix's own diagnosis ("asking about distance where it should be asking about progress")
+applies to rule 1 verbatim and rule 1 was not touched.** Open for the one-rope case.
+
+The pair half, as shipped: `vector::gas::reel_has_effect` asks [`shared::rope::pair_budget_m`], the
+pair rule's **own** function, instead of asking about the distance. Red-then-green, captured:
+with the predicate broken back to the old shape a second of held `Ctrl` in the 57.709 m / 12 m /
+48 m stand-off cost **5.9999 gas for rope nobody got**
+(`tests/vector_gas.rs::f018_a_reel_the_pair_rule_refuses_costs_nothing_and_one_it_allows_costs_the_file`);
+with it restored, **0.0000**, while the control at 2.459 m separation still pays the file's
+`gas_reel_per_s`. Four unit tests in `src/vector/gas.rs` (**`--lib`**) carry the `n = 2` case, the
+boundary at ±1 mm, and the `n = 1` non-regression.
+⚠️ **One writer, and no second copy of the rule**: the expression moved out of
+`player::rope::hold_the_pair` into `shared/rope.rs` unchanged, because `vector -> player` is not
+on the allow list and two implementations of one question drift. The `Q-079` rollback point is
+still the one line in `hold_the_pair`.
+⚠️ **It does NOT ask whether the reel *took* rope**, which is B-014's own wording below and is a
+**deadlock**: `vector::reel` writes `ReelSpeed` off this very grant, so an unbilled reel takes no
+rope and would never be billed again. The question has to be geometric.
 
 `B-013`'s fix (`hold_the_pair`) stops the reel taking a step that would make two rope maxima
 geometrically impossible. **It does not tell the gas ledger.**
@@ -162,7 +188,33 @@ defect** — it is not in this round's group and was not checked.
 
 ---
 
-## B-021 — a taut rope dumps 23.7 m/s in a quarter second with 6.6 m of air underneath
+## B-021 — ⚠️ HALF-REFUTED 2026-09-01: ACT 4 was the wall — but the energy dump is REAL elsewhere
+
+> 🔴 **The refutation below is right about ACT 4 and wrong as a closure.** An adversary replicated
+> `scripts/f003-wall.txt` ACT 2 — the project's own showcase swing, arc bottom matching the
+> script's recorded numbers — and measured **29.9 % of specific energy gone in ≤ 3 ticks**
+> (t=218 `v=29.614` → t=221 `v=9.506`, 1261.2 → 883.6 J/kg) **while GAINING 0.488 m of height**,
+> rope on, gas flat at 15000, and the swing recovering to 26.7 m/s afterwards — **not** `B-031`'s
+> dead-stop signature (37.456 → 0.026 in one tick, then pinned). So the ACT-4 instance is the
+> wall; a distinct tangential energy sink exists on a clean swing and is unexplained. **Open,**
+> with `scratchpad/adv-b/b21-tick.txt` as the repro.
+
+> 🔴 **The diagnosis below is wrong and the measurement under it is right.** One instrumented run
+> of `scripts/f005-feel.txt` ACT 4 at the y = 20 stand (`docs/FINDINGS.md` FIND-221):
+> the loss is **one tick, not a quarter second**, it is **tangential** (33.074 → 7.898 across the
+> rope, radial part 0.0219 — a `DistanceJoint` applies its impulse *along* the rope and cannot do
+> this), avian reports a **contact on exactly that tick**, and `z` is **pinned at −97.680** for
+> the next 70 samples: `maps.ron`'s *"z = +350 .. −97.5 the district"*, i.e. the main wall.
+> `rope_drive`'s look gate is 0.0000 throughout and **one** arm is anchored, so the two suspects
+> named below — the `Drive` joint (`Q-058`) and the pair rule (`B-013`) — are not in the path at
+> all. **This is `B-031`**, the silent wall collision, and `B-031`'s resolution is the one that
+> closes it.
+>
+> ⚠️ **Why the controls below could not see it:** they varied the stand **height** (y = 16/20/24)
+> against a **vertical** face. `docs/lessons/fixtures.md` §4 — a sweep's size is not its coverage.
+> The 6.6 m of air is real and it is under the wrong direction.
+
+## B-021 (as filed) — a taut rope dumps 23.7 m/s in a quarter second with 6.6 m of air underneath
 
 **2026-08-29 · [offlinebot] · measured by the movement group of the corpus re-aim; filed here
 because its own filing collided with `B-018` and was silently lost**
@@ -446,3 +498,88 @@ loopback fake — `docs/multiplayer.md` rule 4 is the reason the socket is real.
 a port chosen from the OS (`:0`) rather than a fixed one, or `#[serial]`-style exclusion.
 
 **Related:** `B-012` (the other unexplained flake, also under load) · `F-175` · `docs/multiplayer.md`
+
+## B-034 — `S` on a taut rope does not brake: 7.630 m/s where the act promises under 2
+
+**2026-09-01 · `[offlinebot]` · repro is an evidence script that has been red since it was
+written · open, and the decision is the user's (`docs/QUESTIONS.md` Q-089)**
+
+### Repro
+
+`scripts/f176-pull.txt`, at its documented invocation (`--ticks 900`), ACT 2:
+
+```
+line 133: assert Speed < 2 — measured 7.630
+```
+
+The act is §3F R1 in the user's own words — *„seil ist vorne und ich laufe zurueck"* — and its
+comment states the band: `run_speed_m_s` is 6.0, *"anything at or over it is a player who walked
+straight out of his own rope"*. It reads **7.630**.
+
+### The mechanism, and it is a latch (`docs/FINDINGS.md` FIND-221b)
+
+`integrator::ground_top_speed_m_s` = `run_speed_m_s − gravity/hz` = 6.0 + 0.5333 = **6.533 m/s**.
+`integrator::movement_state` makes an **anchored** player `Tethered` the moment his ground speed
+passes it — and `Tethered` takes him out of `locomotion::ground_locomotion`, which is the only
+thing `S` acts through, while putting him **into** `air_control`'s `in_the_air`, where
+`rope_winch`'s always-on pull runs: free, keyless, up to `drive_idle_speed_m_s` = 12 m/s of
+closing speed. Over the latch the pull holds him; over the latch the legs may not brake him.
+7.630 sits between 6.533 and 12.0.
+
+🟨 **The two numbers and the two predicates are measured and read; `MovementState` itself was not
+sampled at that tick.** Whoever closes this samples it first — one `assert` is not a mechanism.
+
+### Why it is not fixed here
+
+Two of the user's own instructions meet and disagree, and neither is mine to overrule:
+*„ich will dass es immer ranzieht. nicht nur wenn ich w drücke!"* (`FIND-172`, which is why the
+winch has no key) against §3F R1 (which asks for a brake). → `Q-089`.
+
+**Related:** `FIND-172` · `FIND-221b` · `Q-089` · `F-005` `F-006`
+
+---
+
+## B-012, the unexplained half — 40 of 40 green against a pinned binary, so it is LOAD or nothing
+
+**2026-09-01 · [offlinebot] · the protocol step the entry prescribed and nobody had run**
+
+⚠️ The entry itself sits in `docs/archive/BUGS-closed.md` because its *second* observation was
+explained (the mid-round gravity commit) and the archiver read "PARTLY RESOLVED" as resolved. **The
+first observation — `11 of 19 asserts failed` twice at 23:15 UTC with identical MARK ticks — was
+never explained**, and this is its step 1:
+
+`scripts/f175-loop.txt`, 40 consecutive runs, one pinned binary (`80ab69ed`), quiet machine:
+**40 × exit 0.** So the flake does not live in the script, the binary or repetition. What remains
+is the condition both observed failures shared: **heavy parallel load** (a foreign `nice -4` build
+then; a full-suite run for `B-032`'s sibling). Step 2 — reproducing under artificial load — is
+**deliberately not run while he is at the machine**; it means degrading his desktop on purpose.
+
+**Related:** `B-032` (same shape: green alone, red once under the full suite) ·
+`docs/archive/BUGS-closed.md` B-012
+
+---
+
+## B-036 — the save file is last-writer-wins, and any two game processes race on it
+
+**2026-09-01 · [offlinebot] · found by the progression adversary, controlled, and it had already
+bitten the real career the same day**
+
+`save::record_outcomes` and `save::spend_gear_points` write the **whole file** from the in-memory
+profile. Two processes on one save dir: the fast one spends a gear point and the file reads
+`gear:{"speed":1}`; the slow one wins its sortie 6 s later and writes **its own** in-memory
+profile — final file `gear:{}`. **The point is gone, both logs clean.** Control: the identical two
+scripts run *sequentially* keep both. Concurrency is the only variable.
+
+**It bit the same day:** `tools/corpus.sh` ran six games in parallel against `saves/player-1.ron`,
+and the sweep sent the career **backwards** — 474 → 470 sorties, 798 xp, **two allocated gear
+points erased**. A tally re-earns itself; a gear allocation is the player's decision.
+
+**Mitigated at the tools** (2026-09-01): `corpus.sh` gives every run its own `DBT_SAVE_DIR` in
+`mktemp -d`; `tools/test.sh` runs the whole suite against one scratch dir. The game's own race —
+two real instances, or a future second player — **is not fixed** and needs read-merge-write or a
+lock in `src/save/`.
+
+⚠️ **Do not fix it with write-temp-then-rename alone.** That makes the clobber *atomic*; it does
+not make it *right* — the slow writer still erases the fast one's spend, just cleanly.
+
+**Related:** `docs/multiplayer.md` (a second player makes this the common case) · `F-120` `F-125`

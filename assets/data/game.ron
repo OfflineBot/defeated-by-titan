@@ -77,7 +77,13 @@
         slide_cooldown_s: 0.9,
         // You cannot slide from standing. 3 m/s is half a walk — enough that a player who is
         // actually moving always gets it, enough that a stationary tap does nothing.
-        slide_min_speed_m_s: 3.0,
+        // 🔴 3.0 -> 9.0 on 2026-09-01, HIS WORD: „wenn man sprintet und stoppt slided man und
+        // rennt nicht … ich hab mal gesagt man soll eher sliden aber das soll doch nicht. erst
+        // ab einer bestimmten geschwindigkeit.“ He revokes his own earlier slide preference.
+        // 3.0 was HALF a walk, so every sprint stop slid; 9.0 is 1.5x run_speed_m_s 6.0, a
+        // number the LEGS cannot reach — only a flight landing carries it, which is exactly
+        // the case he wants the slide for. PROVISIONAL until he confirms.
+        slide_min_speed_m_s: 9.0,
         // P5. ⚠️ UNTUNED. Two ways to lose is the bar (docs/PLAN-GAME.md §1), and one of
         // them is this number reaching zero. 100 against a husk's damage of 34 means
         // **three strikes and you are down** — which is what makes a telegraphed wind-up
@@ -515,7 +521,12 @@
         //     locomotion::rope_drive point 6), so this number is now a steering authority and
         //     nothing else — it used to double as the speed he got dragged back down to;
         //   - bound: <= drive_speed_m_s, or A/D alone would hit the drive's own cap.
-        drive_lateral_m_s: 36.0,
+        // 🔴 36 -> 24 on 2026-09-01, HIS WORD AT THE CONTROLLER: „der push nach links und rechts
+        // bei a/d ist zu stark!“ — which supersedes his 2026-08-24 „stärker zur seite“ by the
+        // newer-word-wins rule (Q-002). A third of the way back, not all of it: the tangential
+        // steer is why A/D cannot lengthen the rope, and a lateral under ~20 stops reading as
+        // steering at drive speed 52. PROVISIONAL like every feel number until he confirms.
+        drive_lateral_m_s: 24.0,
         // FIND-172. The acceleration ceiling of the drive, in m/s^2 — and it is the one number
         // in this block that is about WEIGHT rather than about speed.
         //

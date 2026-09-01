@@ -49,9 +49,15 @@ one() {
   # CRASH. The wall scales with the work — ~50 ticks/s is conservative under 6 parallel jobs —
   # and a kill by the clock is TIMEOUT, its own verdict, never CRASH.
   wall=$(( 120 + t / 25 ))
-  out=$(timeout "$wall" nice -n 15 ionice -c 3 ./target/debug/defeated_by_titan \
+  # 🔴 Each run gets its OWN save directory. Six parallel runs against saves/player-1.ron are a
+  # last-writer-wins race on the whole file: measured 2026-09-01, the sweep sent the REAL career
+  # BACKWARDS (474 -> 470 sorties, two allocated gear points erased) with clean logs. A sweep is
+  # an instrument; an instrument must not write the player's data at all.
+  sd=$(mktemp -d "${TMPDIR:-/tmp}/dbt-corpus-save.XXXXXX")
+  out=$(timeout "$wall" env DBT_SAVE_DIR="$sd" nice -n 15 ionice -c 3 ./target/debug/defeated_by_titan \
         --headless $x --script "$f" --ticks "$t" 2>&1 \
         | grep -oE '[0-9]+ of [0-9]+ asserts failed|[0-9]+ asserts held|did not finish' | tail -1)
+  rm -rf "$sd"
   rc=$?
   case "$out" in
     *"asserts held")  printf "GREEN  %-24s %-6s %s\n" "$b" "$t" "$out" ;;

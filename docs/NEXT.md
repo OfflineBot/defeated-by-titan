@@ -1053,3 +1053,52 @@ water and the towers, because the water's extent is a shape in the height field 
 
 **Related:** `docs/NEXT.md` §5A · `FIND-134` · `F-003` `F-004` · `M-002`
 
+
+## §5B — 🔴 HE PLAYED THE NEW BUILD, 2026-09-01. Five instructions, verbatim, all feel.
+
+> *"ok ist jetzt ganz gut. aber der push nach links und rechts bei a/d ist zu stark! und mach dass
+> q und e toggle sind und nicht hold (oder in einstellungen einstellbar) und fov changes sollen
+> nach geschwindigkeit egal welche richtung! weil wenn man seitlich geht ist der change sehr
+> sudden drop. nicht gut!"*
+
+> *"wenn man sprintet und stoppt slided man und rennt nicht. mach dass wenn man am boden ist dann
+> eher sprintet. ich hab mal gesagt man soll eher sliden aber das soll doch nicht. erst ab einer
+> bestimmten geschiwindigkeit."*
+
+**„ist jetzt ganz gut"** — the first positive verdict on the movement since the project began.
+
+1. **`A`/`D` too strong.** `game.ron: drive_lateral_m_s` 36. ⚠️ His 2026-08-24 instruction was
+   *„stärker zur seite"* — **the newer word beats the older**, that precedence rule is Q-002's.
+2. **`Q`/`E` become a TOGGLE, not hold** — or a setting. Hold-to-keep dates from 2026-08-10 and
+   was measured then („hold-to-keep and release-to-drop were ALREADY true"). Tap fires, tap
+   releases. „oder in einstellungen einstellbar" — a settings row is explicitly acceptable.
+3. **FOV follows |v|, not a directional component.** Strafing causes a *sudden drop* — so the FOV
+   input today is projected on some axis. `game.ron: camera.fov_max_speed_deg` block.
+4. **Sliding needs a speed floor that actually bites.** Sprint→stop slides instead of running.
+   He explicitly revokes his earlier slide preference: *„ich hab mal gesagt man soll eher sliden
+   aber das soll doch nicht. erst ab einer bestimmten geschwindigkeit."*
+   `game.ron: slide_min_speed_m_s` is 3.0 — half a walk; a sprint stop is always above it.
+   The floor has to sit ABOVE run speed so only a real flight landing slides.
+
+## §5C — 🔴 THIRD BATCH FROM THE CONTROLLER, 2026-09-01, verbatim. Input and sight.
+
+> *"und w soll ranziehen und nicht von player perspektive (hab ich auch mal anders gesagt) und a
+> und d dann zum anchor. wenn man hoocked ist soll man auch nicht zu stark über 80deg links/rechts
+> schauen. also schon einiges aber nicht zu viel drehen! es wird zeit einstellungen für keybinds zu
+> adden. damit man mehr einstellen kann! mach zudem die verbindung zu einem einfachen crosshair und
+> nicht so gkreise mit seiten strichen etc. sollen 4 striche wo in der mitte nichts und 45deg
+> rotiert und gröse eher mittel bis klein. aktuell ist mittel bis groß. größe einstellbar und farbe
+> auch!"*
+
+1. **`W` pulls TO THE ANCHOR, not along the look.** ⚠️ He revokes his own §1A spec and says so
+   himself (*„hab ich auch mal anders gesagt"*) — newer word wins. This deletes the drive's
+   look-gate `max(0, l̂·r̂)` as the *direction* source: `W` = radial, period. It also closes
+   `FIND-196` (holding `W` closed LESS than holding nothing — the look-gate was why).
+2. **`A`/`D` relative to the anchor** — already §3F's frame; confirms the joint design.
+3. **Hooked look clamp ~±80°.** *„schon einiges aber nicht zu viel drehen"* — a yaw limit
+   relative to the rope while anchored. NEW mechanic; number in RON, and it interacts with the
+   free-look camera. Ask nothing, build it adjustable.
+4. **Keybind settings.** That is `F-172 Vollständige Tastenbelegung` — an Unbuilt row with 3
+   files already naming it. The bindings live in `net::local`.
+5. **Crosshair: 4 Striche, Mitte leer, 45° rotiert (X), mittel-klein.** Today: circles with side
+   ticks, mittel-groß. **Size AND colour settable.** `hud::crosshair::shape_of` owns the shape.
