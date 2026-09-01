@@ -173,8 +173,15 @@ cargo check                2>&1 | grep -E '^error' | head -20
 ```
 
 🔴 **2 · NEVER OPEN A BIG DOC TO ADD A LINE.** `cat >>` to append; `grep -n` for the anchor and
-`sed -n 'a,bp'` for the slice. **And a queue file past ~150 kB gets archived** — `FINDINGS.md`
-reached 812 kB while the rule about it still said 108, and nobody re-measured for seventeen days.
+`sed -n 'a,bp'` for the slice. **And a queue file past its cap gets archived into `docs/archive/`
+with a one-line index per entry** — nothing is ever deleted, and finding an old entry stays a
+`grep`.
+⚠️ **`tools/norms.py` now FAILS on this instead of asking you to remember it**
+(`QUEUE_CAPS_KB`), because the sentence alone did not work: it said 150 kB and quoted
+`FINDINGS.md` at 108 while the file had reached **812 kB** — seven and a half times its own rule,
+for seventeen days. The tightest cap is on **`CLAUDE.md` itself, 45 kB**, because it is the one
+file every agent reads WHOLE: at 40 kB that was ~10 300 tokens per agent per round, and splitting
+the measurements out into `docs/lessons/` bought back about 2 800 of them.
 
 🔴 **3 · A MEASUREMENT ROUND PINS ITS OWN BINARY *AND* ITS DATA.**
 `cp target/debug/defeated_by_titan "$SCRATCH/dbt-pinned"` before any A/B, and interleave
