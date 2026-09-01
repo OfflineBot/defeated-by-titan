@@ -725,9 +725,26 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                 let veto_m = base_m + if remnant.is_some() { height_m } else { ridge_m };
                 let ridge_center = Vec3::new(center_x, veto_m * 0.5, center_z);
                 let ridge_half = Vec3::new(size_x * 0.5, veto_m * 0.5, size_z * 0.5);
-                let blocked = plan[..placed]
-                    .iter()
-                    .any(|g| overlaps(ridge_center, ridge_half, g.center_m, g.half_size_m()));
+                // ⚠️ And a placed block whose **top is below the ground** vetoes by its
+                // FOOTPRINT alone, at any height. That is the channel, and it is the one case
+                // the y test above cannot see: a house box runs from `y = 0` upward, the
+                // channel floor's top is at **y = -4.00**, so the floor slab has never vetoed
+                // anything and only the quays — 0.4 m proud of the paving — ever did. That
+                // worked while `maps.ron` could argue *"a 12 x 11 m row house does not fit into
+                // a 10 m gap"*, and it stopped working the moment the user got the river he
+                // asked for (*„das wasser ist auch VIEL zu klein"*): at 30 m of channel,
+                // **34 of 456 houses** were generated standing in mid-air over the water
+                // (`docs/FINDINGS.md` FIND-220). The rule that does not depend on the width is
+                // the one `CellRole::Hole` already states for the ground beside it: **a house
+                // may not stand where there is no ground.**
+                let blocked = plan[..placed].iter().any(|g| {
+                    let half = g.half_size_m();
+                    if g.center_m.y + half.y < 0.0 {
+                        let d = (ridge_center - g.center_m).abs();
+                        return d.x < ridge_half.x + half.x && d.z < ridge_half.z + half.z;
+                    }
+                    overlaps(ridge_center, ridge_half, g.center_m, half)
+                });
                 if blocked {
                     continue;
                 }

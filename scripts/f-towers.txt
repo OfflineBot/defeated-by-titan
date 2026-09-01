@@ -1,0 +1,218 @@
+# f-towers — THE RIVER IS CROSSABLE BY ROPE, AND THE CROSSING NEVER TOUCHES THE WATER.
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/f-towers.txt --ticks 1200
+#   ./target/debug/defeated_by_titan --headless --script scripts/f-towers.txt --ticks 1200 >/dev/null 2>&1; echo $?
+#   ./target/debug/defeated_by_titan --offscreen --script scripts/f-towers.txt --ticks 120 \
+#       --screenshot docs/images/f003-towers.png      # 120: inside ACT 0's own window, see it
+#
+# The user, 2026-08-29: *„adde andere tuerme beim wasser (das wasser ist auch VIEL zu klein)"*.
+# Both halves landed together on 2026-09-01, and the second decides the first: the channel went
+# from **10 m to 25 m** of water, so the towers are designed against a river two and a half
+# times the one they were asked for beside.
+#
+# PINS: **the tower pair at z = 65**, out of `maps.ron: maps.ashgate.blocks`, and the channel it
+# stands in. Move any of these and this file is wrong, not the map:
+#
+#   east shaft   (-55, 16.70, 65)      (10, 32.60, 10)  -> x -60..-50, y 0.40..33.00
+#   east decks   (-58.5, 11/22/34, 65) (17,  2.00, 10)  -> x -67..-50, tops y 12 / 23 / 35
+#   west shaft   (-90, 16.70, 65)      (10, 32.60, 10)  -> x -95..-85
+#   west decks   (-86.5, 11/22/34, 65) (17,  2.00, 10)  -> x -95..-78, tops y 12 / 23 / 35
+#   quays        x -95..-85 and -60..-50, tops y +0.40
+#   water        x -84.95..-60.05, surface **y = -0.60**   (`water.ron: volumes.ashgate`)
+#
+# PINS: **the two stands and the two aims of ACT 2 and ACT 5.** They are a mirrored pair about
+# the channel's centre line (x = -72.5) — the same crossing east-to-west and west-to-east — and
+# re-aiming either makes the pair meaningless. When a constant moves under this file, the
+# heights and speeds are re-measured against the same stands; a stand is never moved to recover
+# a number.
+#
+# ⚠️ **The yaw sign, because it cost two runs.** `shared::Intent::look_dir` is
+# `(-sin yaw, sin pitch, -cos yaw)`, so **a POSITIVE yaw turns toward -X**, i.e. west.
+# `scripts/f003-wall.txt` said the opposite in a comment for three days; aiming this file off
+# that comment hooked the wrong bank of the river twice, and the swing looked plausible both
+# times. `docs/FINDINGS.md` FIND-220 §4.
+#
+# ## ⭐ THE MEASUREMENT, AND ITS TWO CONTROLS
+#
+# `game.ron: vector.rope_force_model` is **`Drive`**, so a hooked player who presses nothing
+# falls — the rope is a leash, not a joint, until it comes tight. That is what makes the
+# controls the evidence rather than a formality. All three rows, same stand, same tick, one
+# binary:
+#
+#   WITH the hook                            lowest point **14.572 m** at 39.459 m/s, and he
+#                                            ends **at rest on the far tower's rung 1:
+#                                            y 12.000, speed 0.000**
+#   the same stand, NO hook                  he falls straight into the channel and ends
+#                                            **floating: y -1.294, drifting at 0.255**
+#   the hook, and the far tower's RUNG 1     he swings the identical arc and ends
+#   DELETED — one line of `maps.ron`         **floating: y -1.306, drifting at 0.509**
+#
+# The third row is what makes the first mean anything. **A body at rest reads its surface
+# exactly** — 12.000 on a deck whose top is 12.00, 23.000 on one at 23.00, 0.400 on the quay,
+# all measured — while a floating one sits at -1.29 (`water.ron`: `-gravity_m_s2 *
+# surface_band_m / buoyancy_m_s2` = 0.727 m under the surface; `FIND-216` measured -1.292) and
+# **never stops drifting**. So: the rope carries him over the river, and **one 17 x 2 x 10 block
+# is the difference between the far bank and a swim.**
+#
+# ## What it costs, and it is not free
+#
+# **Gas 15000 -> 15000: the crossing itself is the rope and costs nothing.** What costs is
+# getting to the deck. The rungs are at 12 / 23 / 35 m and the roofscape is 11.5 m
+# (`scale.ron: house_large`), so a body coming off the eaves meets rung 1 at his own height and
+# has **two rungs of climb** before the river is his — 23 m of reel or two swings, both billed.
+# And `bottom = H - d` (FIND-041) says rung 1 is not a crossing at all: the two facing decks are
+# 11.0 m apart, so rung 3 bottoms out at 35 - 11 = **24 m** and rung 1 at 12 - 11 = **1 m**,
+# which is one metre over a river you have to be exactly right about. **You climb, or you swim.**
+#
+# ## ⚠️ THE SWING IS DIAGONAL, AND THAT IS THE MECHANIC, NOT A CONVENIENCE
+#
+# The same lesson the wall's ACT 2 wrote down: a pendulum's far half ends over its own anchor's
+# structure. Hooked **off-axis** — 20 m up the river from the pair — the swing plane runs
+# diagonally, its far half passes the far tower in Z, and the apex stands over it. So the AoT
+# move here is the same sideways one the wall rewards, and the river is the map's strictest
+# teacher of it: the penalty is not a bruise but a swim, in water that holds no hook
+# (`vector::hookable::SurfaceKind::Water`) and bills the way out at
+# `water.ron: swim.gas_cost_factor` 2.0.
+
+wait 1.5                # world, camera, meshes and the render pipelines come up
+
+# ---------------------------------------------------------------------------------------
+# ACT 0 — THE PICTURE. 58 m up over the middle of the channel at z = 130, looking straight
+# down it: the pairs at z = 65 and z = -20, each two shafts the width of their own quay with
+# three sand-brown rungs corbelled out over the water, 25 m of river running between them, and
+# the 120 m wall closing the frame.
+#
+# ⚠️ The vantage stands over the OPEN channel and not over the bank, and that is not taste:
+# from inside the district the near geometry fills the frame (measured three times on
+# 2026-09-01 — a 50 m stand at x = -18 photographed the side of a house).
+# ---------------------------------------------------------------------------------------
+warp -72.5 58 130
+look 0 -11
+wait 0.3
+mark VIEW the river and its towers
+wait 0.5                # ⚠️ THE SCREENSHOT WINDOW, and it is not padding. `--screenshot` fires
+                        # at a TICK, the mark lands at t=111 and ACT 1's `warp` executes on
+                        # t=112 — a frame taken at 115 without this line photographs the east
+                        # quay from three metres up. Measured 2026-09-01, twice.
+
+# ---------------------------------------------------------------------------------------
+# ACT 1 — THE FOOT OF THE LADDER. He starts on the east quay 13 m north of the tower — beside
+# it and not inside it: the shaft is the quay's own 10 x 10 m and a `warp` onto its centre is a
+# warp into stone (measured: -0.068 instead of 0.400). **A body at rest reads its surface
+# exactly**, so 0.400 is the quay top, and that is the calibration every "on stone" assert in
+# this file leans on.
+# ---------------------------------------------------------------------------------------
+warp -55 3 78
+wait 1.5
+mark ACT1 on the east quay at the foot of the tower
+assert height > 0.35     # 0.400
+assert height < 0.45
+assert speed < 0.10
+assert gas == 15000
+
+# ---------------------------------------------------------------------------------------
+# ACT 2 — THE STAND, 35 m up, at the east deck's own height and 20 m north of the pair.
+# ---------------------------------------------------------------------------------------
+warp -68.5 36 85
+look 25 -6              # +yaw is -X: this aims WEST, and 25 degrees up the river. See ACT 5.
+wait 0.1
+mark ACT2 stepping off the east deck
+assert height > 35.0     # 35.714
+assert height < 36.5
+# ⚠️ DERIVED from `gravity_m_s2` -32.0, and it fires BEFORE the hook so nothing but gravity is
+# in it: `wait 0.1` is an 8-tick settle, |g| * 8/60 = 4.267 m/s, plus one more simulation step
+# |g|/60 = 0.533, i.e. 4.80.
+assert speed < 4.8
+assert gas == 15000
+
+# ---------------------------------------------------------------------------------------
+# ACT 3 — ⭐ THE CROSSING, EAST TO WEST.
+# ---------------------------------------------------------------------------------------
+hook right 3.0
+wait 0.3
+mark ACT3 the rope is on the far tower and he is falling into the arc
+assert rope == 1
+assert height > 31.0     # 32.690 at 16.028 m/s
+assert speed > 15.0
+
+wait 0.3
+mark ACT3 half way down
+assert height > 25.0     # 26.523 at 26.761
+assert speed > 25.0
+
+wait 0.2
+mark ACT3 out over the middle of the channel
+assert height > 19.0     # 20.731 at 33.461
+assert speed > 32.0
+
+# ★ THE FIVE SAMPLES THIS FILE EXISTS FOR, and they are five and not one on purpose: the bottom
+# of an arc is exactly the sample a single mark lands beside. The river's surface is at
+# **-0.60** and the lowest of these is **14.572 m** — 15.17 m of clear air under the deepest
+# point of the crossing, over water 24.9 m wide.
+wait 0.1
+mark ACT3 over the water, a
+assert height > 13.5     # 17.777 at 36.419 m/s
+wait 0.1
+mark ACT3 over the water, b
+assert height > 13.5     # 15.605 at 38.477
+wait 0.1
+mark ACT3 over the water, c
+assert height > 13.5     # **14.572 at 39.459 m/s**  <- the lowest and the fastest tick of the
+                         # whole crossing: 6.6x running speed (game.ron: run_speed_m_s 6.0),
+                         # and 15.17 m of air between him and the river
+wait 0.1
+mark ACT3 over the water, d
+assert height > 13.5     # 14.865 at 39.265
+wait 0.1
+mark ACT3 over the water, e
+assert height > 13.5     # 16.439 at 37.908 — past the bottom and climbing again
+
+wait 0.7
+mark ACT3 the far apex, over the west tower
+assert height > 31.0     # 32.666 at 18.112 — the whole fall given back, and he is level with
+assert speed < 22.0      # the deck he stepped off
+assert gas == 15000      # not one unit spent — the whole crossing is the rope
+
+# ---------------------------------------------------------------------------------------
+# ACT 4 — THE FAR BANK.
+# ★ **12.000 at exactly 0.000 — he is standing on the far tower's rung 1, whose top is 12.00.**
+# ⚠️ And the height alone would not have proved it: the grass either side of the channel dips
+# BELOW the water's own surface (-0.60) in places, so "higher than the surface" is not a
+# discriminator here and a test built on it would have been measuring the terrain. What proves
+# it are the two controls in this file's header — no hook: -1.294; that one deck deleted:
+# -1.306. Both drifting, both in the river.
+# ---------------------------------------------------------------------------------------
+wait 4.0
+mark ACT4 at rest on the far tower's first rung
+assert height > 11.9     # 12.000
+assert height < 12.1
+assert speed < 0.05
+assert health == 100     # he crossed it, he did not survive it
+assert gas == 15000
+
+# ---------------------------------------------------------------------------------------
+# ACT 5 — AND BACK. The mirrored crossing, west to east: the same stand reflected in the
+# channel's centre line (x = -72.5) and the same aim negated. So the two acts are an `n = 2`
+# and not one measurement quoted twice — if only one bank's towers worked, this act is where
+# it shows. It does not: 17.145 m at 37.678 m/s, and he lands on the EAST tower's rung 1.
+# ---------------------------------------------------------------------------------------
+warp -76.5 36 85
+look -25 -6             # -yaw is +X: the mirror of ACT 2, aimed EAST
+wait 0.1
+mark ACT5 stepping off the west deck
+assert height > 35.0     # 35.714
+assert speed < 4.8
+
+hook right 3.0
+wait 1.0
+mark ACT5 the low point over the water, the other way round
+assert height > 13.5     # 17.145 at **37.026 m/s** — the mirror of ACT 3
+assert height < 19.0
+
+wait 4.8
+mark ACT5 at rest on the east tower's first rung
+assert height > 11.9     # 12.000 at 0.000: the other bank's rung, and the river crossed twice
+assert height < 12.1
+assert speed < 0.05
+assert gas == 15000
+end

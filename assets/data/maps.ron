@@ -518,9 +518,10 @@
         // both 28 m wide and 20 m tall, and the straight line between them is the main
         // street — it runs from z = -277.5 through the whole district up to z = +250.
         //
-        // **The canal runs through the district and through BOTH walls** at x = -70: a
-        // 16 m channel 4 m below the paving, with 8 m quays either side, six bridges, and a
-        // water gate 12 m tall where it crosses each wall.
+        // **The canal runs through the district and through BOTH walls** at x = -72.5: a
+        // **25 m** channel 4 m below the paving, with 10 m quays either side, six bridges, a
+        // water gate 12 m tall where it crosses each wall — and since 2026-09-01 **six pairs of
+        // river towers**, which are the only way over it that is not a bridge.
         //
         // ## Where the geometry comes from
         //
@@ -574,13 +575,26 @@
         //     you take the gate at street level, or you climb — ground -> gallery (60 m) ->
         //     crown corbel (120 m), two moves, both legs well inside the 200 m range.
         //
-        // ## The river, in a game that has no water
+        // ## The river
         //
-        // Graybox: a lowered channel, its own colour, `anchorable: false` — a hook into the
-        // water would be the one thing worse than no river. The **bridges are anchorable**,
-        // which makes the crossings the only hook targets over the channel and turns the
-        // canal into what it is in the reference: a gap in the roof network that costs you
-        // something to cross.
+        // ⚠️ This heading read *"The river, in a game that has no water"* for eighteen days and
+        // it is no longer true: `assets/data/water.ron` puts a volume in the channel, and the
+        // user's *„das wasser ist auch VIEL zu klein"* was answered on 2026-09-01 by taking the
+        // channel from **10 m to 25 m**. 25 and not more, and both bounds are buildings:
+        // the pocket's **west flank wall** puts its plinth face at **x = -97.5**, and the
+        // **garrison headquarters** puts the back wall of its hall at **x = -47.0**. With 2.5 m
+        // and 3.0 m of margin the corridor is x -95..-50 — 45 m, less two 10 m quays, so
+        // **25 m of water**. `docs/FINDINGS.md` FIND-220.
+        //
+        // The water is `anchorable: false` by being no block at all — a hook into the water
+        // would be the one thing worse than no river, and the rule lives in
+        // `vector::hookable::SurfaceKind::Water`. The **bridges are anchorable**, and so are
+        // the **river towers**: those two are the hook targets over the channel, and together
+        // they keep the canal what it is in the reference — a gap in the roof network that
+        // **costs you something** to cross. What it costs after the towers: two rungs of climb
+        // (12 -> 23 -> 35 m) before the river is yours, because `bottom = H - d` puts a
+        // crossing hooked at rung 1 one metre over a surface you would have to be exactly right
+        // about. You climb, or you swim.
         //
         // ## How a hole gets into a box world
         //
@@ -990,15 +1004,20 @@
                 // that answers NoAnchor for no reason the player can see.
                 //
                 // the two ground slabs. The gap between them is the channel, and that is the only
-                // way to get a hole into a box world: leave it out. **Sand, not green: the ground BETWEEN
-                // the channel floor 4 m down — no water in this game, so the river is a lowered lane.
-                // ⚠️ 16 -> 10 m of channel, and it is not taste. The quays are what deletes a grid
-                (center_m: (-70.0, -4.1, 0.0), size_m: (10.0, 0.2, 700.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
-                // house standing over the water, and since 2026-08-12 that test runs per HOUSE and not
-                (center_m: (-80.0, -1.8, 0.0), size_m: (10.0, 4.4, 700.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
-                // per cell: a 12 x 11 m row house fits into a 16 m gap and would hang in the air over
-                // the channel. It does not fit into 10. The quays are 10 m for the same arithmetic.
-                (center_m: (-60.0, -1.8, 0.0), size_m: (10.0, 4.4, 700.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                // way to get a hole into a box world: leave it out.
+                // ⚠️ **10 -> 25 m of channel on 2026-09-01**, on the user's *„das wasser ist auch
+                // VIEL zu klein"*, and the widening deleted the argument the old 10 m rested on:
+                // the quays vetoed a grid house because a 12 x 11 m row house does not fit into
+                (center_m: (-72.5, -4.1, 0.0), size_m: (25.0, 0.2, 700.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                // a 10 m gap — and it fits into 25. **34 of 456 houses** were then generated hanging
+                (center_m: (-90.0, -1.8, 0.0), size_m: (10.0, 4.4, 700.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
+                // in mid-air over the water. What carries the veto now is `plan_blocks` itself: a
+                // placed block whose TOP is below the ground vetoes by its footprint at any height,
+                // which is the rule `CellRole::Hole` already states — a house may not stand where
+                // there is no ground. `tests/world.rs::f003_no_grid_house_is_generated_over_the_open_channel`
+                // is the guard, `docs/FINDINGS.md` FIND-220 the measurement. The quays are 10 m thick
+                // because a river tower's shaft is exactly one quay wide and stands on it.
+                (center_m: (-55.0, -1.8, 0.0), size_m: (10.0, 4.4, 700.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
                 // the lots IS the street network, and a green one made the district read as houses on a lawn. Green stays outside the wall, where it is a field.
                 // the boulevard along the wall: the cleared strip the wall gallery swings over
                 (center_m: (0.0, -0.1, -83.75), size_m: (700.0, 0.3, 27.5), color: "stone_gray", anchorable: true, solid: true, landmark: false),
@@ -1287,8 +1306,8 @@
                 // its nave
                 (center_m: (51.0, 5.75, -8.0), size_m: (26.0, 11.5, 14.0), color: "stone_gray", anchorable: true, solid: true, landmark: false),
                 // trees along the quays and the square: the cheapest anchor above the eaves
-                (center_m: (-92.0, 6.0, 60.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
-                (center_m: (-92.0, 6.0, -20.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
+                (center_m: (-92.0, 6.0, 45.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
+                (center_m: (-92.0, 6.0, -40.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
                 (center_m: (-48.0, 6.0, 30.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
                 (center_m: (-48.0, 6.0, -50.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
                 (center_m: (30.0, 6.0, 20.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
@@ -1299,16 +1318,172 @@
                 // its crown — an anchorable surface — had 47 m of stone over it.
                 (center_m: (-50.0, 6.0, -180.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
                 (center_m: (-48.0, 6.0, -220.0), size_m: (2.5, 12.0, 2.5), color: "olive_green", anchorable: true, solid: true, landmark: true),
-                // six bridges. Since 2026-08-12 the channel, the quays and the bridges are
+                // six bridges, **47 m** wide since the channel widened — the corridor is 45 m
+                // (x -95..-50) and a bridge lands 1 m past each quay. ⚠️ Not wider: at 52 the west
+                // end reaches x = -98.5 and the west flank wall's plinth starts at -97.5.
+                // Since 2026-08-12 the channel, the quays and the bridges are
                 // all anchorable — the user: *„man soll überall seinen haken inmachen
                 // können! auch an den boden oder dächer, alles!"*. What that costs is
                 // written at the ground slabs above.
-                (center_m: (-70.0, -0.1, -240.0), size_m: (36.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
-                (center_m: (-70.0, -0.1, -180.0), size_m: (36.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
-                (center_m: (-70.0, -0.1, -60.0), size_m: (36.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
-                (center_m: (-70.0, -0.1, 20.0), size_m: (36.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
-                (center_m: (-70.0, -0.1, 110.0), size_m: (36.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
-                (center_m: (-70.0, -0.1, 190.0), size_m: (36.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (-72.5, -0.1, -240.0), size_m: (47.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (-72.5, -0.1, -180.0), size_m: (47.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (-72.5, -0.1, -60.0), size_m: (47.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (-72.5, -0.1, 20.0), size_m: (47.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (-72.5, -0.1, 110.0), size_m: (47.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                (center_m: (-72.5, -0.1, 190.0), size_m: (47.0, 1.0, 8.0), color: "sand_brown", anchorable: true, solid: true, landmark: false),
+                // ---- The river towers — six pairs, and they are where the swing anchors go
+                // ⭐ The user, 2026-08-29, in one breath with the water: *„adde andere tuerme
+                // beim wasser (das wasser ist auch VIEL zu klein)"*. Both halves landed
+                // together, because the second decides the first: a tower is a crossing over
+                // the channel, and the channel just went from 10 m to 30 m.
+                //
+                // ## Why a tower here is not the tower he rejected at the gate
+                //
+                // He threw out the four 120 m gatehouses in one sentence — *„das passt GAR
+                // nicht zu attack on titan"* — and what replaced them was not a smaller tower
+                // but the wall's own **cornice ladder**: ledges that hang out over open ground.
+                // `maps.ron` has argued the reason since the gantries: *"the bottom of a
+                // pendulum lies vertically under the ANCHOR; on a solid tower that point is
+                // inside the tower."* These towers carry the same property and nothing else —
+                // a shaft the width of the quay it stands on, and three ledges corbelled
+                // **inward, over the water**. Nothing projects outward over the street, which
+                // is also what keeps them out of the west flank wall (see the channel above).
+                //
+                // ## Every number, and where it comes from
+                //
+                //   height 35.0     `scale.ron: architecture.heights_m.church` — the ONE legal
+                //                   height between the 11.5 m house and the 120 m wall
+                //                   (`Q-036`). The eight bell towers already stand at it.
+                //   shaft 10 x 10   exactly the quay it stands on (x -95..-85 / -55..-45), so
+                //                   no part of the SHAFT is ever over the water: a shaft over
+                //                   the channel is a plumb line into the river.
+                //   rungs 12 / 23 / 35 (tops)   one rung per **11.5 m**, which is
+                //                   `scale.ron: house_large` — the roofscape's own ridge. So
+                //                   every leg of the climb is one city high, and rung 1's top
+                //                   stands 0.5 m over the roofs: a body coming off the eaves
+                //                   meets the tower at his own height.
+                //   deck 17 m wide  = 10 m of shaft + **7.0 m of corbel over the water**, and it
+                //                   corbels INWARD only — nothing projects over the street, which is
+                //                   what keeps the west towers clear of the flank wall's plinth. The
+                //                   wall's `f003_every_cornice_on_the_wall_hangs_over_open_ground`
+                //                   asks a ledge for four body widths (1.40 m); over a river the
+                //                   arc bottom is the difference between a swing and a swim, so
+                //                   this one is asked for a body LENGTH (1.80 m) and gets 7.00.
+                //
+                // ## What the crossing then IS, as arithmetic (FIND-041: bottom = H - d)
+                //
+                // The two decks of a pair face each other across the water at x = -78 and
+                // x = -67 — an **11.0 m** gap, both edges over the river (water -84.95..-60.05).
+                // A level hook is a rope of L = d, so:
+                //
+                //     rung 3 (35 m)   bottom 35 - 11 = **24.0 m**   24.6 m over the surface
+                //     rung 2 (23 m)   bottom 23 - 11 = **12.0 m**   12.6 m over the surface
+                //     rung 1 (12 m)   bottom 12 - 11 = **1.0 m**    ⛔ 1.6 m, less than a body
+                //
+                // 🔴 **AND THAT TABLE IS THE LEVEL HOOK ONLY — an adversary swept the aims the
+                // table does not cover and the honest windows are narrower** (2026-09-01, 48
+                // aim-pitch cells at z = 65, arc minimum read while the rope was still on):
+                //
+                //     rung 3   crossing works over a **27°** pitch window (−6..−32) — 2/48 wet
+                //     rung 2   a **~5°** window (−10..−14); 12/16 aims end in the water, and
+                //              the "successful" crossing lands on the FAR RUNG-1 DECK 11 m
+                //              below the one you left — delete that one deck (a one-line
+                //              control) and the same aim ends floating at −1.294
+                //     rung 1   16/16 aims in the water; at pitch −18..−30 the arc bottoms
+                //              **−3.3 to −4.0 m**, under the surface of a 3.55 m river
+                //
+                // **So rung 3 is THE crossing; rung 2 is a catch-assisted hop; rung 1 is a
+                // landing and a climb-out.** Rung 1 is not a crossing by design — 1.6 m of
+                // clearance is inside the 1.8 m a body is long, which is why `tests/world.rs`
+                // asks a crossing for a body length and rung 1 does not get one. You meet the
+                // tower at roof height, and you have to CLIMB before the river is yours.
+                // ⚠️ The pure-RON fixture (`bottom = top − gap`) checks ONE hook per pair and is
+                // conservative by ~0.6 m for exactly that hook — `docs/lessons/fixtures.md` §3:
+                // it says nothing about the other aims, and those are the numbers above. Two
+                // rungs of climb — 23 m of reel or two swings — is what the crossing costs, and
+                // misjudging it drops you in water that holds no hook
+                // (`vector::hookable::SurfaceKind::Water`) and bills the way out at
+                // `water.ron: swim.gas_cost_factor` 2.0.
+                //
+                // ## Where they stand, and it is derived from the crossings the map already had
+                //
+                // A crossing swing carries `2d` = **22 m**. The river already had eight
+                // crossings — six bridges and the two walls, whose cornice ladders run the full
+                // 700 m at 29 / 59 / 89 m and cross the channel with them. **Every gap between
+                // two of them that one crossing swing cannot span gets a pair at its midpoint**,
+                // and the two gaps a WALL bounds get none, because the wall is already the
+                // crossing there. The 160 m gap north of the last bridge takes two, at its
+                // third points.
+                //
+                //   gap                     length   verdict
+                //   -350 .. -300 (edge)      50 m    the outer wall bounds it
+                //   -300 .. -240             60 m    outer wall
+                //   -240 .. -180             60 m    -> z = -210
+                //   -180 .. -120             60 m    main wall
+                //   -120 ..  -60             60 m    main wall
+                //    -60 ..   20             80 m    -> z = -20
+                //     20 ..  110             90 m    -> z = 65
+                //    110 ..  190             80 m    -> z = 150
+                //    190 ..  350            160 m    > 2 x 22, so two -> z = 245 and z = 295
+                //
+                // Twelve towers, 48 blocks. ⚠️ UNTUNED like every footprint in this file; what
+                // is NOT untuned is the 35.0 m, which is `scale.ron` and therefore the user's.
+                // Evidence: `scripts/f-towers.txt`, `docs/images/f003-towers.png`,
+                // `tests/world.rs::f003_every_river_tower_deck_reaches_out_over_the_water_with_nothing_under_it`.
+                // the pair at z = -210
+                (center_m: (-90.0, 16.70, -210.0), size_m: (10.0, 32.60, 10.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-86.5, 11.00, -210.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-86.5, 22.00, -210.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-86.5, 34.00, -210.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-55.0, 16.70, -210.0), size_m: (10.0, 32.60, 10.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-58.5, 11.00, -210.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-58.5, 22.00, -210.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-58.5, 34.00, -210.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                // the pair at z = -20
+                (center_m: (-90.0, 16.70, -20.0), size_m: (10.0, 32.60, 10.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-86.5, 11.00, -20.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-86.5, 22.00, -20.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-86.5, 34.00, -20.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-55.0, 16.70, -20.0), size_m: (10.0, 32.60, 10.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-58.5, 11.00, -20.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-58.5, 22.00, -20.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-58.5, 34.00, -20.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                // the pair at z = 65
+                (center_m: (-90.0, 16.70, 65.0), size_m: (10.0, 32.60, 10.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-86.5, 11.00, 65.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-86.5, 22.00, 65.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-86.5, 34.00, 65.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-55.0, 16.70, 65.0), size_m: (10.0, 32.60, 10.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-58.5, 11.00, 65.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-58.5, 22.00, 65.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-58.5, 34.00, 65.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                // the pair at z = 150
+                (center_m: (-90.0, 16.70, 150.0), size_m: (10.0, 32.60, 10.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-86.5, 11.00, 150.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-86.5, 22.00, 150.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-86.5, 34.00, 150.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-55.0, 16.70, 150.0), size_m: (10.0, 32.60, 10.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-58.5, 11.00, 150.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-58.5, 22.00, 150.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-58.5, 34.00, 150.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                // the pair at z = 243
+                (center_m: (-90.0, 16.70, 243.0), size_m: (10.0, 32.60, 10.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-86.5, 11.00, 243.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-86.5, 22.00, 243.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-86.5, 34.00, 243.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-55.0, 16.70, 243.0), size_m: (10.0, 32.60, 10.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-58.5, 11.00, 243.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-58.5, 22.00, 243.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-58.5, 34.00, 243.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                // the pair at z = 297
+                (center_m: (-90.0, 16.70, 297.0), size_m: (10.0, 32.60, 10.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-86.5, 11.00, 297.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-86.5, 22.00, 297.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-86.5, 34.00, 297.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-55.0, 16.70, 297.0), size_m: (10.0, 32.60, 10.0), color: "stone_gray", anchorable: true, solid: true, landmark: true),
+                (center_m: (-58.5, 11.00, 297.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-58.5, 22.00, 297.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
+                (center_m: (-58.5, 34.00, 297.0), size_m: (17.0, 2.00, 10.0), color: "sand_brown", anchorable: true, solid: true, landmark: true),
                 // ---- Bell towers — the skyline, and the only legal way to build one ----
                 // The user, 2026-08-12: *„keine unterschiedliche höhen!"*. The residential
                 // band cannot answer that on its own: `scale.ron: architecture.heights_m`

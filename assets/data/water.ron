@@ -3,7 +3,8 @@
 // `maps.ron` still carries the heading it was written under — "The river, in a game that has
 // no water" — and it describes the channel exactly: a **dry lowered lane**, 4 m below the
 // paving, 10 m between the quays, `anchorable: false`, with the bridges as the only hook
-// targets over it. There was no surface, no colour and no rule for what happens when a body
+// targets over it. Both of those are gone now: there is water in it, and there are towers over
+// it (`maps.ron`, `scripts/f-towers.txt`). There was no surface, no colour and no rule for what happens when a body
 // falls in. This file is that rule.
 //
 // ## The three answers this file is built on (the user, 2026-08-29)
@@ -16,11 +17,13 @@
 // `vector::hookable::SurfaceKind`, the first category the `Q-078` switch turns off, and a
 // second flag here would be two spellings of one rule.
 //
-// Answer 3 is **only half done here**, and the half that is missing is not this file's to
-// give. The water can be no wider than the hole in the ground it lies in, and that hole is
-// `maps.ron: blocks` — the channel floor and the two quays, which belong to another stream
-// this round. The exact widening diff is in `docs/FINDINGS.md` FIND-216; the day it lands,
-// this file changes by two numbers.
+// Answer 3 landed on 2026-09-01, one day after the rest: the channel went from **10 m to 25 m**
+// and this file followed it in three numbers (`center_m.x` -70 -> -72.5, `size_m.x` 9.9 -> 24.9).
+// It is 25 and not the 40 `FIND-216` proposed, and the difference is two measurements, not
+// taste: the pocket's **west flank wall** puts its plinth face at **x = -97.5** and the
+// **garrison headquarters** puts the back wall of its hall at **x = -47.0**. A 40 m channel
+// reaches into both. With 2.5 m and 3.0 m of margin the corridor is x -95..-50 — 45 m, less two
+// 10 m quays, so 25 m of water. `docs/FINDINGS.md` FIND-220.
 //
 // ⚠️ Every number here is read with `deny_unknown_fields` and **no `serde(default)`**: a key
 // that goes missing crashes on load (`CLAUDE.md` rule 2). `src/data/water.rs` says what each
@@ -52,7 +55,7 @@
         // quay he has to hook.
         surface_band_m: 1.0,
         // Against `game.ron: player.run_speed_m_s` 6.0. Wading is 42 % of walking; you can
-        // cross the 10 m channel in four seconds and you cannot outrun anything in it.
+        // cross the 25 m channel in ten seconds and you cannot outrun anything in it.
         swim_speed_m_s: 2.5,
         // Water is what you push against. Reaching `swim_speed_m_s` from a standstill takes
         // 0.31 s, against the 0.1 s the legs take on stone.
@@ -70,13 +73,13 @@
     // ================================================================================
     volumes: {
         // ------------------------------------------------------------------------------
-        // Ashgate's canal. It runs the whole 700 m of the map at x = -70, through both walls.
+        // Ashgate's canal. It runs the whole 700 m of the map at x = -72.5, through both walls.
         //
         // ⚠️ THE FOUR NUMBERS IT HAS TO AGREE WITH, all out of `maps.ron: maps.ashgate.blocks`:
         //
-        //   channel floor  (-70.0, -4.1, 0.0)  (10.0, 0.2, 700.0)  -> its TOP is y = -4.00
-        //   quay west      (-80.0, -1.8, 0.0)  (10.0, 4.4, 700.0)  -> inner face x = -75.00
-        //   quay east      (-60.0, -1.8, 0.0)  (10.0, 4.4, 700.0)  -> inner face x = -65.00
+        //   channel floor  (-72.5, -4.1, 0.0)  (25.0, 0.2, 700.0)  -> its TOP is y = -4.00
+        //   quay west      (-90.0, -1.8, 0.0)  (10.0, 4.4, 700.0)  -> inner face x = -85.00
+        //   quay east      (-55.0, -1.8, 0.0)  (10.0, 4.4, 700.0)  -> inner face x = -60.00
         //   both quay tops                                          -> y = +0.40
         //
         // `world::map` turns every placed block whose top is below y = 0 into a
@@ -85,7 +88,7 @@
         // those four numbers, so widening the channel makes the RIVER go red and not just the
         // city — which is the point of pinning it.
         //
-        //   x   9.9 of the 10.0 gap: 0.05 m clear of each quay face, or the coplanar side
+        //   x   24.9 of the 25.0 gap: 0.05 m clear of each quay face, or the coplanar side
         //       walls z-fight from every angle the player swings past at.
         //   y   surface -0.60, bed **-4.15**. 1.00 m below the quay top, so the drop into the
         //       water reads as a drop — and the bed is 0.15 m UNDER the channel floor (-4.00),
@@ -103,8 +106,8 @@
         "ashgate": [
             (
                 name: "canal",
-                center_m: (-70.0, -2.375, 0.0),
-                size_m: (9.9, 3.55, 700.0),
+                center_m: (-72.5, -2.375, 0.0),
+                size_m: (24.9, 3.55, 700.0),
                 // Linear RGB. Dark, desaturated and blue-green: it has to read as *water* from
                 // 60 m up against `grass_green` (0.22, 0.35, 0.16) and `stone_gray`
                 // (0.42, 0.43, 0.40), and it has to be nothing like the three signal colours,

@@ -95,7 +95,12 @@ assert height < 141.0
 # on a 15.3 m one, on zero gas.
 # ---------------------------------------------------------------------------------------
 warp 0 40 -80
-look 60 -11             # yaw +60 = 60 degrees off -Z toward +X, so the swing plane runs
+look 60 -11             # ⚠️ yaw +60 = 60 degrees off -Z toward **-X**, not +X: `look_dir` is
+                        # (-sin yaw, sin pitch, -cos yaw) (`shared::Intent`), so a positive yaw
+                        # turns WEST. The direction label here was wrong from the day it was
+                        # written (found 2026-09-01 while aiming `scripts/f-towers.txt`, which
+                        # hooked the wrong bank of the river twice because of it). Every number
+                        # measured under it stands — only the word was wrong. The swing plane runs
 wait 0.1                # along the wall face and not into it; -11 clears the cornice lip
 mark f003-wall-stand
 assert height > 39.0     # 39.714 — airborne over the main street, 24 m short of the wall

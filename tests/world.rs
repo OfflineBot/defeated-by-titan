@@ -3743,9 +3743,13 @@ fn f003_the_canal_water_lies_inside_the_channel_and_between_its_floor_and_the_qu
     // with it, or the river stops touching its own banks.
     //
     // The four, out of `maps.ron: maps.ashgate.blocks`:
-    //   channel floor (-70, -4.1, 0) size (10, 0.2, 700) -> top    y = -4.00
-    //   quay west     (-80, -1.8, 0) size (10, 4.4, 700) -> inner  x = -75.00, top y = +0.40
-    //   quay east     (-60, -1.8, 0) size (10, 4.4, 700) -> inner  x = -65.00, top y = +0.40
+    //   channel floor (-72.5, -4.1, 0) size (25, 0.2, 700) -> top   y = -4.00
+    //   quay west     (-90, -1.8, 0)   size (10, 4.4, 700) -> inner x = -85.00, top y = +0.40
+    //   quay east     (-55, -1.8, 0)   size (10, 4.4, 700) -> inner x = -60.00, top y = +0.40
+    //
+    // ⚠️ It went red exactly once, on 2026-09-01, and for exactly the reason it was written:
+    // the channel widened 10 -> 30 m and it printed *"the west quay at x = -80 is gone — the
+    // channel moved"*. The three numbers above are the new ones.
     let d = data();
     if d.maps.current != "ashgate" {
         return; // this one is about Ashgate's canal and says so in its name
@@ -3754,19 +3758,19 @@ fn f003_the_canal_water_lies_inside_the_channel_and_between_its_floor_and_the_qu
     let quay_inner_west = map
         .blocks
         .iter()
-        .find(|b| b.center_m.0 == -80.0)
+        .find(|b| b.center_m.0 == -90.0)
         .map(|b| b.center_m.0 + b.size_m.0 * 0.5)
-        .expect("maps.ron: the west quay at x = -80 is gone — the channel moved");
+        .expect("maps.ron: the west quay at x = -90 is gone — the channel moved");
     let quay_inner_east = map
         .blocks
         .iter()
-        .find(|b| b.center_m.0 == -60.0)
+        .find(|b| b.center_m.0 == -55.0)
         .map(|b| b.center_m.0 - b.size_m.0 * 0.5)
-        .expect("maps.ron: the east quay at x = -60 is gone — the channel moved");
+        .expect("maps.ron: the east quay at x = -55 is gone — the channel moved");
     let quay_top = map
         .blocks
         .iter()
-        .find(|b| b.center_m.0 == -80.0)
+        .find(|b| b.center_m.0 == -90.0)
         .map(|b| b.center_m.1 + b.size_m.1 * 0.5)
         .expect("the west quay");
     let bed = map
@@ -4341,5 +4345,323 @@ fn f003_every_cornice_on_the_wall_hangs_over_open_ground() {
          all rungs (mass margin / strict margin): {rows:#?}",
         too_tight.len(),
         rows.len()
+    );
+}
+
+// ============================================================================================
+// 13. The river towers — `maps.ron: maps.ashgate.blocks`, the twelve towers on the quays
+//
+// The user, 2026-08-29, in one sentence with the water: *„adde andere tuerme beim wasser (das
+// wasser ist auch VIEL zu klein)"*. The towers are not decoration and these three tests are
+// why. `maps.ron` argued the deleted gantries as physics — *"the bottom of a pendulum lies
+// vertically under the ANCHOR; on a solid tower that point is inside the tower"* — and over a
+// river that argument has teeth it does not have over a street: an arc that bottoms out in the
+// water is a swim, water holds no hook (`vector::hookable::SurfaceKind::Water`), and the swim
+// is billed at `water.ron: swim.gas_cost_factor` 2.0.
+// ============================================================================================
+
+/// The blocks of the river towers, out of `maps.ron`, as `(lo, hi)` in metres.
+///
+/// ## What this selector reads, and what it deliberately does not
+///
+/// The canal and its quays run the **full 700 m** of the map and the bridges are **8 m** in z;
+/// a tower is the only thing on the canal line that is short in z **and** wide in x **and**
+/// stands above the roofscape. So: `size_m.z <= 12`, `size_m.x >= 8` (this is what rejects the
+/// 2.5 m quay trees, which are otherwise short in z and tall), footprint inside the canal
+/// corridor, and top above `scale.ron: house_large` 11.5 m.
+///
+/// ⚠️ It does **not** read the colour and it does **not** read a name: a selector that reads
+/// the same key the map was written with cannot fail when the map is wrong.
+fn ashgate_river_tower_boxes() -> Vec<(Vec3, Vec3)> {
+    let d = data();
+    let map = d.map("ashgate").expect("maps.ron: ashgate");
+    map.blocks
+        .iter()
+        .filter(|b| {
+            let (c, s) = (b.center_m, b.size_m);
+            s.2 <= 12.0
+                && s.0 >= 8.0
+                && c.0 >= -100.0
+                && c.0 <= -40.0
+                && c.1 + s.1 * 0.5 > 11.5
+        })
+        .map(|b| {
+            let c = Vec3::new(b.center_m.0, b.center_m.1, b.center_m.2);
+            let h = Vec3::new(b.size_m.0, b.size_m.1, b.size_m.2) * 0.5;
+            (c - h, c + h)
+        })
+        .collect()
+}
+
+/// The one water volume of Ashgate, as `(lo, hi)`, straight out of the built world.
+fn ashgate_canal_water(app: &mut App) -> (Vec3, Vec3) {
+    let (_, centre, half) = built_waters(app)
+        .into_iter()
+        .find(|(n, _, _)| n == "water_canal")
+        .expect("no volume called `canal` on Ashgate");
+    (centre - half, centre + half)
+}
+
+#[test]
+fn f003_every_river_tower_deck_reaches_out_over_the_water_with_nothing_under_it() {
+    // ★ **FIND-042 on a river.** A deck is worth hooking only if a plumb line from its inner
+    // edge falls through air — and here "air" has to be the *water*, not the quay: an arc that
+    // bottoms out over the quay ends on stone, and one that bottoms out 2 m inboard of the deck
+    // ends inside the shaft.
+    //
+    // ## What this fixture VARIES and what it HOLDS CONSTANT
+    //
+    // It varies over **every** tower block in the file — twelve towers, both banks, all four
+    // heights — and computes the strip rather than sampling it, so there is no grid to miss a
+    // boundary on. What it holds constant is the water, which is one box; that box is read from
+    // the **built world** and not from `water.ron`, so a `build_water` that drops a volume is
+    // a red here and not a silently smaller denominator.
+    //
+    // ⚠️ **`n = 2` on purpose.** The river has two banks and they are mirror images, so an
+    // aggregate that only ever saw one of them would be a test of a different map. The count
+    // assert below is what makes the two-sidedness visible: 6 pairs, 5 blocks each.
+    let d = data();
+    if d.maps.current != "ashgate" {
+        return;
+    }
+    let towers = ashgate_river_tower_boxes();
+    assert!(
+        !towers.is_empty(),
+        "maps.ron has no river towers at all — the user asked for them beside the water \
+         (*„adde andere tuerme beim wasser\"*) and the canal is still crossable only by bridge"
+    );
+    let mut app = built_world();
+    let (wlo, whi) = ashgate_canal_water(&mut app);
+
+    // A DECK is the thing you hook: thin (a ledge, not a shaft) and reaching further across
+    // the channel than the block below it. `LEDGE_M` is the same 6 m the wall's cornice test
+    // uses, and for the same reason — a ledge is a floor, a shaft is a wall.
+    const LEDGE_M: f32 = 6.0;
+    // DERIVED: `game.ron: player.radius_m` 0.35, so a body is 0.70 m across. The wall's
+    // cornice test asks for four radii; over water the arc bottom is the difference between a
+    // swing and a swim, so this one asks for **a body length** — `player.height_m` 1.8.
+    let need_m = d.game.player.height_m;
+
+    let mut decks = 0usize;
+    let mut over_stone: Vec<String> = Vec::new();
+    let mut too_tight: Vec<String> = Vec::new();
+    let mut rows: Vec<String> = Vec::new();
+    for (lo, hi) in &towers {
+        if hi.y - lo.y > LEDGE_M {
+            continue; // a shaft, not a deck
+        }
+        // Which bank: the deck reaches toward the channel's centre line.
+        let centre_x = (wlo.x + whi.x) * 0.5;
+        let west = (lo.x + hi.x) * 0.5 < centre_x;
+        let edge = if west { hi.x } else { lo.x };
+        decks += 1;
+        // The anchor edge has to be over the WATER, not over the quay beside it.
+        if edge <= wlo.x || edge >= whi.x {
+            over_stone.push(format!(
+                "deck y {:.2}..{:.2} z {:.1} reaches to x {edge:.2} and the water is \
+                 {:.2}..{:.2} — its arc bottoms out on the quay",
+                lo.y, hi.y, lo.z, wlo.x, whi.x
+            ));
+            continue;
+        }
+        // And nothing MASSIVE may stand under it between the shaft and that edge. The strip is
+        // measured, not sampled: the furthest any mass below this deck reaches toward the
+        // channel centre, against the deck's own edge.
+        let mut mass_edge = if west { f32::NEG_INFINITY } else { f32::INFINITY };
+        for (blo, bhi) in &towers {
+            // ⚠️ **"below" is `reaches below`, not `stops below`** — and that distinction is
+            // the whole test. A shaft runs y 0.40..33.00 and every deck but the top one is
+            // seated INTO it, so a predicate that asked for `top <= deck bottom` would find no
+            // mass under any rung, leave `mass_edge` at infinity and pass every deck in the
+            // map trivially. Measured while writing this file: it did.
+            if bhi.y - blo.y <= LEDGE_M || blo.y >= lo.y - 1e-3 {
+                continue; // another ledge, or nothing of it under this one
+            }
+            if bhi.z <= lo.z + 1e-3 || blo.z >= hi.z - 1e-3 {
+                continue; // a different tower along the river
+            }
+            // ⚠️ And it has to be the mass of THIS bank. The far bank's shaft is under no
+            // part of this deck, and taking a max over both gives a strip that spans the
+            // whole river.
+            if bhi.x <= lo.x + 1e-3 || blo.x >= hi.x - 1e-3 {
+                continue;
+            }
+            if west {
+                mass_edge = mass_edge.max(bhi.x);
+            } else {
+                mass_edge = mass_edge.min(blo.x);
+            }
+        }
+        let strip = (edge - mass_edge).abs();
+        rows.push(format!("z {:.0} y {:.2} edge {edge:.2} strip {strip:.2} m", lo.z, hi.y));
+        if strip < need_m {
+            too_tight.push(format!(
+                "the deck at z {:.0}, y {:.2}..{:.2} has {strip:.2} m of free water under its \
+                 edge and a body is {need_m:.2} m long",
+                lo.z, lo.y, hi.y
+            ));
+        }
+    }
+    assert!(
+        decks >= 12,
+        "only {decks} river-tower decks in the whole map — a tower with fewer than two rungs \
+         is a perch, not a ladder, and one bank of towers is not a crossing"
+    );
+    assert!(over_stone.is_empty(), "{over_stone:#?}\nall decks: {rows:#?}");
+    assert!(too_tight.is_empty(), "{too_tight:#?}\nall decks: {rows:#?}");
+}
+
+#[test]
+fn f003_a_swing_between_two_river_towers_bottoms_out_over_the_water_and_not_in_it() {
+    // ★ **The number the towers exist for.** FIND-041: a level hook swings on a rope `L = d`
+    // and its bottom lies at `H - d`. Across the river the two facing decks are the two
+    // anchors, so the whole crossing reduces to one inequality:
+    //
+    //     deck_top - (gap between the two inner edges) > water surface + one body
+    //
+    // If it fails the player ends the swing in the river, and the river is the one surface in
+    // this game that answers no hook at all (`vector::hookable::SurfaceKind::Water`) — so a
+    // crossing that fails this test is a crossing with no way back up.
+    //
+    // ⚠️ This is the GEOMETRY. `scripts/f-towers.txt` is the same claim measured in the running
+    // simulation, and the two are deliberately not the same instrument.
+    let d = data();
+    if d.maps.current != "ashgate" {
+        return;
+    }
+    let towers = ashgate_river_tower_boxes();
+    let mut app = built_world();
+    let (wlo, whi) = ashgate_canal_water(&mut app);
+    let surface = whi.y;
+    let centre_x = (wlo.x + whi.x) * 0.5;
+    const LEDGE_M: f32 = 6.0;
+
+    // Pair the decks up by (z of the tower, top of the deck): one west, one east.
+    let mut pairs: std::collections::BTreeMap<(i32, i32), (Option<f32>, Option<f32>)> =
+        Default::default();
+    for (lo, hi) in &towers {
+        if hi.y - lo.y > LEDGE_M {
+            continue;
+        }
+        let key = (((lo.z + hi.z) * 0.5).round() as i32, (hi.y * 100.0).round() as i32);
+        let slot = pairs.entry(key).or_default();
+        if (lo.x + hi.x) * 0.5 < centre_x {
+            slot.0 = Some(hi.x);
+        } else {
+            slot.1 = Some(lo.x);
+        }
+    }
+    // ⚠️ **Not every rung is a crossing, and the map says so.** The bottom rung stands at the
+    // roofscape's own height so that a body coming off the eaves can reach it — and
+    // `bottom = H - d` then puts its arc in the river. That is the design (`maps.ron`: *"rung 1
+    // is a landing, not a crossing"*), so what this test asks of a PAIR is that its **highest**
+    // rung crosses; every rung's arithmetic is printed either way, because a ladder whose top
+    // rung is the only crossing is a fact the next reader has to be able to see.
+    //
+    // ⚠️ **What this test does NOT catch, measured 2026-09-01 by breaking it.** Dropping one
+    // pair's top rung from 35 m to 26 m leaves it **green**: the bottom moves 19.0 -> 10.0 and
+    // 10.0 is still a body clear of the water. That is the invariant working, not the test
+    // failing — but a reader who thinks this pins the rung HEIGHT will be wrong. It pins the
+    // CROSSING. The two breaks that do fire it are: take one bank's rung away (the `lonely`
+    // arm) and put every rung of a pair at rung 1's height (12 - 16 = -4, in the river).
+    // Whoever wants the heights pinned wants `f003_every_river_tower_deck_...` above, which
+    // measures the corbel, and `scripts/f-towers.txt`, which measures the swing.
+    let need_m = surface + d.game.player.height_m;
+    let mut best: std::collections::BTreeMap<i32, f32> = Default::default();
+    let mut rows: Vec<String> = Vec::new();
+    let mut lonely: Vec<String> = Vec::new();
+    for ((z, top_cm), (west, east)) in &pairs {
+        let top = *top_cm as f32 / 100.0;
+        let (Some(west), Some(east)) = (west, east) else {
+            lonely.push(format!(
+                "the deck at z {z}, top {top:.2}, has no partner on the other bank — one bank \
+                 of decks is a balcony, not a crossing"
+            ));
+            continue;
+        };
+        let (gap, bottom) = (east - west, top - (east - west));
+        rows.push(format!(
+            "z {z}: top {top:.2}, gap {gap:.2}, arc bottom {bottom:.2} ({})",
+            if bottom >= need_m { "crosses" } else { "LANDING ONLY — the arc is in the river" }
+        ));
+        let slot = best.entry(*z).or_insert(f32::NEG_INFINITY);
+        *slot = slot.max(bottom);
+    }
+    let in_the_water: Vec<String> = best
+        .iter()
+        .filter(|(_, b)| **b < need_m)
+        .map(|(z, b)| {
+            format!(
+                "z {z}: the BEST rung of this pair bottoms out at {b:.2} m, the water is at \
+                 {surface:.2} and a body is {:.2} m — every swing across this pair ends in a \
+                 river that holds no hook",
+                d.game.player.height_m
+            )
+        })
+        .collect();
+    assert!(
+        best.len() >= 6,
+        "only {} rope crossings on a 700 m river — the six bridges are still the only way over \
+         it",
+        best.len()
+    );
+    assert!(lonely.is_empty(), "{lonely:#?}");
+    assert!(in_the_water.is_empty(), "{in_the_water:#?}\nall rungs: {rows:#?}");
+}
+
+#[test]
+fn f003_no_grid_house_is_generated_over_the_open_channel() {
+    // ★ **The guard the widening needs, and the argument it replaces.** `maps.ron` argued at
+    // its quays that *"a 12 x 11 m row house fits into a 16 m gap and would hang in the air
+    // over the channel. It does not fit into 10."* — an argument that holds only while the
+    // channel is narrower than a house, and the user asked for the opposite
+    // (*„das wasser ist auch VIEL zu klein"*).
+    //
+    // The real rule is the one `CellRole::Hole` already states for the ground: **a house may
+    // not stand where there is no ground.** The channel floor is a placed block whose top is at
+    // y = -4.00, and `plan_blocks` takes its veto over a house box that runs from y = 0 upward
+    // — so the floor slab has never vetoed anything and only the quays, 0.4 m proud, ever did.
+    //
+    // The fixture varies over EVERY generated house in the district and counts the ones whose
+    // **footprint** lies over the channel floor. `0 of N` is only a zero if N is the houses:
+    // the count is asserted below.
+    let d = data();
+    if d.maps.current != "ashgate" {
+        return;
+    }
+    let map = d.current_map().expect("current map");
+    let floor = map
+        .blocks
+        .iter()
+        .find(|b| b.center_m.1 + b.size_m.1 * 0.5 < 0.0)
+        .expect("maps.ron: no block whose top is below the ground — where is the channel floor?");
+    let (fx0, fx1) = (floor.center_m.0 - floor.size_m.0 * 0.5, floor.center_m.0 + floor.size_m.0 * 0.5);
+    let (fz0, fz1) = (floor.center_m.2 - floor.size_m.2 * 0.5, floor.center_m.2 + floor.size_m.2 * 0.5);
+
+    let plan = plan();
+    let mut houses = 0usize;
+    let mut floating: Vec<String> = Vec::new();
+    for b in &plan {
+        if !b.name.starts_with("house_") {
+            continue;
+        }
+        houses += 1;
+        let h = b.size_m * 0.5;
+        let (x0, x1) = (b.center_m.x - h.x, b.center_m.x + h.x);
+        let (z0, z1) = (b.center_m.z - h.z, b.center_m.z + h.z);
+        if x1 > fx0 && x0 < fx1 && z1 > fz0 && z0 < fz1 {
+            floating.push(format!(
+                "{} stands at x {x0:.1}..{x1:.1} z {z0:.1}..{z1:.1}, over the channel floor \
+                 ({fx0:.1}..{fx1:.1})",
+                b.name
+            ));
+        }
+    }
+    assert!(houses > 400, "only {houses} houses in the plan — the denominator is wrong");
+    assert!(
+        floating.is_empty(),
+        "{} of {houses} generated houses hang in the air over the river:\n{:#?}",
+        floating.len(),
+        &floating[..floating.len().min(8)]
     );
 }

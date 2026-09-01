@@ -8,9 +8,9 @@
 # PINS: **the four numbers of the Ashgate channel**, out of `maps.ron: maps.ashgate.blocks`,
 # and the surface out of `water.ron: volumes.ashgate`. Move any of them and this file is wrong:
 #
-#   channel floor  (-70.0, -4.1, 0.0)  (10.0, 0.2, 700.0)  -> top    y = -4.00
-#   quay west      (-80.0, -1.8, 0.0)  (10.0, 4.4, 700.0)  -> inner  x = -75.00, top y = +0.40
-#   quay east      (-60.0, -1.8, 0.0)  (10.0, 4.4, 700.0)  -> inner  x = -65.00, top y = +0.40
+#   channel floor  (-72.5, -4.1, 0.0)  (25.0, 0.2, 700.0)  -> top    y = -4.00
+#   quay west      (-90.0, -1.8, 0.0)  (10.0, 4.4, 700.0)  -> inner  x = -85.00, top y = +0.40
+#   quay east      (-55.0, -1.8, 0.0)  (10.0, 4.4, 700.0)  -> inner  x = -60.00, top y = +0.40
 #   water surface                                          -> y = -0.60
 #   bridges at z = -240 -180 -60 20 110 190 — this run drops at z = 60, 40 m clear of two.
 #
@@ -24,9 +24,11 @@
 #   *„Nein — Wasser haelt keinen Haken."* NOT here: it is a unit rule
 #                                         (`src/vector/hookable.rs`), because water carries no
 #                                         collider and therefore no ray can reach it to ask.
-#   *„das wasser ist auch VIEL zu klein"* half answered: the water fills the channel it has,
-#                                         and the channel is 10 m wide until `maps.ron` says
-#                                         otherwise (`docs/FINDINGS.md` FIND-216).
+#   *„das wasser ist auch VIEL zu klein"* ANSWERED 2026-09-01: the channel went from 10 m to
+#                                         **25 m**, which is where the west flank wall and the
+#                                         garrison HQ leave off (`docs/FINDINGS.md` FIND-220).
+#                                         ACT 3a still bites because the east quay face moved
+#                                         with it, from x = -65 to x = -60.
 #
 # ## ⚠️ ACT 1's `assert speed` is what makes ACT 2 mean anything
 #
@@ -61,7 +63,7 @@ assert height > -4.1
 # ACT 3 — the gear works from inside the river. Two halves, and they are two different
 # claims.
 #
-# 3a  A HOOK FIRED FROM THE WATER STILL BITES. The east quay face is 5 m away and spans
+# 3a  A HOOK FIRED FROM THE WATER STILL BITES. The east quay face is 10 m away and spans
 #     y -4.00 .. +0.40; `look -90 0` is +X (`shared::Intent::look_dir`: yaw 0 is -Z), so a
 #     level ray from a floating eye at y = 0.27 meets stone. This is the assert that would
 #     have caught the `Sensor` version of the water: avian clamps `tmin` to 0 for a ray whose
