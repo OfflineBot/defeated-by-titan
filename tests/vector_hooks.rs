@@ -14,11 +14,22 @@
 //!    player is `point_m: Some((0.0, 1.5999689, -10.0))`, `anchorable: true`, **`body: None`**,
 //!    and exactly 0 entities in the world carry a `BodyId`. A hook cannot hang on a carrier
 //!    that has no stable id, so in the real game every shot ends as `NoAnchor` today.
-//!    Writing the component from outside between two `update()` calls would not survive: `aim`
-//!    runs in `SimulationSystems::World`, that is *before* `SimulationSystems::Intent`. So the
-//!    injector is registered `.after(aim)` inside the same set — it stands in for the finished
+//!    Writing the component from outside between two `update()` calls would not survive, so the
+//!    injector is a system in `SimulationSystems::World` — the stage before
+//!    `SimulationSystems::Intent`, where the hooks read. It stands in for the finished
 //!    `F-002` + `T-036a` and delivers exactly what the `AimPoint` interface promises: a point,
 //!    a carrier, and whether it holds.
+//!
+//!    🔴 **It carries no `.after(aim)`, and that is load-bearing, not tidying.** `aim` used to
+//!    sit in `World` too, so ordering after it was the only way to be the last writer before
+//!    `Intent`. `FIND-217`/`B-029` moved `aim` to `SimulationSystems::PostStep`, and the
+//!    six stages are `.chain()`ed (`src/lib.rs`) — so `World -> ... -> PostStep -> World`
+//!    closed a **dependency cycle** in `FixedUpdate`. Bevy answers a cycle by enumerating
+//!    every simple cycle in the component and formatting all of them into one `String`:
+//!    2 290 028 cycles here, a single `realloc` of **4.63 GB**, and on 2026-09-01 an
+//!    OOM kill that took the user's tmux session with it (`B-030`, `FIND-218`).
+//!    With `aim` last in the tick, `World` at the start of the next tick already **is** the
+//!    last writer before `Intent`. The order needs no edge; the edge only needed a cycle.
 //! 2. **The flight-time test moves the number in `GameData`.** A test that only measures
 //!    against the file's own value stays green when somebody hard-codes exactly that value in
 //!    Rust. Tripling the speed at run time and measuring again is what makes it red.
@@ -33,6 +44,8 @@
 //! The picture and the script that belong to `F-001`: `scripts/f-001-hooks.txt` and
 //! `docs/images/f-001-hooks.png`.
 
+use std::fmt::Write as _;
+
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
@@ -46,7 +59,7 @@ use defeated_by_titan::shared::{
 use defeated_by_titan::shared::{LookOverride, PlayerSettings, Velocity};
 use defeated_by_titan::data::VectorTuning;
 use defeated_by_titan::vector::aim::{
-    aim, deviation_rad, look_basis, pick_best, probe_dirs, required_margin,
+    deviation_rad, look_basis, pick_best, probe_dirs, required_margin,
     score_candidate, AimCandidate, ScoreContext,
 };
 
@@ -95,13 +108,82 @@ fn app() -> App {
     let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
     app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
     app.init_resource::<HookLog>();
-    app.add_systems(
-        FixedUpdate,
-        force_aim.in_set(SimulationSystems::World).after(aim),
-    );
+    // No `.after(aim)` — see the module header, `B-030`. `aim` runs in `PostStep`.
+    app.add_systems(FixedUpdate, force_aim.in_set(SimulationSystems::World));
     app.add_systems(Last, collect_messages);
+    schedules_build_or_explain(&mut app);
     app.update(); // Startup: the city and the local player come into being
     app
+}
+
+/// At most this many cycles are named, and at most this many nodes of each.
+const MAX_CYCLES_SHOWN: usize = 3;
+const MAX_NODES_PER_CYCLE: usize = 12;
+
+/// **The guard that stands between a schedule cycle and the user's desktop** — `B-030`.
+///
+/// Builds every schedule in the app **before** the first `update()` and, if one does not
+/// build, panics with a message of a **fixed maximum size**.
+///
+/// Why it has to exist at all: `Schedule::run` answers a build error by calling
+/// `ScheduleBuildError::to_string`, and for a dependency cycle that is
+/// `dependency_cycle_to_string` (`bevy_ecs-0.19.0/src/schedule/error.rs:174-206`), which
+/// writes **one block per simple cycle** into a single `String`. The number of simple cycles
+/// in a strongly connected component is not linear in anything you can look at — the one
+/// measured on 2026-09-01 was **2 290 028** cycles over ~10 nodes, the `String` doubled its
+/// way to a **4 966 055 936-byte** `realloc`, and the kernel killed the test binary at
+/// 25 GB anon-rss. **The cycle is a one-line mistake; the 25 GB is bevy's report about it.**
+///
+/// So this reads the same error and prints at most [`MAX_CYCLES_SHOWN`] cycles of at most
+/// [`MAX_NODES_PER_CYCLE`] nodes: bounded by a constant, whatever the graph does. It is not a
+/// smaller constant on an unbounded thing — the unbounded thing never runs.
+///
+/// It is cheap in the green case: `initialize` is idempotent and `app.update()` would call it
+/// one line later anyway.
+fn schedules_build_or_explain(app: &mut App) {
+    use bevy::ecs::schedule::graph::DiGraphToposortError;
+    use bevy::ecs::schedule::{ScheduleBuildError, Schedules};
+
+    let labels: Vec<_> =
+        app.world().resource::<Schedules>().iter().map(|(_, s)| s.label()).collect();
+    for label in labels {
+        app.world_mut().schedule_scope(label, |world, schedule| {
+            let Err(error) = schedule.initialize(world) else {
+                return;
+            };
+            let graph = schedule.graph();
+            let mut lines = format!("schedule {label:?} does not build");
+            match &error {
+                ScheduleBuildError::DependencySort(DiGraphToposortError::Cycle(cycles)) => {
+                    let _ = write!(lines, " — {} before/after cycle(s):", cycles.len());
+                    for cycle in cycles.iter().take(MAX_CYCLES_SHOWN) {
+                        let names: Vec<_> = cycle
+                            .iter()
+                            .take(MAX_NODES_PER_CYCLE)
+                            .map(|n| graph.get_node_name(n))
+                            .collect();
+                        let _ = write!(lines, "\n  len {}: {names:?}", cycle.len());
+                    }
+                }
+                ScheduleBuildError::FlatDependencySort(DiGraphToposortError::Cycle(cycles)) => {
+                    let _ = write!(lines, " — {} flat before/after cycle(s):", cycles.len());
+                    for cycle in cycles.iter().take(MAX_CYCLES_SHOWN) {
+                        let names: Vec<_> = cycle
+                            .iter()
+                            .take(MAX_NODES_PER_CYCLE)
+                            .map(|n| graph.get_node_name(&(*n).into()))
+                            .collect();
+                        let _ = write!(lines, "\n  len {}: {names:?}", cycle.len());
+                    }
+                }
+                // Every other build error formats a bounded message on its own.
+                other => {
+                    let _ = write!(lines, " — {other}");
+                }
+            }
+            panic!("{lines}\n(truncated on purpose — see `schedules_build_or_explain`, B-030)");
+        });
+    }
 }
 
 fn ticks(app: &mut App, n: u64) {

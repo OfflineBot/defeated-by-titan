@@ -205,3 +205,244 @@ loss would delete the only instrument that can see it.
 
 ---
 
+
+## B-029 — the aim marker drifts off the crosshair while you fly, up to 420 px, and it is a schedule order
+
+**FIXED 2026-09-01** · `F-026` · `docs/FINDINGS.md` FIND-217
+
+**Symptom (the user, 2026-08-29, second time):** *„es bewegt sich immernoch also die target
+seile"*. The two arm markers sit on the crosshair standing still and slide off it while moving —
+worse the closer he is to what he is aiming at.
+
+**Repro, and it returns a number rather than an impression:**
+
+```bash
+DBT_AIMTRACE=1 ./target/debug/defeated_by_titan --offscreen --screenshot /tmp/x.png \
+    --script scripts/f026-turn.txt --ticks 620 2>&1 | grep AIMTRACE
+```
+
+Phase D (`t = 252..435`, boosting), Left arm, `dglyph`: **median 14.00 px, p95 48.74, max 419.98**,
+with a 392.92 px jump between two consecutive frames. Standing, panning and flicking: 0.00 px in
+every phase — **the still fixtures could not see it.**
+
+**Cause:** `vector::aim` ran in `SimulationSystems::World`, before `Integrate`, so the ray started
+at the eye from the *previous* step while the HUD projected its answer through the camera at the
+*end* of the step. One step of eye travel, expressed as an **angle** (`v·dt/d`), so it diverges as
+the distance to the target shrinks: at t = 432 the target was a wall 0.35 m ahead at 29.4 m/s.
+
+**Fix:** `src/vector/mod.rs:88` — `aim` moved to `SimulationSystems::PostStep`. After: median
+0.00, p95 0.00, max **0.01 px**. `vector::hook` reads `ArmAim` from a `Transform` no system has
+touched in between, so the rope is unchanged; what it gains is that it now fires at the point the
+frame in front of the player had actually drawn.
+
+**Red tests, both seen red and both red again on the one-line revert:**
+`tests/hud.rs::f026_the_marker_stays_on_the_cursor_while_he_is_flying` ·
+`tests/vector_aiming.rs::f002_the_ray_starts_at_the_eye_the_frame_is_drawn_from`
+**Pictures:** `docs/images/f026-marker-in-flight-before.png` → `docs/images/f026-marker-in-flight.png`
+
+**Related:** `FIND-212` (the 16 px stand-down, the other half of the same complaint) · `FIND-217`
+
+---
+
+## B-028 — a rope fired at the quay from the river lifts you exactly to the surface and then drops you back
+
+**2026-09-01 · `[offlinebot]` · open · found while building `F-water`, and it is NOT a water bug**
+
+### Repro
+
+```bash
+cargo build
+cat > /tmp/b028.txt <<'TXT'
+warp -70 20 60
+wait 3.5
+look -90 45
+hook left 8.0
+wait 0.4
+key ctrl 6.0
+wait 1.0
+mark B028 t+1.0
+assert height > 99
+wait 0.2
+mark B028 t+1.2
+assert height > 99
+wait 0.2
+mark B028 t+1.4
+assert height > 99
+wait 0.6
+mark B028 t+2.0
+assert height > 99
+wait 2.0
+mark B028 t+4.0
+assert height > 99
+end
+TXT
+./target/debug/defeated_by_titan --headless --script /tmp/b028.txt --ticks 700 2>&1 \
+  | grep -E 'MARK|measured' | head -12
+```
+
+### Measured, `[offlinebot]`, 2026-09-01
+
+```
+t+1.0   y = -0.841     climbing
+t+1.2   y = -0.600     <- exactly the water surface, and the peak
+t+1.4   y = -1.190     falling back
+t+2.0   y = -1.269
+t+4.0   y = -1.294     settled at the float equilibrium again
+```
+
+The rope is anchored the whole time (`assert rope == 1` holds), `Ctrl` is held for six seconds,
+and `Velocity` reads **28.079 m/s** throughout — `game.ron: vector.reel_speed_m_s` to the digit.
+So the winch is running at full speed and the body advances **0.7 m in 1.2 s** and then loses it
+again.
+
+### What it is, as far as it has been measured
+
+The anchor is on the east quay's inner face or on the city behind it, i.e. **+X of the player**,
+and the quay wall stands between the two. `locomotion::rope_winch` re-writes the full
+`reel_speed_m_s` along the rope on every tick; the wall eats the horizontal component, the body
+grinds up the face, and at the lip it stops and falls back. The 28 m/s in the readback is the
+velocity the winch **asked for**, not the one the body got — the same shape as `FIND-103`: the
+instrument agrees with the code and both are wrong about the world.
+
+### What it is NOT
+
+Not the swim rule. `water.ron: swim.drag_per_s` slows the climb but does not stop it, and the
+same reel out of the water works: the boost route in `scripts/f-water.txt` ACT 3b takes the body
+from `-1.291` to `+9.814` in 1.2 s on gas. The bug is a rope-against-a-wall behaviour that the
+channel merely makes easy to hit — an anchor 5 m away with a 4.4 m wall in front of it is
+exactly what the river hands you.
+
+### Why it is filed and not fixed
+
+Foreign territory: it is `player::locomotion::rope_winch` / `vector::rope`, which this round does
+not own. **The evidence script does not go through it** — `scripts/f-water.txt` proves the hook
+fires from the water (ACT 3a) and leaves on gas (ACT 3b), so the acceptance is met without
+standing on the broken path. `docs/FINDINGS.md` FIND-216 §2 has the numbers.
+
+---
+
+## B-030 — a schedule cycle in a test allocates 4.63 GB and OOM-kills the machine
+
+**FIXED 2026-09-01** · `docs/FINDINGS.md` FIND-218 · fallout of `B-029`/`FIND-217`
+
+**Symptom (the user's machine, 2026-09-01 09:18):** a test binary is OOM-killed and takes his
+tmux session with it.
+
+```
+Out of memory: Killed process 274850 (vector_hooks-eb)
+  total-vm: 81 085 156 kB   anon-rss: 25 289 420 kB
+  task_memcg=/user.slice/.../tmux-spawn-45512ce8-....scope
+```
+
+**Repro (30 s, and it dies alone under the cap):**
+
+```bash
+nice -n 15 ionice -c 3 cargo build --test vector_hooks -j 3        # uncapped: mold needs 8 GB VM
+( ulimit -v 6291456; ./target/debug/deps/vector_hooks-* \
+    f001_a_hook_whose_carrier_disappears_releases --exact ) 2>&1 | grep 'memory allocation'
+# memory allocation of 4966055936 bytes failed
+```
+
+**Cause — one line, and it is not in `src/`.** `FIND-217` moved `vector::aim::aim` from
+`SimulationSystems::World` to `SimulationSystems::PostStep` (working tree, uncommitted).
+`tests/vector_hooks.rs:100` and `tests/vector_rope.rs:97` still registered their `AimPoint`
+injector as `force_aim.in_set(SimulationSystems::World).after(aim)`. The six stages are
+`.chain()`ed in `src/lib.rs`, so `World → Intent → Drive → Integrate → PostStep → World`
+**closes a dependency cycle in `FixedUpdate`**.
+
+**Why one line costs 25 GB:** `Schedule::run` answers a build error by calling
+`ScheduleBuildError::to_string`, and for a cycle that is `dependency_cycle_to_string`
+(`bevy_ecs-0.19.0/src/schedule/error.rs:174-206`), which writes **one block per simple cycle**
+into a single `String`. Measured here: **2 290 028 cycles**, a `String` doubling its way to a
+**4 966 055 936-byte** `realloc` (= 37 · 2²⁷ — a `Vec` doubling, not a product of anything),
+× 8 test threads in one binary = the 25 GB. The failing test was not special: **every** test in
+`tests/vector_hooks.rs` builds the same app.
+
+**Fix:** drop the `.after(aim)` in both files. With `aim` last in the tick, `World` at the start
+of the next tick already **is** the last writer before `Intent` — the edge bought nothing.
+
+**Guard (two, because the shape will come back):**
+- `tests/vector_hooks.rs::schedules_build_or_explain` builds every schedule before the first
+  `update()` and prints at most 3 cycles of at most 12 nodes. Bounded by a constant.
+- `tools/test.sh` runs the suite under `ulimit -v 6291456` per process — compile first
+  **uncapped** (mold reserves 8 GB of VM and dies under the cap with a link error that reads
+  like a memory error), then run capped.
+
+**Red-then-green control:** re-adding `.after(aim)` on the fixed tree fails in 11.4 s with
+`schedule FixedUpdate does not build — 2290028 flat before/after cycle(s)`, peak RSS **529 MB**,
+exit 101. Removing it again: `31 passed`, 7.2 s.
+
+---
+
+## B-031 — a swing whose plane is normal to the wall dumps 37.5 m/s in ONE tick against the gate hood
+
+**2026-09-01 · `[offlinebot]` · not a regression — the old map read the same shape · open**
+
+`assets/data/maps.ron` argues the wall's cornices as physics: *"the bottom of the pendulum lies
+vertically under the ANCHOR… two columns and a crossbeam put the anchor over open ground."*
+`scripts/f003-wall.txt` ACT 2 flies that at **yaw 60**, along the wall, and it is excellent
+(15.318 m arc bottom at 42.282 m/s, back up to 26.110 m, nothing struck). At **yaw 0** — the
+obvious thing a player does, straight at the gate he is flying through — the far half of the arc
+ends in the hood over the passage.
+
+### Repro
+
+```
+warp 0 40 -80        # ACT 2's stand, 24 m short of the inner gate, 40 m up
+look 0 -11           # yaw 0 = straight at the wall, instead of ACT 2's yaw 60
+wait 0.1
+hook right 2.0
+wait 0.95            # then `mark` + `assert speed > 99999` + `wait 0.0166` x 40, one per tick
+```
+
+Tick by tick, and it really is one tick — the marks above are `1/60 s` apart:
+
+```
+h=21.910  v=36.368      still falling into the arc
+h=21.316  v=36.946
+h=20.788  v=37.456      <- the last tick before the hood
+h=20.532  v= 0.026      <- 37.456 -> 0.026 m/s, 99.93 % of the speed, in ONE step
+h=20.533  v= 0.011 ... 0.001 for the next 29 ticks
+h=20.515  v= 1.066      the 2 s hold ends, the rope lets go, and he falls to the street
+```
+
+No sound, no message, no HUD state change — the run reads exactly like a rope that went slack.
+
+### Why it is on the list even though it is old
+
+Measured on `HEAD`'s map at the same stand and yaw: **38.407 → 0.346 m/s** at `y = 19.403`. So
+the wall did not cause it and the deleted gantries did not prevent it. What changed is that the
+wall's own header now *claims* the property in prose, and the claim is only true in one plane.
+`tests/world.rs::f003_every_cornice_on_the_wall_hangs_over_open_ground` measures the strip
+**perpendicular** to the wall (3.50 m under the ladder, 5.50 m under the gate cornice) — a
+necessary condition for the pendulum's bottom, and no condition at all on the far half of the
+arc, which curves back into the face whenever the swing plane is normal to it.
+
+### What would close it — his call, not mine (`docs/QUESTIONS.md`)
+
+A body that loses 37.4 m/s into stone should say so: the collision needs a **verdict** the way a
+cut does, and the same instant is where a wall-run or a kick-off would go. Until then the honest
+statement is that the wall rewards the sideways swing and punishes the straight one silently,
+and `f003-wall.txt`'s header says so in words with no assert behind it.
+
+---
+
+## B-032 — `net_a_peer_on_a_real_socket_drives_his_own_body` is flaky under parallel load
+
+**2026-09-01 · [offlinebot] · seen once in a full-suite run, then green 3 of 3 alone**
+
+`tools/test.sh` reported `tests/multiplayer.rs:424` failed inside the full suite. Re-run on its own
+with the same binary and the same 6 GB cap: **ok, three times in a row.**
+
+The name says why: it **binds a real socket**. A test that takes a real port cannot be run beside
+an unknown number of other test binaries — `cargo test` runs binaries in parallel and each one
+spawns its own threads, so two runs can collide on a port or on the scheduler.
+
+**No repro under load yet**, so this is filed rather than fixed, and it is **not** a blocker: the
+thing it guards (a peer on a real socket moving his own body) is proven every time it runs alone.
+
+⚠️ **Do not "fix" it by deleting the socket.** The whole point of that test is that it is not a
+loopback fake — `docs/multiplayer.md` rule 4 is the reason the socket is real. The honest fixes are
+a port chosen from the OS (`:0`) rather than a fixed one, or `#[serial]`-style exclusion.
+
+**Related:** `B-012` (the other unexplained flake, also under load) · `F-175` · `docs/multiplayer.md`

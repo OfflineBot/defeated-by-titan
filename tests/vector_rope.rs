@@ -43,7 +43,6 @@ use defeated_by_titan::shared::{
     LocalPlayer, PlayerId, ReleaseReason, RopeLength, Side, SimulationSystems, SpatialIndex,
     TitanHit, TitanId, WarpPlayer,
 };
-use defeated_by_titan::vector::aim::aim;
 
 // ---------------------------------------------------------------------------------------
 // The harness
@@ -94,7 +93,14 @@ fn app() -> App {
         RopeForceModel::Pendulum;
     app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
     app.init_resource::<Releases>();
-    app.add_systems(FixedUpdate, force_aim.in_set(SimulationSystems::World).after(aim));
+    // 🔴 **No `.after(aim)`.** `aim` moved to `SimulationSystems::PostStep` (`FIND-217`,
+    // `B-029`); the six stages are `.chain()`ed, so ordering a `World` system after a
+    // `PostStep` one closes a dependency cycle in `FixedUpdate` — and bevy answers a cycle by
+    // formatting **every simple cycle in the component** into one `String`, which on
+    // 2026-09-01 was a 4.63 GB allocation and an OOM kill (`B-030`, `FIND-218`).
+    // `World` is the stage before `Intent`, so it already is the last writer before the hooks
+    // read. The edge bought nothing and cost the machine.
+    app.add_systems(FixedUpdate, force_aim.in_set(SimulationSystems::World));
     // `PostStep`, so that a release written in `Intent` of the same tick is already in.
     app.add_systems(FixedUpdate, collect_releases.in_set(SimulationSystems::PostStep));
     app.update(); // Startup: the city and the local player come into being
