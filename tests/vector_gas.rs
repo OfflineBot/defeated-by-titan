@@ -35,7 +35,7 @@ use defeated_by_titan::data::{GameData, GasConsumer};
 use defeated_by_titan::player::spawn_player;
 use defeated_by_titan::shared::{
     BodyId, Buttons, Cli, Gas, GasGrant, Hook, HookState, IdCounter, Intent, LocalPlayer,
-    MovementState, PlayerId, RefuelRequest, Side,
+    MovementState, PlayerId, RefuelRequest, RopeLength, Side,
 };
 
 /// Builds the **real** app, headless, one simulation step per `update()`.
@@ -174,6 +174,38 @@ fn anchor_left(app: &mut App, e: Entity) {
     hook.arms[Side::Left.index()].state =
         HookState::Anchored { body: BodyId(1), local_m: Vec3::ZERO };
     hook.arms[Side::Left.index()].tip_m = hand_m + Vec3::new(0.0, 10.0, -20.0);
+}
+
+/// Hangs **both** hooks on two anchors `separation_m` apart and publishes the two rope lengths.
+///
+/// ⚠️ **Set again before every tick, like [`anchor_left`], and for a second reason on top of
+/// that one:** `player::rope::sync_rope_length` is `RopeLength`'s only writer and it runs in
+/// `SimulationSystems::Integrate` every tick. There is no `Rope` entity in this app — no world,
+/// no anchor markers — so it publishes `RopeLength::default()`, i.e. `0.0` on both sides, and a
+/// value set once would be gone before the second tick. It is written **before** `app.update()`
+/// because `gas_budget` sits in `Intent`, one stage ahead of the writer, which is the same one
+/// tick of lag the `Hook` read there already has (`src/vector/gas.rs`, header).
+///
+/// The geometry is `docs/BUGS.md` B-014's: nearly collinear, the hand between the two anchors,
+/// and **asymmetric** — 11.9 m to the left anchor, the rest to the right one.
+fn anchor_both(app: &mut App, e: Entity, separation_m: f32, lengths_m: [f32; 2]) {
+    let hand_m = {
+        let world = app.world();
+        let transform = world.get::<Transform>(e).expect("a player has a transform");
+        let eye_m = world.resource::<GameData>().game.player.eye_height_m;
+        transform.translation + Vec3::Y * eye_m
+    };
+    {
+        let mut hook = app.world_mut().get_mut::<Hook>(e).expect("every player carries two hooks");
+        for (i, side) in [Side::Left, Side::Right].into_iter().enumerate() {
+            hook.arms[side.index()].state =
+                HookState::Anchored { body: BodyId(1 + i as u32), local_m: Vec3::ZERO };
+        }
+        hook.arms[Side::Left.index()].tip_m = hand_m + Vec3::new(-11.9, 0.0, 0.0);
+        hook.arms[Side::Right.index()].tip_m = hand_m + Vec3::new(separation_m - 11.9, 0.0, 0.0);
+    }
+    let mut rope = app.world_mut().get_mut::<RopeLength>(e).expect("every player carries one");
+    rope.lengths_m = lengths_m;
 }
 
 /// A second player, without the `LocalPlayer` marker — the way a team mate arrives later.
@@ -1310,4 +1342,69 @@ fn f005_a_reel_on_a_rope_that_has_room_left_is_still_billed() {
         (spent - want).abs() < 0.2,
         "a second of `Ctrl` on a 22 m rope has to cost gas_reel_per_s ({want}): spent {spent}"
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// `B-014` — the reel is billed for rope the pair rule refuses to give
+// ---------------------------------------------------------------------------------------
+
+/// 🔴 **`B-014`, in the real app, with the real key.** Ten seconds of held `Ctrl` in a two-rope
+/// stand-off cost **59.766 gas for 0.4985 m of rope — 119.9 gas/m**, against 0.74 gas/m in the
+/// same table with the anchors together, and the 0.4985 m was already taken at tick 180: *seven
+/// of those ten seconds moved nothing at all.*
+///
+/// The old predicate asked about the **distance** to the anchors, which in a stand-off stays
+/// true forever; `player::rope::hold_the_pair` had already refused the step and had no way to
+/// say so. Since `Q-058` `Ctrl` acts only through `DistanceJoint::limits.max`, so a refused step
+/// is literally no effect — and this is a movement game with a gas economy, so a player holding
+/// `Ctrl` in a geometry the rule refuses drains his tank for nothing and cannot see why.
+///
+/// **What this fixture varies and the control holds constant is the SEPARATION of the anchors,
+/// and only that** — same key, same duration, same two rope lengths, same tank, same player.
+/// `12 + 48 − 57.709 − 3 = −0.709` refuses; `12 + 48 − 2.459 − 3 = +54.5` does not.
+#[test]
+fn f018_a_reel_the_pair_rule_refuses_costs_nothing_and_one_it_allows_costs_the_file() {
+    let mut app = app();
+    let e = me(&mut app);
+    let d = data(&app);
+    let per_s = d.game.vector.gas_reel_per_s;
+
+    // ── the defect: two anchors 57.709 m apart on 12 m and 48 m of rope ────────────────
+    set_tank(&mut app, e, measurement_tank(&d));
+    let before = gas(&app, e).current;
+    hold(&mut app, REEL_KEY);
+    for _ in 0..60 {
+        anchor_both(&mut app, e, 57.709, [12.0, 48.0]);
+        app.update();
+    }
+    let refused = before - gas(&app, e).current;
+    assert!(
+        refused.abs() < 1.0e-3,
+        "a second of Ctrl in a refused stand-off cost {refused:.4} gas for rope nobody got"
+    );
+    assert!(
+        !grant(&app, e).reel_in,
+        "a step hold_the_pair refuses is no effect at all, so it may not be granted"
+    );
+
+    // ── the control: the SAME second, the same two ropes, the anchors 2.459 m apart ────
+    release(&mut app, REEL_KEY);
+    app.update();
+    set_tank(&mut app, e, measurement_tank(&d));
+    let before = gas(&app, e).current;
+    hold(&mut app, REEL_KEY);
+    for _ in 0..60 {
+        anchor_both(&mut app, e, 2.459, [12.0, 48.0]);
+        app.update();
+    }
+    let allowed = before - gas(&app, e).current;
+    assert!(
+        grant(&app, e).reel_in,
+        "with 54.5 m of pair budget the reel really takes rope and has to be billed"
+    );
+    assert!(
+        (allowed - per_s).abs() < 0.05,
+        "a second of a reel that works costs gas_reel_per_s = {per_s}, measured {allowed:.4}"
+    );
+    release(&mut app, REEL_KEY);
 }

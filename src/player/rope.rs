@@ -126,6 +126,7 @@ use avian3d::prelude::{
 use bevy::prelude::*;
 
 use crate::data::{GameData, RopeForceModel};
+use crate::shared::rope::pair_budget_m;
 use crate::shared::{
     BodyGone, BodyId, HitStop, Hook, HookAnchored, HookReleased, PlayerId, ReelSpeed, RopeLength,
     Side, WarpPlayer,
@@ -703,10 +704,17 @@ fn hold_the_pair(wanted: &mut [Wanted], i: usize, j: usize, min_rope_m: f32) {
     // the one `min_rope_m` of play that keeps the solution a LENS and not a single point — see
     // the tightrope section above, and `docs/QUESTIONS.md` Q-079 for why that term is this
     // number. **This line is the rollback point for both decisions.**
-    // `.max(0.0)` is for the pair that is **already** at or past the boundary — a rope that has
-    // just been re-attached, or a floor that has moved: then nothing at all may be taken, which
-    // is the one direction that cannot make it worse.
-    let allowed_m = (wanted[i].cur_m + wanted[j].cur_m - separation_m - min_rope_m).max(0.0);
+    // The `.max(0.0)` inside it is for the pair that is **already** at or past the boundary — a
+    // rope that has just been re-attached, or a floor that has moved: then nothing at all may be
+    // taken, which is the one direction that cannot make it worse.
+    //
+    // 🔴 **The expression moved to [`crate::shared::rope::pair_budget_m`] on 2026-09-01 and did
+    // not change** (`docs/BUGS.md` B-014). `vector::gas` has to know whether this budget is zero
+    // before it bills `Ctrl` for a step this function is about to refuse, and `vector -> player`
+    // is not on the allow list — so the rule is one function with two callers instead of two
+    // copies that drift. **This is still its only writer.**
+    let allowed_m =
+        pair_budget_m(wanted[i].cur_m, wanted[j].cur_m, separation_m, min_rope_m);
     // `>` and not `>=`, so a NaN on either side leaves both arms alone. It is also false when
     // nothing is being asked for, which is the common case and costs one comparison.
     if !(asked_m > allowed_m) {

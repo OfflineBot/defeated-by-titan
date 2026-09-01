@@ -201,6 +201,40 @@ fn is_valid(z: &RopeConstraint) -> bool {
     z.anchor_m.is_finite() && z.length_m.is_finite() && z.length_m > 0.0
 }
 
+/// 🔴 **How much rope a PAIR of arms may still give up — the triangle inequality, once.**
+///
+/// Two maxima `L_l` and `L_r` on anchors `d_a` apart have a common solution iff
+/// **`L_l + L_r >= d_a`**: two balls intersect exactly when the sum of their radii reaches the
+/// distance between their centres. Below that no point in space honours both, avian keeps one
+/// arm and abandons the other, and the player sits on one anchor at 0.000 m/s with the other
+/// rope 50.167 m past its own maximum (`docs/BUGS.md` B-013, `FIND-191`).
+///
+/// The `- min_rope_m` term is the slack that keeps the feasible set a **lens** and not a single
+/// tangent point — the measurement that bought it, and the `ASSUMPTION` that this is the right
+/// key for it, stay where they were: `player::rope::hold_the_pair` and `docs/QUESTIONS.md`
+/// Q-079. **That function's `allowed_m` is this function, and the rollback point is still there.**
+///
+/// ## Why it lives in `shared/` and not next to its rule
+///
+/// Because **two domains have to answer the same question and only one of them may decide it**
+/// (`docs/BUGS.md` B-014). `player::rope::hold_the_pair` decides how much rope the reel gets;
+/// `vector::gas::reel_has_effect` has to know whether that is *zero* before it bills `Ctrl` for
+/// it, and `vector -> player` is not on the allow list of `docs/architecture.md`. One
+/// implementation with two callers is the shape `vector::boost::dodge_direction` already has
+/// for the same reason — two copies of one rule drift, and the drift is invisible because both
+/// halves are ours.
+///
+/// **`0.0` means the reel is refused entirely**, not "a small step": `hold_the_pair` scales
+/// both arms by `allowed_m / asked_m`, so a budget of zero keeps both lengths exactly where
+/// they are.
+///
+/// Non-finite in, `0.0` out — the one direction that cannot make a stand-off worse.
+#[must_use]
+pub fn pair_budget_m(len_a_m: f32, len_b_m: f32, separation_m: f32, min_rope_m: f32) -> f32 {
+    let budget_m = len_a_m + len_b_m - separation_m - min_rope_m;
+    if budget_m.is_finite() { budget_m.max(0.0) } else { 0.0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

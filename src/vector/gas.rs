@@ -80,9 +80,10 @@
 use bevy::prelude::*;
 
 use crate::data::{GameData, GasConsumer};
+use crate::shared::rope::pair_budget_m;
 use crate::shared::{
     Buttons, DodgeCharges, Gas, GasGrant, Hook, Intent, MovementState, PlayerId, RefuelRequest,
-    Submerged, Tick,
+    RopeLength, Submerged, Tick,
 };
 
 /// Puts gas back — **the only thing in the game that ever raises a tank** (Q-033).
@@ -168,6 +169,68 @@ pub fn steer_has_effect(
     })
 }
 
+/// 🔴 **Does `Ctrl` take any rope at all?** — `B-014`, and it is the same rule as
+/// [`steer_has_effect`] one verb further along: **the cost follows the effect, not the button.**
+///
+/// Since `Q-058` `Ctrl` acts through **one** thing, `DistanceJoint::limits.max`, and
+/// `player::rope::shorten_ropes` is its only writer. So there are exactly two ways for a held
+/// `Ctrl` to be worth nothing, and this function is both of them:
+///
+/// 1. **Every arm is already at the floor** (`Q-050`). Unchanged, and it is per arm: one arm at
+///    `min_rope_m` and one out at 40 m still pays, because the far one really is winding in.
+/// 2. **The pair rule refuses the step** (`B-014`, new). Two maxima have a common solution only
+///    while `L_l + L_r >= d_a`, and `player::rope::hold_the_pair` gives the whole step back the
+///    moment that budget reaches zero — [`pair_budget_m`], the one implementation of that rule.
+///    **A refused step is literally no effect**, and the old predicate could not see it: it
+///    asked about the DISTANCE to the anchors, which in a stand-off stays true forever.
+///
+/// **Measured before the fix**, 600 ticks of held `Ctrl` at `gas_reel_per_s: 6.0`
+/// (`docs/BUGS.md` B-014): anchors 57.709 m apart, ropes 12 / 48 m — **0.4985 m of rope for
+/// 59.766 gas = 119.9 gas/m**, against 0.74 gas/m in the same table with the anchors together.
+/// The 0.4985 m was taken by tick 180; **seven further seconds moved nothing at all.**
+///
+/// ## What it is NOT, and this is the part that had to be got right
+///
+/// It does **not** ask whether the reel *took* rope last tick, which is the obvious reading of
+/// B-014's own sentence and is a **deadlock**: `vector::reel` writes `ReelSpeed` off this very
+/// grant, so an unbilled reel takes no rope, and a reel that took no rope would never be billed
+/// again. The question has to be about the **geometry**, which is true or false whether or not
+/// the reel ever ran. That is what [`pair_budget_m`] is.
+///
+/// ## The arguments, and why they are two parallel slices
+///
+/// `to_anchors_m` is one `tip − hand` per **anchored** arm, exactly as [`steer_has_effect`]
+/// takes it; `lengths_m` is that same arm's enforced `limits.max`
+/// ([`RopeLength::lengths_m`](crate::shared::RopeLength)), in the **same order**. ⚠️ They are
+/// filled in one loop at the call site for exactly that reason: `RopeLength` is indexed by
+/// `Side`, `to_anchors_m` is compacted by anchored-ness, and with only the right arm on a hook
+/// the two indices name different arms.
+///
+/// The separation of the anchors needs no third argument — `(tip_a − h) − (tip_b − h)` is
+/// `tip_a − tip_b`, and the hand cancels exactly.
+///
+/// A length of `0.0` is [`RopeLength`](crate::shared::RopeLength)'s own "no constraint" — the
+/// rope was attached this tick and has not been published yet. Then the pair cannot be judged
+/// and only rule 1 applies, which is the direction that keeps billing rather than the one that
+/// grants free rope.
+#[must_use]
+pub fn reel_has_effect(to_anchors_m: &[Vec3], lengths_m: &[f32], min_rope_m: f32) -> bool {
+    // Rule 1, `Q-050`, per arm and unchanged.
+    if !to_anchors_m.iter().any(|to_anchor| to_anchor.length() > min_rope_m) {
+        return false;
+    }
+    // Rule 2, `B-014`. **The `n = 2` case is the only one it can fire in** — a single rope has
+    // no pair to be infeasible with, and that is not a special case to remember here: the guard
+    // is the pattern match itself.
+    if let ([a, b], [len_a_m, len_b_m]) = (to_anchors_m, lengths_m)
+        && *len_a_m > 0.0
+        && *len_b_m > 0.0
+    {
+        return pair_budget_m(*len_a_m, *len_b_m, (*a - *b).length(), min_rope_m) > 0.0;
+    }
+    true
+}
+
 /// **Diagnostics only, and off unless `DBT_GAS_LEDGER=1` stands in the environment.**
 ///
 /// The tank is one number, so a player who says *„gas ist VIEL zu schnell weg"* cannot be
@@ -227,6 +290,11 @@ pub fn gas_budget(
         // `Submerged` must still be billed, and `None` means dry. Every real body gets one at
         // spawn (`player::spawn_player_with_id`).
         Option<&Submerged>,
+        // `Option` for the third time and for the same reason as the two above: a fixture
+        // player that carries no `RopeLength` must still be billed, and `None` reads as the
+        // component's own "no constraint" (`B-014`). Every real body gets one at spawn, and
+        // `player::rope::sync_rope_length` is its only writer.
+        Option<&RopeLength>,
     )>,
 ) {
     let vector = &data.game.vector;
@@ -256,16 +324,26 @@ pub fn gas_budget(
     // so it must never be multiplied by `dt` and must never grow a `_per_s` in its name.
     let flip_cost = vector.gas_flip;
 
-    for (intent, hook, mut gas, mut grant, transform, charges, state, submerged) in &mut players {
+    for (intent, hook, mut gas, mut grant, transform, charges, state, submerged, rope_length) in
+        &mut players
+    {
         // **The hand and the two rope directions, once**, for the three verbs below that all
         // need them. Hoisted above `wants_reel_in` on 2026-08-25 — it used to sit further down,
         // next to `wants_steer`, and the reel could not see it.
         let hand_m = transform.translation + Vec3::Y * data.game.player.eye_height_m;
         let mut to_anchors_m = [Vec3::ZERO; 2];
+        // The same arm's enforced rope length, **filled in the same loop and therefore in the
+        // same order** (`B-014`). `RopeLength` is indexed by `Side`; `to_anchors_m` is compacted
+        // by anchored-ness, so with only the right arm on a hook `lengths_m[0]` read off the
+        // component would be the LEFT arm's. Two arrays written in one pass cannot drift apart.
+        // `None` (a fixture with no `RopeLength`) reads as `0.0` = "no constraint", which is the
+        // component's own contract for it — see [`reel_has_effect`].
+        let mut lengths_m = [0.0f32; 2];
         let mut anchored = 0;
-        for arm in &hook.arms {
+        for (side, arm) in hook.arms.iter().enumerate() {
             if arm.state.is_anchored() {
                 to_anchors_m[anchored] = arm.tip_m - hand_m;
+                lengths_m[anchored] = rope_length.map_or(0.0, |r| r.lengths_m[side]);
                 anchored += 1;
             }
         }
@@ -279,10 +357,18 @@ pub fn gas_budget(
         // `gas_reel_per_s` — the same shape as `FIND-139`'s steer, one verb further along
         // (`Q-050`). The distance is the arm's own, so **one arm at the floor and one out at
         // 40 m still pays**, which is right: the far one really is winding in.
+        // 🔴 **`B-014` (2026-09-01): and `anchored_count() > 0` was not enough, and neither was
+        // the DISTANCE.** The old line asked whether an arm was further from its anchor than
+        // `min_rope_m`, which in a two-rope stand-off stays true forever while
+        // `player::rope::hold_the_pair` refuses every step — 59.766 gas for 0.4985 m of rope,
+        // and the last seven of those ten seconds moved nothing at all. Both rules now live in
+        // one predicate, and the pair half is the pair rule's OWN function.
         let wants_reel_in = intent.pressed(Buttons::REEL_IN)
-            && to_anchors_m[..anchored].iter().any(|to_anchor| {
-                to_anchor.length() > vector.min_rope_m
-            });
+            && reel_has_effect(
+                &to_anchors_m[..anchored],
+                &lengths_m[..anchored],
+                vector.min_rope_m,
+            );
         // The same shape as the line above it, and for the same reason: **the cost follows the
         // effect, not the button.** A double-tap with no movement key held has no direction to
         // throw the player in (`boost::dodge_direction` answers `None`), so `vector::boost`
@@ -701,6 +787,127 @@ mod tests {
     /// The fourth arm exists and it debits. Without this the `Steer` entry in `gas_priority`
     /// would be a consumer that is named and never served — which is exactly the state
     /// `FIND-082` describes and this file was left un-compiling to prevent.
+    // -----------------------------------------------------------------------------------
+    // `B-014` — `Ctrl` and the rope the pair rule refuses to give
+    // -----------------------------------------------------------------------------------
+    //
+    // **What `reel_has_effect` reads:** `|to_anchor|` per anchored arm · the enforced length of
+    // that same arm · `|tip_a − tip_b|` (the anchor separation) · `vector.min_rope_m`.
+    // **What these fixtures vary:** every one of them, and the two arms are given DIFFERENT
+    // values wherever they can be — `docs/lessons/fixtures.md` §3, because an aggregate over one
+    // arm is a test of a different function and this game has two hooks.
+    // **What they hold constant:** `min_rope_m = 3.0`, `assets/data/game.ron`'s own value; the
+    // file's number has `tests/data.rs`.
+
+    /// The separation and the two lengths of the measurement in `docs/BUGS.md` B-014.
+    const B014_SEPARATION_M: f32 = 57.709;
+    const MIN_ROPE_M: f32 = 3.0;
+
+    /// Two arms `separation_m` apart, nearly collinear with the hand between them — the shape a
+    /// player really hangs in when two far anchors hold him (*„Beide Seile bleiben, du haengst
+    /// fest"*). Deliberately **asymmetric**: the hand is not in the middle.
+    fn stand_off(separation_m: f32) -> [Vec3; 2] {
+        [Vec3::new(-11.9, 0.0, 0.0), Vec3::new(separation_m - 11.9, 0.0, 0.0)]
+    }
+
+    #[test]
+    fn f018_two_ropes_the_pair_rule_refuses_are_not_billed_for_the_reel() {
+        // 🔴 THE `n = 2` CASE, AND THE TWO ARMS DISAGREE — 12 m against 48 m of rope on anchors
+        // 57.709 m apart, which is the geometry `docs/BUGS.md` B-014 measured in the game:
+        // **0.4985 m of rope for 59.766 gas = 119.9 gas/m**, and the 0.4985 m was taken by tick
+        // 180, so seven of the ten seconds moved nothing at all.
+        //
+        // `12 + 48 − 57.709 − 3 = −0.709`, so `pair_budget_m` is zero, so `hold_the_pair` scales
+        // both arms by `0 / asked` and gives the whole step back. A refused step is literally no
+        // effect: since `Q-058` `Ctrl` acts only through `limits.max`.
+        let arms = stand_off(B014_SEPARATION_M);
+        assert!(
+            !reel_has_effect(&arms, &[12.0, 48.0], MIN_ROPE_M),
+            "the pair rule refuses every step at 12 + 48 < 57.709 + 3, so Ctrl buys nothing"
+        );
+
+        // **Control 1 — move the LENGTHS and nothing else.** Two more metres of rope on the
+        // short arm and the pair has a solution again: `14 + 48 − 57.709 − 3 = +1.291`.
+        assert!(
+            reel_has_effect(&arms, &[14.0, 48.0], MIN_ROPE_M),
+            "with 1.291 m of budget the reel really takes rope and really costs gas"
+        );
+
+        // **Control 2 — move the SEPARATION and nothing else.** B-014's own control row: the
+        // same two ropes with the anchors 2.459 m apart billed 0.74 gas/m, and that must stay
+        // billed. This is the half of the rule `Q-050` already had right.
+        assert!(
+            reel_has_effect(&stand_off(2.459), &[12.0, 48.0], MIN_ROPE_M),
+            "anchors 2.459 m apart are B-014's own control: the reel works and is paid for"
+        );
+    }
+
+    #[test]
+    fn f018_the_pair_budget_is_sampled_on_the_boundary_itself() {
+        // `docs/lessons/fixtures.md` §5 — sample the boundary, not a comfortable distance from
+        // it. The budget is exactly zero at `separation = L_a + L_b − min_rope_m` = 60 − 3 = 57,
+        // and `pair_budget_m` clamps at zero, so `> 0.0` is the whole test of the edge.
+        let lengths = [12.0, 48.0];
+        assert!(
+            !reel_has_effect(&stand_off(57.0), &lengths, MIN_ROPE_M),
+            "a budget of exactly 0.0 is a refused step, not a small one"
+        );
+        assert!(
+            reel_has_effect(&stand_off(57.0 - 0.001), &lengths, MIN_ROPE_M),
+            "one millimetre inside the boundary the reel still moves the rope"
+        );
+        assert!(
+            !reel_has_effect(&stand_off(57.0 + 0.001), &lengths, MIN_ROPE_M),
+            "one millimetre outside it the reel does not"
+        );
+    }
+
+    #[test]
+    fn f018_one_rope_is_never_refused_by_a_rule_about_two() {
+        // The non-regression that matters: `hold_the_pair` cannot fire at `n = 1` (there is no
+        // partner), so neither may this. A single arm 58 m out on a 12 m rope — every number
+        // that would refuse the pair above — still bills, because the far arm really is winding
+        // in. `Q-050`'s floor is the only thing that may refuse one arm.
+        assert!(
+            reel_has_effect(&[Vec3::new(0.0, 0.0, -58.0)], &[12.0], MIN_ROPE_M),
+            "one rope has no pair to be infeasible with"
+        );
+        assert!(
+            !reel_has_effect(&[Vec3::new(0.0, 0.0, -3.0)], &[3.0], MIN_ROPE_M),
+            "Q-050: an arm at the floor moves nobody and pays nothing"
+        );
+        // And the `Q-050` rule stays PER ARM at `n = 2`: one arm at the floor, one out at 40 m,
+        // on anchors close enough that the pair has room — the far one really is winding in.
+        //
+        // ⚠️ **The two anchors are on the SAME side, and the first draft of this line had them
+        // on opposite sides at ±3 and ±40** — 43 m apart on 3 + 40 m of rope, which is the
+        // tangent case exactly, so the rule refused it and this assert went red on the day it
+        // was written. It was the fixture that was wrong, not the rule (`docs/lessons/fixtures.md`:
+        // the fixture is the half nobody attacks). Same side: separation 37, budget
+        // `3 + 40 − 37 − 3 = 3` m, and the reel really has somewhere to go.
+        assert!(
+            reel_has_effect(
+                &[Vec3::new(0.0, 0.0, -3.0), Vec3::new(0.0, 0.0, -40.0)],
+                &[3.0, 40.0],
+                MIN_ROPE_M
+            ),
+            "one arm at the floor does not stop the other arm being billed"
+        );
+    }
+
+    #[test]
+    fn f018_a_rope_that_has_no_published_length_yet_keeps_being_billed() {
+        // `RopeLength`'s own contract: `0.0` means **no constraint**, which here means "attached
+        // this tick, `sync_rope_length` has not run yet". The pair cannot be judged then, and the
+        // safe direction is the one that keeps BILLING — granting free rope on a missing value
+        // would be a hole a player could stand in.
+        let arms = stand_off(B014_SEPARATION_M);
+        assert!(reel_has_effect(&arms, &[0.0, 48.0], MIN_ROPE_M));
+        assert!(reel_has_effect(&arms, &[12.0, 0.0], MIN_ROPE_M));
+        // Nothing anchored at all is not a reel — the caller's slice is empty.
+        assert!(!reel_has_effect(&[], &[], MIN_ROPE_M));
+    }
+
     #[test]
     fn f006_the_rope_steer_is_billed_and_is_not_free() {
         let mut gas = Gas::full(100.0);

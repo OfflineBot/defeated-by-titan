@@ -17,6 +17,11 @@
 # up. So a `mark` on the same script tick as a `hook` prints `t = T-1` where the shot leaves at
 # `T`. Every ledger below subtracts that one.
 
+# PINS: the STAND HEIGHTS and the anchors (y = 12 in ACT 3/4, the ruin face at y = 28.8). Every
+# speed and height bracket below is derived from those; gravity moving re-derives the brackets,
+# not the geometry. ACT 4's bracket is additionally pinned to the SWING, not to the wall it ends
+# in — see the block above `assert speed > 8.0`.
+
 wait 1.5                # world, camera, meshes and the render pipelines come up (90 ticks)
 
 # ── ACT 1 · the ledger: press -> anchored, on a rope a player really fires ────────────────
@@ -88,26 +93,39 @@ look 90 0
 key W 3.0
 wait 3.0
 mark f005-swing-end
-# 🔴 RED ON PURPOSE SINCE 2026-08-29 — 1 of 5, reads 1.691, and it is NOT a bracket to re-aim.
-# `gravity_m_s2` -20 -> -32 made the arc deeper, and the deeper arc found something real. Two
-# probes on the pinned binary, both with `rope` reading 1.000 on every sample (nothing let go):
+# 🔴 RED ON PURPOSE — 1 of 5, reads 1.691 — AND SINCE 2026-09-01 THE CAUSE IS NAMED.
+# It is **not** an energy loss in the rope and it is not `F-004`'s subject. **The player flies
+# into the wall.** `docs/BUGS.md` B-021 filed this as "a taut rope dumps 23.7 m/s"; that filing is
+# refuted and merged into **B-031** — a silent wall collision — by five measurements on one run
+# (`docs/FINDINGS.md` FIND-221). The stand raised to y = 20 so the arc clears the street:
 #
-#   at the staged y=12, speed every 0.25 s from the swing start:
-#     15.6  22.4  28.0  30.0   10.0  10.2   9.5   8.2   6.1   3.7   1.0   3.7   8.6
-#                        ^ h=0.050: HE IS ON THE GROUND, and 20 m/s vanishes into it
+#   tick  p=(x, y, z)                 |v|      v·r̂     |v_t|   contact
+#   474   (68.638,  6.520, -97.202)  33.074   0.0219  33.074   -
+#   475   (68.503,  6.512, -97.680)   7.898  -0.0721   7.898   n=1     <- one tick, 25.18 m/s
+#   ...   z stays -97.680 for the next 70 samples, y climbs again
 #
-#   at y=20, where the arc never touches anything (lowest h = 6.622):
-#     15.6  22.4  28.0  31.7    8.1   8.5   8.3   7.5   6.2   4.3   2.2   0.5   4.0
-#                        ^ 31.745 -> 8.092 in 0.25 s, WITH NO COLLISION
+#   1 the loss is TANGENTIAL: 33.074 -> 7.898 across the rope while the radial part is 0.0219.
+#     A `DistanceJoint` applies its impulse ALONG the rope. It cannot do this, at all.
+#   2 avian reports a contact on the player on exactly that tick and on every tick after it.
+#   3 `z` is pinned at -97.680. `maps.ron`: "z = +350 .. -97.5 the district" — the main wall.
+#   4 `rope_drive`'s look gate is 0.0000 for the whole act, so the drive contributes nothing;
+#     the 10.000 m/s^2 in the trace is `air_thrust`, i.e. plain W.
+#   5 ONE arm is anchored, so `hold_the_pair` never runs. Both suspects B-021 named — the
+#     `DistanceJoint` under `Drive` (Q-058) and the two-rope rule (B-013) — are not in the path.
 #
-# ⚠️ THE SECOND ROW IS THE FINDING. Raising the stand removes the ground contact and does NOT
-# restore the swing: 23.7 m/s disappears at the moment the rope goes taut, with 6.6 m of air
-# under the player. Whatever is left afterwards is a real but small pendulum (T ~ 3.2 s, so
-# `wait 3.0` samples it at the top of its arc, which is why the number is 1.691 and not 8.5).
-# Re-timing to the same PHASE — 3.0 * sqrt(20/32) = 2.372 s — reads ~5.5 m/s and still fails,
-# because the amplitude after the taut event is smaller, not just shifted. There is no wait that
-# makes this line true: the post-taut peak anywhere in the swing is 8.535 m/s.
-# So the bracket stays where it is and the energy dump is filed — `docs/BUGS.md` **B-021**. (It said B-018 for an hour on 2026-08-29: two agents in one round claimed the same free id and only one write survived, so this pointer named the terrace-step bug instead. An id is claimed by writing the entry, not by planning to.)
+# ⚠️ **AND THIS IS WHY B-021's OWN CONTROLS COULD NOT SEE IT.** They raised the stand to
+# y = 16 / 20 / 24 and read 2.212 / 2.212 / 2.629 m/s — three samples of the one axis that cannot
+# move a VERTICAL wall face. `docs/lessons/fixtures.md` §4: a sweep's size is not its coverage;
+# ask what it holds constant. The 6.6 m of air is real and it is under the wrong direction.
+#
+# ⚠️ **The bracket still stays where it is, and now for a reason that survives.** ACT 4's arc is
+# a 36 m pendulum whose far half ends in the wall — B-031's shape exactly, and B-031's own control
+# is the pair that proves it: along the wall at yaw 60, 42.282 m/s at the arc bottom and back up
+# to 26.110 m; into the gate hood at yaw 0, 37.456 -> 0.026 m/s in one tick. Re-aiming the LOOK
+# does turn this line green (`look 180 0`: 5 asserts held) and it is the wrong fix — 180 points
+# along the rope, so the gate stops being 0 and ACT 4 quietly becomes ACT 3. What closes this act
+# is B-031's answer: a body that loses 25 m/s into stone has to say so.
+
 assert speed > 8.0
 # **And the other end, same A/B:** 13.334 m/s at 0.0 against 13.431 m/s at 0.7 — **+0.7 %**.
 # The relief is identically zero at 90° off the rope (tests/player.rs::
