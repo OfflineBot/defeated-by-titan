@@ -53,6 +53,22 @@ pub enum ScriptCommand {
     /// mouse buttons became the blades. The verb kept its name because a dozen scripts say it
     /// and it still says what it means; only the button underneath moved. A script that was
     /// not repointed on that day swung a sword where it meant to fire a rope, silently.
+    ///
+    /// ## What a duration means under `HookFire::Toggle` (the 2026-09-01 default)
+    ///
+    /// The driver holds the REAL key for the whole duration, and `net::local::HookLatch` is
+    /// what reads it — so the corpus keeps its meaning without a special case:
+    /// - a duration **over** `net::local::HOOK_TAP_MAX_TICKS` (0.3 s) is a hold: anchored
+    ///   while down, **released on key-up**, exactly as before 2026-09-01. Every release-and-
+    ///   refire chain in the corpus (`f025-chain` at 0.52 s and up) is this case.
+    /// - a duration **under** it is a tap: the rope fires and STAYS after the key is up
+    ///   (anchor-and-stay). Since §5E-c (2026-09-01) a SECOND tap on the ANCHORED arm is the
+    ///   RE-FIRE — its press releases the old rope, its key-up fires fresh at the current
+    ///   aim — and the pure release on an anchored arm is a duration over the boundary. The
+    ///   arm's own miss/loss still clears the latch. `scripts/f172-hook-toggle.txt` is the
+    ///   evidence run for all four cases.
+    /// A script that wants the old semantics for a tap-length press writes
+    /// `settings hook_fire 0` first.
     Hook { right: bool, duration_s: f32 },
     /// `slash left|right <seconds>` — hold a real mouse button.
     ///
@@ -100,6 +116,11 @@ pub enum Setting {
     /// `assist_strength` — how much better a candidate has to be than the point you are
     /// really aiming at, 0..100 %. 0 % never snaps (FREI), 100 % needs no margin (SNAP).
     AssistStrength,
+    /// `hook_fire` — `0` is Hold, `1` is Toggle (the 2026-09-01 default). It qualifies under
+    /// this enum's own rule: the release semantics of a rope IS something a script can
+    /// measure (`assert rope` after the key came back up), and it has no other route out of
+    /// a script — the settings screen is unreachable headless (`FIND-189`).
+    HookFire,
 }
 
 impl Setting {
@@ -108,6 +129,7 @@ impl Setting {
         match self {
             Setting::AssistCatch => "assist_catch",
             Setting::AssistStrength => "assist_strength",
+            Setting::HookFire => "hook_fire",
         }
     }
 
@@ -117,6 +139,15 @@ impl Setting {
         match self {
             Setting::AssistCatch => s.assist_catch_pct = value,
             Setting::AssistStrength => s.assist_strength_pct = value,
+            // 0 is Hold, 1 is Toggle — the parse refuses anything else, so the `!= 0.0`
+            // can never quietly reinterpret a typo.
+            Setting::HookFire => {
+                s.hook_fire = if value == 0.0 {
+                    crate::shared::settings::HookFire::Hold
+                } else {
+                    crate::shared::settings::HookFire::Toggle
+                };
+            }
         }
     }
 }
@@ -375,10 +406,11 @@ fn parse_line(line: &str) -> Result<ScriptCommand, String> {
             let key = match *t.get(1).ok_or("setting key is missing")? {
                 "assist_catch" => Setting::AssistCatch,
                 "assist_strength" => Setting::AssistStrength,
+                "hook_fire" => Setting::HookFire,
                 other => {
                     return Err(format!(
                         "{other:?} is not a setting a script may move — known: \
-                         assist_catch, assist_strength"
+                         assist_catch, assist_strength, hook_fire"
                     ));
                 }
             };
@@ -386,7 +418,11 @@ fn parse_line(line: &str) -> Result<ScriptCommand, String> {
             // ⚠️ **Refused, not clamped.** A line that asked for 150 % and silently got 100 %
             // would leave a run measuring something other than what it says — the same failure
             // the whole error list above exists to prevent.
-            if !(0.0..=100.0).contains(&value) {
+            if key == Setting::HookFire {
+                if value != 0.0 && value != 1.0 {
+                    return Err(format!("hook_fire is 0 (hold) or 1 (toggle), not {value}"));
+                }
+            } else if !(0.0..=100.0).contains(&value) {
                 return Err(format!(
                     "{} is a percentage and {value} is outside 0..100",
                     key.key()
@@ -697,6 +733,12 @@ assert speed > 25
             assist_catch_pct: 0.0,
             assist_strength_pct: 0.0,
             speed_fov_pct: 100.0,
+            hook_fire: crate::shared::settings::HookFire::Toggle,
+            binds: crate::shared::settings::KeyBinds::DEFAULT,
+            crosshair_size_pct: 100.0,
+            crosshair_colour: 0,
+            page: crate::shared::settings::SettingsPage::Main,
+            rebinding: None,
         }
     }
 

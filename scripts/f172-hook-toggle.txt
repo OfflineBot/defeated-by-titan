@@ -1,0 +1,68 @@
+# f172-hook-toggle — the rope trigger is a TOGGLE by default (user, 2026-09-01: „mach dass q
+# und e toggle sind und nicht hold"), and since §5E-c a tap on a LATCHED arm is a RE-FIRE
+# (user, 2026-09-01: „und später nochmal e drücke soll das seil weg "neu" raus gehen und
+# toggeln!"): its press releases the old rope, its short key-up fires fresh at the current
+# aim. The PURE release is the long press — the rope goes at the press edge and a key-up past
+# the boundary adds nothing.
+#
+#   cargo run -q -- --headless --script scripts/f172-hook-toggle.txt --ticks 700
+#
+# PINS: the tap/hold boundary — `net::local::HOOK_TAP_MAX_TICKS` (18 ticks = 0.3 s at 60 Hz).
+# PINS: the 0.1 s tap (6 ticks, UNDER the boundary — it latches, and on a latched arm it
+# PINS: RE-FIRES) and the 1.0 s hold (60 ticks, OVER it — on a latched arm it is the pure
+# PINS: release; on a fresh rope its key-up still releases, which is what keeps every older
+# PINS: script's `hook <side> <seconds>` meaning what it always meant).
+#
+# ⚠️ ACT 2 went RED against the pre-§5E-c binary — `assert rope == 1 — measured 0.000` —
+# because the old second tap was a plain toggle-off. That red run is this file's evidence
+# that the re-fire is really new (`docs/FINDINGS.md` FIND-227).
+#
+# The tick numbers of the release -> re-fire handoff are in the log, not in an assert:
+#   grep -E 'let go: Released|fired again during the retract|anchored on body' — the release
+# lands on the re-tap's press tick, the fresh flight on its key-up tick (<= 6 ticks later
+# for the 0.1 s tap), and the two anchor lines carry two different coordinates.
+#
+# The stance is `scripts/q078-fling.txt`'s pavement anchor: 12 m over the street, looking
+# straight down — an anchor that has never missed.
+
+warp 168.19 12.0 -50.12
+look 0 -90
+wait 0.2
+
+# ── ACT 1 · a tap fires and the rope STAYS after the key is long up ─────────────────────
+hook left 0.1
+wait 1.0
+mark f172-tap-anchored
+assert rope == 1
+
+# ── ACT 2 · a tap on the LATCHED arm re-fires: old rope away, new rope out, one tap ─────
+look 35 -55
+wait 0.2
+hook left 0.1
+wait 0.5
+mark f172-retap-refired
+assert rope == 1
+
+# ── ACT 3 · a LONG press on the latched arm is the PURE release ─────────────────────────
+# The rope goes at the press edge — rope is already 0 while the key is still down — and the
+# key-up past HOOK_TAP_MAX_TICKS fires nothing.
+hook left 1.0
+wait 0.5
+mark f172-longpress-releasing
+assert rope == 0
+wait 1.0
+mark f172-longpress-released
+assert rope == 0
+
+# ── ACT 4 · a LONG hold on a FRESH rope is still a hold: anchored while down, released ──
+# on key-up — bit for bit what `hook <side> <seconds>` has always meant.
+look 0 -90
+wait 0.2
+hook left 1.0
+wait 0.5
+mark f172-hold-anchored
+assert rope == 1
+wait 1.0
+mark f172-hold-released
+assert rope == 0
+end

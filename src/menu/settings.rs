@@ -1,45 +1,36 @@
-//! The settings screen — **five things a person may change about his own game.**
+//! The settings screen — **three pages of things a person may change about his own game.**
 //!
 //! > *„zudem fehlen settings."* — the user, 2026-08-13 (`docs/NEXT.md` §1D req 6).
+//! > *„es wird zeit einstellungen für keybinds zu adden. damit man mehr einstellen kann!"* —
+//! > the user, 2026-09-01, and the keybinds page is `F-172` in its first honest cut.
 //!
-//! | row | field | window | seeded from |
+//! | page | row | field | window |
 //! |---|---|---|---|
-//! | Mouse sensitivity | `mouse_deg_per_px` | 0.01 – 0.60 °/px, step 0.01 | `game.ron: camera.mouse_deg_per_px` (0.08) |
-//! | Invert Y | `invert_y` | on / off | nothing — it is a preference, not a game value |
-//! | Field of view | `fov_deg` | 55 – 110°, step 5 | `game.ron: camera.fov_deg` (60) |
-//! | Aim assist reach | `assist_catch_pct` | 0 – 100 %, step 5 | nothing — `F-016` defines 0 % as free aim |
-//! | Aim assist strength | `assist_strength_pct` | 0 – 100 %, step 5 | the same |
+//! | Main | Mouse sensitivity | `mouse_deg_per_px` | 0.01 – 0.60 °/px, step 0.01 |
+//! | Main | Invert Y | `invert_y` | on / off |
+//! | Main | Field of view | `fov_deg` | 55 – 110°, step 5 |
+//! | Main | Aim assist reach | `assist_catch_pct` | 0 – 100 %, step 5 |
+//! | Main | Aim assist strength | `assist_strength_pct` | 0 – 100 %, step 5 |
+//! | Keybinds | Hook fire | `hook_fire` | Hold / Toggle |
+//! | Keybinds | eight bind rows | `binds` | any key in `REBINDABLE_KEYS` |
+//! | Crosshair | Crosshair size | `crosshair_size_pct` | 50 – 200 %, step 25 |
+//! | Crosshair | Crosshair colour | `crosshair_colour` | `CROSSHAIR_COLOURS`, cycling |
 //!
-//! ## The last two rows are the ones he asked for by name
+//! ## Rebinding is a two-click capture
 //!
-//! > *„die accuracy von anzeige zu wo seil landet ist nicht immer korrekt … es sollte best match
-//! > sein. und seinstellen können wie weit ca es sein sollte und wie aggressive (damit ich testen
-//! > kann was am besten wäre mach debug einstellungen dafür)"* — the user, 2026-08-18.
+//! Click a key button and the row arms ([`PlayerSettings::rebinding`]); the next key that goes
+//! down and is in `shared::settings::REBINDABLE_KEYS` becomes the bind. A key another action
+//! holds **swaps** (`KeyBinds::set` — `F-172`'s „Konflikterkennung" in its smallest honest
+//! form). Leaving the screen cancels the capture; there is no cancel key, because `Esc` is
+//! already "leave the screen" one level up (`menu::keys`).
 //!
-//! `F-016` is the feature and it specifies the shape exactly: a **stepless 0–100 % snap catch
-//! angle where 0 % is today's pure free aim**. So both rows start at 0, and at 0 the game aims
-//! precisely as it did before they existed — which is what makes them safe to ship a round
-//! before `F-024`/`F-025` build the candidate scoring that will read them.
+//! ## Everything on these pages survives a restart — `saves/settings.ron`
 //!
-//! ⚠️ **Today they are knobs with no consumer yet, and the screen says so** rather than
-//! implying an effect that is not there. What they already do is the thing he actually asked
-//! for: they are live, they need no restart (`F-024`), and every change **prints its own value
-//! into the log** so he can tell us the number he liked. A knob whose setting he cannot report
-//! back is half a knob.
-//!
-//! ## The aim-spread row is gone, and so is the wheel that shared its field
-//!
-//! Between 2026-08-13 and 2026-08-23 a fourth row edited `PlayerSettings::aim_spread_deg` — how
-//! far apart `F-023`'s two aim rays were **allowed** to stand — and the mouse wheel wrote the
-//! same field, one number reached by two devices. The user retired the fan on 2026-08-23
-//! (*„dann das auseinander mit q und e kann weg. einfach da wo ich hinschau (also fadenkreuz)
-//! geht das seil hin."*), so both ropes fly at the crosshair, there is no angle left to allow,
-//! and the row, the wheel and the field went with it (`docs/QUESTIONS.md` Q-048).
-//!
-//! **The two assist rows below are a different feature and they stay.** The assist searches
-//! sideways along the crosshair's own screen row and publishes **one** point that both arms fly
-//! to (`docs/FINDINGS.md` FIND-133); "sideways from the crosshair" was never "the two arms
-//! apart".
+//! Every arm below that changes a persisted field ends the frame with
+//! `shared::settings::store_settings` — **`menu` stays the one writer of `PlayerSettings` and
+//! of its file** (`src/save/mod.rs`'s own header says why `save` must not do this), and
+//! `PlayerSettings::from_world` reads the file back before anything else runs. The two view
+//! fields (`page`, `rebinding`) never reach the file.
 //!
 //! ## Why every row rebuilds the whole plate
 //!
@@ -48,14 +39,16 @@
 //! this screen shows — its `spawn` — instead of two that drift apart the first time a row is
 //! added. It costs a rebuild **per click**, never per frame (§6 rule 6), and it has a second
 //! effect that is worth more than the tidiness: a held mouse button cannot ramp a slider,
-//! because the button it is holding no longer exists.
+//! because the button it is holding no longer exists. A page flip is the same mechanism with
+//! no new machinery, which is why the page lives in `PlayerSettings` at all.
 
 use bevy::prelude::*;
 
 use super::{plate, PauseElement, Screen, SettingsFrom};
 use crate::shared::settings::{
-    ASSIST_CATCH_MAX_DEG, ASSIST_MAX_PCT, ASSIST_MIN_PCT, FOV_MAX_DEG, FOV_MIN_DEG,
-    MOUSE_MAX_DEG_PER_PX, MOUSE_MIN_DEG_PER_PX,
+    key_label, key_name, store_settings, BindAction, HookFire, SettingsPage,
+    ASSIST_CATCH_MAX_DEG, ASSIST_MAX_PCT, ASSIST_MIN_PCT, CROSSHAIR_MAX_PCT, CROSSHAIR_MIN_PCT,
+    FOV_MAX_DEG, FOV_MIN_DEG, MOUSE_MAX_DEG_PER_PX, MOUSE_MIN_DEG_PER_PX,
 };
 use crate::shared::PlayerSettings;
 
@@ -92,14 +85,32 @@ pub enum SettingsAction {
     AssistCatch(Nudge),
     /// `F-016` / `F-024` — how hard it pulls once it has a candidate. 0 % is free aim.
     AssistStrength(Nudge),
-    /// Back to the screen the options were opened from — the same place `Esc` goes, and
-    /// since 2026-08-19 that is a recorded answer ([`SettingsFrom`]) rather than a constant:
-    /// the title screen opens the options too.
+    /// Hold ↔ Toggle for the two rope triggers (user, 2026-09-01: *„oder in einstellungen
+    /// einstellbar"* — this row is that clause).
+    HookFire,
+    /// The X's size, 50–200 % (*„größe einstellbar"*).
+    CrosshairSize(Nudge),
+    /// The X's Free-state colour, cycling through the table (*„und farbe auch!"*).
+    CrosshairColour(Nudge),
+    /// Arm the capture for one action's key (`F-172`).
+    Bind(BindAction),
+    /// Show another page of this same screen.
+    Page(SettingsPage),
+    /// One step out: a sub-page goes back to Main, Main goes back to the screen the options
+    /// were opened from — the same place `Esc` goes ([`SettingsFrom`]).
     Back,
 }
 
 /// Builds the plate out of the **current** values. Called by `menu::spawn_menu`.
 pub fn spawn_settings_screen(commands: &mut Commands, s: &PlayerSettings) {
+    match s.page {
+        SettingsPage::Main => spawn_main_page(commands, s),
+        SettingsPage::Keybinds => spawn_keybinds_page(commands, s),
+        SettingsPage::Crosshair => spawn_crosshair_page(commands, s),
+    }
+}
+
+fn spawn_main_page(commands: &mut Commands, s: &PlayerSettings) {
     commands.spawn(plate::root(Screen::Settings, "settings")).with_children(|screen| {
         screen.spawn(plate::title("Settings"));
 
@@ -154,6 +165,22 @@ pub fn spawn_settings_screen(commands: &mut Commands, s: &PlayerSettings) {
             SettingsAction::AssistStrength,
         );
 
+        // The two sub-pages, side by side in ONE row: a second full-height row here would
+        // outgrow the 720 px budget this column already fills, and the counterweight below has
+        // only 64 px to give.
+        screen.spawn(plate::row()).with_children(|line| {
+            for (page, label) in
+                [(SettingsPage::Keybinds, "Keybinds"), (SettingsPage::Crosshair, "Crosshair")]
+            {
+                line.spawn((
+                    Name::new(format!("settings_Page_{page:?}")),
+                    SettingsAction::Page(page),
+                    plate::button((plate::ROW_W - plate::ROW_GAP) * 0.5, false),
+                ))
+                .with_child(plate::label(format!("{label}  >")));
+            }
+        });
+
         screen
             .spawn((
                 Name::new("settings_Back"),
@@ -164,11 +191,9 @@ pub fn spawn_settings_screen(commands: &mut Commands, s: &PlayerSettings) {
 
         // **The counterweight, and it is not decoration.** `plate::root` centres this column on
         // the screen, so `plate::centre_lane` only lands on the *screen's* middle while the
-        // column above it and the column below it are the same height. That was true by
-        // accident while the screen had three rows on each side of the lane; retiring the aim
-        // spread row (`docs/QUESTIONS.md` Q-048) took one row off the lower half and the whole
-        // plate slid down by half of it, walking the `Field of view` hint straight into the
-        // band's lane. This node puts that height back.
+        // column above it and the column below it are the same height. Retiring the aim-spread
+        // row (Q-048) once slid the plate down by half a row; the pages row above took another
+        // 58 px of the same budget on 2026-09-01, so what is left here is the difference.
         //
         // The number is pinned from the outside by
         // `tests/menu.rs::f016_the_settings_screen_leaves_the_bands_lane_empty`, which measures
@@ -182,9 +207,139 @@ pub fn spawn_settings_screen(commands: &mut Commands, s: &PlayerSettings) {
     });
 }
 
-/// One settings row plus one `plate::root` row gap — the height the lower half of the column
-/// lost when the aim-spread row was retired. See the counterweight above.
-const ROW_COUNTERWEIGHT_PX: f32 = 64.0;
+/// `F-172` — the keybinds page: the hook-fire mode and the eight rebindable actions, two per
+/// row so the column fits a 720 px screen with the lane still in its middle.
+fn spawn_keybinds_page(commands: &mut Commands, s: &PlayerSettings) {
+    commands.spawn(plate::root(Screen::Settings, "settings")).with_children(|screen| {
+        screen.spawn(plate::title("Keybinds"));
+        screen.spawn(plate::note(
+            "click a key, then press the new one — a key already in use swaps",
+        ));
+
+        // Hold | Toggle. On the keybinds page because it is a statement about the same two
+        // keys the first bind row names.
+        screen.spawn(plate::row()).with_children(|line| {
+            line.spawn((PauseElement, Node { width: Val::Px(plate::LABEL_W), ..default() }))
+                .with_child(plate::label("Hook fire"));
+            line.spawn((
+                Name::new("settings_HookFire"),
+                SettingsAction::HookFire,
+                plate::button(plate::SPAN_W, s.hook_fire == HookFire::Toggle),
+            ))
+            .with_child(plate::label(match s.hook_fire {
+                HookFire::Toggle => "toggle — tap fires, tap releases",
+                HookFire::Hold => "hold — release lets go",
+            }));
+        });
+
+        bind_pair(screen, s, BindAction::HookLeft, BindAction::HookRight);
+        bind_pair(screen, s, BindAction::Dodge, BindAction::Mark);
+
+        // The same hole as the main page: the band and the crosshair stay up over every page
+        // of this screen, so every page keeps the lane.
+        screen.spawn(plate::centre_lane());
+
+        bind_pair(screen, s, BindAction::SlashLeft, BindAction::Boost);
+        bind_pair(screen, s, BindAction::ReelIn, BindAction::Jump);
+
+        screen
+            .spawn((
+                Name::new("settings_Back"),
+                SettingsAction::Back,
+                plate::button(plate::BUTTON_W, false),
+            ))
+            .with_child(plate::label("Back  (Esc)"));
+
+        // The upper half carries the title, the note and the mode row; the lower half only two
+        // pair rows and the button. This makes up the difference, same contract as the main
+        // page's counterweight.
+        screen.spawn((
+            Name::new("settings_counterweight"),
+            PauseElement,
+            Node { height: Val::Px(KEYBINDS_COUNTERWEIGHT_PX), width: Val::Px(plate::ROW_W), ..default() },
+        ));
+    });
+}
+
+/// The crosshair page — size and colour (*„größe einstellbar und farbe auch!"*).
+fn spawn_crosshair_page(commands: &mut Commands, s: &PlayerSettings) {
+    commands.spawn(plate::root(Screen::Settings, "settings")).with_children(|screen| {
+        screen.spawn(plate::title("Crosshair"));
+
+        row(
+            screen,
+            "Crosshair size",
+            &format!("{:.0} %", s.crosshair_size_pct),
+            &format!(
+                "{CROSSHAIR_MIN_PCT:.0} - {CROSSHAIR_MAX_PCT:.0} % of the base X — the \
+                 middle stays empty at every size"
+            ),
+            SettingsAction::CrosshairSize,
+        );
+
+        screen.spawn(plate::centre_lane());
+
+        row(
+            screen,
+            "Crosshair colour",
+            s.crosshair_colour_name(),
+            "free aim only — anchor stays cyan, cortex stays amber (they are signals)",
+            SettingsAction::CrosshairColour,
+        );
+
+        screen
+            .spawn((
+                Name::new("settings_Back"),
+                SettingsAction::Back,
+                plate::button(plate::BUTTON_W, false),
+            ))
+            .with_child(plate::label("Back  (Esc)"));
+    });
+}
+
+/// One settings row plus one `plate::root` row gap — the height the lower half of the main
+/// column lost when the aim-spread row was retired (`Q-048`), minus the 58 px the pages row
+/// put back on 2026-09-01. See the counterweight comment above.
+const ROW_COUNTERWEIGHT_PX: f32 = 6.0;
+
+/// What the keybinds page's lower half is short by: the title, the hint note and the mode row
+/// stand above the lane against one button below it.
+const KEYBINDS_COUNTERWEIGHT_PX: f32 = 86.0;
+
+/// The label cell of one bind, narrower than [`plate::LABEL_W`] because two of them share a
+/// row with their buttons.
+const BIND_LABEL_W: f32 = 120.0;
+/// The key button of one bind.
+const BIND_KEY_W: f32 = 98.0;
+
+/// Two binds side by side: `label [key]   label [key]`.
+///
+/// The armed cell says so in its own plate — it is the `chosen` state, the same lighter plate
+/// every screen uses for "this one", and its label is the instruction.
+fn bind_pair(
+    screen: &mut ChildSpawnerCommands,
+    s: &PlayerSettings,
+    left: BindAction,
+    right: BindAction,
+) {
+    screen.spawn(plate::row()).with_children(|line| {
+        for action in [left, right] {
+            let armed = s.rebinding == Some(action);
+            line.spawn((PauseElement, Node { width: Val::Px(BIND_LABEL_W), ..default() }))
+                .with_child(plate::label(action.label()));
+            line.spawn((
+                Name::new(format!("settings_Bind_{action:?}")),
+                SettingsAction::Bind(action),
+                plate::button(BIND_KEY_W, armed),
+            ))
+            .with_child(plate::label(if armed {
+                "press...".to_string()
+            } else {
+                key_label(s.binds.get(action))
+            }));
+        }
+    });
+}
 
 /// One adjustable row: `label   [-]  value  [+]`, and a dim line under it saying what the
 /// window is. The window is written down because a slider that silently stops is a slider the
@@ -257,37 +412,72 @@ fn toggle_row(screen: &mut ChildSpawnerCommands, label: &str, on: bool) {
     }));
 }
 
-/// What the buttons do — **the only place a setting is written by a click.**
+/// What the buttons do — **the only place a setting is written by a click** — plus the key
+/// capture while a bind row is armed.
 ///
-/// `PlayerSettings` is taken as `ResMut` and touched only inside the pressed branch: a
-/// `DerefMut` on a resource marks it changed for every reader, and this system runs every
-/// frame (§6 rule 6). The one write per click is what makes the plate rebuild.
+/// `PlayerSettings` is taken as `ResMut` and touched only when something really changes: a
+/// `DerefMut` on a resource marks it changed for every reader, this system runs every frame
+/// (§6 rule 6), and a changed resource is a full plate rebuild here.
 ///
-/// The aim-spread window comes out of `game.ron` and not out of a constant here — it is the
-/// same window the wheel obeys, and a second copy of it would be a second answer.
+/// Every persisted change ends with one `store_settings` — the click IS the save point, so
+/// there is no "apply" button to forget and no dirty state to flush on exit.
 pub fn settings_buttons(
     buttons: Query<(&Interaction, &SettingsAction)>,
+    keys: Res<ButtonInput<KeyCode>>,
     back: Res<SettingsFrom>,
     mut settings: ResMut<PlayerSettings>,
     mut screen: ResMut<Screen>,
 ) {
+    // Leaving the screen (`Esc`, or any route) forgets the view state: a capture must not
+    // stay armed into the next visit, and the next visit starts on the first page. Guarded
+    // reads first — `settings` may only be dereferenced mutably when something changes.
+    if *screen != Screen::Settings {
+        if settings.rebinding.is_some() || settings.page != SettingsPage::Main {
+            settings.rebinding = None;
+            settings.page = SettingsPage::Main;
+        }
+        return;
+    }
+
+    let mut persist = false;
+
+    // The capture. `get_just_pressed` and not `pressed`: the arming click's own frame cannot
+    // bind anything (a mouse click is not a key), and a held key binds once, not per frame.
+    if let Some(action) = settings.rebinding {
+        let captured = keys.get_just_pressed().find(|key| key_name(**key).is_some()).copied();
+        if let Some(key) = captured {
+            settings.binds.set(action, key);
+            settings.rebinding = None;
+            persist = true;
+            info!("keybind {} = {}", action.label(), key_label(key));
+        }
+    }
+
     for (interaction, action) in &buttons {
         if *interaction != Interaction::Pressed {
             continue;
         }
         match action {
-            SettingsAction::Mouse(n) => settings.nudge_mouse(n.steps()),
+            SettingsAction::Mouse(n) => {
+                settings.nudge_mouse(n.steps());
+                persist = true;
+            }
             SettingsAction::InvertY => {
                 let inverted = settings.invert_y;
                 settings.invert_y = !inverted;
+                persist = true;
             }
-            SettingsAction::Fov(n) => settings.nudge_fov(n.steps()),
+            SettingsAction::Fov(n) => {
+                settings.nudge_fov(n.steps());
+                persist = true;
+            }
             // ⚠️ **Both print.** `F-024`'s acceptance is that a change is live without a
             // restart, and the user's own reason for asking is that he wants to *test* and
             // tell us what felt best — so the value goes into the log the moment it moves.
             // One line per click, never per frame: this branch only runs on `Pressed`.
             SettingsAction::AssistCatch(n) => {
                 settings.nudge_assist_catch(n.steps());
+                persist = true;
                 info!(
                     "aim assist reach = {:.0} % ({:.1} deg off the crosshair)",
                     settings.assist_catch_pct,
@@ -296,9 +486,49 @@ pub fn settings_buttons(
             }
             SettingsAction::AssistStrength(n) => {
                 settings.nudge_assist_strength(n.steps());
+                persist = true;
                 info!("aim assist strength = {:.0} %", settings.assist_strength_pct);
             }
-            SettingsAction::Back => *screen = back.0,
+            SettingsAction::HookFire => {
+                settings.hook_fire = match settings.hook_fire {
+                    HookFire::Hold => HookFire::Toggle,
+                    HookFire::Toggle => HookFire::Hold,
+                };
+                persist = true;
+                info!("hook fire = {}", settings.hook_fire.word());
+            }
+            SettingsAction::CrosshairSize(n) => {
+                settings.nudge_crosshair_size(n.steps());
+                persist = true;
+                info!("crosshair size = {:.0} %", settings.crosshair_size_pct);
+            }
+            SettingsAction::CrosshairColour(n) => {
+                settings.cycle_crosshair_colour(n.steps() as i32);
+                persist = true;
+                info!("crosshair colour = {}", settings.crosshair_colour_name());
+            }
+            SettingsAction::Bind(bind) => {
+                // Clicking the armed row again disarms it; clicking another row moves the
+                // capture there. View state only — nothing to persist yet.
+                settings.rebinding =
+                    if settings.rebinding == Some(*bind) { None } else { Some(*bind) };
+            }
+            SettingsAction::Page(page) => {
+                settings.page = *page;
+                settings.rebinding = None;
+            }
+            SettingsAction::Back => {
+                if settings.page != SettingsPage::Main {
+                    settings.page = SettingsPage::Main;
+                    settings.rebinding = None;
+                } else {
+                    *screen = back.0;
+                }
+            }
         }
+    }
+
+    if persist {
+        store_settings(&settings);
     }
 }

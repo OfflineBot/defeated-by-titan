@@ -1152,7 +1152,10 @@ fn f175_every_settings_row_is_the_same_width() {
 
     let rows = settings_rows(&mut app);
     println!("settings rows: {rows:?}");
-    assert_eq!(rows.len(), 5, "the settings screen has five adjustable rows");
+    // Five adjustable rows plus the pages row (`Keybinds | Crosshair`, 2026-09-01) — the
+    // pages row is in the same grid on purpose: its two halves span exactly `ROW_W`, so its
+    // outer edges land on the same columns every arrow does.
+    assert_eq!(rows.len(), 6, "the settings main page has six rows in the grid");
     let (first, _) = rows[0];
     for (total, widths) in &rows {
         assert!(
@@ -2867,4 +2870,190 @@ fn f120_the_debrief_says_what_the_sortie_earned() {
         "the debrief does not say there is a budget to spend — which is why 122 of them sat \
          unspent for 419 sorties: {text:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// F-172 — the keybinds page, the capture, and the file everything survives in
+// ---------------------------------------------------------------------------
+//
+// ⚠️ **What this evidence is, said honestly**: no script can click a menu (`FIND-189` — a
+// `--headless`/`--offscreen` run has no plate at all), so `F-172` cannot be photographed
+// being used. The claim is carried by these app-level tests — a real click arms the capture,
+// a real `KeyboardInput` becomes the bind, the swap rule holds — plus the settings-file
+// round-trip below, which is what makes the bind survive a restart. The one thing neither
+// covers is a human hand on a real window; that stays with the user.
+
+use defeated_by_titan::shared::settings::{
+    key_label as bind_key_label, parse_settings, render_settings, BindAction, HookFire,
+    SettingsPage,
+};
+use defeated_by_titan::shared::PlayerSettings as SettingsRes;
+
+/// One real key press, through the same message pipeline the window would feed.
+fn press_key(app: &mut App, window: Entity, key_code: KeyCode) {
+    for state in [ButtonState::Pressed, ButtonState::Released] {
+        app.world_mut().write_message(KeyboardInput {
+            key_code,
+            logical_key: Key::Unidentified(bevy::input::keyboard::NativeKey::Unidentified),
+            state,
+            text: None,
+            repeat: false,
+            window,
+        });
+        app.update();
+    }
+}
+
+#[test]
+fn f172_a_click_arms_the_capture_and_the_next_key_is_the_bind() {
+    let (mut app, window) = app_with_window();
+    open_settings(&mut app, window);
+    press(&mut app, &SettingsAction::Page(SettingsPage::Keybinds));
+    app.update();
+    assert_eq!(app.world().resource::<SettingsRes>().page, SettingsPage::Keybinds);
+
+    // Arm the left hook's row, press `M`: `M` is the bind, the capture is spent.
+    press(&mut app, &SettingsAction::Bind(BindAction::HookLeft));
+    app.update();
+    assert_eq!(app.world().resource::<SettingsRes>().rebinding, Some(BindAction::HookLeft));
+    press_key(&mut app, window, KeyCode::KeyM);
+    let s = *app.world().resource::<SettingsRes>();
+    assert_eq!(s.binds.hook_left, KeyCode::KeyM, "the pressed key has to become the bind");
+    assert_eq!(s.rebinding, None, "the capture is spent by its key");
+
+    // The swap rule (F-172 „Konflikterkennung"): binding the RIGHT hook to `M` as well gives
+    // it `M` and hands the left hook the right's old key — no key ever fires two arms.
+    let old_right = s.binds.hook_right;
+    press(&mut app, &SettingsAction::Bind(BindAction::HookRight));
+    app.update();
+    press_key(&mut app, window, KeyCode::KeyM);
+    let s = *app.world().resource::<SettingsRes>();
+    assert_eq!(s.binds.hook_right, KeyCode::KeyM);
+    assert_eq!(
+        s.binds.hook_left, old_right,
+        "the action that owned the key takes the freed one — a silent duplicate would mean \
+         one key firing two arms"
+    );
+
+    // And leaving the screen forgets the view state: no armed capture survives into the next
+    // visit, and the next visit starts on the first page.
+    press(&mut app, &SettingsAction::Bind(BindAction::Dodge));
+    app.update();
+    press_esc(&mut app, window);
+    app.update();
+    let s = *app.world().resource::<SettingsRes>();
+    assert_eq!(s.rebinding, None);
+    assert_eq!(s.page, SettingsPage::Main);
+}
+
+#[test]
+fn f172_the_hook_fire_row_flips_between_toggle_and_hold() {
+    let (mut app, window) = app_with_window();
+    open_settings(&mut app, window);
+    press(&mut app, &SettingsAction::Page(SettingsPage::Keybinds));
+    app.update();
+    // Toggle is the seed — he asked for toggle in so many words (2026-09-01).
+    assert_eq!(app.world().resource::<SettingsRes>().hook_fire, HookFire::Toggle);
+    press(&mut app, &SettingsAction::HookFire);
+    app.update();
+    assert_eq!(app.world().resource::<SettingsRes>().hook_fire, HookFire::Hold);
+    press(&mut app, &SettingsAction::HookFire);
+    app.update();
+    assert_eq!(app.world().resource::<SettingsRes>().hook_fire, HookFire::Toggle);
+}
+
+/// The lane rule holds on the keybinds page too: the band and the crosshair stay on screen
+/// over EVERY page of the settings screen (`hud::ShowWhileTuning` knows screens, not pages),
+/// so every page keeps the hole. Same measurement as
+/// `f016_the_settings_screen_leaves_the_bands_lane_empty`, page flipped.
+#[test]
+fn f172_the_keybinds_page_leaves_the_bands_lane_empty() {
+    let (mut app, window) = app_with_window();
+    attach_screen(&mut app);
+    open_settings(&mut app, window);
+    nudge_reach(&mut app, 20);
+    press(&mut app, &SettingsAction::Page(SettingsPage::Keybinds));
+    app.update();
+    assert_eq!(app.world().resource::<SettingsRes>().page, SettingsPage::Keybinds);
+
+    let band = band_rects(&mut app);
+    assert!(!band.is_empty(), "there has to be a band for this test to prove anything");
+    let lane = band.iter().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |a, b| {
+        (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3))
+    });
+    let mut q = app.world_mut().query_filtered::<
+        (&ComputedNode, &UiGlobalTransform, Option<&Text>),
+        (With<PauseElement>, Without<MenuRoot>, Without<plate::CentreLane>),
+    >();
+    let mut seen = 0;
+    for (computed, at, text) in q.iter(app.world()) {
+        let (s, c) = (computed.size(), at.translation);
+        let (x0, y0, x1, y1) = (c.x - s.x / 2.0, c.y - s.y / 2.0, c.x + s.x / 2.0, c.y + s.y / 2.0);
+        seen += 1;
+        let clear = x1 <= lane.0 || x0 >= lane.2 || y1 <= lane.1 || y0 >= lane.3;
+        assert!(
+            clear,
+            "a keybinds node sits in the band's lane: x {x0:.1}..{x1:.1} y {y0:.1}..{y1:.1} \
+             against the lane y {:.1}..{:.1} — {:?}",
+            lane.1,
+            lane.3,
+            text.map(|t| t.0.clone()).unwrap_or_default()
+        );
+    }
+    assert!(seen > 10, "the keybinds page has to be built for this to prove anything");
+}
+
+#[test]
+fn f172_the_settings_file_round_trips_and_clamps_a_vandalised_number() {
+    // The write-and-read pair, over a REAL file. `settings_path()` is deliberately not used:
+    // it answers `None` inside a test binary (the same contract as `save::SaveDir`), which is
+    // exactly what keeps every other test in this suite from reading a developer's own
+    // settings — so the file here is explicit.
+    let (mut app, window) = app_with_window();
+    open_settings(&mut app, window);
+    press(&mut app, &SettingsAction::Page(SettingsPage::Keybinds));
+    app.update();
+    press(&mut app, &SettingsAction::HookFire); // -> hold
+    app.update();
+    press(&mut app, &SettingsAction::Bind(BindAction::Mark));
+    app.update();
+    press_key(&mut app, window, KeyCode::KeyG);
+    let before = *app.world().resource::<SettingsRes>();
+    assert_eq!(before.hook_fire, HookFire::Hold);
+    assert_eq!(before.binds.mark, KeyCode::KeyG);
+    assert_eq!(bind_key_label(KeyCode::KeyG), "G");
+
+    let dir = std::env::temp_dir().join(format!("dbt-settings-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("settings.ron");
+    std::fs::write(&path, render_settings(&before)).expect("written");
+    let text = std::fs::read_to_string(&path).expect("read back");
+    // A second, differently-seeded machine reads the file: everything persisted comes back.
+    let mut seeded = before;
+    seeded.hook_fire = HookFire::Toggle;
+    seeded.binds = defeated_by_titan::shared::settings::KeyBinds::DEFAULT;
+    seeded.crosshair_size_pct = 100.0;
+    seeded.page = SettingsPage::Main; // view state: never in the file
+    let loaded = parse_settings(&text, seeded).expect("the file this build writes parses");
+    assert_eq!(loaded.hook_fire, HookFire::Hold);
+    assert_eq!(loaded.binds.mark, KeyCode::KeyG);
+    assert_eq!(loaded.binds.hook_left, before.binds.hook_left);
+    assert_eq!(loaded.crosshair_size_pct, before.crosshair_size_pct);
+    assert_eq!(loaded.crosshair_colour, before.crosshair_colour);
+    assert_eq!(loaded.page, SettingsPage::Main, "view state must not round-trip");
+    assert_eq!(loaded.rebinding, None);
+
+    // A hand-edited absurdity comes back clamped into the slider's own window, not as a
+    // fisheye nobody can navigate out of.
+    let vandalised = text.replace(
+        &format!("fov_deg: {:.1}", before.fov_deg),
+        "fov_deg: 500.0",
+    );
+    assert_ne!(vandalised, text, "the fixture has to really vandalise the number");
+    let loaded = parse_settings(&vandalised, seeded).expect("still parses");
+    assert_eq!(loaded.fov_deg, defeated_by_titan::shared::settings::FOV_MAX_DEG);
+
+    // And garbage is refused, not half-read: the caller keeps the seeds.
+    assert!(parse_settings("this is not RON {{{", seeded).is_err());
+    std::fs::remove_dir_all(&dir).ok();
 }

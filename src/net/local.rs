@@ -4,12 +4,14 @@
 //! reads nothing but the `Intent` — and therefore does not know whether a human, a script
 //! or one day the network is playing (`prompts/init.md` §6 rule 2).
 //!
-//! ⚠️ The bindings live **here in the code** for now, not in a RON file. They are not a
-//! balancing number but a UI setting, and **rebindable keys are a requirement of the
-//! bible** (3.5, accessibility) — they move into the options once `menu/` gets them. Until
-//! then they are a default, not a design.
+//! ⚠️ Since 2026-09-01 the bindings are **`PlayerSettings::binds`** (`F-172`): the scheme
+//! below is `shared::settings::KeyBinds::DEFAULT`, the keybinds page in `menu::settings`
+//! rebind them, and `saves/settings.ron` keeps them. They are a UI setting and not a
+//! balancing number, which is why no RON tuning file ever got a key for them. The movement
+//! axes (`WASD`) and the mouse buttons are still fixed — see `KeyBinds`' own doc for why that
+//! is said out loud.
 //!
-//! ## The scheme (user, 2026-08-10, after the first human play session)
+//! ## The DEFAULT scheme (user, 2026-08-10, after the first human play session)
 //!
 //! `Q` `HOOK_LEFT` · `E` `HOOK_RIGHT` · `LMB` `SLASH_LEFT` · `RMB` `SLASH_RIGHT` ·
 //! `F` `SLASH_LEFT` (second binding) · `Shift` `BOOST` · `Ctrl` `REEL_IN` · `Space` `JUMP` ·
@@ -57,7 +59,10 @@ use bevy::prelude::*;
 
 use super::Inbox;
 use crate::data::GameData;
-use crate::shared::{LookOverride, Intent, LocalPlayer, PlayerId, PlayerSettings, Buttons, Tick};
+use crate::shared::settings::HookFire;
+use crate::shared::{
+    Hook, HookState, LookOverride, Intent, LocalPlayer, PlayerId, PlayerSettings, Buttons, Tick,
+};
 
 /// Reads the real input and posts an [`Intent`] built from it into the inbox.
 ///
@@ -81,6 +86,15 @@ pub fn read_input(
     // `F-009` — `[A, D]`, one arming state per side. See the comment at the call site for why
     // it cannot be one shared state.
     mut flips: Local<[DodgeTap; 2]>,
+    // The toggle state of the two rope triggers — `[left, right]`, like `flips`. A `Local`
+    // for the same reason as every other state in this file: it belongs to this machine's
+    // keyboard, not to a player.
+    mut hook_latches: Local<[HookLatch; 2]>,
+    // Read-only, to un-latch when an arm lets go on its own (miss, body gone, overextended) —
+    // `Hook` is a `shared` component and `vector::hook` stays its only writer. Without this a
+    // missed tap would leave the latch up, and the next honest tap would toggle a rope that
+    // no longer exists instead of firing.
+    hooks: Query<&Hook, With<LocalPlayer>>,
     local: Query<&PlayerId, With<LocalPlayer>>,
 ) {
     // There is no such thing as "the player" — but there is exactly one that is ME. If he
@@ -115,10 +129,15 @@ pub fn read_input(
             .clamp(-limit, limit);
     }
 
-    let jump = keys.pressed(KeyCode::Space);
+    // **Every key below comes out of `settings.binds`** (`F-172`, 2026-09-01) — the defaults
+    // are the 2026-08-10 scheme, verbatim, and `KeyBinds::DEFAULT` is where it now lives.
+    // The movement axes (`WASD`) and the mouse buttons are still fixed; see [`crate::shared::
+    // settings::KeyBinds`] for why that is said out loud instead of implied.
+    let b = settings.binds;
+    let jump = keys.pressed(b.jump);
     let dodge = space.feed(
         jump,
-        keys.pressed(KeyCode::KeyC),
+        keys.pressed(b.dodge),
         tick.0,
         data.game.vector.dodge_double_tap_window_ticks,
     );
@@ -162,7 +181,7 @@ pub fn read_input(
     // would make the move feel like it ate an input. `F-008` adds a button, it does not steal
     // one.
     t.set(Buttons::JUMP, jump);
-    t.set(Buttons::BOOST, keys.pressed(KeyCode::ShiftLeft));
+    t.set(Buttons::BOOST, keys.pressed(b.boost));
     // 🔴 **`Ctrl` and NOTHING else.** `S` was a second binding for `REEL_IN` here between
     // 2026-08-12 and 2026-08-13, and it was a **misreading**: *„mit s »spannt« man nur das
     // seil!"* was taken to mean "reel in", but **„spannen" is keeping a rope taut, not hauling
@@ -174,7 +193,7 @@ pub fn read_input(
     //
     // So `S` is nothing but the backwards axis again (the `forward` line below), and the rope
     // stays taut because the rope constraint keeps it taut — not because a key asks for it.
-    t.set(Buttons::REEL_IN, keys.pressed(KeyCode::ControlLeft));
+    t.set(Buttons::REEL_IN, keys.pressed(b.reel_in));
     // **`C` stays, and it is not a leftover.** Two routes to one bit, exactly like `F` next to
     // the left mouse button above:
     //   - a double-tap is a **gesture**, and the bible asks for accessibility (3.5) — a player
@@ -195,15 +214,54 @@ pub fn read_input(
     // the first time a human played this: the ropes have to be **steerable**). A hand can hold
     // `Q` and `E` and still aim; it cannot hold both mouse buttons and still aim. `MARK` had to
     // move off `Q` for that and went to `Tab`, which nothing else uses.
-    t.set(Buttons::MARK, keys.pressed(KeyCode::Tab));
-    t.set(Buttons::HOOK_LEFT, keys.pressed(KeyCode::KeyQ));
-    t.set(Buttons::HOOK_RIGHT, keys.pressed(KeyCode::KeyE));
-    // `F` stays on the left blade next to the left mouse button — a second binding, not a
+    t.set(Buttons::MARK, keys.pressed(b.mark));
+    // **The rope triggers go through [`HookLatch`]** (user, 2026-09-01: *„mach dass q und e
+    // toggle sind und nicht hold"*). Under `HookFire::Toggle` a tap latches the held bit on;
+    // a later tap on the latched arm is a **re-fire** (user, 2026-09-01, second note: *„und
+    // später nochmal e drücke soll das seil weg "neu" raus gehen und toggeln!"*): its press
+    // edge drops the bit — the old rope releases in that very tick — and its key-up, if it
+    // comes inside [`HOOK_TAP_MAX_TICKS`], raises the bit again, which is the fresh fire.
+    // A press held LONGER than the boundary adds no new rope: that is the pure release, one
+    // gesture away on the same key. The first press of a rope still releases on a long
+    // key-up as before, which is what keeps every `hook <side> <seconds>` line in `scripts/`
+    // meaning what it always meant — a sub-boundary tap anchors and stays, a long hold is
+    // released on key-up. Under `Hold` the latch is a wire: bit = key, bit for bit the
+    // pre-2026-09-01 behaviour.
+    //
+    // The `arm_is_out` argument is what un-latches after a **self**-release: a missed tap, a
+    // vanished carrier, an overextended rope. The `anchored` argument is §5E-c's re-fire
+    // gate: only a press on an ANCHORED arm arms the key-up re-fire. Both read last tick's
+    // state — see [`HookLatch::feed`] for why that is exactly right and not a race.
+    let toggle = settings.hook_fire == HookFire::Toggle;
+    let arm = hooks.iter().next().copied().unwrap_or_default().arms;
+    let out = |s: HookState| matches!(s, HookState::Flying { .. } | HookState::Anchored { .. });
+    let anchored = |s: HookState| matches!(s, HookState::Anchored { .. });
+    t.set(
+        Buttons::HOOK_LEFT,
+        hook_latches[0].feed(
+            keys.pressed(b.hook_left),
+            out(arm[0].state),
+            anchored(arm[0].state),
+            tick.0,
+            toggle,
+        ),
+    );
+    t.set(
+        Buttons::HOOK_RIGHT,
+        hook_latches[1].feed(
+            keys.pressed(b.hook_right),
+            out(arm[1].state),
+            anchored(arm[1].state),
+            tick.0,
+            toggle,
+        ),
+    );
+    // The keyboard slash stays next to the left mouse button — a second binding, not a
     // leftover. It is the only route to `SLASH_LEFT` that `debug::script::parse_key` can
-    // reach, because a script has no way to press a mouse button except `hook left|right`.
+    // reach, because a script has no way to press a mouse button except `slash left|right`.
     t.set(
         Buttons::SLASH_LEFT,
-        mouse_buttons.pressed(MouseButton::Left) || keys.pressed(KeyCode::KeyF),
+        mouse_buttons.pressed(MouseButton::Left) || keys.pressed(b.slash_left),
     );
     t.set(Buttons::SLASH_RIGHT, mouse_buttons.pressed(MouseButton::Right));
 
@@ -354,4 +412,293 @@ pub fn gather_mouse_motion(
     mut pending: ResMut<MouseSinceTick>,
 ) {
     pending.delta += motion.delta;
+}
+
+/// The longest press that still counts as a **tap** under [`HookFire::Toggle`], in ticks.
+///
+/// Since 2026-09-01 (§5E-c) it is also the boundary between a re-tap's two verbs on a
+/// latched arm: key-up inside it re-fires, key-up past it is the pure release.
+///
+/// 18 ticks = 0.3 s at 60 Hz. A UI constant like `PIXELS_PER_NOTCH`, not a `game.ron` value:
+/// it is a property of the control, and a tuning file that carries it invites somebody to
+/// balance the game with it. The number sits between the two populations that exist:
+/// a human tap is 3–9 ticks, and the shortest **hold** any evidence script performs on an
+/// anchor it must let go of again is 0.52 s = 31 ticks (`scripts/f025-chain.txt`). The 0.2 s
+/// taps in `scripts/f028-why.txt` are under the boundary on purpose — three are misses (the
+/// latch clears itself off the idle arm) and the fourth staying anchored is what a tap now
+/// means.
+pub const HOOK_TAP_MAX_TICKS: u64 = 18;
+
+/// One rope trigger's toggle state (`F-172`'s neighbour — user, 2026-09-01: *„mach dass q und
+/// e toggle sind und nicht hold (oder in einstellungen einstellbar)"*).
+///
+/// **This is the whole toggle.** It lives on the keyboard side of the `Intent`, exactly like
+/// [`DodgeTap`]: the simulation keeps reading a plain held bit (`vector::hook`'s `held` /
+/// `just_pressed` pair), never learns which mode produced it, and a network client or a
+/// script driver is unaffected by construction. The rules, each one a test below:
+///
+/// - **Hold mode is a wire.** `bit = key`, bit for bit the old behaviour.
+/// - **A tap latches.** Press edge with the latch down: latch up (the rising bit is
+///   `vector::hook`'s fire edge).
+/// - **A tap on a latched arm is a RE-FIRE** (user, 2026-09-01: *„und später nochmal e drücke
+///   soll das seil weg "neu" raus gehen und toggeln!"*). Its press edge drops the bit — the
+///   falling edge is the release of the old rope, in the tick of the press, exactly his
+///   *„das seil weg"* — and its key-up **inside** [`HOOK_TAP_MAX_TICKS`] raises the bit
+///   again: a fresh fire edge at the current aim, his *„neu raus"*. The rising edge lands
+///   while the arm is `Retracting` (or already `Idle` on a short rope), and both fire on the
+///   edge since `F-002` — the retract is not a lockout, so no tick is swallowed. The re-fire
+///   arms only over an arm that is really **anchored**; a press over a rope still in flight
+///   is the plain toggle-off it always was.
+/// - **A re-tap held past the boundary is the PURE release.** The rope has been gone since
+///   the press; a key-up after more than [`HOOK_TAP_MAX_TICKS`] adds nothing. One key, two
+///   verbs, and the tap is the common one. (⚠️ 2026-09-01, second half of §5E-c: until then
+///   the second tap was a plain toggle-off. `docs/QUESTIONS.md` Q-095 records the one
+///   reading this implementation chose: the release half happens at the press edge, not at
+///   key-up, because the press cannot yet know whether it is a tap or a hold and holding the
+///   OLD rope through the decision would re-fire it on every long press.)
+/// - **A long press on a FRESH rope is still a hold.** First press: key-up after more than
+///   [`HOOK_TAP_MAX_TICKS`] drops the latch — so a Hold-trained hand, and every
+///   `hook <side> <seconds>` script line, gets release-on-key-up unchanged.
+/// - **A self-release un-latches — but only once the key is up.** The latch is up, the key is
+///   not down, the arm is neither flying nor anchored, and the tap is at least one tick old:
+///   the arm let go on its own (a miss, `BodyGone`, `Overextended`), and a latch left up
+///   would swallow the next tap as a toggle-off of a rope that no longer exists. While the
+///   key IS down the bit stays up whatever the arm does — a held trigger means a held
+///   trigger, which is what the `bindings_*` seam tests pin. `arm_is_out` is **last tick's**
+///   state, because `read_input` runs in `FixedPreUpdate` and `vector::hook` in
+///   `FixedUpdate` — which is exactly why the `tick > down_at` guard exists: on the tap's own
+///   tick the stale state may not clear the latch that tap just set.
+#[derive(Default)]
+pub struct HookLatch {
+    /// The key at the previous tick — the edge memory, like [`DodgeTap::space_down`].
+    key_down: bool,
+    /// Whether the held bit is currently latched on.
+    latched: bool,
+    /// The tick of the press that set the latch. Meaningless while un-latched.
+    down_at: u64,
+    /// The press tick of a **re-tap** — a press that found the latch already up. `Some`
+    /// while that press is still held: its release half has already gone out (the falling
+    /// edge, at the press), and the key-up decides only whether a fresh fire follows (a
+    /// tap, inside [`HOOK_TAP_MAX_TICKS`]) or nothing does (a hold — the pure release).
+    retap_at: Option<u64>,
+}
+
+impl HookLatch {
+    /// The `HOOK_*` bit for this tick.
+    pub fn feed(
+        &mut self,
+        key: bool,
+        arm_is_out: bool,
+        arm_is_anchored: bool,
+        tick: u64,
+        toggle: bool,
+    ) -> bool {
+        let pressed = key && !self.key_down;
+        let released = !key && self.key_down;
+        self.key_down = key;
+        if !toggle {
+            // Hold: the latch mirrors the key, so switching modes mid-game starts clean.
+            self.latched = key;
+            self.retap_at = None;
+            return key;
+        }
+        // Only once the key is UP: while it is held, the bit staying up is exactly what a
+        // held trigger means (and what every `bindings_*` seam test pins) — the stale case
+        // this exists for is a latch left up over an arm that let go while nobody was
+        // touching the key.
+        if self.latched && !key && !arm_is_out && tick > self.down_at {
+            self.latched = false;
+        }
+        if pressed {
+            if self.latched {
+                // The re-tap (2026-09-01): *„das seil weg"* — the falling edge NOW sends
+                // the anchored arm to `Retracting` in this very tick. Whether *„neu raus"*
+                // follows is the key-up's decision below, because only the key-up can tell
+                // a tap from a hold — and it is armed only over an arm that is really
+                // ANCHORED: a press over a rope still in flight is the plain toggle-off it
+                // always was, so trigger-spam cannot chain rope after rope out of one aim.
+                self.latched = false;
+                self.retap_at = arm_is_anchored.then_some(tick);
+            } else {
+                self.latched = true;
+                self.down_at = tick;
+            }
+        }
+        if released {
+            if let Some(t0) = self.retap_at.take() {
+                if tick.saturating_sub(t0) <= HOOK_TAP_MAX_TICKS {
+                    // *„neu raus"*: the rising edge, on the key-up tick. The arm is
+                    // `Retracting` (or `Idle` again on a short rope) and both fire on the
+                    // edge — `vector::hook` decision 1, `F-002`: the retract is not a
+                    // lockout, so the fresh flight starts in this same tick.
+                    self.latched = true;
+                    self.down_at = t0;
+                }
+                // Past the boundary: the pure release. The rope has been gone since the
+                // press edge; a long hold adds nothing new.
+            } else if tick.saturating_sub(self.down_at) > HOOK_TAP_MAX_TICKS {
+                self.latched = false;
+            }
+        }
+        self.latched
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Drives one latch over a keyboard trace. The second element says whether the arm is
+    /// out (flying or anchored) at tick `t`, the third whether it is ANCHORED — the test's
+    /// stand-in for what `vector::hook` did last tick. In these traces an arm that is out is
+    /// anchored unless a test says otherwise; the flying case has its own test below.
+    fn run(latch: &mut HookLatch, trace: &[(bool, bool)], toggle: bool) -> Vec<bool> {
+        trace
+            .iter()
+            .enumerate()
+            .map(|(t, (key, arm_out))| latch.feed(*key, *arm_out, *arm_out, t as u64, toggle))
+            .collect()
+    }
+
+    #[test]
+    fn in_hold_mode_the_bit_is_the_key_bit_for_bit() {
+        let mut latch = HookLatch::default();
+        let trace = [(true, false), (true, true), (false, true), (true, true), (false, false)];
+        let bits = run(&mut latch, &trace, false);
+        assert_eq!(bits, vec![true, true, false, true, false]);
+    }
+
+    /// The 2026-09-01 re-fire (`docs/NEXT.md` §5E-c: *„das seil weg, neu raus, und toggeln"*).
+    /// Until that day the second tap was a plain toggle-off; now its press releases and its
+    /// short key-up fires fresh.
+    ///
+    /// What the code reads: the key edges, the tick distance to `HOOK_TAP_MAX_TICKS`, last
+    /// tick's arm state. What this fixture varies: all three. The arm bit is held `true`
+    /// through the re-tap on purpose — the stale-clear must NOT eat the latch the key-up
+    /// just set.
+    #[test]
+    fn a_tap_on_a_latched_arm_releases_at_the_press_and_refires_on_the_short_key_up() {
+        let mut latch = HookLatch::default();
+        // Tap: 3 ticks down, then up; the arm flies from tick 1 and anchors.
+        let mut trace = vec![(true, false), (true, true), (true, true)];
+        trace.extend(std::iter::repeat_n((false, true), 30));
+        // The re-tap: two ticks down, then up, then two quiet ticks.
+        trace.push((true, true)); // t33 — the press: release of the old rope
+        trace.push((true, true)); // t34 — still held, still down
+        trace.push((false, true)); // t35 — the key-up: the fresh fire
+        trace.push((false, true)); // t36 — the new rope holds
+        let bits = run(&mut latch, &trace, true);
+        assert!(bits[..33].iter().all(|b| *b), "the latch has to hold through the whole gap");
+        assert!(!bits[33], "the re-tap's press has to drop the bit — that is the release");
+        assert!(!bits[34], "and it stays down while the key is held");
+        assert!(bits[35], "the key-up inside HOOK_TAP_MAX_TICKS has to re-raise the bit — the fresh fire");
+        assert!(bits[36], "and the new rope is latched exactly like a first tap's");
+    }
+
+    /// The other half of the same gesture: held past `HOOK_TAP_MAX_TICKS`, the re-tap is the
+    /// PURE release — the rope went at the press and the key-up adds nothing.
+    #[test]
+    fn a_retap_held_past_the_boundary_is_a_pure_release_and_nothing_refires() {
+        let mut latch = HookLatch::default();
+        let mut trace = vec![(true, false), (false, true), (false, true)];
+        // The re-tap press at t3, held for HOOK_TAP_MAX_TICKS + 3 ticks.
+        trace.push((true, true));
+        trace.extend(std::iter::repeat_n((true, false), HOOK_TAP_MAX_TICKS as usize + 2));
+        trace.push((false, false)); // the late key-up
+        trace.push((false, false));
+        let bits = run(&mut latch, &trace, true);
+        assert!(bits[2], "the first tap latched");
+        assert!(!bits[3], "the re-tap's press releases the rope immediately");
+        let up = trace.len() - 2;
+        assert!(!bits[up], "a key-up past HOOK_TAP_MAX_TICKS must NOT fire fresh");
+        assert!(!bits[up + 1], "and nothing comes back afterwards");
+    }
+
+    /// The re-fire gate: a second press over a rope that is OUT but not yet ANCHORED is the
+    /// plain toggle-off it always was — the quick key-up fires nothing.
+    #[test]
+    fn a_retap_over_a_still_flying_rope_is_a_plain_toggle_off_not_a_refire() {
+        let mut latch = HookLatch::default();
+        // (key, out, anchored): the rope flies from t1 and never anchors before the re-tap.
+        let trace = [
+            (true, false, false),
+            (false, true, false),
+            (false, true, false),
+            (true, true, false),  // the second press, mid-flight
+            (false, true, false), // the quick key-up
+            (false, true, false),
+        ];
+        let bits: Vec<bool> = trace
+            .iter()
+            .enumerate()
+            .map(|(t, (k, o, a))| latch.feed(*k, *o, *a, t as u64, true))
+            .collect();
+        assert!(bits[2], "the first tap latched");
+        assert!(!bits[3], "the press drops the bit — the toggle-off");
+        assert!(!bits[4], "the quick key-up must NOT re-fire: this arm never anchored");
+        assert!(!bits[5]);
+    }
+
+    /// A re-fire that finds nothing must not leave the latch up over an idle arm — the
+    /// stale-clear rule catches it one tick later and the next tap is a fresh fire.
+    #[test]
+    fn a_refire_that_misses_clears_itself_off_the_idle_arm() {
+        let mut latch = HookLatch::default();
+        let trace = vec![
+            (true, false),  // t0 tap: fire
+            (false, true),  // t1 anchored
+            (true, true),   // t2 re-tap press: release
+            (false, true),  // t3 key-up: the re-fire edge (arm bit is last tick's, still out)
+            (false, false), // t4 the re-fire missed — the arm never came out again
+            (false, false), // t5
+            (true, false),  // t6 the next tap
+        ];
+        let bits = run(&mut latch, &trace, true);
+        assert!(bits[3], "the short key-up re-fires");
+        assert!(!bits[4], "an arm that stayed idle clears the latch the re-fire left up");
+        assert!(bits[6], "and the next tap is a fresh fire, not a toggle of nothing");
+    }
+
+    #[test]
+    fn a_long_press_still_releases_on_key_up() {
+        let mut latch = HookLatch::default();
+        let mut trace = vec![(true, false)];
+        trace.extend(std::iter::repeat_n((true, true), HOOK_TAP_MAX_TICKS as usize + 5));
+        trace.push((false, true));
+        trace.push((false, true));
+        let bits = run(&mut latch, &trace, true);
+        assert!(bits[HOOK_TAP_MAX_TICKS as usize], "held: the bit stays while the key is down");
+        assert!(
+            !bits[trace.len() - 2],
+            "key-up after more than HOOK_TAP_MAX_TICKS has to release, or every \
+             `hook <side> <seconds>` script line changes its meaning"
+        );
+    }
+
+    #[test]
+    fn a_missed_tap_unlatches_so_the_next_tap_fires_instead_of_toggling_nothing() {
+        let mut latch = HookLatch::default();
+        // Tap at nothing: the arm never leaves Idle.
+        let mut trace = vec![(true, false), (true, false), (false, false), (false, false)];
+        // The next tap must be a FIRE (rising edge), not a toggle-off.
+        trace.push((true, false));
+        let bits = run(&mut latch, &trace, true);
+        assert!(bits[0], "the tap itself raises the bit — that edge is the fire");
+        assert!(!bits[3], "an arm that stayed idle clears the latch");
+        assert!(bits[4], "the next tap is a fresh fire");
+    }
+
+    #[test]
+    fn the_arms_own_release_unlatches_too() {
+        let mut latch = HookLatch::default();
+        // Tap, anchored for a while, then the rope overextends and the arm retracts.
+        let mut trace = vec![(true, false), (false, true), (false, true), (false, true)];
+        trace.push((false, false)); // vector::hook released the arm on its own
+        trace.push((false, false));
+        trace.push((true, false)); // the next tap
+        let bits = run(&mut latch, &trace, true);
+        assert!(bits[3]);
+        assert!(!bits[5], "the latch has to follow the arm's own release");
+        assert!(bits[6], "and the next tap fires");
+    }
 }

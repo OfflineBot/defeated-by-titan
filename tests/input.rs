@@ -297,7 +297,7 @@ fn intent_from(keys: &[KeyCode], mouse: &[MouseButton]) -> Intent {
 /// it he said so (`docs/NEXT.md` §1A req 7): *„aktuell wenn ich seil spanne und s drücke werde
 /// ich stark zum seil gezogen! das soll nicht sein!"*
 ///
-/// The number behind it is in `r7_s_tightens_the_rope_and_never_reels_it_in`: a held
+/// The number behind it is in `r7_s_cancels_the_pull_and_only_the_lateral_remains`: a held
 /// `S` was worth `reel_speed_m_s` × 2 s = **56 m** of rope. What stays taut is the rope, and
 /// what keeps it taut is the rope constraint — not a key.
 #[test]
@@ -319,63 +319,74 @@ fn bindings_s_never_reels_and_still_walks_backwards() {
     );
 }
 
-/// ★ **R7, and it is the number the user reported.** A held `S` **tautens** the rope; it never
-/// reels it in.
+/// ★ **R7, third meaning, and it is his newest word.** With `S` held **the pull is cancelled**
+/// — only the lateral remains.
 ///
-/// *„aktuell wenn ich seil spanne und s drücke werde ich stark zum seil gezogen! das soll
-/// nicht sein!"* (user, 2026-08-12, `docs/NEXT.md` §1A req 7). The binding test above says
-/// which bit is set; **this one says what it did to the player**, in metres, in the real app
-/// on the real map — a bit pattern is not evidence that anybody stopped being dragged.
+/// The history of this key, each reversal his own sentence, newest wins (`Q-002`):
 ///
-/// The manoeuvre is `scripts/f003-ashgate.txt` ACT 4 leg 1 with `S` where that script holds
-/// `Ctrl`: from the market square at `(75, 2, -30)`, `look 0 44` puts the ray on the wall
-/// gallery 57.6 m away and 56 m up, i.e. **81.2 m of rope, measured**. `reel_speed_m_s` is 28,
-/// so 120 ticks of reeling are **56 m** — which is exactly what this returned while `S` was a
-/// second binding for `REEL_IN`.
+/// 1. 2026-08-12 — *„mit s »spannt« man nur das seil!"* → `S` stopped being a `REEL_IN`
+///    binding (56 m of haul in 2 s, the number he reported).
+/// 2. 2026-08-27 — `Q-061`, asked directly: *„S spannt nur, bewegt nicht."* → the two-sided
+///    bound: `S` moves the player neither in nor out.
+/// 3. 2026-09-01 — `docs/NEXT.md` §5D rule 4: *„aber wenn verbunden wird immer rangezogen …
+///    aber dennoch AUßER man drückt S dann nur zur seite"* → **`S` is the one input that
+///    cancels the always-on pull.** With `S` held and no lateral key, the player holds
+///    position on a taut rope; the joint still forbids retreat (§3F, „NICHT das seil
+///    verlängern"). `Q-061` is superseded — see its entry in `docs/QUESTIONS.md`.
 ///
-/// # 🔴 What this test claimed, what it claims now, and why it is the same claim
+/// The fixture is unchanged since meaning 1, so all three sentences were measured on the same
+/// 82.2 m of rope: from the market square at `(75, 2, -30)`, `look 0 44` puts the ray on the
+/// wall gallery 57.6 m away and 56 m up. 120 ticks of the old reel closed 56 m here.
 ///
-/// It was named `r7_s_held_on_a_taut_rope_does_not_close_the_distance` and it asserted the
-/// closing against **zero**: `with_s > −0.56 m`. Since `FIND-172` the rope **always pulls**
-/// (*„ich will dass es immer ranzieht. nicht nur wenn ich w drücke!"*, the user, 2026-08-26),
-/// and the shipped game now reads `S −9.427 m`. That is not `S` reeling. Measured, tick by
-/// tick, on this exact run:
+/// # What the fixture varies and what the code reads (`docs/lessons/fixtures.md` rule 2)
 ///
-/// ```text
-///   t0..t7   S walks backwards at 6.00 m/s, +Z, MovementState::Grounded, in_flight false
-///            — he is walking AWAY from the anchor and stretching the rope. That is „spannen".
-///   t8       v.y jumps 0.00 -> +1.86 m/s: the taut rope answers, and it points 44° UP.
-///   t10      MovementState::Tethered -> in_flight true -> FIND-172's free winch takes over
-///            and hauls him in for the remaining 110 ticks.
-/// ```
+/// The fixture varies: the held key set, and `drive_idle_speed_m_s` (the deletion control).
+/// The code reads: `move_x`/`move_y` (`pull_scale` — the S-cancel and the lateral ramp),
+/// `MovementState` (the winch's `in_flight` gate), the anchor geometry, and
+/// `drive_steer_pull_fraction`. The fraction is NOT varied here — its ramp is measured in
+/// `tests/player.rs::f5d_the_lateral_scales_the_pull_in_a_ramp_not_a_switch`.
 ///
-/// So the chain from *„spannen"* to *„zum Seil gezogen"* is three steps long now and **every
-/// one of them is something the user asked for**: `S` tautens, a taut rope lifts, and anything
-/// in flight is pulled in. `S` itself never touches the rope's length — which is exactly what
-/// the deletion control below shows, and it is a **stronger** statement than the old floor of
-/// zero was:
+/// # 🔴 The free pull needs a key that is not a movement key — `Space`
 ///
-/// * with `drive_idle_speed_m_s` deleted in one key, the same held `S` **opens** the rope by
-///   **+8.911 m** (he walks his 12 m backwards and stays `Grounded` for all 120 ticks);
-/// * `A`, the one key here that never tautens the rope, is `+0.882 m` with the pull on **and**
-///   with it off — the winch never gets a hold on him at all;
-/// * `Ctrl`, which *is* the reel, is measured in the same fixture, so this run demonstrably can
-///   tell a reel from a walk (`docs/FINDINGS.md` rule 5: an assertion that cannot tell the two
-///   apart passes when both are wrong).
+/// Until §5D, "the pure always-on pull" was measured by holding `S`: once airborne, `S` was
+/// arithmetically no key at all (`FIND-196`'s table). Rule 4 kills that proxy — `S` now
+/// cancels the very thing it was standing in for. `Space` replaces it: one jump takes the
+/// player off his legs (the winch is `in_flight`-gated, `FIND-172`), and `JUMP` touches
+/// neither `move_x` nor `move_y`, so the winch runs at full scale. The jump's own impulse is
+/// in the number, which is why the deletion control (`space_alone`) subtracts it out.
 ///
-/// The open half — whether a player who tautens the rope on the ground **should** be lifted
-/// into the free winch — is his, and it stands as `docs/QUESTIONS.md` Q-054.
+/// # 🔴 FIND-196 is closed here, and this is the re-measurement
+///
+/// FIND-196: holding `W` closed **11.270 m** where holding nothing closed **11.937 m** — the
+/// look gate `max(0, l̂·r̂)` shrank the drive's target while the winch's floor did not, so the
+/// key that flies you AT your anchor was slower than no key. Since §5D the pull is the winch
+/// alone (never look-gated, never chased away) and `W` is a look-directed thrust ON TOP of it
+/// (`player::locomotion::rope_drive`), so a forward key must close at least the free pull.
+///
+/// ⚠️ **Until 2026-09-01 the comparison had to happen IN FLIGHT, because the winch was
+/// ground-gated** (`FIND-172`'s `in_the_air`, the `Q-055`/`Q-056` decision) — `W` alone
+/// WALKED its 8.031 m. **§5E-b overturned that gate, third ruling, newest word wins:**
+/// *„wenn cih mich hooke werde ich nicht autmoatisch rangezogen! das fehlt noch!"* — a bite
+/// pulls immediately, ground included (`player::locomotion::ground_pull_live`). So `idle`
+/// now MEASURES the ground pull (14.832 m closed on this build, where the gate held it at
+/// 0.000), `W` rides pull + thrust from the bite tick, and the FIND-196 pair `Space`+`W`
+/// against `Space` still stands with the same `with_sw <= with_space + 0.05` bound.
 #[test]
-fn r7_s_tightens_the_rope_and_never_reels_it_in() {
+fn r7_s_cancels_the_pull_and_only_the_lateral_remains() {
     let idle = taut_rope_then_hold(&[]);
     let with_s = taut_rope_then_hold(&[KeyCode::KeyS]);
     let with_a = taut_rope_then_hold(&[KeyCode::KeyA]);
     let with_w = taut_rope_then_hold(&[KeyCode::KeyW]);
-    // **The control the whole test hangs on**, and it is a deletion, not a second opinion:
-    // one key of `game.ron` set to 0 takes `FIND-172`'s always-on pull out of the run and
-    // leaves everything else — the map, the rope, the ground, the binding — identical.
+    // The free pull: `Space` gets him off his legs without touching a movement axis.
+    let with_space = taut_rope_then_hold(&[KeyCode::Space]);
+    // And the FIND-196 pair: the same flight WITH the forward key.
+    let with_sw = taut_rope_then_hold(&[KeyCode::Space, KeyCode::KeyW]);
+    // **The deletion controls**: one key of `game.ron` set to 0 takes `FIND-172`'s always-on
+    // pull out of the run and leaves everything else — map, rope, ground, binding — identical.
+    let idle_alone = taut_rope_then_hold_with_pull(&[], false);
     let s_alone = taut_rope_then_hold_with_pull(&[KeyCode::KeyS], false);
     let a_alone = taut_rope_then_hold_with_pull(&[KeyCode::KeyA], false);
+    let space_alone = taut_rope_then_hold_with_pull(&[KeyCode::Space], false);
     // And the shape of an actual reel, in this same fixture: `Ctrl` is `REEL_IN`.
     let reel = taut_rope_then_hold_with_pull(&[KeyCode::ControlLeft], false);
 
@@ -383,59 +394,64 @@ fn r7_s_tightens_the_rope_and_never_reels_it_in() {
     // one, and the point of this one IS the number.
     println!(
         "120 ticks on a taut rope — idle {idle:+.3} m · S {with_s:+.3} m · A {with_a:+.3} m · \
-         W {with_w:+.3} m (S as a second REEL_IN binding: -56.001 m)"
+         W (pull + thrust, §5E-b) {with_w:+.3} m · Space {with_space:+.3} m · Space+W \
+         {with_sw:+.3} m"
     );
     println!(
         "  the always-on pull deleted — S {s_alone:+.3} m · A {a_alone:+.3} m · \
-         Ctrl (the real reel) {reel:+.3} m"
+         Space {space_alone:+.3} m · Ctrl (the real reel) {reel:+.3} m"
     );
 
-    // **The bound is derived, not chosen.** `S` used to be `REEL_IN`, and 120 ticks of that is
-    // `reel_speed_m_s` × 2 s. A hundredth of that is still two orders of magnitude away from
-    // anything a player would call "being pulled in", and no *slow* reel can sneak through it
-    // either — a reel at 1 % of `reel_speed_m_s` would take three minutes to cover this rope.
-    // **The number it is applied to is the one `S` owns**: the run with the always-on pull
-    // taken out. That is the same sentence the old assert made, measured on the axis the key
-    // is actually responsible for.
-    let reel_would_have = reel_speed_m_s() * 2.0;
-    assert!(
-        s_alone > -reel_would_have / 100.0,
-        "with the always-on pull deleted, S still closed {:.3} m in 120 ticks — a reel would \
-         have closed {reel_would_have:.1} m. `S` is backwards movement, not a reel \
-         (docs/NEXT.md §1A req 7)",
-        -s_alone
-    );
-    // 🔴 **The other half, and it REVERSED on 2026-08-27 because he said so.** Until then this
-    // asserted `s_alone > 5.0` — that `S` walks you 12 m backwards and the rope OPENS. He was
-    // asked directly (`docs/QUESTIONS.md` Q-061) and answered:
-    //
-    //   „S spannt nur, bewegt nicht."
-    //
-    // which is his own original wording restored (`docs/NEXT.md` §1A: *„mit s »spannt« man nur
-    // das seil"*). So `S` is **tension, not thrust**: it moves the player neither toward the
-    // anchor nor away from it, and the bound has to be **two-sided**. The old one-sided assert
-    // was satisfied by any amount of retreat, including a sprint.
-    //
-    // **The bound is derived.** `run_speed_m_s` is 6.0, so 120 ticks of walking is 12 m. A
-    // tenth of a walk — 0.5 m/s, i.e. 1.0 m over this window — is far below anything a player
-    // could feel as movement and still an order of magnitude above the 0.157 m of solver
-    // settling this fixture actually produces. It catches a reel in one direction and a walk in
-    // the other, which is the whole of his sentence.
+    // 🔴 **Rule 4, the headline: `S` cancels the pull.** Two-sided and with the pull ON — the
+    // stronger statement than Q-061's, because until §5D the pull hauled a taut-roped `S`
+    // player 11.9 m through this very window. The bound is derived: `run_speed_m_s` is 6.0, so
+    // 120 ticks of walking is 12 m; a tenth of a walk is far below anything a player could
+    // feel as movement and an order of magnitude above this fixture's solver settling.
     let a_tenth_of_a_walk = run_speed_m_s() * 2.0 / 10.0;
     assert!(
-        s_alone.abs() < a_tenth_of_a_walk,
-        "S is tension and not thrust (Q-061, „S spannt nur, bewegt nicht\") — over 120 ticks it \
-         should move the player neither in nor out, and a tenth of a walk is \
-         {a_tenth_of_a_walk:.3} m. It read {s_alone:+.3} m"
+        with_s.abs() < a_tenth_of_a_walk,
+        "§5D rule 4 („AUßER man drückt S dann nur zur seite\"): with the pull ON, S held for \
+         120 ticks moved the player {with_s:+.3} m — it must cancel the pull and hold position \
+         within {a_tenth_of_a_walk:.3} m"
     );
-    // 🔴 **The deletion control has to move the number.** If `S −9.427 m` and `S +8.911 m`
-    // were the same, the key removed would not be the one doing the closing, and every line
-    // above would be measuring something else (`CLAUDE.md` rule 5).
+    // And with the pull deleted the same key reads the same ~nothing — S owns no movement on
+    // this axis in either world. If these two differ, something besides the winch moves him.
     assert!(
-        with_s < s_alone - 5.0,
-        "deleting `drive_idle_speed_m_s` changed the held-S run from {with_s:+.3} m to \
-         {s_alone:+.3} m — if those two are the same number, the always-on pull is not what \
+        s_alone.abs() < a_tenth_of_a_walk,
+        "with the always-on pull deleted, S still moved {s_alone:+.3} m in 120 ticks — S is \
+         neither a reel nor a walk on this axis (docs/NEXT.md §1A req 7, §5D rule 4)"
+    );
+    // 🔴 **The deletion control has to move a number, and since rule 4 that number is
+    // `Space`'s, not `S`'s.** One jump with the pull on hands him to the winch; the same jump
+    // with the pull deleted comes straight back down to his legs.
+    assert!(
+        with_space < space_alone - 5.0,
+        "deleting `drive_idle_speed_m_s` changed the held-Space run from {with_space:+.3} m to \
+         {space_alone:+.3} m — if those two are the same number, the always-on pull is not what \
          closes this rope and this test is measuring the wrong thing"
+    );
+    // 🔴 **FIND-196, closed: the forward key in flight closes at least the free pull.**
+    // 0.05 m of margin against a defect that measured 0.667 m. Under the old model this pair
+    // is exactly the strangle: the drive's look-gated chase replaced the winch's closing with
+    // something slower the moment `W` went down.
+    assert!(
+        with_sw <= with_space + 0.05,
+        "Space+W closed {:.3} m while the free pull (Space alone) closed {:.3} m — the look is \
+         gating the pull again (FIND-196, §5D rule 1)",
+        -with_sw,
+        -with_space
+    );
+    // `W` alone, since §5E-b: the bite hands the body to the rope on the spot, and `W` is
+    // thrust plus drive ON TOP of the pull — so from a standing start it has to beat the
+    // free pull by a wide margin, not merely walk. Measured on this build: −69.386 m against
+    // the free pull's −14.832 — a 54 m gap; 10 m is the fat-margin floor under it.
+    assert!(
+        with_w < with_space - 10.0,
+        "W alone closed {:.3} m against the free pull's {:.3} m — thrust on top of the \
+         ground pull is supposed to beat the pull alone by ≥ 10 m in this stance (§5E-b + \
+         §5D rule 2)",
+        -with_w,
+        -with_space
     );
     // 🔴 **And the fixture has to be able to SEE a reel**, or none of the above is evidence:
     // `Ctrl`, under the same deleted pull, is `REEL_IN` and closes tens of metres.
@@ -445,44 +461,45 @@ fn r7_s_tightens_the_rope_and_never_reels_it_in() {
          fact that S is invisible proves nothing",
         -reel
     );
-    // 🔴 **This used to compare `S` against `W` and it was RETIRED on 2026-08-27**, because the
-    // comparison stopped measuring what its own sentence claimed. It read
-    // `assert!(with_s >= with_w)` under the words *"S closes more distance than W — it still
-    // has a rope power the other movement keys do not have"*.
-    //
-    // **Measured on two binaries, one control run apart** (`docs/FINDINGS.md` FIND-196):
-    //
-    // | | HEAD, no joint | with the joint |
-    // |---|---|---|
-    // | `S` alone, pull deleted | **+8.911 m** (opens the rope) | **−0.157 m** (moves nothing) |
-    // | `W` | −11.270 m | **−11.270 m, identical** |
-    //
-    // `W` is the same to three decimals on both, so the joint did not touch it. What changed is
-    // that `S` lost its retreat — which is exactly `Q-061` — and with the always-on pull running,
-    // "`S` held" is now arithmetically "no key held". The assert then failed because **the pure
-    // pull (−11.937 m) closes MORE than holding `W` does (−11.270 m)**, which is a statement
-    // about `W`, not about `S`. It is pre-existing and it is filed as `FIND-196`, not asserted
-    // on here.
-    //
-    // The claim the retired line was a proxy for — *`S` has no rope power of its own* — is
-    // measured **directly** by the two-sided bound above, on the axis `S` actually owns.
-    // A proxy that survives its subject is how a green suite stops meaning anything.
+    // `A`, since §5E-b, hands the body to the rope too (the ramp never reaches zero) — and
+    // the DISTANCE still has to stay flat in this stance, for a measured reason, not a gate:
+    // at 44° of elevation gravity's outward radial component (32·sin 44° ≈ 22 m/s²) beats
+    // the ramped pull's whole ceiling (0.35 · 34.29 = 12 m/s²), so the taut joint holds the
+    // radius while the lateral drive swings him across it. Measured −0.153 m with the pull
+    // on, −0.008 m without it. If `A` ever starts closing tens of metres here, the ramp
+    // (`pull_scale`) has fallen off and the full winch is running under a lateral key.
+    let reel_would_have = reel_speed_m_s() * 2.0;
     assert!(
         with_a > -reel_would_have / 100.0 && a_alone > -reel_would_have / 100.0,
         "A closed {:+.3} m with the pull and {a_alone:+.3} m without it; the key that never \
          tautens the rope must not close it either",
         with_a
     );
-    // ⚠️ `idle` is exactly 0.000 m, and that is a claim of its own: the free winch is **not**
-    // free on the ground. A hooked player standing still keeps his legs, and it takes a key to
-    // take him off them — see `player::locomotion::in_flight` and `FIND-172`'s `in_the_air`
-    // gate. The −0.17 m residual `docs/FINDINGS.md` FIND-083 recorded here is gone.
+    // 🔴 **§5E-b (2026-09-01), the third ruling on the ground gate, and this assert is its
+    // re-derivation.** Until today `idle` was asserted to be 0.000 — the `Q-055`/`Q-056`
+    // design where a hooked player standing still kept his legs. The user overturned it:
+    // *„wenn cih mich hooke werde ich nicht autmoatisch rangezogen! das fehlt noch!"* — so
+    // the key that takes him off his legs is now NO key, and a flat `idle` is the BUG this
+    // line guards against. Measured on this build: −14.832 m (the 44° anchor is below the
+    // 69° clean-lift line, so this closing is the DRAG — `player::locomotion::ground_pull_live`
+    // and the elevation sweep in `tests/player.rs::f176_the_contact_break_threshold_*`).
+    // −5 m is a third of the measurement and 60× the old residual noise.
     assert!(
-        idle.abs() < 0.05,
-        "a hooked player who presses nothing drifted {idle:+.3} m — the always-on pull is \
-         supposed to stop at the ground"
+        idle < -5.0,
+        "a hooked player who pressed nothing closed only {:.3} m in 120 ticks — §5E-b says \
+         the bite pulls immediately, ground included; a flat idle is the old `in_the_air` \
+         gate (FIND-172/Q-056) coming back",
+        -idle
     );
-    println!("idle control: {idle:+.3} m — anything above that is the rope, not the key");
+    // And the deletion control for exactly that claim: the same no-key stance with
+    // `drive_idle_speed_m_s: 0` has to stand still — otherwise something other than the
+    // always-on pull moved him and the number above is not the pull's.
+    assert!(
+        idle_alone.abs() < a_tenth_of_a_walk,
+        "with the always-on pull deleted the no-key player still drifted {idle_alone:+.3} m \
+         — the idle measurement is not measuring the winch"
+    );
+    println!("idle: {idle:+.3} m pulled · {idle_alone:+.3} m with the pull deleted");
 }
 
 /// `player.run_speed_m_s` out of the app's own `game.ron` — what walking would look like on
@@ -936,4 +953,131 @@ fn f009_a_second_tap_after_the_window_is_only_a_strafe() {
         "a tap {} ticks after the first still flipped — the window is {window}: {ticks:?}",
         window + 2
     );
+}
+
+// ---------------------------------------------------------------------------
+// The rope trigger is a toggle at the seam (2026-09-01), and the keys are binds
+// ---------------------------------------------------------------------------
+
+/// > *„mach dass q und e toggle sind und nicht hold (oder in einstellungen einstellbar)"*
+///
+/// The whole toggle lives in `net::local::HookLatch`, on the keyboard side of the `Intent` —
+/// this test drives the REAL app through `ButtonInput` and reads the bit off the `Intent`,
+/// exactly the seam a script or a network client would see. A tap goes down for two ticks and
+/// comes up; under the default `HookFire::Toggle` the `HOOK_LEFT` bit has to STAY up — the
+/// pre-2026-09-01 code dropped it with the key. The running-game half of the claim (tap,
+/// anchored, tap, released, and a long hold still releasing on key-up) is
+/// `scripts/f172-hook-toggle.txt`, captured red against the old binary first:
+/// `line 22: assert Rope == 1 — measured 0.000`.
+#[test]
+fn the_hook_bit_stays_latched_after_a_tap_and_hold_mode_still_exists() {
+    let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
+    app.update();
+    let step = app.world().resource::<Time<Fixed>>().timestep();
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(step));
+
+    let bit = |app: &mut App| {
+        let mut players = app.world_mut().query_filtered::<&Intent, With<LocalPlayer>>();
+        players
+            .iter(app.world())
+            .next()
+            .expect("the local player must exist")
+            .buttons
+            .contains(Buttons::HOOK_LEFT)
+    };
+
+    // The same stance as `scripts/f172-hook-toggle.txt`: 12 m over the boulevard, looking
+    // straight down — an anchor that has never missed. From the spawn on the street the
+    // pavement is under `vector.min_rope_m` (3.0) and a tap at nothing clears itself off the
+    // idle arm (`net::local::HookLatch`), which would make this test measure the miss path
+    // instead of the latch. Warp and look take the same routes a script's verbs take.
+    let me = {
+        let mut players = app
+            .world_mut()
+            .query_filtered::<&defeated_by_titan::shared::PlayerId, With<LocalPlayer>>();
+        *players.iter(app.world()).next().expect("the local player must exist")
+    };
+    app.world_mut().write_message(defeated_by_titan::shared::WarpPlayer {
+        player: me,
+        pos_x: 168.19,
+        pos_y: 12.0,
+        pos_z: -50.12,
+    });
+    app.world_mut().resource_mut::<defeated_by_titan::shared::LookOverride>().0 =
+        Some((0.0, (-89.0f32).to_radians()));
+    app.update();
+
+    // Tap: two ticks down, then up.
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyQ);
+    app.update();
+    app.update();
+    assert!(bit(&mut app), "the tap itself raises the bit — that edge is the fire");
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::KeyQ);
+    for _ in 0..5 {
+        app.update();
+    }
+    // ⚠️ In this app the aim ray from the spawn stance finds an anchorable surface, the arm
+    // anchors, and the latch therefore holds. (If it missed, the latch would clear off the
+    // idle arm — `net::local::HookLatch` — and this assert is what would notice.)
+    assert!(
+        bit(&mut app),
+        "Toggle is the default and a tap has to LATCH: the bit fell with the key, which is \
+         the Hold behaviour he asked to be rid of"
+    );
+
+    // The second tap drops it.
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyQ);
+    app.update();
+    app.update();
+    assert!(!bit(&mut app), "the second tap has to release the latch");
+
+    // And Hold is one setting away, bit-for-bit the old behaviour.
+    app.world_mut()
+        .resource_mut::<defeated_by_titan::shared::PlayerSettings>()
+        .hook_fire = defeated_by_titan::shared::settings::HookFire::Hold;
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::KeyQ);
+    app.update();
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyQ);
+    app.update();
+    assert!(bit(&mut app), "Hold: down is down");
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::KeyQ);
+    app.update();
+    assert!(!bit(&mut app), "Hold: up is up, the moment the key comes back");
+}
+
+/// `F-172` at the same seam: `read_input` fires the arm off `PlayerSettings::binds`, not off
+/// a literal `KeyCode` — rebind the left hook to `M` and `M` is what raises the bit while `Q`
+/// raises nothing.
+#[test]
+fn f172_a_rebound_key_fires_the_arm_and_the_old_key_is_dead() {
+    let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::ZERO));
+    app.update();
+    {
+        let mut s = app.world_mut().resource_mut::<defeated_by_titan::shared::PlayerSettings>();
+        s.binds.set(
+            defeated_by_titan::shared::settings::BindAction::HookLeft,
+            KeyCode::KeyM,
+        );
+    }
+    let step = app.world().resource::<Time<Fixed>>().timestep();
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(step));
+
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyQ);
+    app.update();
+    app.update();
+    let mut players = app.world_mut().query_filtered::<&Intent, With<LocalPlayer>>();
+    let buttons = players.iter(app.world()).next().expect("player").buttons;
+    assert!(
+        !buttons.contains(Buttons::HOOK_LEFT),
+        "`Q` still fires the left arm although the bind moved to `M`"
+    );
+
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::KeyQ);
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyM);
+    app.update();
+    let mut players = app.world_mut().query_filtered::<&Intent, With<LocalPlayer>>();
+    let buttons = players.iter(app.world()).next().expect("player").buttons;
+    assert!(buttons.contains(Buttons::HOOK_LEFT), "the bound key has to fire the arm");
 }
