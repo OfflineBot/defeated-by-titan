@@ -117,9 +117,12 @@ assert titans == 1         # the husk is really standing there, and it is exactl
 # column). Drop-tested 2026-09-02: rest at exactly **-0.250**, speed 0.000.
 # The claim is unchanged: *the stand is bare ground, not a lot.* A lot here would be a house
 # roof, metres higher and a different number. Only the ground moved, so only the number did.
-wait 0.4
-assert height > -0.35      # bare ground, continuous-field cell: measured -0.250
-assert height < -0.15
+# …and a third move the same day: §5E's final trimesh (5c44e8e) landed hours after the
+# shim I re-pinned against — the cell now rests at -0.910 (measured twice, wait raised to
+# be sure it is rest, not fall). The claim is STILL "bare ground, not a lot".
+wait 0.6
+assert height > -1.05      # bare ground, §5E trimesh cell: measured -0.910
+assert height < -0.75
 
 # ---- 4: and the ANCHOR panel is not a lie ------------------------------------------------
 #

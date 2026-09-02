@@ -1244,3 +1244,32 @@ anchor fails the gate regardless of feel:
    tower body 79 at 345.11 m dead ahead instead of the lane beam at z 231.5 (predates
    today, 78e5c87); (c) w5 gallery drift (lines 329/332) joins ruling 2's speed-envelope
    attribution debt.
+
+## Session end 2026-09-02 ~14:00 — paused on his order, he playtests next
+
+His words: *"ok solangsam pausieren. mach noch fertig was aktuell gemacht wird. ich
+playteste später und sag ich wenns weiter geht."* Everything running was finished; the
+tree is committed, pushed, and the full suite + corpus are green/attributed.
+
+**What he should do first: RESTART the game.** The build he last played predates: the
+ground-pull fix, toggle+refire, X-crosshair, FOV slew, keybinds, honest house colliders,
+pose-true titan hit capsules (his "unmöglich zu treffen"), honest ruin colliders (his
+"seil in der luft"), the same-tick look fix (B-041), and §5E smooth terrain.
+**And answer Q-086 when he can:** elevation 24 vs 48, four photographs in
+docs/images/f003-field-*.png; 24 is shipped as the ASSUMPTION.
+
+**Corpus state at close: 66 GREEN / 16 RED / 0 CRASH**, every red attributed or booked:
+the 16 are the known drift-debt set; the last sweep's three +1 movements are booked as
+terrain-redistribution class — f171-crosshair re-pinned (third move of that stand in one
+day, now −0.910), f003-ashgate (+1) and f004-towers (+1) NOT re-pinned, their per-line
+attribution is the first work item at restart (they sit on the FIND-229/230 debt stack:
+lane collapse, speed-envelope drift, cornice, now redistribution on top).
+
+**The honest paragraph — what went unseen today:** the corpus baseline lists still live
+only in task outputs, so the ±1 movements in the two big city scripts are attributed by
+CLASS, not by line — nobody has named the exact new red line in either. The §5E FEEL
+(walking, swinging over the smooth field) has been asserted and photographed but never
+FELT by a human — he is the first. The −9.440 m obstruction standing in a street lane
+(FIND-231) is unexplained. game-full's two rope reds (B-045) have numbers but no owner
+yet. The B-046 hud flake fired once and has not been hunted. And the five prop hull rows
+are unblocked but not landed — they wait in tools/fleet/validate.py.
