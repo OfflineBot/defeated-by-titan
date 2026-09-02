@@ -1200,3 +1200,19 @@ shared/anchors.rs, world/map.rs, art.ron, tests/dressing.rs, f-dressing.txt, B-0
 uncommitted CONFIRMED controller batch. Commit order agreed: controller batch (game.ron etc.,
 WITHOUT net/local.rs) first, then the cf-session's streams on top. Full corpus/test gate only
 after house-boxes lands.
+
+## §5F — his 2026-09-02 report, both combat-critical, ahead of terrain polish
+
+Verbatim: *„ah und die hittboxen der titanen waren sehr schlecht. unmöglich diese
+überhautp zu treffen. auch das seil war einfach in der luft verankert!"*
+
+Order: measurement rounds FIRST (no fix without attribution), both are Vector-Gear-gate
+blockers — a movement game where you cannot hit the target and the rope lies about its
+anchor fails the gate regardless of feel:
+1. B-042 titan hit envelope: measure drawn-glb-surface vs registering collider vs blade
+   sweep at the doubled scale, per titan kind; deliverable is a table + repro script.
+2. B-043 air anchors: in-repo fleet-style sweep over remnants/props/titans (the B-039
+   instrument, rebuilt in-repo this time); attribute his sighting to envelope debt vs
+   B-041 staleness vs titan colliders; deliverable is the attribution + worst-offender
+   table.
+3. Then §5E smooth terrain (plan stands in docs/PLAN.md).

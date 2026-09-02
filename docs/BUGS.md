@@ -772,3 +772,38 @@ and `schedules_build_or_explain` guards it, but the fix round must treat the ord
 claim and re-run `scripts/b041-stale-look.txt` (green = fixed) plus the f025 legs. Do NOT
 re-pin f025-chain first (FIND-228: half its `look` lines are dead letters under this bug —
 a pin would aim at the bug, the FIND-096 mistake).
+
+## B-042 — titan hit zones: "unmöglich diese überhaupt zu treffen" (2026-09-02, OPEN, cause unknown)
+
+His words, verbatim: *„ah und die hittboxen der titanen waren sehr schlecht. unmöglich
+diese überhautp zu treffen."* A symptom he reports is real even when the code looks right —
+every one so far has been.
+
+**Context that makes it plausible:** the titans were DOUBLED (scale.ron, his §5A order
+"gerne doppelt so groß") and the rig got real body segments with the neck window. Nobody
+has ever measured whether hit zones, blade sweep reach and the DRAWN mesh scaled
+consistently — this is the house disease (collider ≠ drawing, B-039) on the titan rig.
+Candidate mechanisms to measure, not argue: hit-zone capsules offset/undersized vs the
+doubled mesh; blade sweep length not scaled with the target; cortex window ticks too tight
+at the new geometry; `width_fraction` 0.20 cut after the doubling.
+
+**Repro:** none yet — that is the first deliverable. The instrument exists in shape:
+f030-hitbox scripts + the B-039 fleet method (ray/sweep distance between the drawn glb
+surface and the collider that actually registers). Binary state unknown for his session —
+attribute against the CURRENT tree first.
+
+## B-043 — the rope anchors in open air, again — this time NOT on a dressed house (2026-09-02, OPEN, cause unknown)
+
+His words, verbatim: *„auch das seil war einfach in der luft verankert!"* — after the
+B-039 house fix landed in the tree. Three candidate causes, each with an existing measured
+foothold, none confirmed for his sighting:
+1. **The documented B-039 debt**: remnants, the 12 props, dormers and chimneys still carry
+   fat envelope colliders — a hook there bites an invisible box. Measured oversize exists
+   in the B-039/FIND-225 record.
+2. **B-041**: a hook in the same tick as a `look` fires along the PREVIOUS look — the
+   anchor lands where the camera was, not where it is, which reads exactly as "in der
+   Luft". Repro: scripts/b041-stale-look.txt (4/7 red).
+3. Titan colliders vs drawn titan (see B-042 — if he hooked a titan, same disease).
+**First deliverable is attribution**: an in-repo fleet-style sweep measuring
+anchor-to-nearest-drawn-surface distance across remnants/props/titans, plus which of his
+plausible targets have envelope-only colliders.
