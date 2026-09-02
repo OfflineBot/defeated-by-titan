@@ -749,7 +749,9 @@ pointer to rebuild the entry from FIND-214.
 
 Found while attributing `f025-chain`'s 12/36 (FIND-228). For exactly ONE tick the gun and
 the eye disagree: `vector::aim::aim` runs in FixedUpdate `PostStep` (moved there by the
-2026-09-01 marker fix, FIND-222), and `vector::hook` consumes the previous tick's `ArmAim`
+2026-09-01 marker fix — FIND-217, held under A/B in FIND-219 §1; the first version of this
+entry cited FIND-222, which is the progression finding, wrong number), and `vector::hook`
+consumes the previous tick's `ArmAim`
 and never re-casts (its own decision 6). A `hook` in the same tick as a `look` therefore
 flies along the OLD look; 3 ticks of separation already behaves fresh.
 
@@ -763,8 +765,8 @@ when this is fixed.
 
 **Blast radius:** every corpus script that puts `hook` on the line after `look` with no
 wait — the f025-chain legs 2..5 shape — and, in play, a hook clicked mid-flick lands where
-the camera was 16 ms ago while the marker (PostStep-exact since FIND-222) shows the NEW
-aim: what you see is not what you fire, one tick wide.
+the camera was 16 ms ago while the marker (PostStep-exact since FIND-217/219) shows the
+NEW aim: what you see is not what you fire, one tick wide.
 
 **Fix warning:** the naive fix is re-ordering aim before hook inside one tick — schedule
 surgery in the exact class that produced the B-030 cycle OOM. `tools/test.sh` runs capped
@@ -845,3 +847,45 @@ Refuted: towers, wall modules, gates, bridge are honest by construction (drawn f
 collider's own cuboid); stations/water not hookable; terrain divergence ≤ 0.25 m.
 **Fix shape: hulls rows for the ~14 remnant/rubble/prop model classes (the mechanism
 shipped with B-039 — data work, no new code), then re-run this fleet; B-041 separately.**
+
+## B-044 — unfreezing a hit-stopped titan that TOUCHES anything aborts the process (2026-09-02, FIXED same day)
+
+B-004's twin, latent since F-034 and unreachable until B-042's pose-true colliders made
+player-titan contact during a cut the NORMAL case: `combat::hitstop` froze bodies with
+`RigidBodyDisabled` while a contact existed; the unfreeze then hit avian3d-0.7.0's
+`debug_assert` at `islands/mod.rs:518` (`contact.island.is_none()`, via
+`narrow_phase/system_param.rs:343`) and the whole game exits 101. **Captured:** before the
+fix `scripts/b042-titan-hitzone.txt` aborted exit 101 with the backtrace; foot-capsule
+ground penetration was ruled out first (feet lifted, still crashed). **Fix:** the freeze
+bracket also inserts `ColliderDisabled` and the unfreeze removes it, so no contact
+survives into the teardown. **Rollback:** delete the insert and the
+`.remove::<ColliderDisabled>()` — the abort returns on every kill pass that grazes flesh.
+After: exit 0, and the whole b042/f030 evidence set ran on the fixed build.
+
+## B-045 — game-full's two rope reds: a slack rope moves a standing player, and speed 16 after a release that followed a full stop (2026-09-02, OPEN, rope domain)
+
+Found by the f170/game-full re-derivation round, reported not tuned (the f032 lesson). On
+the pinned 2026-09-02 binary, `scripts/game-full.txt`: line 184 `assert Speed < 0.5 —
+measured 9.736` right after `hook right 1.0` with NO reel (a slack rope should move
+nobody), and line 279 `assert Speed < 1 — measured 16.000` at `game-rope-released` although
+`game-on-the-roof` (t=357) had provably held speed < 1.0 — something re-accelerates the
+player between t=357 and t=563 while only `hook left 6.0` and `key Ctrl 5.0` run. All three
+cortex cuts land (29.87 m/s, MISSION WON) — the reds are rope behaviour, not aim. Candidate
+suspects, unmeasured: the B-040 always-on ground pull (its contact-break line reads
+elevation — a roof anchor overhead is exactly the >68.96° regime) interacting with claims
+written before it existed. Needs a rope-domain owner with the two moments re-instrumented.
+
+## B-046 — f177 board-panel test is FLAKY: the prompt arrives empty in ~1 of 5 runs (2026-09-02, OPEN)
+
+Observed at the 2026-09-02 round gate: `tests/hud.rs::f177_the_board_panel_lists_exactly_
+what_missions_ron_offers` panicked with *"the prompt does not name the board: \"\""* —
+then passed 28/28 twice in isolation and had passed twice in full-suite runs the same
+morning. One failure in roughly five runs of the binary. **Cause unknown** — the shape
+(an empty string where a writer should have run) suggests the TEST app reads the board
+prompt one update before its writer, but no established finding covers it: FIND-190 was
+checked and is the door-prediction geometry, NOT a schedule race — do not cite it here.
+**A flake trains people to re-run gates, which is how real
+reds get skimmed past — this is a bug, not noise.** Repro: run `--test hud` in a loop
+until it fails (captured message above). Fix shape: find the prompt's writer, give the
+test an explicit settle (or the writer an ordering edge in the test app), and prove it
+with 30 consecutive green runs.

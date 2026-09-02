@@ -215,3 +215,39 @@ and cascading. B-018 class dissolves under the max-grade guard.
 detector, avian edge flags the fallback) · canal holes must be cut exactly or ground pokes
 through the water box · block-count tests move deliberately when ~6300 pads vanish ·
 titan-ring spawn at y=0 depends on the flat disc (assert map.rs:1285 guards it).
+
+## B-041 fix — the design (scouted 2026-09-02, builds after the B-042/B-043 round lands)
+
+**Candidate D won: a second instance of the aim resolution in the EMPTY `World` set.**
+`SimulationSystems::World` has been empty since aim moved to PostStep, and its doc never
+stopped saying "the aim ray". Add `pub fn pre_fire_aim(<identical params>)` in
+`src/vector/aim.rs` forwarding to `aim` (distinct fn type = distinct SystemTypeSet),
+registered `in_set(SimulationSystems::World)`. Per tick: World runs it with THIS tick's
+delivered look on the end-of-last-tick transform (the same Vec3 the drawn frame used —
+nothing writes Transform between PostStep and Intent); `update_hooks` in Intent then
+consumes a direction-fresh ArmAim; PostStep's `aim` overwrites for the HUD exactly as
+today. When the look did not change, inputs are bit-identical through the same code and
+`set_if_neq` elides the write — the behavioural delta is confined to ticks where the look
+moved. Decision 6 in hook.rs stays literally true (hook re-casts nothing); the assist
+resolves once, in aim.rs. Rejected: A (hook into PostStep — breaks the one-tick-lag pins,
+gas contract, forced-aim harness), B (fire-time re-cast — harness cannot intercept a real
+cast, both vector test files die), C (latch to next tick — adds the latency the user
+fought twice).
+
+**Build agent owns:** src/vector/aim.rs · src/vector/mod.rs (register + rewrite the
+:72-84 comment block, now the documented-bug prose) · src/vector/hook.rs (decision-6
+header amendment ONLY) · tests/vector_hooks.rs:124 + tests/vector_rope.rs:113
+(`force_aim.in_set(World).after(pre_fire_aim)` — NEVER `.after(aim)`, that is the exact
+B-030 shape) · docs closes B-041 + new FIND. Also: src/debug/mod.rs:363-365 stale claim
+becomes true again — touch up.
+
+**Acceptance in order:** scripts/b041-stale-look.txt 7/7 green exit 0 (A/C/E/F flip,
+B/D/W stay) · tools/test.sh --test vector_aiming with the printed worst-px at FIND-219
+magnitude (med 0.000 / max 0.01) captured · full tools/test.sh (schedules guard) · re-run
+whole binaries vector_hooks, vector_rope, vector_aiming, hud, input, latch, player (f176
+timing must NOT move — that is candidate A's failure mode, absent in D) · regression
+scripts f-001-hooks, f172-hook-toggle, f176-pull, f026-turn, f002-look(+turned) ·
+b043-flick-gap re-measured (the 1.02 m @ 14 m one-tick term collapses to ≈0; read its
+asserts before re-pinning) · THEN f025-chain re-run, never re-pinned first (FIND-228).
+Scout's open point: whether b043-flick-gap pins red numbers or is a pure harness — read
+before re-running.

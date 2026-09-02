@@ -118,7 +118,7 @@ if __name__ == '__main__':
         head = height_m - leg - torso; neck_r = head/2
         shoulder = 0.82*height_m
         rows = [
-            ('nape/cortex height', cortex_m, neck_r),
+            ('Cortex height', cortex_m, neck_r),
             ('neck mid', (shoulder + height_m)/2, neck_r),
             ('shoulder', shoulder, torso_r),
             ('torso mid', (torso_r + shoulder - torso_r)/2 + 0.0, torso_r),

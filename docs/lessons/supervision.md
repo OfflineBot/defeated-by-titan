@@ -266,3 +266,15 @@ The protocol that worked, in one line each:
   gate + corpus + push.
 - **A resumed agent whose journal shows started-without-result more than once is suspect**: let
   the refuter measure the final tree, and the supervisor sanity-checks at landing anyway.
+
+## A pinned binary does not pin its DATA SCHEMA (measured 2026-09-02)
+
+The remnant-hulls agent pinned its binary per the rule — and crashed anyway: a concurrent
+agent added `drawn_poses` to `titan.ron`, and every binary built BEFORE that change
+refuses the file at load (`deny_unknown_fields`). The pin protected the code, not the
+data contract. The agent worked around it with a shadow assets root (symlink tree with
+the schema-critical RON at its pre-round state — `src/data/mod.rs` reads CWD first).
+**Rule: a commission that changes any RON SCHEMA (not values — keys) must be named in the
+fan-out interface, and every concurrently-running agent that runs the game binary needs
+either the shadow-assets workaround in its brief or a sequencing edge before the schema
+change lands.** Values stay parallel-safe; keys do not.
