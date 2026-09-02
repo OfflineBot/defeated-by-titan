@@ -141,6 +141,13 @@ impl GameData {
         self.art.models.get(name)
     }
 
+    /// `B-042` — the drawn pose of the model this kind wears, if `titan.ron` carries one.
+    /// `None` is the primitive-rig case and legal; a **glb-bound** titan model without a pose
+    /// is the B-042 disease itself, and `tests/titan.rs` fails on it instead of this accessor.
+    pub fn titan_drawn_pose(&self, kind: &TitanKind) -> Option<&DrawnPose> {
+        self.titans.drawn_poses.get(&kind.model)
+    }
+
     /// A size class by its logical name (`scale.ron: titan.classes`). `None` means: the class
     /// does not stand in the RON — `tests/data.rs` catches that before a Titan of height 0
     /// stands in the ground.
@@ -1461,6 +1468,48 @@ pub struct Titans {
     pub crowd: TitanCrowd,
     /// `F-054` — how often a titan's brain runs, by distance.
     pub lod: TitanLod,
+    /// `B-042` — **the drawn pose of a glb-dressed titan model**, keyed by the model name a
+    /// kind wears (`TitanKind::model`). A `.glb` body is authored in a pose (the a-042 figure
+    /// STRIDES) while the rig's capsules stand on the axis — up to 2.4 m of drawn flesh
+    /// registered nothing and 0.86 m of registering air stood outside the drawn waist.
+    /// `titan::rig` builds the physical body collider out of these capsules for every kind
+    /// whose model has a row here; a model without a row keeps the axis-centred
+    /// `TitanRig::body_segments_m` build. The numbers are MEASURED from the file's mesh
+    /// (23 780 surface samples), not styled — the measurement record is in the row comments
+    /// of `titan.ron`.
+    pub drawn_poses: BTreeMap<String, DrawnPose>,
+}
+
+/// `B-042` — one glb body's drawn pose, as capsules in the **model file's own units**, already
+/// turned into the game's frame (+x right, +y up, **+z backwards** — i.e. after
+/// `shared::MODEL_FACES`). `titan::rig` scales them by `cortex_height_m / cortex_y`, which is
+/// **exactly** the factor `render::model::fit_to_class` scales the drawn mesh by — so the
+/// registering surface and the picture cannot drift apart, at any `scale.ron` size.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DrawnPose {
+    /// The y of the model's own `cortex` empty, in the file's units. The same number the
+    /// renderer's fit divides by; writing it here instead of reading the `.glb` at spawn keeps
+    /// `data` free of asset IO. A wrong value scales the whole capsule set off the drawn body
+    /// — which is what `scripts/b042-titan-hitzone.txt` (drawn jaw books a hit) and
+    /// `scripts/b042-air-hit.txt` (visible air books nothing) pin from both sides.
+    pub cortex_y: f32,
+    /// One capsule per drawn body part. The physical collider for this model is the compound
+    /// of exactly these plus the rig's own neck segment (the nape geometry `f030` measured).
+    pub capsules: Vec<DrawnCapsule>,
+}
+
+/// One capsule of a [`DrawnPose`]: endpoints `a` -> `b` and a radius, all in the model file's
+/// units, in the game-turned frame, y measured from the ground between the feet.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DrawnCapsule {
+    /// Which drawn part this is — documentation and test addressing, not a mechanic: a hit
+    /// on any of these books through the same body layer and zone tiering as before.
+    pub part: String,
+    pub radius: f32,
+    pub a: [f32; 3],
+    pub b: [f32; 3],
 }
 
 /// `F-051` — **the perception model**, the half of it that is not a kind's own.

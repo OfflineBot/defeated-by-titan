@@ -429,4 +429,54 @@
         mid_hz: 20.0,
         far_hz: 5.0,
     ),
+
+    // B-042 — the drawn pose of every glb-dressed titan model, as hit/collision capsules.
+    //
+    // "die hittboxen der titanen waren sehr schlecht. unmöglich diese überhautp zu treffen."
+    // The a-042 body is a gaunt figure mid-STRIDE — head thrust ~1 unit forward, left arm
+    // swinging forward, right arm back, left leg planted forward, right trailing — while the
+    // rig registered hits on two axis-centred capsules only. Measured gap on the husk (x2
+    // scale): drawn jaw 2.01 m in front of the neck collider, striding hand 1.9 m beside it,
+    // and 0.86 m of registering AIR outside the drawn waist (scripts/b042-titan-hitzone.txt,
+    // scripts/b042-air-hit.txt).
+    //
+    // Units: the MODEL FILE's own units (NOT metres), in the game-turned frame (+z backwards,
+    // MODEL_FACES applied), y from the ground between the feet. `titan::rig` scales every
+    // number by `cortex_height_m / cortex_y` — the exact factor the renderer fits the mesh
+    // with, so a scale.ron change moves picture and capsules together (husk today: x2.0).
+    //
+    // MEASURED 2026-09-02 from a-042-koerpertyp-a-hager-mittel.glb: 23 780 surface samples,
+    // capsules fitted per part (skeleton assignment + PCA refit, radius at p95). Against this
+    // set plus the rig's neck segment the drawn surface sticks out at most 0.218 units
+    // (0.44 m at husk scale; p99 0.09), and the worst registering air over any capsule is
+    // 0.52 units behind the leaning torso's waist (was: 0.86 m of air at r 2.00 m, plus a
+    // whole drawn jaw, hand and knee registering nothing at all).
+    //
+    // The torso leans forward (pelvis z +0.10, chest z -0.42): one tilted capsule, not two
+    // rows. The drawn leg is STRAIGHT hip to ankle (knee on the line within 0.05 units), so
+    // thigh+shin are one capsule per leg — a second row would model a joint the mesh does
+    // not have.
+    drawn_poses: {
+        "titan_husk": (
+            cortex_y: 8.9,
+            capsules: [
+                (part: "torso",      radius: 0.64, a: (0.00, 5.10,  0.10), b: ( 0.00, 8.20, -0.42)),
+                (part: "head",       radius: 0.50, a: (0.00, 9.30, -0.05), b: (-0.10, 9.55, -0.72)),
+                (part: "arm_left_upper",  radius: 0.22, a: (-0.85, 8.10, -0.40), b: (-1.10, 6.10, -0.90)),
+                (part: "arm_left_lower",  radius: 0.18, a: (-1.10, 6.00, -0.90), b: (-1.02, 3.85, -1.50)),
+                (part: "arm_right_upper", radius: 0.22, a: ( 0.85, 8.00, -0.50), b: ( 1.15, 5.70,  0.10)),
+                (part: "arm_right_lower", radius: 0.18, a: ( 1.12, 5.65,  0.12), b: ( 1.06, 3.75,  0.72)),
+                (part: "hand_left",  radius: 0.28, a: (-1.04, 3.80, -1.50), b: (-0.98, 2.85, -1.75)),
+                (part: "hand_right", radius: 0.27, a: ( 1.14, 3.70,  0.70), b: ( 1.10, 2.80,  0.90)),
+                (part: "leg_left",   radius: 0.34, a: (-0.42, 5.30, -0.10), b: (-0.46, 0.50, -0.78)),
+                (part: "leg_right",  radius: 0.32, a: ( 0.48, 5.30,  0.12), b: ( 0.62, 0.50,  0.72)),
+                (part: "foot_left",  radius: 0.28, a: (-0.47, 0.30, -0.35), b: (-0.46, 0.30, -1.60)),
+                (part: "foot_right", radius: 0.29, a: ( 0.66, 0.31, -0.05), b: ( 0.66, 0.31,  1.15)),
+            ],
+        ),
+        // "titan_large" has NO row on purpose: it is `Primitive` in art.ron (its glb binding
+        // is blocked by 1.4 cm of cortex x, see the art.ron row), so the box rig IS the
+        // picture and the axis-centred capsules are honest. The day it binds, it needs a
+        // pose here — tests/titan.rs::b042 fails loudly on a glb-bound titan model without one.
+    },
 )

@@ -50,7 +50,7 @@ use avian3d::prelude::{Collider, CollisionLayers, LayerMask, RigidBody, Sensor};
 use avian3d::prelude::CustomPositionIntegration;
 use bevy::prelude::*;
 
-use crate::data::{GameData, TitanKind};
+use crate::data::{DrawnPose, GameData, TitanKind};
 use crate::shared::{
     Body, BodyMask, Health, HitZone, HitZoneOf, ModelAnchors, StateClock, TitanId, TitanKindName,
     TitanState, Velocity, CORTEX_ANCHOR, LAYER_TITAN_BODY, LAYER_TITAN_CORTEX,
@@ -157,14 +157,22 @@ impl TitanRig {
         self.leg_m + self.torso_m * 0.5
     }
 
-    /// 🔴 **The one writer of "how wide is the body a blade has to reach past".**
+    /// 🔴 **The one writer of "how wide is the AXIS-CENTRED body a blade has to reach past".**
     ///
-    /// Returns the vertical capsule segments the *physical* collider is made of, as
+    /// Returns the vertical capsule segments of the axis-centred rig body, as
     /// `(radius_m, y_bottom_m, y_top_m)` — the two **endpoint** heights above the feet, so the
-    /// solid reaches `y_bottom − radius` .. `y_top + radius`. `build_rig` builds the collider
-    /// out of exactly this list and nothing else, and every test asks this instead of
-    /// re-deriving `width_fraction × height / 2` for itself (`CLAUDE.md` rule 5's corollary:
-    /// *one writer decides, everyone else reads the answer*).
+    /// solid reaches `y_bottom − radius` .. `y_top + radius` — and every test asks this
+    /// instead of re-deriving `width_fraction × height / 2` for itself (`CLAUDE.md` rule 5's
+    /// corollary: *one writer decides, everyone else reads the answer*).
+    ///
+    /// ⚠️ Since `B-042` the collider is built from
+    /// [`registering_segments_m`](Self::registering_segments_m), which for a glb-dressed kind
+    /// replaces the torso barrel here with the model's measured drawn-pose capsules — but
+    /// keeps this function's **neck** segment verbatim, so everything the nape tests read off
+    /// this list (the neck radius, the nape clearance band) is still the truth of the built
+    /// collider. Only the torso barrel is then wider here than what is really in the world,
+    /// and only on the five glb kinds — a fixture that reads the torso row of a glb kind is
+    /// asking the wrong writer.
     /// **A titan has a neck, and until 2026-08-29 he did not.** The collider was ONE capsule of
     /// shoulder half-width (`width_fraction × height / 2`) running from the ankles to the crown,
     /// so the solid at nape height was `0.125 × height` where the head is only `0.055 × height`
@@ -186,6 +194,53 @@ impl TitanRig {
             (torso_r, torso_r, self.shoulder_m - torso_r),
             (neck_r, self.shoulder_m - neck_r, self.height_m - neck_r),
         ]
+    }
+
+    /// 🔴 **The one writer of the REGISTERING surface** — every capsule the physical body
+    /// collider is made of, as `(radius_m, a_m, b_m)` endpoint pairs in the root's local
+    /// frame. `build_rig` builds the compound out of exactly this list and nothing else.
+    ///
+    /// ## `B-042`: with a drawn pose, the collider is the PICTURE, not the axis
+    ///
+    /// *„die hittboxen der titanen waren sehr schlecht. unmöglich diese überhautp zu
+    /// treffen."* — measured true: the five glb-dressed kinds draw a striding figure whose
+    /// jaw sits 2.01 m in front of the neck collider and whose waist is 0.86 m inside the
+    /// torso capsule's registering air. The models carry **zero animation clips**
+    /// (`art.ron`: "the drop has ZERO clips" — every `animations: {}` is the file's own
+    /// truth), so the drawn pose is STATIC and one measured capsule set per model is exact,
+    /// not an approximation of a moving body. The `titan.ron: drawn_poses` row is that
+    /// measurement; here it is scaled by `cortex_height_m / cortex_y` — the same factor
+    /// `render::model::fit_to_class` scales the mesh by, so the picture and the collider
+    /// cannot drift apart at any `scale.ron` size.
+    ///
+    /// ## The neck segment survives untouched, and that is a constraint, not an accident
+    ///
+    /// The nape geometry is 🟧 with red-checked evidence (`f030-hitbox`: all seven kinds die;
+    /// the lurker registration boundary measured at the computed 5.00 m). The neck capsule out
+    /// of [`body_segments_m`](Self::body_segments_m) is what the cortex sphere protrudes from
+    /// by construction, so it is copied into the compound verbatim — the drawn capsules only
+    /// ever ADD forward-hanging flesh (head, striding limbs) and REPLACE the fat torso barrel;
+    /// none of them reaches the nape band (measured: the drawn head capsule's rearmost point
+    /// stays inside the neck capsule's own footprint).
+    ///
+    /// Without a pose (the primitive-rig kinds) this is [`body_segments_m`](Self::body_segments_m)
+    /// verbatim, endpoints put on the axis.
+    pub fn registering_segments_m(&self, pose: Option<&DrawnPose>) -> Vec<(f32, Vec3, Vec3)> {
+        let on_axis = |(r, bottom, top): (f32, f32, f32)| {
+            (r, Vec3::new(0.0, bottom, 0.0), Vec3::new(0.0, top, 0.0))
+        };
+        let Some(pose) = pose else {
+            return self.body_segments_m().into_iter().map(on_axis).collect();
+        };
+        let fit = self.cortex_height_m / pose.cortex_y;
+        // The LAST body segment is the neck — `body_segments_m` builds torso-then-neck and
+        // its own doc calls the second segment the neck; `tests/titan.rs` pins the order.
+        let neck = on_axis(*self.body_segments_m().last().expect("body_segments_m is never empty"));
+        std::iter::once(neck)
+            .chain(pose.capsules.iter().map(|c| {
+                (c.radius * fit, Vec3::from(c.a) * fit, Vec3::from(c.b) * fit)
+            }))
+            .collect()
     }
 
     /// The half-width of the physical body at height `y_m` above the feet — 0.0 where the
@@ -440,23 +495,17 @@ pub fn build_rig(
                 // Endpoints, not `Collider::capsule`: that one centres the capsule on the
                 // origin and would sink the titan half his height into the ground, because a
                 // body's origin lies between its feet (the same trap as `player/mod.rs`).
-                // 🔴 **Built out of `TitanRig::body_segments_m` and nothing else** — the one
-                // writer of the body's width at a given height. Before 2026-08-29 this line
-                // held its own `capsule_endpoints(w * 0.5, ...)` and three tests re-derived
-                // the same arithmetic beside it.
+                // 🔴 **Built out of `TitanRig::registering_segments_m` and nothing else** —
+                // the one writer of the registering surface. Before 2026-08-29 this line held
+                // its own `capsule_endpoints(w * 0.5, ...)` and three tests re-derived the
+                // same arithmetic beside it; since B-042 the list is the model's measured
+                // drawn pose wherever `titan.ron: drawn_poses` carries one, so the surface a
+                // blade or a rope registers on IS the surface the player sees drawn.
                 Collider::compound(
-                    rig.body_segments_m()
+                    rig.registering_segments_m(data.titan_drawn_pose(kind))
                         .into_iter()
-                        .map(|(r, bottom, top)| {
-                            (
-                                Vec3::ZERO,
-                                Quat::IDENTITY,
-                                Collider::capsule_endpoints(
-                                    r,
-                                    Vec3::new(0.0, bottom, 0.0),
-                                    Vec3::new(0.0, top, 0.0),
-                                ),
-                            )
+                        .map(|(r, a, b)| {
+                            (Vec3::ZERO, Quat::IDENTITY, Collider::capsule_endpoints(r, a, b))
                         })
                         .collect(),
                 ),

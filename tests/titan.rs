@@ -2706,14 +2706,29 @@ fn q031_the_nape_survives_a_titan_who_tracks_you() {
         while turned <= 90.0 {
             let p = fly_past_a_titan(kind, Vec3::NEG_Z, AIR_M, 30.0, None, Tracking::Off, None, turned);
             if p.cortex_tick.is_none() {
-                // 🔴 The blade has to be INSIDE the cortex when this happens, or the pass was
-                // refused by geometry and this sweep is measuring the wrong thing entirely.
+                // 🔴 A refused pass has to be one of exactly two things, or this sweep is
+                // measuring a reach bug and not the approach angle:
+                //
+                // - **the gate** — the blade is INSIDE the cortex and `cortex_half_angle_deg`
+                //   said no (`p.blade_gap_m < 0.0`), which was the only legal refusal while
+                //   the body was two axis-centred capsules; or
+                // - **the titan's own drawn body** — since `B-042` the registering surface is
+                //   the pose (`titan.ron: drawn_poses`), and a husk yawed ≥ 60° puts his
+                //   leaning chest and forward upper arm INTO this lane (measured 2026-09-02:
+                //   the lane clears his flesh by −0.70 m at 60°). The pass is then shoved off
+                //   the line before the blade arrives, and the discriminator is the shove:
+                //   every body-shut refusal measured carried `thrown_off_m_s ≥ 10.5` where a
+                //   short blade with nothing in the lane carries ~0 (the 55° pass still LANDS
+                //   through 8.2 m/s of graze). A refusal with the blade short AND no shove is
+                //   still the reach running out, and still fails here.
                 assert!(
-                    p.blade_gap_m < 0.0,
+                    p.blade_gap_m < 0.0 || p.thrown_off_m_s > 5.0,
                     "{kind}: the pass stopped landing at {turned}° of turn with the blade \
-                     {:+.3} m SHORT of the cortex — that is the reach running out, not the gate. \
-                     This sweep is not measuring cortex_half_angle_deg",
-                    p.blade_gap_m
+                     {:+.3} m SHORT of the cortex and only {:.1} m/s of deflection — that is \
+                     the reach running out, not the gate and not the body. This sweep is not \
+                     measuring the approach angle",
+                    p.blade_gap_m,
+                    p.thrown_off_m_s
                 );
                 shut_at = Some((turned, p.blade_gap_m));
                 break;
@@ -2777,10 +2792,16 @@ const GRAPPLE_LANE_Y: f32 = 60.0;
 /// writer, so he does not fall out of it.
 const GRAPPLE_TITAN_M: Vec3 = Vec3::new(0.0, GRAPPLE_LANE_Y, 0.0);
 
-/// The player: 14 m to the titan's −X side and 3 m up, which puts his eye inside the capsule's
-/// vertical span (feet + 1.6 m … feet + 8.4 m on a 10 m husk). Inside `aggro_radius_m` (45 m),
-/// because a hook into a statue proves nothing about a moving carrier.
-const GRAPPLE_PLAYER_M: Vec3 = Vec3::new(-14.0, GRAPPLE_LANE_Y + 3.0, 0.0);
+/// The player: 14 m to the titan's −X side and 13 m up, which puts the level aim ray through
+/// the doubled husk's **drawn chest** (`B-042`: the registering surface is the pose, and its
+/// torso capsule stands solid over feet + 8.9 m … feet + 17.7 m within ~1.3 m of the axis).
+/// Until 2026-09-02 this said `+ 3.0` — shin height — and that ray anchored in the old fat
+/// barrel's registering air: at shin height the pose-true surface is two striding legs a metre
+/// fore and aft of the axis, and a ray dead down the axis now honestly flies BETWEEN them,
+/// which is precisely the air the user's rope kept anchoring in ("das seil war einfach in der
+/// luft verankert"). Inside `aggro_radius_m` (45 m), because a hook into a statue proves
+/// nothing about a moving carrier.
+const GRAPPLE_PLAYER_M: Vec3 = Vec3::new(-14.0, GRAPPLE_LANE_Y + 13.0, 0.0);
 
 /// Parks the local player where he is put, weightless and still, looking at **+X**.
 ///
@@ -3611,4 +3632,169 @@ fn f054_a_far_titan_thinks_less_often_and_winds_up_for_just_as_long() {
         "F-054 240 ticks: 20 m -> {close} brain runs, 400 m -> {distant} (1 in {far}), control \
          {control}. Mid-tier wind-up {windup_ticks} ticks against {wanted}"
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// B-042 — the drawn pose IS the registering surface on the glb-dressed kinds
+// ---------------------------------------------------------------------------------------
+
+/// Distance from a point to a capsule's surface: negative inside. The same arithmetic
+/// `avian` answers a cast with, written out so the test does not need a physics world.
+fn capsule_surface_distance_m(p: Vec3, r: f32, a: Vec3, b: Vec3) -> f32 {
+    let ab = b - a;
+    let t = ((p - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0);
+    (p - (a + ab * t)).length() - r
+}
+
+fn drawn_data() -> GameData {
+    GameData::load(std::path::Path::new("assets/data"))
+}
+
+/// B-042 — a titan model that draws a `.glb` carries a `drawn_poses` row, and a primitive
+/// one does not. The disease was exactly the missing half: a picture with no matching
+/// surface. The other direction matters too — a pose on a primitive-drawn model would put
+/// a striding surface under a standing box rig, which is B-042 with the signs flipped.
+///
+/// Fixture note (docs/lessons/fixtures.md): the code reads `TitanKind::model` and
+/// `art.ron: models[..].source`; this test varies NEITHER — it walks every kind the files
+/// really ship, so a ninth kind or a rebound model is checked the day it lands.
+#[test]
+fn b042_a_glb_dressed_titan_model_has_a_drawn_pose_and_a_primitive_one_has_none() {
+    use defeated_by_titan::data::ModelSource;
+    let d = drawn_data();
+    for (name, kind) in &d.titans.kinds {
+        let model = d
+            .model(&kind.model)
+            .unwrap_or_else(|| panic!("kind {name:?} wears model {:?} that art.ron does not know", kind.model));
+        let pose = d.titan_drawn_pose(kind);
+        match &model.source {
+            ModelSource::Gltf(_) => assert!(
+                pose.is_some(),
+                "kind {name:?} draws {:?} from a .glb but titan.ron: drawn_poses has no row for \
+                 it — its hit surface is the axis rig while the player sees a striding body \
+                 (B-042)",
+                kind.model
+            ),
+            ModelSource::Primitive => assert!(
+                pose.is_none(),
+                "kind {name:?} is drawn as the box rig itself, but titan.ron: drawn_poses \
+                 carries a pose for {:?} — a striding surface under a standing picture is \
+                 B-042 with the signs flipped",
+                kind.model
+            ),
+        }
+    }
+}
+
+/// B-042 — on the husk, the registering surface is the drawn pose: the neck segment of
+/// `body_segments_m` survives verbatim (the f030 nape geometry), the drawn jaw is INSIDE
+/// the surface, and the old torso barrel's registering air at the waist is OUTSIDE it.
+///
+/// The jaw and waist points are measured off `a-042-koerpertyp-a-hager-mittel.glb`
+/// (23 780 surface samples, 2026-09-02), written here in the model's own units and scaled
+/// by the same `cortex_height_m / cortex_y` the renderer fits the mesh with.
+///
+/// Fixture note: the code reads `titan.ron: drawn_poses` through
+/// `TitanRig::registering_segments_m`; the fixture varies the POSE ARGUMENT (`Some` vs
+/// `None`) on the same points — the delete-the-thing control the fixtures lesson asks for:
+/// against `None` (the pre-B-042 surface) the jaw assertion goes red and the waist
+/// assertion flips, so the capsule rows are measurably what makes both hold.
+#[test]
+fn b042_the_husk_registers_on_the_drawn_jaw_and_not_in_the_waist_air() {
+    let d = drawn_data();
+    let husk = d.titan("husk").expect("titan.ron has a husk");
+    let rig = TitanRig::of(&d, husk).expect("husk rig");
+    let pose = d.titan_drawn_pose(husk).expect("the husk draws a .glb, so it has a pose");
+    let fit = rig.cortex_height_m / pose.cortex_y;
+
+    let segments = rig.registering_segments_m(Some(pose));
+    let plain = rig.registering_segments_m(None);
+
+    // 1. The neck segment stands first and verbatim — f030's nape geometry is untouched.
+    let (neck_r, neck_bottom, neck_top) =
+        *rig.body_segments_m().last().expect("body_segments_m is never empty");
+    assert_eq!(
+        segments[0],
+        (neck_r, Vec3::new(0.0, neck_bottom, 0.0), Vec3::new(0.0, neck_top, 0.0)),
+        "the first registering segment of a posed kind must be the rig's own neck"
+    );
+
+    let inside = |segs: &[(f32, Vec3, Vec3)], p: Vec3| {
+        segs.iter()
+            .map(|(r, a, b)| capsule_surface_distance_m(p, *r, *a, *b))
+            .fold(f32::INFINITY, f32::min)
+    };
+
+    // 2. The drawn face front (glb (-0.10, 9.45, -0.85), on the jaw slab the user's blade
+    //    crossed for nothing) is inside the new surface — and OUTSIDE the old one by over
+    //    half a metre, which is the whole bug.
+    let jaw = Vec3::new(-0.10, 9.45, -0.85) * fit;
+    let jaw_new = inside(&segments, jaw);
+    let jaw_old = inside(&plain, jaw);
+    assert!(
+        jaw_new <= 0.0,
+        "the drawn jaw at {jaw} sits {jaw_new:.2} m OUTSIDE the posed registering surface — \
+         a blade through the visible face books nothing again (B-042)"
+    );
+    assert!(
+        jaw_old > 0.5,
+        "control: the same jaw point should be far outside the axis rig (measured 2.01 m of \
+         gap before the fix) — it is {jaw_old:.2} m, so this test is no longer measuring the \
+         thing B-042 was about"
+    );
+
+    // 3. 1.5 m beside the axis at waist height is VISIBLE AIR (drawn half-width 1.14 m) —
+    //    outside the new surface, inside the old barrel (r = width/2 = 2.0 m). This is the
+    //    shrink half: without it the rope keeps anchoring in air ("das seil war einfach in
+    //    der luft verankert").
+    let waist_air = Vec3::new(0.75, 6.5, 0.0) * fit;
+    let air_new = inside(&segments, waist_air);
+    let air_old = inside(&plain, waist_air);
+    assert!(
+        air_new > 0.0,
+        "1.5 m beside the drawn waist still registers ({air_new:.2} m inside) — the torso \
+         capsule did not tighten to the drawn skin"
+    );
+    assert!(
+        air_old < 0.0,
+        "control: the same point should be inside the OLD barrel ({air_old:.2} m) — if it is \
+         not, the axis rig changed underneath this test and the comparison means nothing"
+    );
+
+    println!(
+        "B-042 husk: jaw {jaw_new:.2} m inside (was {jaw_old:.2} m outside), waist air \
+         {air_new:.2} m outside (was {:.2} m inside), fit {fit:.4}",
+        -air_old
+    );
+}
+
+/// B-042 — the pose follows `scale.ron` through the SAME factor the drawn mesh does.
+/// A future doubling (the user's §5A order went through exactly once already) moves the
+/// picture and the registering surface together, or B-042 comes straight back.
+///
+/// Fixture note: the code reads `cortex_height_m / cortex_y`; the fixture varies
+/// `cortex_height_m` alone (×2) and asserts every drawn capsule's radius and endpoints
+/// double while the neck segment follows its own rig arithmetic instead.
+#[test]
+fn b042_the_drawn_capsules_scale_with_the_cortex_height_like_the_mesh_fit() {
+    let d = drawn_data();
+    let husk = d.titan("husk").expect("titan.ron has a husk");
+    let rig = TitanRig::of(&d, husk).expect("husk rig");
+    let pose = d.titan_drawn_pose(husk).expect("the husk has a pose");
+
+    let doubled = TitanRig { cortex_height_m: rig.cortex_height_m * 2.0, ..rig };
+    let base = rig.registering_segments_m(Some(pose));
+    let twice = doubled.registering_segments_m(Some(pose));
+    assert_eq!(base.len(), twice.len());
+    // Skip the neck (index 0): it derives from head_m, which this fixture holds still.
+    for ((r1, a1, b1), (r2, a2, b2)) in base.iter().skip(1).zip(twice.iter().skip(1)) {
+        assert!(
+            (r2 - r1 * 2.0).abs() < 1e-4
+                && (*a2 - *a1 * 2.0).length() < 1e-3
+                && (*b2 - *b1 * 2.0).length() < 1e-3,
+            "a drawn capsule did not scale with cortex_height_m: {:?} -> {:?}",
+            (r1, a1, b1),
+            (r2, a2, b2)
+        );
+    }
 }
