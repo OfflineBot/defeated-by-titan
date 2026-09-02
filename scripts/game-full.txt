@@ -35,6 +35,24 @@
 #   (23 asserts until 2026-08-19; the 24th is the invocation guard at line 102 and it is an
 #    ADDED claim, not a changed one)
 #
+# ⚠️ **RE-MEASURED 2026-09-02, pinned binary — 2 of 24 red, and NEITHER is the kill pass.**
+# The three cuts still land (t=619/706/793, each `cut titan N Cortex at 29.87 m/s`, kills 3/3,
+# MISSION WON) — so the B-042-attribution suspicion that ACT 2 shared f170's stale g = −20 pass
+# is REFUTED by measurement: this file's acts were re-derived on 2026-08-29 (waits 0.281/0.506,
+# warp 30.26) and hold on today's rig, while `f170-objective.txt` was the file still carrying
+# the old numbers (fixed 2026-09-02, its own header). The two reds are ACT 1 rope claims and
+# belong to the vector/rope domain, not to this file's aim:
+#   line 184: `assert speed < 0.5` after `hook right 1.0` (unreeled = slack) — measured 9.736
+#   line 279: `assert speed < 1` at `game-rope-released` (at rest, attached to nothing) —
+#             measured 16.000
+# `game-on-the-roof` (t=357) still held `speed < 1.0` and `height > 11.5`, so the player DID
+# land and stand — something accelerated him again between t=357 and t=563, inside the window
+# where `hook left 6.0` (to t=533) and `key Ctrl 5.0` (to t=498) run out. Also the Torso graze
+# three ticks before each Cortex cut is gone (was 619 Torso / 622 Cortex; now Cortex directly).
+# **Not re-aimed here**: a rope-behaviour red gets fixed in the rope, not tuned away in a
+# script (the f032 lesson), and an assert that says "an unreeled rope is slack" is a claim
+# about the game, not about this file's geometry.
+#
 # ⚠️ **AND ON 2026-08-26 THE CROWD RING TOOK ACT 3 AWAY — RE-AIMED AGAIN, NOT LOOSENED.**
 # Five of the 24 were red because `F-055` gives a titan a standing place to walk to as soon as
 # **one other titan** has also noticed the player, and `missions.ron: tutorial` brings its own

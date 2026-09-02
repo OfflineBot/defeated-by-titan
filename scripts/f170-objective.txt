@@ -1,32 +1,49 @@
 # f170-objective — THE COUNTER ON THE SCREEN: one cut, and the top of the screen says 1/3.
 #
+# PINS: the pass speed at the nape (21.0 m/s) AND the 0.60 m of air between the two capsules —
+#       scripts/f030-hitbox.txt's medium row, verbatim. Warp height and both waits follow from
+#       `game.ron: gravity_m_s2` and are re-evaluated, never re-aimed.
+#
 #   the verdict:  cargo run -q -- --headless  --mission tutorial \
 #                     --script scripts/f170-objective.txt --ticks 500
 #
-#   ⚠️ `--ticks 400` until 2026-08-12, and it CUT THE SCRIPT OFF: the run needs 457 ticks and
-#   the last instruction was still running at 400. Since FIND-032 an unfinished run is an
-#   error, so this read as a red file with no failed assert. 500 finishes it: 4 asserts held.
+#   ⚠️ `--ticks 400` until 2026-08-12, and it CUT THE SCRIPT OFF (FIND-032: an unfinished run
+#   is an error). The run needs 406 ticks since 2026-09-02 (457 before); 500 still finishes it.
 #   the picture:  cargo run -q -- --offscreen --mission tutorial \
 #                     --script scripts/f170-objective.txt --ticks 300 \
 #                     --screenshot docs/images/f170-objective.png
 #   the CONTROL:  the very same line WITHOUT `--mission` (see below)
 #
-# 🔴 **RED ON PURPOSE SINCE 2026-08-29 — `docs/BUGS.md` B-019.** `assert kills == 1` reads
-# **0.000**, and it is **not** the gravity change: it is red at `gravity_m_s2: -20` too, with the
-# committed numbers. The cut below still works exactly as recorded — 30.00 then 30.33 m/s, kill
-# 1/3 — **when the husk is spawned in the mission's first tick**. Put ANY leading `wait` in front
-# of it, even `wait 0.0`, and the blade hits `Torso`, `ArmLeft` and `LegLeft` and never the
-# `Cortex`. The `wait 1.5` this file opens with is that leading wait. Do not re-aim it: the
-# window is nine ticks wide with no preamble and empty with one, so there is no number to aim at.
-# ⚠️ The header below says this cut is `scripts/game-full.txt` ACT 2 verbatim — that file was not
-# checked this round and very likely carries the same defect.
+# ## RE-DERIVED 2026-09-02 — the pass was stale twice over, and the numbers say how
+#
+# The cut below carried `warp y 30.8` and waits `0.45 / 0.90` until today: the g = −20
+# derivation over the 10 m husk, untouched while `gravity_m_s2` went −20 → −32 (2026-08-27)
+# and `scale.ron`'s classes DOUBLED (2026-08-29, the user's *„gerne doppelt so groß"*). At
+# g = −32 that press fell 1.35 s ≈ 29 m and arrived at height 5.7 m against a nape at 17.8 m,
+# bouncing off the doubled torso footprint on the way down (lane lateral 1.88 m < torso r
+# 2.00 — the measured trace is in `docs/BUGS.md` B-042 · Attribution). Captured red,
+# pinned binary, 2026-09-02: `1 of 4 asserts failed · line 102: assert Kills == 1 — measured
+# 0.000`. The fix is not a re-aim: the pass is now `scripts/f030-hitbox.txt`'s medium row —
+# rig-derived, 0.60 m cushion, green against all seven kinds — translated to this file's
+# titan stand. One husk, same asserts, nothing loosened.
+#
+# ⚠️ **B-019's "any leading wait empties the window" did NOT survive the re-derivation.**
+# This file opens with `wait 1.5` as it always did, and the cut lands (t=131, Cortex,
+# 20.80 m/s). The nine-tick no-preamble window that header spoke of belonged to the stale
+# g = −20 geometry, not to the mission or the wait.
 #
 # ## What this file is for, and why it is not `scripts/game-full.txt`
 #
-# `docs/PLAN-GAME.md` §1 asks for a counter "in the top of the screen" that "goes from `0/3` to
-# `1/3`". `game-full.txt` photographs the END of that sentence — the word `WON` over a cleared
-# field. This one photographs the MIDDLE, which is the half a player spends the mission looking
-# at: the mission running, `Active`, one titan cut, `1/3` in amber above the crosshair.
+# `docs/PLAN-GAME.md` §1 asks for a counter "in the top of the screen" that "goes from `0/3`
+# to `1/3`". `game-full.txt` photographs the END of that sentence — the word `WON` over a
+# cleared field. This one photographs the MIDDLE, which is the half a player spends the
+# mission looking at: the mission running, `Active`, one titan cut, `1/3` in amber.
+#
+# ⚠️ **The cut is NOT game-full ACT 2 any more, and it never was "verbatim" after 2026-08-29:**
+# game-full's acts were re-derived that day to a 30 m/s pass (waits 0.281/0.506, warp 30.26)
+# while this file kept the g = −20 numbers. Since 2026-09-02 this file flies f030's 21 m/s
+# pass instead — so the flagship evidence samples two closing speeds on purpose: game-full
+# cuts at ~30 m/s, this file at ~21.
 #
 # ## The control run is the point, not an afterthought
 #
@@ -41,47 +58,26 @@
 # `None`, and the line hides itself (`tests/hud.rs::f170_the_objective_line_stays_empty_without
 # _a_mission`). Everything else in the frame is identical: the city, the light, the player, the
 # husk — `spawn titan` writes the same `SpawnTitan` message with or without a mission. The two
-# asserts below fail in that run, loudly and on purpose; the failure IS the control (no mission,
-# no kill, no counter), and the PNG is written at tick 300 long before the run ends.
+# kill/phase asserts below fail in that run, loudly and on purpose; the failure IS the control
+# (no mission, no kill, no counter), and the PNG is written at tick 300 long before the run ends.
 #
-# MEASURED on debian, 2026-08-10:
+# MEASURED on offlinebot, 2026-09-02, pinned binary:
 #
-#   t=182   cut titan 2 Torso  at 30.00 m/s
-#   t=185   cut titan 2 Cortex at 30.33 m/s  -> kill: player 1 cut titan 2 — 1/3
-#   t=213   MARK f170-cut          t=275  MARK f170-objective
-#   headless: 4 asserts held, 457 ticks, exit 0
+#   t=131   cut titan 2 Cortex at 20.80 m/s  -> kill: player 1 cut titan 2 — 1/3
+#   t=162   MARK f170-cut          t=224  MARK f170-objective
+#   headless: 4 asserts held, 406 ticks, exit 0
+#   control (slash line deleted): 1 of 4 failed, `Kills == 1 — measured 0.000`, no cut line —
+#   so the file measures the blade and not a titan walking into a falling player.
 #
-#   the PICTURES, both bit-identical over two runs:
-#     docs/images/f170-objective-before.png  tick 150, the line reads 0/3
-#       sha256 9e72560fa051eaf5de8ca8ddaf67f8f4ac81b8fbfa57ce52158786dbe7a2830a
-#     docs/images/f170-objective.png         tick 300, the line reads 1/3
-#       sha256 baef9522dbc4e0c8fc3388146a168a3588910bddf51c1c0789a38d63ca848488
+# ⚠️ **The PNG pair in `docs/images/` is STALE since 2026-09-02** (shas
+# 9e72560f… / baef9522… were taken with the cut at t=185). The cut now lands at t=131, so the
+# 0/3 "before" frame has to be shot at a tick ≤ 130 (tick 110 is inside the old resting
+# window), and both pictures need retaking under the offscreen invocations above. The decoded
+# one-glyph criterion (the `1/3` vs `0/3` band, x 625..654, y 23..39) is unchanged — it is a
+# claim about the HUD node, not about the pass.
 #
-#   DECODED, top-centre band x 448..832, y 0..96 of 1280 x 720 (36 864 px):
-#     0/3 against the control : 259 px differ, ALL 259 moved toward amber, control has 0
-#     1/3 against the control : 229 px differ, ALL 229 moved toward amber, control has 0,
-#                               8 of them EXACTLY the amber of maps.ron (linear
-#                               1.0/0.68/0.10 -> sRGB 255, 215, 89)
-#     both bounding boxes     : x 625..654, y 23..39 — 30 x 17 px, three glyphs at 18 px,
-#                               centred on 640 = the middle of a node at left 30 %, width 40 %
-#     1/3 against 0/3         : 114 px differ, and their bounding box is x 625..633,
-#                               y 25..37 — **9 x 13 px, one glyph cell, the leading digit.**
-#                               The `/3` is bit-identical between the two shots.
-#
-# That last line is the whole criterion: `docs/PLAN-GAME.md` §1 asks that the counter "goes
-# from `0/3` to `1/3`", and what changed on the screen between the two ticks is exactly one
-# character in exactly the right place, in amber, and nothing else in the band.
-#
-# ## The cut is `scripts/game-full.txt`'s ACT 2, verbatim
-#
-# Same geometry, same fall, same blade — it is a pass that has already been measured twice, and
-# a picture job is no place to invent a new one. The player is dropped from 30.8 m, the husk is
-# spawned 27 ticks INTO the fall so its pose at the cut is `scripts/q030-reach.txt`'s proven
-# one, he stands 1.80 m to -X of the titan's axis, and the RIGHT blade lies on +X at yaw 0
-# (`src/blades/cut.rs: blade_segment`). See `scripts/game-full.txt` for the arithmetic.
-#
-# ⚠️ The 300 ticks belong to THIS file: the last mark falls at t=276 and the player has been
-# standing still on the ground since t=199. Whoever changes a `wait` changes the image.
+# ⚠️ The 300 ticks belong to THIS file: the last mark falls at t=224 and the player has been
+# standing still on the ground since ~t=150. Whoever changes a `wait` changes the image.
 
 wait 1.5          # 90 ticks: world, camera, meshes and the render pipelines come up
 key F3 0.05       # the overlay on, so the counter's digits stand next to the HUD's in one PNG
@@ -89,12 +85,20 @@ key F3 0.05       # the overlay on, so the counter's digits stand next to the HU
 assert kills == 0 # nothing has happened yet — the line reads 0/3 at this moment
 assert phase == 2 # Active: the mission has been running since tick 0
 
-# --- the cut: game-full.txt ACT 2 -------------------------------------------------------
-warp -1.80 30.8 18.55
+# --- the cut: scripts/f030-hitbox.txt, medium row, translated to (0, 0, 18) ---------------
+# All five numbers are f030's and none is aimed by hand:
+#   drop    = 21² / (2 · 32)                       = 6.891 m
+#   warp y  = cortex_height_m 17.8 − eye 1.6 + drop = 23.091
+#   warp x  = −(clearance 1.550 + 0.60 cushion)     = −2.150   (clearance = widest_between + 0.35)
+#   warp z  = titan z + set-back head_m/2           = 19.100   (0.055 × 20 m)
+#   wait    = 21/32 − mid-window 0.15 = 0.506, split 0.446 / spawn / 0.06 so the husk gets
+#             0.06 + 0.15 = 0.21 s of lead — one wind-up's worth of notice and no more.
+# B-041 note: the slash lands 31 ticks (0.51 s) after `look 0 0` — clear of the stale-look tick.
+warp -2.150 23.091 19.100
 look 0 0
-wait 0.45         # 27 ticks of fall BEFORE the husk exists
+wait 0.446        # the fall down to the nape, derived above
 spawn titan husk 0 0 18
-wait 0.90
+wait 0.06
 slash right 0.40  # SLASH_RIGHT (`src/net/local.rs`): the right blade, on +X
 wait 0.60
 mark f170-cut
