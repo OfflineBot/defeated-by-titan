@@ -953,48 +953,41 @@ pub struct SupplyPoint {
     pub uses: u32,
 }
 
-/// The ground under the district — **a continuous height field, and every number it needs.**
+/// The ground under the district — **a smooth surface, and every number it needs.**
 ///
-/// The user, 2026-08-29, after playing the terraced version: *„auch die verschiedenen hoehen
-/// passen nicht! das soll grass sein und nicht so wie jetzt! und nicht verschiedene hardcoded
-/// stufen sondern wirklich terrain! und deutlich hoeher und niedriger als jetzt!"*
-///
-/// What that sentence deleted from this struct: `levels`, `step_m`, `stair_rise_m`,
-/// `stair_tread_m`, `stair_color` and `pillar_gap_m`. Those six existed to make **terraces**
-/// walkable — a flight of stairs on every falling edge, cut out of the terrace's own rim. A
-/// continuous field has no falling edge to put a flight on; what it has instead is `rise_m`,
-/// which is the same question (*can he walk up it?*) answered once for the whole map.
+/// Two rewrites, both the user's (2026-08-29 and 2026-09-02): first *„nicht verschiedene
+/// hardcoded stufen sondern wirklich terrain!"* deleted the terraces (`levels`, `step_m`, the
+/// four stair fields), then *„aber es soll smooth sein und mehr elevation! also richtiges
+/// terrain!"* deleted the quantum. There is no `rise_m` any more: the walkability question
+/// moved from "how tall is the riser" to "how steep is the slope", and that is [`max_grade`].
 ///
 /// The generator is [`shared::TerrainField`](crate::shared::TerrainField); what stands here is
-/// only the shape of the result. **Everything is a length or a colour key** — the code holds
-/// the mechanics and not one of these figures (`docs/conventions.md` §4).
+/// only the shape of the result. **Everything is a length, a slope or a colour key** — the
+/// code holds the mechanics and not one of these figures (`docs/conventions.md` §4).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Terrain {
     /// Edge of one terrain cell, in metres. `Map::size_m` has to be a whole multiple of it,
     /// or the grid does not cover the map and the last row of the world has no ground.
-    ///
-    /// It is also the **tread** of every riser in the game: `rise_m / cell_m` is the steepest
-    /// grade anything on this map has.
     pub cell_m: f32,
-    /// The quantum of the field, in metres — and therefore the tallest riser a player ever
-    /// meets on foot.
+    /// The steepest slope the ground may have anywhere, in m/m — the budget of the descent in
+    /// `shared::TerrainField` is `max_grade * cell_m` per grid edge. Shipped at 0.35 ≈ 19°:
+    /// well under the ~50° a grounded player holds, and steep enough that "mehr elevation"
+    /// reads as hills and not as a tilted plate.
+    pub max_grade: f32,
+    /// **THE elevation knob** — *„mehr elevation!"* (2026-09-02) is this one number. Octave
+    /// `i` of the noise contributes `elevation_m * amplitude[i]` metres; the octave mix stays
+    /// a shape while this scales it. `0.0` is a statement of flatness, like `amplitude: []`.
+    pub elevation_m: f32,
+    /// One octave of value noise each: `amplitude` **unitless** (scaled by [`elevation_m`]),
+    /// `wavelength_m` in metres. Same length, or `world::map` refuses the map.
     ///
-    /// 🔴 **Bounded above by a measurement, not by taste.** At `game.ron: gravity_m_s2 -32`,
-    /// walking `W` from flat, the player climbs a 0.27 m riser and is stopped dead by 0.28 m
-    /// (`docs/FINDINGS.md` FIND-214, eleven risers swept, treads 1.0/2.0/3.0 m make no
-    /// difference). `docs/BUGS.md` B-018 is the same number from the other side.
-    /// ⚠️ `gravity_m_s2` is PROVISIONAL (`docs/QUESTIONS.md` Q-063): if it rises again, this
-    /// ceiling falls with it and this is the field that has to move.
-    pub rise_m: f32,
-    /// One octave of value noise each, in metres of amplitude and metres of wavelength. Same
-    /// length, or `world::map` refuses the map.
-    ///
-    /// **`amplitude_m: []` means "provably flat"** and is a statement, not a missing key
+    /// **`amplitude: []` means "provably flat"** and is a statement, not a missing key
     /// (§4, no `serde(default)`) — which is exactly what `graybox` writes, and it has to,
     /// because eight tests in `tests/vector_aiming.rs` and four in `tests/player.rs` reason
-    /// about `y = 0` on that fixture.
-    pub amplitude_m: Vec<f32>,
+    /// about `y = 0` on that fixture. The rename from `amplitude_m` is deliberate: a stale
+    /// RON with metre-amplitudes has to crash on load, not scale by surprise.
+    pub amplitude: Vec<f32>,
     pub wavelength_m: Vec<f32>,
     /// The radius around the origin that stays at height 0. The player spawns there and the
     /// hub pads stand around him at `y = 0` (`missions.ron`); ground under any of them is a

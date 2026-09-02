@@ -32,12 +32,16 @@ pub mod light;
 pub mod model;
 pub mod rope;
 
+use bevy::asset::RenderAssetUsages;
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
 use crate::data::GameData;
 use avian3d::prelude::LinearVelocity;
 
-use crate::shared::{Block, LocalPlayer, PlayerSettings, SupplyStation, WaterVolume};
+use crate::shared::{
+    Block, LocalPlayer, PlayerSettings, SupplyStation, TerrainSheet, WaterVolume,
+};
 
 pub struct RenderPlugin;
 
@@ -60,6 +64,12 @@ impl Plugin for RenderPlugin {
                     attach_camera,
                     apply_field_of_view,
                     build_block_meshes,
+                    // The ground (`world::map::spawn_terrain`). §5E: the ~6 300 quantised
+                    // ground pads were `Block`s and were drawn by `build_block_meshes`; they
+                    // are gone, and the ONE terrain entity carries a `TerrainSheet` instead
+                    // of a `Block` — so it gets its own builder and the city's block-count
+                    // guard stays a guard (same argument as the stations and the river).
+                    build_terrain_meshes,
                     // The river (`world::water`). Beside `build_block_meshes` and not inside
                     // it: water carries no `Block`, on purpose (`shared::water`).
                     build_water_meshes,
@@ -513,6 +523,146 @@ fn build_block_meshes(
         });
         commands.entity(e).insert((Mesh3d(mesh), MeshMaterial3d(material)));
     }
+}
+
+/// **Draws the ground** — §5E: one mesh for the one terrain entity, and it is the SAME
+/// surface the player stands on.
+///
+/// `world::map::spawn_terrain` builds the static trimesh collider over the corner grid and
+/// hangs a [`TerrainSheet`] beside it; this system turns that sheet into the picture. The
+/// contract (`shared::ground`) is one sentence: **every consumer triangulates each cell along
+/// the fixed diagonal `(i, j) -> (i+1, j+1)` and leaves hole cells out.** A flipped diagonal
+/// or a filled hole here would be a drawing of a different ground than the one under the
+/// player's feet — the exact class of lie the sheet exists to make impossible.
+///
+/// The geometry itself lives in [`terrain_mesh`], a free function, so `tests/render.rs` can
+/// hold the diagonal, the hole cut, the triangle count and the normals without an app or a
+/// window — the same split as [`speed_fov_deg`].
+fn build_terrain_meshes(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    fresh: Query<(Entity, &TerrainSheet, &Transform), Without<Mesh3d>>,
+) {
+    for (e, sheet, transform) in &fresh {
+        let Some(mesh) = terrain_mesh(sheet, transform.translation) else {
+            continue;
+        };
+        let material = materials.add(StandardMaterial {
+            // White, because the colour is IN the vertices: `StandardMaterial` multiplies
+            // `ATTRIBUTE_COLOR` into the base, and the sheet's height bands are per corner.
+            base_color: Color::WHITE,
+            // Not chrome (`docs/models.md`, glTF trap 2) — grass is the most matte thing on
+            // the map, same numbers as the buildings.
+            metallic: 0.0,
+            perceptual_roughness: 0.95,
+            ..default()
+        });
+        commands.entity(e).insert((Mesh3d(meshes.add(mesh)), MeshMaterial3d(material)));
+    }
+}
+
+/// The ground's triangles out of a [`TerrainSheet`] — positions, smooth normals, vertex
+/// colours; `None` when every cell is a hole (nothing to draw is not an empty mesh).
+///
+/// Decisions, not arithmetic:
+///
+/// - **Vertices are LOCAL to the carrier.** The sheet speaks world space, but the terrain
+///   entity sits at the centre of its own AABB (`world::index` reads the transform as the
+///   body centre — `shared::ground` carries the warning), so every position subtracts
+///   `carrier_translation_m`. Building at the origin would draw the whole field displaced by
+///   half its own height range.
+/// - **One vertex per corner, and the triangles are the collider's, index for index**:
+///   `[c00, c11, c10]`, `[c00, c01, c11]` — CCW seen from above, the fixed diagonal. Shared
+///   vertices are what make the normals below smooth.
+/// - **Normals are area-weighted from the EMITTED triangles only.** "Smooth" is the whole
+///   §5E order (*„es soll smooth sein"*) — face normals would put a crease on every cell
+///   edge and re-draw the terraces the round deletes. The un-normalised cross product IS the
+///   area weight; a corner whose every neighbour cell is a hole gets +Y instead of a NaN.
+/// - **Colour is the corner's height band.** The field's own range is cut into
+///   `colors.len()` equal bands (`shared::ground`), each corner gets its band's colour, and
+///   the interpolation across a triangle between two bands is the GPU's — no second palette
+///   logic anywhere. A flat field (range 0) is entirely the lowest band, and an empty
+///   `colors` list falls back to mid-grey rather than to an invisible ground.
+pub fn terrain_mesh(sheet: &TerrainSheet, carrier_translation_m: Vec3) -> Option<Mesh> {
+    let (nx, nz) = (sheet.nx as usize, sheet.nz as usize);
+    let cw = nx + 1;
+    if nx == 0 || nz == 0 {
+        return None;
+    }
+
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(cw * (nz + 1));
+    for iz in 0..=nz {
+        for ix in 0..=nx {
+            positions.push([
+                sheet.origin_m.x + ix as f32 * sheet.cell_m - carrier_translation_m.x,
+                sheet.corners_m[iz * cw + ix] - carrier_translation_m.y,
+                sheet.origin_m.y + iz as f32 * sheet.cell_m - carrier_translation_m.z,
+            ]);
+        }
+    }
+
+    let mut indices: Vec<u32> = Vec::with_capacity(6 * nx * nz);
+    let mut normals: Vec<Vec3> = vec![Vec3::ZERO; positions.len()];
+    for iz in 0..nz {
+        for ix in 0..nx {
+            if sheet.hole[iz * nx + ix] {
+                continue;
+            }
+            let c00 = (iz * cw + ix) as u32;
+            let c10 = c00 + 1;
+            let c01 = c00 + cw as u32;
+            let c11 = c01 + 1;
+            for tri in [[c00, c11, c10], [c00, c01, c11]] {
+                let [a, b, c] = tri.map(|i| Vec3::from(positions[i as usize]));
+                // Un-normalised: twice the triangle's area, pointing +Y for this winding —
+                // the accumulation is thereby area-weighted for free.
+                let face = (b - a).cross(c - a);
+                for i in tri {
+                    normals[i as usize] += face;
+                }
+                indices.extend_from_slice(&tri);
+            }
+        }
+    }
+    if indices.is_empty() {
+        return None;
+    }
+    let normals: Vec<[f32; 3]> = normals
+        .into_iter()
+        .map(|n| if n == Vec3::ZERO { [0.0, 1.0, 0.0] } else { n.normalize().to_array() })
+        .collect();
+
+    // The height bands. `lo`/`hi` are the sheet's own extremes, not the map's allowance —
+    // the top band has to exist on the ground that actually came out of the seed.
+    let lo = sheet.corners_m.iter().copied().fold(f32::INFINITY, f32::min);
+    let hi = sheet.corners_m.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let span = hi - lo;
+    let bands = sheet.colors.len();
+    let colors: Vec<[f32; 4]> = sheet
+        .corners_m
+        .iter()
+        .map(|&h| {
+            if bands == 0 {
+                return [0.5, 0.5, 0.5, 1.0];
+            }
+            let band = if span > 0.0 {
+                (((h - lo) / span) * bands as f32).min(bands as f32 - 1.0) as usize
+            } else {
+                0
+            };
+            let [r, g, b] = sheet.colors[band];
+            [r, g, b, 1.0]
+        })
+        .collect();
+
+    Some(
+        Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+            .with_inserted_indices(Indices::U32(indices)),
+    )
 }
 
 /// One frame of the FOV's approach to its target — **the slew, and it is asymmetric on

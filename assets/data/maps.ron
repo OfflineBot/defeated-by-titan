@@ -181,13 +181,16 @@
             // re-derivation.
             terrain: (
                 cell_m: 5.0,
-                rise_m: 0.25,
-                // ⚠️ **PROVABLY FLAT, and that is not laziness.** An empty octave list makes
-                // `shared::TerrainField` return 0 for every cell, so `world::map` emits not
-                // one ground block and every generated house stands on `y = 0` exactly as it
-                // did before 2026-08-13. The 400 x 400 m slab in `blocks` stays the floor of
-                // this fixture.
-                amplitude_m: [],
+                // The grade budget the smooth field would honour if this map ever turned its
+                // terrain on — the shipped default, not a decision made here.
+                max_grade: 0.35,
+                // ⚠️ **PROVABLY FLAT, and that is not laziness.** `elevation_m: 0.0` and an
+                // empty octave list each force `shared::TerrainField` to 0 at every corner,
+                // so `world::map` emits no ground and every generated house stands on `y = 0`
+                // exactly as it did before 2026-08-13. The 400 x 400 m slab in `blocks` stays
+                // the floor of this fixture.
+                elevation_m: 0.0,
+                amplitude: [],
                 wavelength_m: [],
                 flat_radius_m: 30.0,
                 max_rise_m: 0.0,
@@ -927,37 +930,54 @@
                 // ⚠️ `size_m` must be a whole multiple of it (700 / 5 = 140 cells a side), or
                 // the last row of the map has no ground.
                 cell_m: 5.0,
-                // ## rise_m 0.25 — MEASURED, not chosen
+                // ## max_grade 0.35 — the steepest ground of this map, in m/m
                 //
-                // The tallest riser the player can walk up at `game.ron: gravity_m_s2 -32`,
-                // swept on the shipped binary 2026-08-29 (`docs/FINDINGS.md` FIND-214):
-                // 0.27 m climbs, **0.28 m is a wall**, and treads of 1.0/2.0/3.0 m make no
-                // difference at all. 0.25 keeps 8 % of margin under the last value that
-                // worked. ⚠️ `gravity_m_s2` is PROVISIONAL (`Q-063`) — if it rises again this
-                // number has to fall with it, and `scripts/w2-terrain-walk.txt` is the run
-                // that says so.
-                rise_m: 0.25,
-                // ## Two octaves, both far steeper than 5 % on purpose
+                // ≈ 19°, well under the ~50° a grounded player holds, and 7x the 5 % the
+                // quantised field could carry — this is where "mehr elevation" (2026-09-02)
+                // comes from. ⚠️ Proposed value: `scripts/w2-terrain-walk.txt` and the two
+                // §5E C screenshot pairs are what confirm or move it (Q-086).
+                max_grade: 0.35,
+                // ## elevation_m 24 — THE size of the relief, in metres
+                //
+                // Octave i contributes `elevation_m * amplitude[i]` metres, so the mix below
+                // is a shape and this is its size: turning "mehr elevation!" up is ONE
+                // number. 24 with [1.0, 0.32] reproduces the field the last round shipped
+                // (22 + 7 m of metre-amplitudes) at the same wavelengths; the §5E C aerial
+                // pair at 24 vs 48 is what answers Q-086.
+                elevation_m: 24.0,
+                // ## Two octaves, both far steeper than the budget on purpose
                 //
                 // The clamp is what shapes this ground (`world::map::plan_terrain`); the noise
                 // decides **where** the high ground and the hollows are, not how fast you get
                 // there. 620 m is a landform across the whole district, 240 m breaks it into
                 // quarters. Amplitudes below the grade budget would make the field a pure
                 // distance cone off the streets — measured, and it reads as a pyramid.
-                amplitude_m: [22.0, 7.0],
+                amplitude: [1.0, 0.32],
                 wavelength_m: [620.0, 240.0],
                 // >= layout.clear_radius_m 24.0. The player spawns at (0, 2, 0) and the hub
                 // pads stand around him at y = 0 (`missions.ron`); ground under any of them is
                 // a pad inside the earth.
                 flat_radius_m: 30.0,
-                // The ceiling the field actually reaches, asserted against the field that came
-                // out — and the line above which a hand-placed block is sky: `max_rise_m +
-                // scale.ron reference.door_height_m`.
-                max_rise_m: 14.0,
-                // Every ground block runs from here up to its own height. Well above
+                // The ceiling the field is ALLOWED to reach, asserted against the field that
+                // came out — and the line above which a hand-placed block is sky:
+                // `max_rise_m + scale.ron reference.door_height_m`.
+                //
+                // §5E moved it 14 -> 32: the smooth field's noise can reach
+                // `elevation_m * (amplitude[0] + amplitude[1])` = 31.68 m wherever no pin
+                // cone caps it, and `tests/world.rs` builds the city under six foreign seeds
+                // — one of them measured 25.43 m, so 14 was a ceiling only the shipped seed
+                // happened to respect. The line moving also moves the SKY class: blocks with
+                // bottoms between 16.1 and 34.1 m (the gallery floors, the low gantries) now
+                // pin their cells instead of being ignored, which is the honest answer — a
+                // ground that may climb to 32 really can bury a floor at 20.
+                max_rise_m: 32.0,
+                // The plane the ground's underside is reasoned from. Well above
                 // `bounds.fence_bottom_m` (-50) and `recovery_plane_y_m` (-300), and below the
-                // lowest cell the field produces — `world::map` asserts that.
-                base_m: -20.0,
+                // lowest corner the field produces — `world::map` asserts that. §5E measured
+                // the smooth field's lowest corner at -21.71 m (the quantised field stopped at
+                // -11.94, and -20 was below THAT), so the plane moved -20 -> -30 by its own
+                // documented contract.
+                base_m: -30.0,
                 // Everything hand-placed whose top is at or below this is paving: the ground
                 // may climb over it, and may never sink away underneath and leave it hanging.
                 // The paving of this map has its top edge at exactly 0.05 m.

@@ -42,7 +42,7 @@ use bevy::time::TimeUpdateStrategy;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::shared::{
     AnchorSurface, Block, Body, BodyGone, BodyId, BodyMask, Cli, IdCounter, SpatialIndex,
-    WaterVolume,
+    TerrainSheet, WaterVolume,
 };
 use defeated_by_titan::world::index::mask_from;
 use defeated_by_titan::data::{Model, ModelSource};
@@ -202,6 +202,15 @@ fn f003_the_city_comes_from_the_file_and_not_twice() {
     // K1. Red when `build_map` is an empty body (0 instead of ~90), when it spawns twice
     // (2x), or when the layout generates nothing (then it would be exactly the placed blocks
     // from the file).
+    //
+    // ⚠️ **The count moved DELIBERATELY on §5E B (2026-09-02).** The plan held ~7 400 cuboids
+    // (1 648 city + 5 752 ground) while the ground was quantised `ground_*` pads; the pads
+    // are deleted (the shipped plan measures 1 648: 277 placed + 1 371 generated) and the
+    // ground is now ONE trimesh entity that carries `Body` + `TerrainSheet` but **no
+    // `Block`** — it is not a cuboid and `render` draws it from the sheet, so it neither
+    // stands in the plan nor in this query, and plan == built stays an equality without a
+    // fudge term. The +1 body it adds is counted where bodies are counted
+    // (`t036a_every_body_gets_exactly_one_id`).
     let d = data();
     let map = d.current_map().expect("current map");
     let plan = plan();
@@ -231,6 +240,23 @@ fn f003_the_city_comes_from_the_file_and_not_twice() {
         app.update();
     }
     assert_eq!(built_blocks(&mut app).len(), plan.len(), "the city grows every frame");
+
+    // §5E: the ground is ONE entity, not ~5 752 pads — and it is really there, exactly once,
+    // with the trimesh beside the sheet. Zero would be a district floating over the void;
+    // two would be the doubled-city bug wearing a new component.
+    assert!(
+        !plan.iter().any(|b| b.name.starts_with("ground_")),
+        "a ground_* pad is back in the plan — §5E replaced the pads with the one trimesh"
+    );
+    let mut sheets = app.world_mut().query::<(&TerrainSheet, &Collider, &RigidBody)>();
+    let sheets: Vec<_> = sheets.iter(app.world()).collect();
+    assert_eq!(sheets.len(), 1, "{} terrain sheets in the built world", sheets.len());
+    let (sheet, collider, rb) = &sheets[0];
+    assert_eq!(**rb, RigidBody::Static, "the terrain is not a static body");
+    assert!(collider.shape().as_trimesh().is_some(), "the terrain collider is not a trimesh");
+    assert_eq!(sheet.corners_m.len(), (sheet.nx as usize + 1) * (sheet.nz as usize + 1));
+    assert_eq!(sheet.hole.len(), (sheet.nx as usize) * (sheet.nz as usize));
+    assert!(!sheet.colors.is_empty(), "the sheet carries no ground colours");
 
     // Independent of the planning function: every block placed in the file stands in the
     // world exactly once, at exactly its center and at exactly its size.
@@ -294,51 +320,88 @@ fn f003_the_colliders_carry_the_half_edge_from_the_file() {
     // hull grows by a measured 0.01 m per axis, and by the sweep once something moves.
     let d = data();
     let map = d.current_map().expect("current map");
+    let plan = plan();
     let mut app = built_world();
 
-    let mut q = app.world_mut().query::<(&Transform, &Block, &Body, &Collider)>();
-    let all: Vec<(Vec3, Vec3, Vec3, Vec3)> = q
+    // Every block, with its collider's shape kind. A dressed block carries a mesh-true
+    // COMPOUND instead of the envelope cuboid since 2026-09-01 (B-039,
+    // `world::map::BlockPlan::collider`); those are measured by `tests/dressing.rs` against
+    // the drawn planes. **Since §5E B this holds for PLACED blocks too** — the five
+    // validated prop hull rows (B-043, held back in `art.ron`'s own comment because this
+    // test used to demand every placed block be a plain cuboid) are legal here now. What a
+    // compound must still honour is the half of the invariant that is not about the shape:
+    // `Block` and `Body` carry the file's box, full and half.
+    let mut q = app.world_mut().query::<(&Name, &Transform, &Block, &Body, &Collider)>();
+    let all: Vec<(String, Vec3, Vec3, Vec3, Option<Vec3>)> = q
         .iter(app.world())
-        .filter_map(|(t, b, k, c)| {
-            // Since 2026-09-01 a dressed house carries a mesh-true COMPOUND instead of the
-            // envelope cuboid (B-039, `world::map::BlockPlan::collider`); those are measured
-            // by `tests/dressing.rs` against the drawn planes and drop out of this factor-2
-            // check, which is about the bare boxes the file states.
-            let form = c.shape().as_cuboid()?;
-            let h = form.half_extents;
-            Some((t.translation, b.size, k.half_size_m, Vec3::new(h.x, h.y, h.z)))
+        .map(|(n, t, b, k, c)| {
+            let cuboid = c.shape().as_cuboid().map(|f| {
+                let h = f.half_extents;
+                Vec3::new(h.x, h.y, h.z)
+            });
+            (n.to_string(), t.translation, b.size, k.half_size_m, cuboid)
         })
+        .filter(|(n, ..)| n.as_str() != "terrain") // the trimesh has no Block and never
+        // lands here — belt over that brace: the query demands &Block anyway.
         .collect();
 
     assert!(all.len() > 40, "only {} blocks with a collider", all.len());
 
-    let mut measured = 0;
+    // Which planned blocks are dressed — the only licence for a non-cuboid collider.
+    let dressed: std::collections::BTreeSet<&str> =
+        plan.iter().filter(|p| p.model.is_some()).map(|p| p.name.as_str()).collect();
+
+    let (mut measured, mut compounds) = (0, 0);
     for (i, k) in map.blocks.iter().enumerate() {
         let center = Vec3::new(k.center_m.0, k.center_m.1, k.center_m.2);
         let full = Vec3::new(k.size_m.0, k.size_m.1, k.size_m.2);
-        let (_, render, aabb, collider) = all
+        let (name, _, render, aabb, cuboid) = all
             .iter()
-            .find(|(m, _, _, _)| *m == center)
+            .find(|(_, m, ..)| *m == center)
             .unwrap_or_else(|| panic!("maps.ron: blocks[{i}] is not at {center:?}"));
         assert_eq!(*render, full, "blocks[{i}]: render shape deviates from the file");
-        assert_eq!(
-            *collider,
-            full * 0.5,
-            "blocks[{i}]: collider half size {collider:?}, expected {:?} — \
-             factor {:.2} against the file",
-            full * 0.5,
-            collider.x / (full.x * 0.5)
-        );
         assert_eq!(*aabb, full * 0.5, "blocks[{i}]: Body::half_size_m deviates");
-        measured += 1;
+        match cuboid {
+            Some(collider) => {
+                assert_eq!(
+                    *collider,
+                    full * 0.5,
+                    "blocks[{i}]: collider half size {collider:?}, expected {:?} — \
+                     factor {:.2} against the file",
+                    full * 0.5,
+                    collider.x / (full.x * 0.5)
+                );
+                measured += 1;
+            }
+            None => {
+                // A placed block may only stop being a cuboid by WEARING something with a
+                // hull row — anything else is a shape nobody ordered.
+                assert!(
+                    dressed.contains(name.as_str()),
+                    "blocks[{i}] ({name}) carries a non-cuboid collider but wears no model — \
+                     a placed block only becomes a compound through art.ron: hulls"
+                );
+                compounds += 1;
+            }
+        }
     }
     assert!(measured >= 3, "only {measured} blocks checked against the file, at least 3 required");
+    eprintln!("placed blocks: {measured} cuboids factor-2-checked, {compounds} dressed compounds");
 
-    // And for EVERY block, the generated ones included: render shape and collision shape are
-    // the same shape. That is exactly why one writer sets both.
-    for (center, render, aabb, collider) in &all {
-        assert_eq!(*collider, *render * 0.5, "block at {center:?}: render {render:?}");
-        assert_eq!(*aabb, *render * 0.5, "block at {center:?}: aabb {aabb:?}");
+    // And for EVERY block, the generated ones included: `Body` is half the render shape
+    // (one writer sets both), and every CUBOID collider is too. A compound is only legal on
+    // a dressed block.
+    for (name, center, render, aabb, cuboid) in &all {
+        assert_eq!(*aabb, *render * 0.5, "{name} at {center:?}: aabb {aabb:?}");
+        match cuboid {
+            Some(collider) => {
+                assert_eq!(*collider, *render * 0.5, "{name} at {center:?}: render {render:?}")
+            }
+            None => assert!(
+                dressed.contains(name.as_str()),
+                "{name} at {center:?}: a non-cuboid collider on an undressed block"
+            ),
+        }
     }
 }
 
@@ -523,7 +586,7 @@ fn f003_no_grid_house_stands_inside_a_placed_block() {
     let plan = plan();
     let (placed, generated) = plan.split_at(map.blocks.len());
 
-    for house in generated.iter().filter(|b| !b.name.starts_with("ground_")) {
+    for house in generated.iter() {
         for block in placed {
             let distance = (house.center_m - block.center_m).abs();
             let sum = house.size_m * 0.5 + block.size_m * 0.5;
@@ -551,7 +614,7 @@ fn f003_the_space_around_the_origin_stays_clear() {
     let radius = map.layout.clear_radius_m;
     let plan = plan();
 
-    for house in plan[map.blocks.len()..].iter().filter(|b| !b.name.starts_with("ground_")) {
+    for house in plan[map.blocks.len()..].iter() {
         let half = house.size_m * 0.5;
         let dx = (house.center_m.x.abs() - half.x).max(0.0);
         let dz = (house.center_m.z.abs() - half.z).max(0.0);
@@ -585,6 +648,20 @@ fn f003_the_grid_houses_stay_in_the_height_window_from_the_file() {
     let ceiling_m = map.terrain.max_rise_m;
     let mut tall = 0usize;
 
+    // Every corner height of the shipped field, sorted — the set a house foundation has to
+    // be drawn from (see the base assert below). Sorted floats and a binary search, not bit
+    // patterns: the base is recovered through `center.y - size.y / 2`, and that round trip
+    // costs up to an ULP against the corner the founding really used.
+    let (_, field) = defeated_by_titan::world::map::terrain_of(&d, map);
+    let mut corner_heights: Vec<f32> = field.corner_heights().to_vec();
+    corner_heights.sort_by(f32::total_cmp);
+    let is_corner_height = |v: f32| {
+        let i = corner_heights.partition_point(|c| *c < v);
+        let lo = i.checked_sub(1).map_or(f32::INFINITY, |j| (v - corner_heights[j]).abs());
+        let hi = corner_heights.get(i).map_or(f32::INFINITY, |c| (c - v).abs());
+        lo.min(hi) <= 1e-4
+    };
+
     for house in &houses {
         let ridge = ridge_m(&plan, house);
         let in_band = (r.min_height_m..=r.max_height_m).contains(&ridge);
@@ -601,24 +678,26 @@ fn f003_the_grid_houses_stay_in_the_height_window_from_the_file() {
         );
         assert!(house.size_m.y > 0.0, "{}: the roof ate the whole wall", house.name);
         // ⚠️ Until 2026-08-13 this line read "stands on y = 0" — and it had to, there was no
-        // terrain. Until 2026-08-29 it read "stands on a terrace". What it means now is
-        // **stands on the ground**: the base is a whole number of `terrain.rise_m`, inside
-        // the range the field is allowed, and it is the LOWEST cell the house covers so the
-        // downhill corner cannot stand on air. A house half a rise off the ground floats or
-        // sinks, and neither shows up in the picture.
+        // terrain. Until 2026-08-29 it read "stands on a terrace"; until §5E, "on a whole
+        // number of rises". What it means now is **stands on the ground**: the base is the
+        // LOWEST corner of the smooth field over the ring's own rect
+        // (`world::map::ground_under`), so it must be bit-for-bit ONE OF the field's corner
+        // heights — a base that is not a corner height is a foundation invented beside the
+        // field, and neither floating nor sinking shows up in the picture. (That the base is
+        // also *under every surface sample of its own footprint* is the never-floats sweep,
+        // one test further down.)
         let base = base_m(house);
         assert!(
             base >= -map.terrain.max_rise_m - 1e-4 && base <= ceiling_m + 1e-4,
             "{}: stands at {base} m, outside +/- terrain.max_rise_m",
             house.name
         );
-        if map.terrain.rise_m > 0.0 && !map.terrain.amplitude_m.is_empty() {
-            let rises = base / map.terrain.rise_m;
+        if map.terrain.elevation_m > 0.0 && !map.terrain.amplitude.is_empty() {
             assert!(
-                (rises - rises.round()).abs() < 1e-3,
-                "{}: stands at {base} m, which is {rises} rises of {} m — not on the field",
-                house.name,
-                map.terrain.rise_m
+                is_corner_height(base),
+                "{}: stands at {base} m, which is not any corner height of the field — \
+                 the foundation did not come out of ground_under",
+                house.name
             );
         } else {
             assert!(base.abs() < 1e-4, "{}: a flat map, and the house stands at {base}", house.name);
@@ -751,149 +830,197 @@ fn f003_the_district_has_a_skyline_and_not_one_flat_top() {
 }
 
 #[test]
-fn f003_the_ground_is_stepped_and_not_one_flat_slab() {
-    // ★ The user, 2026-08-13: *„adde verschiedene höhen vom boden her! lass es wie die echte
-    // stadt aussehen! aktuell kann man es noch nicht erkennen!"*. Until that day this game had
-    // no terrain at all — `maps.ron` placed one 700 x 700 m slab and every generated house in
-    // the district stood on `y = 0`, so the number below was **0.00 m**.
+fn f003_the_ground_is_smooth_and_no_edge_beats_max_grade() {
+    // ★ The user, twice. 2026-08-13: *„adde verschiedene höhen vom boden her!"* — before that
+    // day every house stood on y = 0 and the relief below was **0.00 m**. 2026-09-02: *„ok
+    // und die welt hat jetzt harte höhen. aber es soll smooth sein und mehr elevation! also
+    // richtiges terrain!"* — and that (§5E) deleted the 0.25 m quantum, so the walkability
+    // promise is no longer "no cell a riser above its neighbour" but **no corner-grid edge
+    // steeper than `terrain.max_grade`**, measured here on the field the shipped map really
+    // builds, not on a fixture (`shared::terrain` holds the fixture halves).
     //
-    // Measured on the **base of every generated house**, and that is the honest sample: it is
-    // area-weighted over the built district (every house is one vote where houses are), it
-    // needs nothing but the plan, and it is exactly the ground the player runs on between the
-    // facades. The field's own cell heights are reported next to it and include the pinned
-    // rows along the wall and the canal, which nobody walks a district on.
+    // ## What this sweep varies, and what it holds constant (docs/lessons/fixtures.md)
+    //
+    // It varies **nothing**: an exhaustive walk over every corner of shipped Ashgate and both
+    // of its forward edge directions (the other two are the same pairs from the other side).
+    // Skipped: nothing — the edge counter is asserted, holes included (a hole pins its rim
+    // corners, and a pinned corner is still a corner of the grid).
     let d = data();
     let map = d.current_map().expect("current map");
     let plan = plan();
     let houses = walls(&plan);
     assert!(houses.len() > 100, "only {} generated houses — is this the district?", houses.len());
 
+    // The ground under the district, sampled where the district is: the base of every house.
     let mut bases: Vec<f32> = houses.iter().map(|h| base_m(h)).collect();
     bases.sort_by(f32::total_cmp);
     let p10 = bases[bases.len() / 10];
     let p90 = bases[bases.len() * 9 / 10];
 
-    let mut distinct: Vec<i64> = bases.iter().map(|b| (b * 1000.0).round() as i64).collect();
-    distinct.sort_unstable();
-    distinct.dedup();
+    let (_, field) = defeated_by_titan::world::map::terrain_of(&d, map);
+    let (nx, nz) = (field.nx() as usize, field.nz() as usize);
+    let corners = field.corner_heights();
+    let lo = corners.iter().copied().fold(f32::INFINITY, f32::min);
+    let hi = corners.iter().copied().fold(f32::NEG_INFINITY, f32::max);
 
-    let (_, ground) = defeated_by_titan::world::map::terrain_of(&d, map);
-    let cells = ground.field.heights_m();
-
-    // The whole field, one digit per cell. It costs sixteen lines and it is the only way to
-    // see **why** a number came out the way it did: every 0 is something hand-placed pinning
-    // its cell, and the slope away from it is the distance transform (`docs/FINDINGS.md`
-    // FIND-090). Reading the histogram instead sent this round down a wrong path twice.
-    for iz in (0..ground.field.nz() as i32).step_by(4) {
-        let row: String = (0..ground.field.nx() as i32)
-            .step_by(2)
+    // The whole field, one digit per sampled corner (0 low .. 9 high, ~ = hole cell). It
+    // costs sixteen lines and it is the only way to see WHY a number came out the way it
+    // did: every low stripe is something hand-placed pinning its cells, and the slope away
+    // from it is the envelope (`docs/FINDINGS.md` FIND-090). Reading a histogram instead
+    // sent the 2026-08-29 round down a wrong path twice.
+    let span = (hi - lo).max(1e-3);
+    for iz in (0..nz as i32).step_by(8) {
+        let row: String = (0..nx as i32)
+            .step_by(4)
             .map(|ix| {
-                if ground.field.is_hole(ix, iz) {
+                if field.is_hole(ix, iz) {
                     '~'
                 } else {
-                    let s = ground.field.step_at(ix, iz);
-                    char::from_digit((s.rem_euclid(10)) as u32, 10).unwrap_or('?')
+                    let band = ((field.corner_m(ix, iz) - lo) / span * 9.9) as u32;
+                    char::from_digit(band.min(9), 10).unwrap_or('?')
                 }
             })
             .collect();
         eprintln!("ground row {iz:3}  {row}");
     }
     eprintln!(
-        "ground under {} houses: p10 {p10:.2} m, p90 {p90:.2} m, relief {:.2} m · \
-         {} distinct levels {distinct:?} · {} terrain cells, {} heights used · \
-         {} ground blocks",
+        "ground under {} houses: p10 {p10:.2} m, p90 {p90:.2} m, relief {:.2} m · field \
+         {lo:.2}..{hi:.2} m over {} corners",
         houses.len(),
         p90 - p10,
-        distinct.len(),
-        cells.len(),
-        ground.field.steps_used().len(),
-        ground.pads.len()
+        corners.len()
     );
 
     assert!(
         p90 - p10 >= 2.7,
         "the ground under the tenth-highest and the tenth-lowest house of the district \
-         differs by {:.2} m — below 2.7 m the terracing is a rounding error and the district \
+         differs by {:.2} m — below 2.7 m the relief is a rounding error and the district \
          is the flat slab it was before 2026-08-13",
         p90 - p10
     );
-    assert!(
-        distinct.len() >= 4,
-        "the whole district stands on {} different ground heights ({distinct:?}) — two or \
-         three terraces are a mistake in the map, not a landscape",
-        distinct.len()
-    );
 
-    // And the invariant every riser hangs from, on the **real** field and not on a fixture:
-    // no cell may stand more than one `rise_m` over the one next to it. One rise is 0.25 m and
-    // 0.28 m is already a wall at `gravity_m_s2: -32` (FIND-214) — so this assert is the
-    // difference between terrain and a wall with a texture.
+    // ## The invariant every step of ground hangs from, on the REAL field
     //
-    // ## What this sweep varies, and what it holds constant
+    // `budget = max_grade * cell_m` per corner-grid edge. Above it the ground is a wall with
+    // a texture (FIND-214 measured where a wall begins for a walking capsule; max_grade is
+    // the smooth field's whole answer). The counter proves no edge was skipped:
+    // 2*cw*ch - cw - ch interior edges, visited exactly once each.
+    let budget = map.terrain.max_grade * map.terrain.cell_m;
+    let (cw, ch) = (nx + 1, nz + 1);
+    let mut worst = f32::NEG_INFINITY;
+    let mut edges = 0usize;
+    for iz in 0..ch {
+        for ix in 0..cw {
+            let h = corners[iz * cw + ix];
+            if ix + 1 < cw {
+                worst = worst.max((h - corners[iz * cw + ix + 1]).abs() - budget);
+                edges += 1;
+            }
+            if iz + 1 < ch {
+                worst = worst.max((h - corners[(iz + 1) * cw + ix]).abs() - budget);
+                edges += 1;
+            }
+        }
+    }
+    assert_eq!(edges, 2 * cw * ch - cw - ch, "the sweep skipped edges");
+    eprintln!(
+        "steepest edge: budget {budget:.3} m ({}% grade over {} m), worst excess {worst:.4} m",
+        map.terrain.max_grade * 100.0,
+        map.terrain.cell_m
+    );
+    assert!(
+        worst <= 1e-4,
+        "an edge of the shipped field exceeds the grade budget by {worst} m — the descent \
+         stopped short of its fixed point, and that edge is a wall he cannot walk up"
+    );
+    // The control: the same instrument on a doctored copy must fire (delete the thing you
+    // are measuring — a sweep that cannot go red measures nothing).
+    let mut doctored = corners.to_vec();
+    doctored[(ch / 2) * cw + cw / 2] += 2.0 * budget;
+    let mut fired = f32::NEG_INFINITY;
+    for iz in 0..ch {
+        for ix in 0..cw {
+            let h = doctored[iz * cw + ix];
+            if ix + 1 < cw {
+                fired = fired.max((h - doctored[iz * cw + ix + 1]).abs() - budget);
+            }
+            if iz + 1 < ch {
+                fired = fired.max((h - doctored[(iz + 1) * cw + ix]).abs() - budget);
+            }
+        }
+    }
+    assert!(fired >= budget - 1e-4, "the instrument did not fire on a doctored corner ({fired})");
+}
+
+#[test]
+fn f003_fifty_houses_are_founded_under_their_own_ground_and_never_float() {
+    // ★ §5E B's acceptance sweep, and the half `FIND-134` §3B cost a round to: a house on a
+    // smooth slope must be founded AT OR BELOW every point of the surface its footprint
+    // covers — founded on the highest corner it stands on air downhill, and no screenshot
+    // from street level shows a 0.4 m gap under a wall.
     //
-    // It varies **nothing**: it is an exhaustive walk over every cell of the shipped Ashgate
-    // and both of its neighbour directions (the other two are the same pairs seen from the
-    // other side). Skipped: nothing — holes are checked too, because a hole still has a height
-    // and its neighbours still have to be reachable from the quay beside it.
-    let f = &ground.field;
-    let mut steepest = 0i32;
-    for iz in 0..f.nz() as i32 {
-        for ix in 0..f.nx() as i32 {
-            for (dx, dz) in [(1, 0), (0, 1)] {
-                let d = (f.step_at(ix, iz) - f.step_at(ix + dx, iz + dz)).abs();
-                steepest = steepest.max(d);
+    // ## What this sweep varies, and what it holds constant (docs/lessons/fixtures.md)
+    //
+    // Varies: 50 houses spread evenly over the sorted plan (every k-th of ~1000 — spread, not
+    // random, so the sample is reproducible and covers the district), and an 11 x 11 surface
+    // sample grid over each footprint (boundary included: the corners of the footprint are
+    // the extreme samples, and the surface is piecewise linear so interior extrema lie on
+    // triangle vertices/edges the grid brushes). Held constant: the field, the map, the
+    // oracle (`height_at_m` — the SAME triangulation the collider is built from). Skipped:
+    // nothing — the house counter is asserted.
+    let d = data();
+    let map = d.current_map().expect("current map");
+    if map.terrain.elevation_m <= 0.0 || map.terrain.amplitude.is_empty() {
+        return; // a flat fixture founds everything at 0 and the sweep would measure nothing
+    }
+    let plan = plan();
+    let houses = walls(&plan);
+    assert!(houses.len() > 100, "only {} houses — the denominator is wrong", houses.len());
+    let (_, field) = defeated_by_titan::world::map::terrain_of(&d, map);
+    let (origin_x, origin_z) = (-map.size_m.0 * 0.5, -map.size_m.1 * 0.5);
+
+    let step = (houses.len() / 50).max(1);
+    let mut swept = 0usize;
+    let mut worst_gap = f32::NEG_INFINITY; // base - surface: positive = floating
+    for house in houses.iter().step_by(step).take(50) {
+        swept += 1;
+        let base = base_m(house);
+        let half = house.size_m * 0.5;
+        for sz in 0..=10 {
+            for sx in 0..=10 {
+                let x = house.center_m.x - half.x + half.x * 0.2 * sx as f32;
+                let z = house.center_m.z - half.z + half.z * 0.2 * sz as f32;
+                let surface = field.height_at_m(x - origin_x, z - origin_z);
+                worst_gap = worst_gap.max(base - surface);
                 assert!(
-                    d <= 1,
-                    "cell ({ix},{iz}) at {:.2} m stands {:.2} m over ({},{}) — one rise is \
-                     {} m and 0.28 m is a wall he cannot walk up",
-                    f.height_at(ix, iz),
-                    d as f32 * f.rise_m(),
-                    ix + dx,
-                    iz + dz,
-                    f.rise_m()
+                    base <= surface + 1e-3,
+                    "{}: founded at {base:.3} m but the ground under ({x:.1}, {z:.1}) is only \
+                     {surface:.3} m — the downhill wall stands on {:.3} m of air",
+                    house.name,
+                    base - surface
                 );
             }
         }
     }
-    assert_eq!(steepest, 1, "the whole field is flat — no cell is a rise above its neighbour");
+    assert_eq!(swept, 50, "the sweep visited {swept} houses, not 50 — the sample is broken");
+    eprintln!("50-house sweep: worst base-over-surface gap {worst_gap:.4} m (<= 0 is grounded)");
 
-    // The steepest grade anything on this map has, and it is what the acceptance run
-    // (`scripts/w2-terrain-walk.txt`) has to be able to climb.
-    let grade = map.terrain.rise_m / map.terrain.cell_m;
-    eprintln!(
-        "steepest ground: {} m over {} m = {:.1} % grade (the terraces were 3.6 %)",
-        map.terrain.rise_m,
-        map.terrain.cell_m,
-        grade * 100.0
-    );
-    assert!(
-        map.terrain.rise_m <= 0.27,
-        "terrain.rise_m is {} m. At game.ron gravity_m_s2 -32 the player climbs 0.27 m and is \
-         stopped dead by 0.28 m (docs/FINDINGS.md FIND-214, docs/BUGS.md B-018) — a field with \
-         a taller quantum is a wall wherever it is not flat",
-        map.terrain.rise_m
-    );
-
-    // Every ground block's top really is on the field: a slab half a rise off is a lip the
-    // player trips on and nothing in a screenshot shows it.
-    for pad in &ground.pads {
-        let top = pad.center_m.y + pad.size_m.y * 0.5;
-        let rises = top / map.terrain.rise_m;
-        assert!(
-            (rises - rises.round()).abs() < 1e-3,
-            "{}: its top is at {top} m, which is not a whole number of {} m rises",
-            pad.name,
-            map.terrain.rise_m
-        );
-        assert!(
-            pad.center_m.y - pad.size_m.y * 0.5 <= map.terrain.base_m + 1e-3,
-            "{}: its underside is at {} m and terrain.base_m is {} — the ground is a crust \
-             over a hole instead of solid rock",
-            pad.name,
-            pad.center_m.y - pad.size_m.y * 0.5,
-            map.terrain.base_m
-        );
+    // The control: found the first sampled house just ABOVE the lowest surface sample of its
+    // own footprint and the same comparison must fire — the instrument can go red (delete
+    // the thing you are measuring).
+    let house = houses[0];
+    let half = house.size_m * 0.5;
+    let mut min_surface = f32::INFINITY;
+    for sz in 0..=10 {
+        for sx in 0..=10 {
+            let x = house.center_m.x - half.x + half.x * 0.2 * sx as f32;
+            let z = house.center_m.z - half.z + half.z * 0.2 * sz as f32;
+            min_surface = min_surface.min(field.height_at_m(x - origin_x, z - origin_z));
+        }
     }
+    let doctored = min_surface + 0.01;
+    let fired = !(doctored <= min_surface + 1e-3);
+    assert!(fired, "the never-floats instrument cannot fire even on a doctored foundation");
 }
 
 #[test]
@@ -911,7 +1038,7 @@ fn f003_the_terrain_did_not_cost_the_district_its_houses() {
     let with = plan();
 
     let mut flat_map = map.clone();
-    flat_map.terrain.amplitude_m = Vec::new();
+    flat_map.terrain.amplitude = Vec::new();
     flat_map.terrain.wavelength_m = Vec::new();
     let flat = plan_blocks(&d, &flat_map);
 
@@ -931,11 +1058,20 @@ fn f003_the_terrain_did_not_cost_the_district_its_houses() {
          to keep it off the galleries"
     );
 
-    // And the terrain really is what is being compared: the flat plan has no terrace in it,
-    // the shipped one has many.
+    // And the terrain really is what is being compared: the shipped field has real relief,
+    // the flattened clone builds no grid at all (`amplitude: []` is the flatness statement).
+    // §5E: neither plan contains a single ground block any more — the ground is the one
+    // trimesh entity, spawned in `build_map` and deliberately absent from `plan_blocks`.
     let ground = |p: &[BlockPlan]| p.iter().filter(|k| k.name.starts_with("ground_")).count();
-    assert_eq!(ground(&flat), 0, "`amplitude_m: []` still built ground blocks");
-    assert!(ground(&with) > 500, "only {} ground blocks in the district", ground(&with));
+    assert_eq!(ground(&with), 0, "a ground_* pad came back — §5E deleted the pads");
+    assert_eq!(ground(&flat), 0, "`amplitude: []` built ground blocks");
+    let (_, shipped_field) = defeated_by_titan::world::map::terrain_of(&d, map);
+    let (_, flat_field) = defeated_by_titan::world::map::terrain_of(&d, &flat_map);
+    assert!(
+        shipped_field.corner_heights().iter().any(|h| h.abs() > 1.0),
+        "the shipped field is flat — this test compares nothing"
+    );
+    assert_eq!(flat_field.nx(), 0, "the flattened clone still built a terrain grid");
 }
 
 #[test]
@@ -1126,12 +1262,17 @@ fn f003_the_street_is_narrower_than_the_houses_are_tall() {
     // is the *rest* of the frontage quietly going with it, which is what this still catches —
     // and the number that moved is written down rather than the assertion being widened until
     // it goes green.
+    // §5E measured 35.1 % here (2026-09-02): the smooth field carries 34.6 m of relief and
+    // the swallowed-whole rule in `world::map` deletes the handful of houses whose whole box
+    // ends below the surface of their own footprint, so the ceiling did not have to move —
+    // but the number is written down because it sits closer to it than the 37.6 % of
+    // 2026-08-19 did on its own bar.
     assert!(
         broken * 5 < n * 2,
         "{broken} of {} samples are a facade with no facade opposite — a frontage with that \
          many holes in it is not a street, and the arc has nothing to run between. A fallen \
-         ring is allowed 40 % of them (measured 37.6 % on 2026-08-19); above that the ruin \
-         has eaten the town instead of standing in it",
+         ring is allowed 40 % of them (measured 35.1 % on 2026-09-02, 37.6 % on 2026-08-19); \
+         above that the ruin has eaten the town instead of standing in it",
         broken + n
     );
 
@@ -1215,58 +1356,53 @@ fn f003_the_hand_placed_blocks_that_have_a_model_in_the_drop_wear_it() {
 }
 
 #[test]
-fn f003_the_ground_climbs_six_times_what_the_terraces_did_and_still_holds_a_walkable_grade() {
-    // ★ **The number FIND-134 named, replaced.** On 2026-08-19 this test asserted the district
-    // was a 3.6 % grade and explained, correctly, that 3.6 % under an 11.50 m roofscape is
-    // 13 % of one roof and therefore nothing the eye can read. The user played it on
-    // 2026-08-29 and said the same thing in his own words — *„und deutlich hoeher und niedriger
-    // als jetzt!"* — so the number, not the explanation, was the defect.
-    //
-    // What replaced it is the same arithmetic on a different instrument: **one `rise_m` per
-    // `cell_m` of ground**, everywhere, instead of a 1.50 m cliff every 42 m. The two ends of
-    // it are bounded from opposite sides and that is why this test has two asserts:
-    //   * from **above** by what a body can walk over (0.27 m at `gravity_m_s2 -32`, FIND-214)
-    //     — a steeper field is a prettier picture of a wall;
-    //   * from **below** by what the eye can read, which is the whole reason for the round.
+fn f003_the_ground_climbs_a_readable_grade_and_carries_thirty_metres_of_relief() {
+    // ★ **The number FIND-134 named, replaced twice.** The terraces were a 3.6 % grade the
+    // eye could not read under an 11.5 m roofscape; the quantised field raised that to 5 %
+    // and 20 m of relief; and on 2026-09-02 the user judged THAT: *„aber es soll smooth sein
+    // und mehr elevation!"*. §5E answers with `max_grade` (the slope itself, no riser) and
+    // `elevation_m` (the size knob). The two ends are bounded from opposite sides:
+    //   * from **above** by what a grounded body can hold (~50°, so max_grade < tan 50°;
+    //     the schema test in tests/data.rs pins the same line) — a steeper field is a
+    //     prettier picture of a wall;
+    //   * from **below** by what the eye can read (>= 4.5 %) and by the user's own words:
+    //     the corner relief has to beat the 20 m the quantised round shipped — >= 30 m.
     let d = data();
     let map = d.current_map().expect("current map");
     let t = &map.terrain;
-    if t.amplitude_m.is_empty() || t.rise_m <= 0.0 {
+    if t.amplitude.is_empty() || t.elevation_m <= 0.0 {
         return;
     }
-    let (_, ground) = defeated_by_titan::world::map::terrain_of(&d, map);
-    let hs = ground.field.heights_m();
-    let lo = hs.iter().copied().fold(f32::INFINITY, f32::min);
-    let hi = hs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    let grade = t.rise_m / t.cell_m;
+    let (_, field) = defeated_by_titan::world::map::terrain_of(&d, map);
+    let corners = field.corner_heights();
+    let lo = corners.iter().copied().fold(f32::INFINITY, f32::min);
+    let hi = corners.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     eprintln!(
-        "ground: {:.2} m rise per {:.1} m cell = {:.1} % grade · {lo:.2} .. {hi:.2} m = \
-         {:.2} m of relief in {} heights · tallest house {:.2} m",
-        t.rise_m,
+        "ground: max_grade {:.2} ({:.0} % over {:.1} m cells) · {lo:.2}..{hi:.2} m = {:.2} m \
+         of relief at elevation_m {} · tallest house {:.2} m",
+        t.max_grade,
+        t.max_grade * 100.0,
         t.cell_m,
-        grade * 100.0,
         hi - lo,
-        ground.field.steps_used().len(),
+        t.elevation_m,
         d.scale.architecture.heights_m.values().copied().fold(0.0, f32::max)
     );
     assert!(
-        grade <= 0.27 / t.cell_m + 1e-6 && t.rise_m <= 0.27,
-        "the ground climbs {:.1} % ({} m per {} m cell) — above a 0.27 m riser the player \
-         cannot walk up it at all (FIND-214), and a picture of a wall is not terrain",
-        grade * 100.0,
-        t.rise_m,
-        t.cell_m
+        t.max_grade < 1.19,
+        "max_grade {} is steeper than the ~50 degrees a grounded player holds — a picture of \
+         a wall is not terrain",
+        t.max_grade
     );
     assert!(
-        grade >= 0.045,
+        t.max_grade >= 0.045,
         "the ground climbs {:.1} % — the terraces were 3.6 % and FIND-134 measured that as \
          unreadable under an 11.50 m roofscape; this is not a step away from it",
-        grade * 100.0
+        t.max_grade * 100.0
     );
     assert!(
-        hi - lo >= 20.0,
-        "{:.2} m of relief. The terraces had 7.50 m and the user asked for *deutlich hoeher \
-         und niedriger*",
+        hi - lo >= 30.0,
+        "{:.2} m of relief. The quantised field shipped 20 and the user asked for *mehr \
+         elevation!* — below 30 m the smooth round did not deliver its own reason",
         hi - lo
     );
 }
@@ -1542,11 +1678,24 @@ fn t036a_every_body_gets_exactly_one_id() {
     //
     // Everything here is read out of the plan and out of `IdCounter`, never out of a literal:
     // the number of blocks is a question for `maps.ron`.
+    //
+    // ⚠️ **`+ 1` since §5E B (2026-09-02), deliberately.** The ~5 752 quantised `ground_*`
+    // pads left the plan (each was one body), and the ground came back as exactly ONE
+    // trimesh entity that carries `Body` without being a planned cuboid. So the world holds
+    // `plan().len() + 1` bodies: the city out of the plan, plus the terrain. On a flat map
+    // (`graybox`) the terrain entity is not spawned at all and the +1 would be wrong — this
+    // binary runs on the shipped district, where the field is real.
     let planned = plan().len();
+    let expected = planned + 1;
     let mut app = stepped_world();
 
     let all = bodies_with_id(&mut app);
-    assert_eq!(all.len(), planned, "{} bodies in the world, {planned} planned", all.len());
+    assert_eq!(all.len(), expected, "{} bodies in the world, {expected} expected", all.len());
+    assert_eq!(
+        all.iter().filter(|(n, ..)| n.as_str() == "terrain").count(),
+        1,
+        "the one terrain body is not there exactly once"
+    );
 
     let missing: Vec<&String> = all.iter().filter(|(_, _, id)| id.is_none()).map(|(n, _, _)| n).collect();
     assert!(
@@ -1567,12 +1716,12 @@ fn t036a_every_body_gets_exactly_one_id() {
     assert_eq!(ids.len(), handed_out, "two bodies share one `BodyId`");
     assert_eq!(
         ids,
-        (1..=planned as u32).collect::<Vec<u32>>(),
-        "the ids are not the consecutive 1..={planned} out of `IdCounter`"
+        (1..=expected as u32).collect::<Vec<u32>>(),
+        "the ids are not the consecutive 1..={expected} out of `IdCounter`"
     );
     assert_eq!(
         app.world().resource::<IdCounter>().body,
-        planned as u32,
+        expected as u32,
         "`IdCounter.body` and the number of bodies disagree"
     );
 
@@ -1580,8 +1729,8 @@ fn t036a_every_body_gets_exactly_one_id() {
     // not more (an id inserted twice under two entries).
     assert_eq!(
         app.world().resource::<SpatialIndex>().len(),
-        planned,
-        "the index holds {} of {planned} bodies",
+        expected,
+        "the index holds {} of {expected} bodies",
         app.world().resource::<SpatialIndex>().len()
     );
 
@@ -1590,8 +1739,8 @@ fn t036a_every_body_gets_exactly_one_id() {
     for _ in 0..5 {
         app.update();
     }
-    assert_eq!(app.world().resource::<IdCounter>().body, planned as u32, "ids are handed out again every tick");
-    assert_eq!(app.world().resource::<SpatialIndex>().len(), planned, "the index grows every tick");
+    assert_eq!(app.world().resource::<IdCounter>().body, expected as u32, "ids are handed out again every tick");
+    assert_eq!(app.world().resource::<SpatialIndex>().len(), expected, "the index grows every tick");
 }
 
 #[test]
@@ -1617,6 +1766,14 @@ fn t036a_the_index_carries_the_anchorable_bit_from_the_file() {
         let entry = index
             .body(id)
             .unwrap_or_else(|| panic!("{name} (id {}) is not in the index", id.0));
+        // §5E: the one body that is not a planned cuboid. Its mask is the user's ground
+        // rule — *„man soll überall seinen haken machen können! auch an den boden"* — and
+        // solid, because the ground stops you.
+        if name.as_str() == "terrain" {
+            assert_eq!(entry.mask, mask_from(true, true), "the terrain body lost its mask");
+            anchorable += 1;
+            continue;
+        }
         let want = by_name
             .get(name.as_str())
             .unwrap_or_else(|| panic!("{name} stands in the world but not in the plan"));
@@ -1634,15 +1791,31 @@ fn t036a_the_index_carries_the_anchorable_bit_from_the_file() {
     assert!(wrong.is_empty(), "{} block(s) with the wrong mask: {wrong:#?}", wrong.len());
 
     // The number comes out of the plan and is written nowhere here, because a map change must
-    // not turn into a test change.
-    let expected_anchorable = plan.iter().filter(|p| p.anchorable).count();
+    // not turn into a test change. `+ 1`: the terrain body (§5E), counted above.
+    let expected_anchorable = plan.iter().filter(|p| p.anchorable).count() + 1;
     assert_eq!(anchorable, expected_anchorable, "anchorable bodies in the index vs. in the file");
     assert!(anchorable > 0, "not a single anchorable body in the index");
 
     // The hull the index carries is the hull of the body, and it comes from the file's half
-    // edge. A factor of 2 here is a hook that catches in mid-air.
+    // edge. A factor of 2 here is a hook that catches in mid-air. The terrain body's hull is
+    // not in the plan — it is compared against its own `Body` component instead, which is
+    // the same one-writer state the entry was built from.
+    let mut terrain_q = app
+        .world_mut()
+        .query_filtered::<(&Name, &Body, &Transform), Without<Block>>();
+    let (_, terrain_body, terrain_at) = terrain_q
+        .iter(app.world())
+        .find(|(n, ..)| n.as_str() == "terrain")
+        .expect("the terrain body is in the world");
+    let (terrain_half, terrain_center) = (terrain_body.half_size_m, terrain_at.translation);
+    let index = app.world().resource::<SpatialIndex>();
     for (name, _, id) in &all {
         let entry = index.body(id.expect("id")).expect("in the index");
+        if name.as_str() == "terrain" {
+            assert_eq!(entry.half_size_m, terrain_half, "terrain: half size in the index");
+            assert_eq!(entry.center_m, terrain_center, "terrain: center in the index");
+            continue;
+        }
         let want = by_name[name.as_str()];
         assert_eq!(entry.half_size_m, want.size_m * 0.5, "{name}: half size in the index");
         assert_eq!(entry.center_m, want.center_m, "{name}: center in the index");
@@ -2402,78 +2575,81 @@ fn f003_a_dressed_house_is_exactly_its_model_and_never_leaves_its_slot() {
 
 #[test]
 fn f003_the_districts_ground_is_reproducible_and_the_seed_moves_it_without_moving_a_pin() {
-    // ★ Two properties, and the second one **reversed on 2026-08-29** — deliberately, with the
-    // old sentence kept so the reversal is readable.
+    // ★ Two properties, and the second one **reversed on 2026-08-29** — deliberately, with
+    // the old sentence kept so the reversal is readable.
     //
     // The terraced field asserted *the seed stays a footnote*: `FIND-101` measured that its
-    // relaxation erased the draw everywhere except one cell of 256, so the ground was the shape
-    // of the hand-placed geometry and almost nothing else. The continuous field is the
-    // opposite by construction — the noise decides where the high ground is and the clamp only
-    // decides how fast you get there — so a seed that moved 0.4 % of the cells would now mean
-    // the noise is doing nothing and the ground is a pure distance cone off the streets.
-    // **The same measurement, the same six seeds, the bound turned around.**
+    // relaxation erased the draw everywhere except one cell of 256, so the ground was the
+    // shape of the hand-placed geometry and almost nothing else. The continuous field is the
+    // opposite by construction — the noise decides where the high ground is and the envelope
+    // only decides how fast you get there — so a seed that moved 0.4 % of the corners would
+    // mean the noise is doing nothing and the ground is a pure distance cone off the streets.
+    // **The same measurement, the same six seeds, the bound turned around.** §5E moved the
+    // instrument from quantised cell steps to exact corner bits; the claim did not move.
     //
-    // What did NOT turn around, and is the half that protects the district: whatever the seed,
-    // every pinned cell is still exactly 0. A quay wall hanging in the air is a desync you can
-    // photograph.
+    // What did NOT turn around, and is the half that protects the district: whatever the
+    // seed, every corner of every spawn-disc cell is still **exactly** 0.0 — no epsilon,
+    // because the hub pads and the titan ring reason about y = 0, not y ~ 0. A quay wall
+    // hanging in the air is a desync you can photograph.
     let d = data();
     let map = d.current_map().expect("current map");
     let (_, base) = defeated_by_titan::world::map::terrain_of(&d, map);
-    let (nx, nz) = (base.field.nx() as i32, base.field.nz() as i32);
-    let cells = (nx * nz) as f32;
+    let (nx, nz) = (base.nx() as i32, base.nz() as i32);
+    let corners = ((nx + 1) * (nz + 1)) as f32;
 
     let (_, again) = defeated_by_titan::world::map::terrain_of(&d, map);
-    assert_eq!(base.field, again.field, "the same map planned twice gave two grounds");
+    assert_eq!(base, again, "the same map planned twice gave two grounds");
 
     let mut least = usize::MAX;
     for seed in [1u64, 2, 7, 12_345, 0xDEAD_BEEF, 999_999_999] {
         let mut m = map.clone();
         m.seed = seed;
         let (_, other) = defeated_by_titan::world::map::terrain_of(&d, &m);
-        let moved = (0..nz)
-            .flat_map(|iz| (0..nx).map(move |ix| (ix, iz)))
-            .filter(|(ix, iz)| base.field.step_at(*ix, *iz) != other.field.step_at(*ix, *iz))
+        // Corner by corner, exact bits — `PartialEq` on f32 is the instrument on purpose:
+        // a corner that moved by one ULP is a corner the seed moved.
+        let moved = (0..=nz)
+            .flat_map(|iz| (0..=nx).map(move |ix| (ix, iz)))
+            .filter(|(ix, iz)| base.corner_m(*ix, *iz) != other.corner_m(*ix, *iz))
             .count();
-        eprintln!(
-            "seed {seed}: {moved} of {} cells move ({:.1} %), {} heights used",
-            nx * nz,
-            100.0 * moved as f32 / cells,
-            other.field.steps_used().len()
-        );
+        eprintln!("seed {seed}: {moved} of {} corners move ({:.1} %)", corners as usize,
+            100.0 * moved as f32 / corners);
         least = least.min(moved);
-        // The pins do not care which seed it is. Taken on the OTHER field, cell by cell,
-        // against the cells this map pins — the spawn disc is the one every mission needs.
+        // The pins do not care which seed it is. Taken on the OTHER field, corner by corner
+        // over the cells this map pins — the spawn disc is the one every mission needs.
         for iz in 0..nz {
             for ix in 0..nx {
-                let (x, z) = (
-                    -map.size_m.0 * 0.5 + (ix as f32 + 0.5) * map.terrain.cell_m,
-                    -map.size_m.1 * 0.5 + (iz as f32 + 0.5) * map.terrain.cell_m,
+                let (x0, z0) = (
+                    -map.size_m.0 * 0.5 + ix as f32 * map.terrain.cell_m,
+                    -map.size_m.1 * 0.5 + iz as f32 * map.terrain.cell_m,
                 );
-                if x * x + z * z < (map.terrain.flat_radius_m - map.terrain.cell_m).powi(2) {
-                    assert_eq!(
-                        other.field.step_at(ix, iz),
-                        0,
-                        "seed {seed}: the spawn cell ({ix},{iz}) is at {:.2} m — the hub pads \
-                         stand at y = 0 and one of them is now inside the ground",
-                        other.field.height_at(ix, iz)
-                    );
+                let (x1, z1) = (x0 + map.terrain.cell_m, z0 + map.terrain.cell_m);
+                // A cell whose whole footprint lies inside the flat disc is a Pin cell, and
+                // every one of its four corners has to sit at 0 exactly.
+                let dx = x0.max(-x1).max(0.0);
+                let dz = z0.max(-z1).max(0.0);
+                let far = x0.abs().max(x1.abs()).hypot(z0.abs().max(z1.abs()));
+                if dx * dx + dz * dz < map.terrain.flat_radius_m.powi(2)
+                    && far < map.terrain.flat_radius_m
+                {
+                    for (cx, cz) in [(ix, iz), (ix + 1, iz), (ix, iz + 1), (ix + 1, iz + 1)] {
+                        assert_eq!(
+                            other.corner_m(cx, cz),
+                            0.0,
+                            "seed {seed}: spawn corner ({cx},{cz}) left the plane — the hub \
+                             pads stand at y = 0 and one of them is now inside the ground"
+                        );
+                    }
                 }
             }
         }
     }
-    eprintln!(
-        "shipped ground: {nx}x{nz} cells, {} heights used, every seed moves at least {least} \
-         cells ({:.1} %)",
-        base.field.steps_used().len(),
-        100.0 * least as f32 / cells
-    );
     assert!(
-        least as f32 >= 0.15 * cells,
-        "the quietest of six seeds moves only {least} of {} cells ({:.1} %) — the noise is \
+        least as f32 >= 0.15 * corners,
+        "the quietest of six seeds moves only {least} of {} corners ({:.1} %) — the noise is \
          doing nothing and this ground is a distance transform off the streets, which is the \
          pyramid the round set out to replace",
-        cells as usize,
-        100.0 * least as f32 / cells
+        corners as usize,
+        100.0 * least as f32 / corners
     );
 }
 
@@ -3613,20 +3789,20 @@ fn f012_the_whole_top_face_of_the_fence_lies_outside_the_map_and_is_recovered_fr
 /// the first two of them in numbers. The third (grass) is a colour and is checked below.
 ///
 /// **What the code under test reads, and what this test varies.** `plan_terrain` reads
-/// `map.terrain.{cell_m, rise_m, amplitude_m, wavelength_m, flat_radius_m, paving_top_m,
-/// pillar_gap_m, base_m, colors}`, `map.seed`, `map.size_m` and every entry of `map.blocks`.
-/// This test varies **none** of them: it is a measurement of the SHIPPED Ashgate, the one
-/// ground the user actually looks at, and it is deliberately a property of `maps.ron` and not
-/// of a fixture. The sweep over the parameters is
-/// `f003_no_two_neighbouring_cells_differ_by_more_than_one_rise`; the sweep over the seeds is
-/// `f003_the_same_seed_yields_exactly_the_same_ground`. Nothing here is skipped — every cell
-/// of the field is in `heights_m()`, holes included.
+/// `map.terrain.{cell_m, max_grade, elevation_m, amplitude, wavelength_m, flat_radius_m,
+/// paving_top_m, max_rise_m, base_m, colors}`, `map.seed`, `map.size_m` and every entry of
+/// `map.blocks`. This test varies **none** of them: it is a measurement of the SHIPPED
+/// Ashgate, the one ground the user actually looks at, and it is deliberately a property of
+/// `maps.ron` and not of a fixture. The sweep over the role layouts lives in
+/// `shared::terrain`'s own tests; the sweep over the seeds is
+/// `f003_the_districts_ground_is_reproducible_...`. Nothing here is skipped — every cell of
+/// the field is in `heights_m()`, holes included (a hole cell still has a diagonal mean).
 #[test]
 fn f003_the_ground_is_a_continuous_field_and_not_a_flight_of_terraces() {
     let d = data();
     let map = d.current_map().expect("maps.ron: current");
-    let (_, ground) = defeated_by_titan::world::map::terrain_of(&d, map);
-    let hs = ground.field.heights_m();
+    let (_, field) = defeated_by_titan::world::map::terrain_of(&d, map);
+    let hs = field.heights_m();
     let lo = hs.iter().copied().fold(f32::INFINITY, f32::min);
     let hi = hs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     let mut distinct: Vec<i64> = hs.iter().map(|h| (h * 1000.0).round() as i64).collect();
@@ -3634,19 +3810,18 @@ fn f003_the_ground_is_a_continuous_field_and_not_a_flight_of_terraces() {
     distinct.dedup();
     eprintln!(
         "field: {} cells of {:.2} m · {:.2} .. {:.2} m = {:.2} m of relief · {} distinct \
-         heights · {} ground blocks",
+         heights",
         hs.len(),
         map.terrain.cell_m,
         lo,
         hi,
         hi - lo,
-        distinct.len(),
-        ground.pads.len()
+        distinct.len()
     );
     // Where the two extremes actually are, in world metres — this is what an evidence
     // screenshot has to be aimed at, and guessing at it cost this round one useless aerial.
     let world = |i: usize| {
-        let (nx, cell) = (ground.field.nx() as usize, map.terrain.cell_m);
+        let (nx, cell) = (field.nx() as usize, map.terrain.cell_m);
         (
             -map.size_m.0 * 0.5 + ((i % nx) as f32 + 0.5) * cell,
             -map.size_m.1 * 0.5 + ((i / nx) as f32 + 0.5) * cell,
@@ -3664,9 +3839,11 @@ fn f003_the_ground_is_a_continuous_field_and_not_a_flight_of_terraces() {
         world(imax).1
     );
     assert!(
-        hi - lo >= 20.0,
-        "the ground of Ashgate spans {:.2} m from its lowest cell to its highest — the user \
-         asked for *deutlich hoeher und niedriger als jetzt* and 'jetzt' was 7.50 m",
+        hi - lo >= 30.0,
+        "the ground of Ashgate spans {:.2} m from its lowest cell to its highest — §5E \
+         tightened this from 20 (the quantised round's own bar, *deutlich hoeher und \
+         niedriger*) to 30, because *mehr elevation!* against a delivered 20 has to move the \
+         measured number, not just a coefficient",
         hi - lo
     );
     assert!(

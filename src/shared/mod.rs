@@ -26,6 +26,7 @@ pub mod rng;
 pub mod state;
 pub mod layers;
 pub mod anchors;
+pub mod ground;
 pub mod terrain;
 pub mod settings;
 pub mod water;
@@ -59,5 +60,6 @@ pub use anchors::{
     is_anchor_name, model_turn, ModelAnchors, ModelName, ModelYaw, ANCHOR_NAMES, CORTEX_ANCHOR,
     HOOK_PREFIX, MODEL_FACES,
 };
+pub use ground::TerrainSheet;
 pub use terrain::{CellRole, TerrainField};
 pub use water::{Submerged, WaterVolume};

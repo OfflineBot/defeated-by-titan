@@ -1875,3 +1875,44 @@ fn f012_every_map_declares_a_measured_gear_ceiling_far_above_its_fence() {
         );
     }
 }
+
+#[test]
+fn t005_terrain_speaks_the_smooth_schema_and_graybox_stays_flat() {
+    // §5E: `rise_m`/`amplitude_m` (the quantised pads) gave way to `max_grade` (m/m) and
+    // `elevation_m * amplitude[i]` (unitless mix, one metre knob). This pins the new keys'
+    // internal consistency; the field they produce is measured in --lib and tests/world.rs.
+    let d = data();
+    for (id, map) in &d.maps.maps {
+        let t = &map.terrain;
+        assert_eq!(
+            t.amplitude.len(),
+            t.wavelength_m.len(),
+            "{id}: terrain has {} amplitudes and {} wavelengths — an octave is a pair",
+            t.amplitude.len(),
+            t.wavelength_m.len()
+        );
+        assert!(
+            t.max_grade.is_finite() && t.max_grade > 0.0 && t.max_grade < 1.19,
+            "{id}: max_grade = {} — must be a slope a grounded player can hold \
+             (tan 50 deg = 1.19 is the ceiling, docs/PLAN.md §5E)",
+            t.max_grade
+        );
+        assert!(
+            t.elevation_m.is_finite() && t.elevation_m >= 0.0,
+            "{id}: elevation_m = {} — 0.0 is the flatness statement, negative is nothing",
+            t.elevation_m
+        );
+        for (i, a) in t.amplitude.iter().enumerate() {
+            assert!(
+                a.is_finite() && *a > 0.0,
+                "{id}: amplitude[{i}] = {a} — a dead octave is a deleted octave, not a zero"
+            );
+        }
+    }
+    // The fixture the aiming and player suites reason about at y = 0, stated twice over.
+    let graybox = &d.maps.maps["graybox"].terrain;
+    assert!(
+        graybox.amplitude.is_empty() && graybox.elevation_m == 0.0,
+        "graybox stopped being provably flat — twelve pinned tests measure y = 0 on it"
+    );
+}

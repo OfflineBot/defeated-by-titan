@@ -63,10 +63,10 @@
 //! ## And since 2026-08-13 the ground has a height, and the roof has a ridge
 //!
 //! The user: *„adde verschiedene höhen vom boden her! lass es wie die echte stadt aussehen!
-//! aktuell kann man es noch nicht erkennen!"*. Two answers, both data:
-//! [`plan_terrain`] steps the ground into terraces with a flight of stairs on every falling
-//! edge, and `layout.roof_steps` / `layout.tall_fraction` turn a roofscape of equal flat lids
-//! into stepped gables with a handful of 18 m houses among them.
+//! aktuell kann man es noch nicht erkennen!"*. Two answers, both data: [`plan_terrain`] gives
+//! the district a height field (since §5E a **smooth** one — [`spawn_terrain`] turns it into
+//! the one trimesh entity), and `layout.roof_steps` / `layout.tall_fraction` turn a roofscape
+//! of equal flat lids into stepped gables with a handful of 18 m houses among them.
 //!
 //! Seen: `docs/images/f003-city.png`, driven with `scripts/f003-city.txt`.
 //! The terrain: `docs/images/f003-terrain.png` (from the street) and
@@ -561,6 +561,12 @@ pub fn build_map(mut commands: Commands, data: Res<GameData>) {
         block.spawn(&mut commands, &data);
     }
 
+    // §5E: the ground itself — ONE entity, not ~6 300 pads. The same `plan_terrain` the
+    // house founding above already ran; deterministic, so running it twice is two equal
+    // fields and not two grounds (`f003_the_same_seed_yields_exactly_the_same_city`).
+    let field = plan_terrain(&data, map, &placed_blocks(&data, map), &Rng::new(map.seed));
+    spawn_terrain(&mut commands, &data, map, &field);
+
     info!(
         "map {:?}: {} blocks built ({} placed, {} generated), {anchorable} of them anchorable",
         map.name,
@@ -584,12 +590,12 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
     let g = LayoutGrid::of(map);
     let (period_m, nx, nz, start_x, start_z) = (g.period_m, g.nx, g.nz, g.start_x, g.start_z);
 
-    // The ground the district stands on, and the stairs that lead up it. It has to be planned
-    // **before** the houses: every house is raised onto the terrace of its own cell, and the
-    // veto against the placed blocks is taken over the raised box.
-    let ground = plan_terrain(data, map, &plan[..placed], &rng, &g);
-    plan.extend(ground.pads);
-    let field = ground.field;
+    // The ground the district stands on. It has to be planned **before** the houses: every
+    // house is founded on the lowest ground its ring covers, and the veto against the placed
+    // blocks is taken over the raised box. Since §5E the field plans **no blocks** — the one
+    // trimesh entity it becomes is spawned by [`build_map`], not planned here, so `plan_blocks`
+    // stays a pure list of cuboids and `tests/world.rs` can keep comparing it value by value.
+    let field = plan_terrain(data, map, &plan[..placed], &rng);
 
     // The tall class — the answer to `Q-036`, and the one height in this generator that does
     // not come out of `layout`'s own band. It is looked up **once**, and loudly: a key that is
@@ -797,6 +803,37 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                 let center_m = Vec3::new(center_x, base_m + height_m * 0.5, center_z);
                 let size_m = Vec3::new(size_x, height_m, size_z);
 
+                // ⚠️ §5E: **a house that the ground swallows whole is not built.** The ring
+                // is founded on the lowest ground of its whole rect (party walls, above),
+                // and with `max_grade 0.35` a 42 m ring can straddle 14+ m of slope — a
+                // house on the ring's high side is then cut so deep into the hill that even
+                // its ridge ends below the surface of its OWN footprint. That is not the
+                // wanted uphill plinth cut, it is an invisible building with a tagged anchor
+                // surface inside the earth (measured 2026-09-02: house_170_3, ring across
+                // the valley wall at the pinned gallery apron, buried to -15.9 m under a
+                // surface at 0). Same rule as the canal: a house may not stand where the
+                // player can never see or touch it. Partial burial stays — the plinth cut is
+                // the §5E founding design.
+                // Measured off the DRAWN footprint and the ridge, not the dressed or spilled
+                // box: whether a building exists may depend on the lot and the seed, never on
+                // what it ended up wearing — `f003_the_rubble_takes_the_ground_...` pins that
+                // a spill-less re-plan is the same set of names, and a rubble mound whose
+                // spill nudged its centre across this line would break that pin for a rule
+                // about visibility.
+                let own_ground_m = ground_under(
+                    &field,
+                    map,
+                    Rect {
+                        x0: f.center_x - f.size_x * 0.5,
+                        x1: f.center_x + f.size_x * 0.5,
+                        z0: f.center_z - f.size_z * 0.5,
+                        z1: f.center_z + f.size_z * 0.5,
+                    },
+                );
+                if base_m + ridge_m <= own_ground_m + 1e-3 {
+                    continue;
+                }
+
                 // What is explicitly placed wins (`maps.ron`). Only the placed blocks are
                 // tested against: two layout houses can never overlap, the ring geometry
                 // and the street see to that.
@@ -827,9 +864,24 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                 // ⚠️ And over the remnant's own height when the house has fallen: a 3 m
                 // stump vetoed against the 11 m box it used to be would delete a mound the
                 // aprons never touch.
-                let veto_m = base_m + if remnant.is_some() { height_m } else { ridge_m };
-                let ridge_center = Vec3::new(center_x, veto_m * 0.5, center_z);
-                let ridge_half = Vec3::new(size_x * 0.5, veto_m * 0.5, size_z * 0.5);
+                // ⚠️ §5E: with the smooth field the base reaches -15 m and deeper, and
+                // "from y = 0 up to the raised ridge" can be an EMPTY box (base + ridge < 0
+                // makes a negative half extent, which `overlaps` treats as never touching —
+                // measured 2026-09-02: 17 houses reappeared under the galleries, house_96_0
+                // under block_6 among them). So the span is written as what it always meant:
+                // from the house's own base OR the plane, whichever is lower, up to its
+                // raised ridge OR the plane, whichever is higher — the box always contains
+                // both the building and the y = 0 band the 0.3 m aprons live in.
+                let veto_top =
+                    (base_m + if remnant.is_some() { height_m } else { ridge_m }).max(0.0);
+                let veto_bottom = base_m.min(0.0);
+                let ridge_center =
+                    Vec3::new(center_x, (veto_top + veto_bottom) * 0.5, center_z);
+                let ridge_half = Vec3::new(
+                    size_x * 0.5,
+                    (veto_top - veto_bottom) * 0.5,
+                    size_z * 0.5,
+                );
                 // ⚠️ And a placed block whose **top is below the ground** vetoes by its
                 // FOOTPRINT alone, at any height. That is the channel, and it is the one case
                 // the y test above cannot see: a house box runs from `y = 0` upward, the
@@ -1005,11 +1057,11 @@ fn placed_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
 
 /// The ground of a map, planned on its own — the same call [`plan_blocks`] makes, without the
 /// city on top of it. `tests/world.rs` measures the relief on this.
-pub fn terrain_of(data: &GameData, map: &Map) -> (LayoutGrid, PlannedGround) {
+pub fn terrain_of(data: &GameData, map: &Map) -> (LayoutGrid, TerrainField) {
     let g = LayoutGrid::of(map);
     let placed = placed_blocks(data, map);
-    let ground = plan_terrain(data, map, &placed, &Rng::new(map.seed), &g);
-    (g, ground)
+    let field = plan_terrain(data, map, &placed, &Rng::new(map.seed));
+    (g, field)
 }
 
 /// The grid every generated thing is placed on — lots, and the terrain cells over them.
@@ -1048,20 +1100,15 @@ impl LayoutGrid {
 
 }
 
-/// The stepped ground and the field it was cut from.
-pub struct PlannedGround {
-    /// The levels, so that the houses can be raised onto the terrace of their own cell.
-    pub field: TerrainField,
-    /// The terrace tops and their flights of stairs, in cell order.
-    pub pads: Vec<BlockPlan>,
-}
-
 /// The lowest ground a footprint stands on, in metres — what a house is founded on.
 ///
 /// The cell grid is the map's own, not the layout's: at `cell_m` 5.0 against a block pitch of
 /// 42 a house covers three cells and a ring covers nine, so "the cell this lot belongs to" is
 /// no longer a question with an answer. `min` and not `max` is the decision — see
-/// [`TerrainField::lowest_over`].
+/// [`TerrainField::lowest_over_m`]. The surface is piecewise linear over the corners, so the
+/// minimum over every **cell the footprint touches** (corners `ix0..=ix1+1` inside
+/// `lowest_over_m`) is a true lower bound of the surface under the footprint — the downhill
+/// corner of a house can never stand on air.
 fn ground_under(field: &TerrainField, map: &Map, foot: Rect) -> f32 {
     let cell_m = map.terrain.cell_m;
     if cell_m <= 0.0 || field.nx() == 0 {
@@ -1072,7 +1119,7 @@ fn ground_under(field: &TerrainField, map: &Map, foot: Rect) -> f32 {
     let ix1 = ((foot.x1 - origin_x) / cell_m).ceil() as i32 - 1;
     let iz0 = ((foot.z0 - origin_z) / cell_m).floor() as i32;
     let iz1 = ((foot.z1 - origin_z) / cell_m).ceil() as i32 - 1;
-    field.lowest_over(ix0, ix1.max(ix0), iz0, iz1.max(iz0))
+    field.lowest_over_m(ix0, ix1.max(ix0), iz0, iz1.max(iz0))
 }
 
 /// A footprint, looking down. The terrain question is always a footprint question.
@@ -1094,110 +1141,54 @@ impl Rect {
         }
     }
 
-    fn grown(self, by_m: f32) -> Self {
-        Self {
-            x0: self.x0 - by_m,
-            x1: self.x1 + by_m,
-            z0: self.z0 - by_m,
-            z1: self.z1 + by_m,
-        }
-    }
-
     fn hits(&self, other: &Rect) -> bool {
         self.x0 < other.x1 && other.x0 < self.x1 && self.z0 < other.z1 && other.z0 < self.z1
     }
-
-    /// A slab thinner than a centimetre is a z-fighting sliver, not a terrace.
-    fn real(&self) -> bool {
-        self.x1 - self.x0 > 0.01 && self.z1 - self.z0 > 0.01
-    }
-}
-
-/// `a` without `b`, as up to four rectangles.
-///
-/// **This world has no subtraction** (`docs/FINDINGS.md` FIND-056) — what it has is leaving
-/// pieces out, and that is exactly what this does. It is the reason a bell tower or a tree does
-/// not have to flatten the whole 42 m cell it happens to stand in: the terrace is cut around
-/// its foot, and the pillar itself fills the hole, because it is solid from the ground up.
-fn without(a: Rect, b: Rect) -> Vec<Rect> {
-    if !a.hits(&b) {
-        return vec![a];
-    }
-    let (z0, z1) = (b.z0.max(a.z0), b.z1.min(a.z1));
-    [
-        Rect { z1: b.z0.min(a.z1), ..a },
-        Rect { z0: b.z1.max(a.z0), ..a },
-        Rect { x1: b.x0.min(a.x1), z0, z1, ..a },
-        Rect { x0: b.x1.max(a.x0), z0, z1, ..a },
-    ]
-    .into_iter()
-    .filter(Rect::real)
-    .collect()
-}
-
-/// What is left of one slab once every pillar has been cut out of it.
-fn cut(rect: Rect, pillars: &[Rect]) -> Vec<Rect> {
-    let mut out = vec![rect];
-    for p in pillars {
-        out = out.into_iter().flat_map(|r| without(r, *p)).collect();
-    }
-    out
 }
 
 /// The ground the district stands on — **the whole of it, in one place.**
 ///
-/// The user, 2026-08-29, having played the terraced version this replaced: *„auch die
-/// verschiedenen hoehen passen nicht! das soll grass sein und nicht so wie jetzt! und nicht
-/// verschiedene hardcoded stufen sondern wirklich terrain! und deutlich hoeher und niedriger
-/// als jetzt!"*
+/// The user, twice, and the second time is why this returns a field and no blocks any more:
 ///
-/// ## What went, and what it took with it
+/// * 2026-08-29: *„auch die verschiedenen hoehen passen nicht! das soll grass sein und nicht
+///   so wie jetzt! und nicht verschiedene hardcoded stufen sondern wirklich terrain! und
+///   deutlich hoeher und niedriger als jetzt!"* — that deleted the terraces.
+/// * 2026-09-02: *„ok und die welt hat jetzt harte höhen. aber es soll smooth sein und mehr
+///   elevation! also richtiges terrain!"* — and that (§5E) deleted the ~6 300 quantised
+///   cuboid pads and their greedy merge. The ground of a map is now **one entity**: a static
+///   trimesh over [`TerrainField::corner_heights`] with the fixed diagonal, built in
+///   [`build_map`], plus a [`TerrainSheet`] so `render` draws the same triangles.
 ///
-/// The terraces were `levels x step_m` on a 42 m cell: six plateaus, a 1.50 m cliff between
-/// two of them, and a flight of `step_m / stair_rise_m` risers cut into every falling edge to
-/// make the cliff walkable. Every one of those numbers existed **for the cliff** — and there
-/// is no cliff any more, so `levels`, `step_m`, `stair_rise_m`, `stair_tread_m`, `stair_color`
-/// and `pillar_gap_m` are gone with it, along with the assert that `step_m` be a whole
-/// multiple of the riser and the one that `cell_m` be a whole multiple of the block pitch.
-///
-/// **What survives is `FIND-091`'s actual finding, in its new form:** whatever the slope, the
-/// player has to be able to walk up it. For terraces that was a flight of stairs; for a field
-/// it is one number, `rise_m`, and it is measured (`shared::terrain`, and FIND-214).
-///
-/// ## Three decisions, and each is why a whole class of bug cannot happen
+/// ## Two decisions that survive from the pad era, unchanged
 ///
 /// 1. **The grid covers the whole map, not the layout.** `size_m` is asserted to be a whole
-///    multiple of `cell_m`. The ground *is* the terrain now — the two 700 m slabs that used to
-///    be Ashgate's floor are deleted from `maps.ron`, because a slab at `y = -0.1` over a
-///    valley at `-10` is a lid on it.
+///    multiple of `cell_m`. The ground *is* the terrain — a slab at `y = -0.1` over a valley
+///    would be a lid on it.
 /// 2. **Every hand-placed block is one of four things to the ground, and it never moves.**
-///    All 240 of them stand exactly where the file puts them; what changes is what the ground
-///    under them is allowed to do (`shared::CellRole`). That is the whole answer to "what
-///    happens to the hand-placed blocks": nothing.
+///    All ~240 of them stand exactly where the file puts them; what changes is what the
+///    ground under them is allowed to do (`shared::CellRole`).
 ///    * **sky** — bottom already above `max_rise_m + door_height_m` (the 56 m gantry beams,
 ///      the 60 m gallery, the crown at 120 m). The ground can never meet it. Ignored.
-///    * **hole** — top below the base plane: the canal floor. No ground at all is emitted
-///      over it, which is how the channel stays a channel in a world that cannot subtract.
+///    * **hole** — top below the base plane: the canal floor. No triangle is emitted over
+///      it, which is how the channel stays a channel in a world that cannot subtract.
 ///    * **floor** — top at or below `paving_top_m`: the paving, the streets, the market
-///      square. The ground may climb over it, exactly as a terrace always could, but may not
-///      sink away underneath and leave it in the air.
+///      square. The ground may climb over it, but may not sink away underneath and leave it
+///      in the air.
 ///    * **pin** — everything else that stands on the ground: the quay walls, the wall
 ///      courses, the gate towers, the stalls, the church, the trees. Its cell is 0.
-/// 3. **One block per merged rectangle, not one per cell.** 19 600 cells of 5 m would be
-///    19 600 draw calls; greedily merging neighbours of equal height into the largest
-///    axis-aligned rectangle that fits brings Ashgate to ~6 300. That is the only reason a
-///    5 m cell is affordable at all, and `docs/lessons/performance.md` rule 6 is why it is
-///    measured in `tests/world.rs` and not hoped for.
-pub fn plan_terrain(
-    data: &GameData,
-    map: &Map,
-    placed: &[BlockPlan],
-    rng: &Rng,
-    _g: &LayoutGrid,
-) -> PlannedGround {
+///
+/// ## The invariants, asserted here where the map can be named
+///
+/// The field promises them (`shared::terrain`), and this function measures the field that
+/// actually came out — `docs/BUGS.md` B-018 is what it looks like when a walkability promise
+/// fails silently:
+/// * **grade**: no corner-grid edge steeper than `max_grade` (the walkability budget);
+/// * **ceiling**: no corner over `max_rise_m` (the line the sky classification depends on);
+/// * **floor**: every corner above `base_m` (or a ground skirt would be inside out).
+pub fn plan_terrain(data: &GameData, map: &Map, placed: &[BlockPlan], rng: &Rng) -> TerrainField {
     let t = &map.terrain;
     let r = &map.layout;
-    let flat_map = t.amplitude_m.is_empty() || t.rise_m <= 0.0 || t.cell_m <= 0.0;
+    let flat_map = t.amplitude.is_empty() || t.elevation_m <= 0.0 || t.cell_m <= 0.0;
     let (ncx, ncz) = if flat_map {
         (0, 0)
     } else {
@@ -1242,8 +1233,9 @@ pub fn plan_terrain(
         ncx,
         ncz,
         t.cell_m,
-        t.rise_m,
-        &t.amplitude_m,
+        t.max_grade,
+        t.elevation_m,
+        &t.amplitude,
         &t.wavelength_m,
         rng,
         STREAM_TERRAIN,
@@ -1269,9 +1261,8 @@ pub fn plan_terrain(
         },
     );
 
-    let mut pads: Vec<BlockPlan> = Vec::new();
     if flat_map {
-        return PlannedGround { field, pads };
+        return field;
     }
 
     assert!(
@@ -1290,10 +1281,10 @@ pub fn plan_terrain(
         r.clear_radius_m
     );
     assert_eq!(
-        t.amplitude_m.len(),
+        t.amplitude.len(),
         t.wavelength_m.len(),
         "maps.ron: terrain has {} amplitudes and {} wavelengths — an octave is a pair",
-        t.amplitude_m.len(),
+        t.amplitude.len(),
         t.wavelength_m.len()
     );
     assert!(
@@ -1301,29 +1292,35 @@ pub fn plan_terrain(
         "maps.ron: terrain.colors is empty — the ground would have no colour at all"
     );
 
-    // ## The invariant, asserted and not trusted
+    // ## The invariants, asserted and not trusted (the ## in the fn doc)
     //
-    // One rise is the tallest riser a player can walk over, and the field promises that no two
-    // neighbours differ by more than one. That promise is the difference between terrain and a
-    // wall with a texture, so it is checked here where the map can be named — `docs/BUGS.md`
-    // B-018 is what it looks like when it fails silently.
+    // `max_grade` is the whole walkability promise now that there is no riser — the
+    // difference between terrain and a wall with a texture — so it is checked on the field
+    // that actually came out, edge by edge over the corner grid, here where the map can be
+    // named. `docs/BUGS.md` B-018 is what it looks like when this fails silently.
+    let budget = t.max_grade * t.cell_m;
+    let (cw, ch) = (ncx as i32 + 1, ncz as i32 + 1);
     let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
-    for cz in 0..ncz as i32 {
-        for cx in 0..ncx as i32 {
-            let h = field.height_at(cx, cz);
+    for iz in 0..ch {
+        for ix in 0..cw {
+            let h = field.corner_m(ix, iz);
             lo = lo.min(h);
             hi = hi.max(h);
             for (dx, dz) in [(1, 0), (0, 1)] {
-                let d = (field.step_at(cx, cz) - field.step_at(cx + dx, cz + dz)).abs();
+                if ix + dx >= cw || iz + dz >= ch {
+                    continue;
+                }
+                let d = (h - field.corner_m(ix + dx, iz + dz)).abs();
                 assert!(
-                    d <= 1,
-                    "map {:?}: cell ({cx},{cz}) stands {:.2} m over its neighbour \
-                     ({},{}) — one rise is {} m and that is already the whole walking budget",
+                    d <= budget + 1e-4,
+                    "map {:?}: corner ({ix},{iz}) stands {d:.3} m over its neighbour \
+                     ({},{}) — max_grade {} over a {} m cell allows {budget:.3} m per edge, \
+                     and that is already the whole walking budget",
                     map.name,
-                    d as f32 * t.rise_m,
-                    cx + dx,
-                    cz + dz,
-                    t.rise_m
+                    ix + dx,
+                    iz + dz,
+                    t.max_grade,
+                    t.cell_m
                 );
             }
         }
@@ -1337,91 +1334,110 @@ pub fn plan_terrain(
     );
     assert!(
         t.base_m < lo - 1e-3,
-        "maps.ron: terrain.base_m = {} is not below the lowest cell ({lo:.2} m) — a ground \
-         block would be inside out",
+        "maps.ron: terrain.base_m = {} is not below the lowest corner ({lo:.2} m) — a ground \
+         skirt would be inside out",
         t.base_m
     );
 
-    // ## The merge, and why it is greedy and not clever
-    //
-    // Row by row: take the first cell nobody has claimed, run right while the height is the
-    // same, then run down while the whole span still matches. It is the standard greedy mesh
-    // and it is exact about what it emits — every cell that is not a hole ends up in exactly
-    // one rectangle, which is what `tests/world.rs` counts. A smarter partition would win a
-    // few per cent and cost the property that makes it checkable.
-    let colors: Vec<[f32; 3]> = t.colors.iter().map(|k| color_of(data, k)).collect();
-    let span = (hi - lo).max(1e-3);
-    let mut claimed = vec![false; (ncx as usize) * (ncz as usize)];
-    let at = |cx: u32, cz: u32| (cz as usize) * (ncx as usize) + cx as usize;
-    for cz in 0..ncz {
-        let mut cx = 0;
-        while cx < ncx {
-            if claimed[at(cx, cz)] || field.is_hole(cx as i32, cz as i32) {
-                cx += 1;
-                continue;
-            }
-            let step = field.step_at(cx as i32, cz as i32);
-            let mut cx1 = cx;
-            while cx1 + 1 < ncx
-                && !claimed[at(cx1 + 1, cz)]
-                && !field.is_hole((cx1 + 1) as i32, cz as i32)
-                && field.step_at((cx1 + 1) as i32, cz as i32) == step
-            {
-                cx1 += 1;
-            }
-            let mut cz1 = cz;
-            while cz1 + 1 < ncz
-                && (cx..=cx1).all(|c| {
-                    !claimed[at(c, cz1 + 1)]
-                        && !field.is_hole(c as i32, (cz1 + 1) as i32)
-                        && field.step_at(c as i32, (cz1 + 1) as i32) == step
-                })
-            {
-                cz1 += 1;
-            }
-            for z in cz..=cz1 {
-                for x in cx..=cx1 {
-                    claimed[at(x, z)] = true;
-                }
-            }
-            let top_m = step as f32 * t.rise_m;
-            let band = (((top_m - lo) / span) * colors.len() as f32) as usize;
-            let piece = Rect {
-                x0: origin_x + cx as f32 * t.cell_m,
-                x1: origin_x + (cx1 + 1) as f32 * t.cell_m,
-                z0: origin_z + cz as f32 * t.cell_m,
-                z1: origin_z + (cz1 + 1) as f32 * t.cell_m,
-            };
-            pads.push(BlockPlan {
-                name: format!("ground_{cx}_{cz}"),
-                center_m: Vec3::new(
-                    (piece.x0 + piece.x1) * 0.5,
-                    (t.base_m + top_m) * 0.5,
-                    (piece.z0 + piece.z1) * 0.5,
-                ),
-                size_m: Vec3::new(
-                    piece.x1 - piece.x0,
-                    top_m - t.base_m,
-                    piece.z1 - piece.z0,
-                ),
-                color: colors[band.min(colors.len() - 1)],
-                // Ground, and since 2026-08-12 the ground of this district holds a hook —
-                // *„man soll überall seinen haken inmachen können! auch an den boden"*.
-                // Anything else here would be an unlisted exception and
-                // `tests/world.rs::f003_an_unanchorable_block_is_a_listed_exception...`
-                // would say so.
-                anchorable: true,
-                solid: true,
-                // The ground wears no model. The pack has street and stair pieces
-                // (`a-085-strasse-*`), and a hillside is not one of them.
-                model: None,
-                yaw_rad: 0.0,
-            });
-            cx = cx1 + 1;
+    field
+}
+
+/// **The one terrain entity** — §5E: the ~6 300 quantised cuboid pads became a single static
+/// trimesh over the corner grid, spawned here and nowhere else.
+///
+/// * **Collider and picture are one surface**: the triangles here follow the fixed diagonal
+///   `(i, j) -> (i+1, j+1)` exactly like [`TerrainField::height_at_m`] and exactly like the
+///   mesh `render` builds from the [`TerrainSheet`] this entity carries. Hole cells (the
+///   canal) are not emitted — the world still cannot subtract, it leaves pieces out.
+/// * **The entity sits at the centre of its own AABB**, because `world::index` reads the
+///   `GlobalTransform` as the body centre; the vertices are therefore local to that centre.
+///   The AABB spans the whole map footprint and the field's own height range, so the entity
+///   lands in the spatial index's large-body list — conservative, like every `Body` here.
+/// * **Anchorable, and that is the user's rule**: *„man soll überall seinen haken machen
+///   können! auch an den boden"* (2026-08-12). Winding is consistently counter-clockwise
+///   seen from above (+Y normals), so an oriented-mesh flag can be added without re-cutting.
+///
+/// Nothing on a flat map (`graybox`): the fixture's 400 x 400 m slab from `blocks` stays its
+/// floor and its body count does not move — eight aiming tests and four player tests are
+/// pinned to exactly that world.
+fn spawn_terrain(commands: &mut Commands, data: &GameData, map: &Map, field: &TerrainField) {
+    let (nx, nz) = (field.nx(), field.nz());
+    if nx == 0 || nz == 0 {
+        return;
+    }
+    let t = &map.terrain;
+    let (origin_x, origin_z) = (-map.size_m.0 * 0.5, -map.size_m.1 * 0.5);
+    let corners = field.corner_heights();
+    let (cw, chh) = (nx as usize + 1, nz as usize + 1);
+
+    let lo = corners.iter().copied().fold(f32::INFINITY, f32::min);
+    let hi = corners.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    // The body centre — and with it the local frame of every vertex below.
+    let center_m = Vec3::new(0.0, (lo + hi) * 0.5, 0.0);
+    let half_size_m = Vec3::new(
+        map.size_m.0 * 0.5,
+        // A field can be all-holes-and-pins thin; a zero-thickness AABB would be invisible
+        // to any slab test, so it keeps a token thickness.
+        ((hi - lo) * 0.5).max(0.05),
+        map.size_m.1 * 0.5,
+    );
+
+    let mut vertices: Vec<Vec3> = Vec::with_capacity(cw * chh);
+    for iz in 0..chh {
+        for ix in 0..cw {
+            vertices.push(
+                Vec3::new(
+                    origin_x + ix as f32 * t.cell_m,
+                    corners[iz * cw + ix],
+                    origin_z + iz as f32 * t.cell_m,
+                ) - center_m,
+            );
         }
     }
+    let mut indices: Vec<[u32; 3]> = Vec::with_capacity(2 * nx as usize * nz as usize);
+    for iz in 0..nz as i32 {
+        for ix in 0..nx as i32 {
+            if field.is_hole(ix, iz) {
+                continue;
+            }
+            let c00 = (iz as u32 * cw as u32 + ix as u32) as u32;
+            let c10 = c00 + 1;
+            let c01 = c00 + cw as u32;
+            let c11 = c01 + 1;
+            // CCW from above (+Y): the lower-right triangle of the fixed diagonal, then the
+            // upper-left one — the exact pair `height_at_m` evaluates.
+            indices.push([c00, c11, c10]);
+            indices.push([c00, c01, c11]);
+        }
+    }
+    if indices.is_empty() {
+        return;
+    }
 
-    PlannedGround { field, pads }
+    commands.spawn((
+        Name::new("terrain"),
+        // What the spatial index sees: the conservative map-wide hull. What the hook and the
+        // player collide with is the trimesh — avian raycasts the shape, not this box.
+        Body { half_size_m, mask: mask_from(true, true) },
+        RigidBody::Static,
+        Collider::trimesh(vertices, indices),
+        AnchorSurface,
+        Transform::from_translation(center_m),
+        // What `render` draws — the same corners, the same diagonal, the same holes
+        // (`shared::ground` carries the contract).
+        crate::shared::TerrainSheet {
+            origin_m: bevy::math::Vec2::new(origin_x, origin_z),
+            cell_m: t.cell_m,
+            nx,
+            nz,
+            corners_m: corners.to_vec(),
+            hole: (0..nz as i32)
+                .flat_map(|iz| (0..nx as i32).map(move |ix| (ix, iz)))
+                .map(|(ix, iz)| field.is_hole(ix, iz))
+                .collect(),
+            colors: t.colors.iter().map(|k| color_of(data, k)).collect(),
+        },
+    ));
 }
 
 /// One house's ground plan inside a cell — everything but its height.

@@ -3048,3 +3048,212 @@ fn the_fov_slew_arrives_and_never_overshoots() {
     assert!(slewed_fov_deg(75.0, f32::NAN, widen, return_rate, dt).is_finite());
     assert!(slewed_fov_deg(75.0, 60.0, widen, return_rate, f32::NAN).is_finite());
 }
+
+// ---------------------------------------------------------------------------------------------
+// §5E — the ground's mesh (`render::terrain_mesh`). The contract under test is
+// `shared::ground`'s one sentence: every consumer triangulates each cell along the fixed
+// diagonal `(i, j) -> (i+1, j+1)` and leaves hole cells out. What the fixture varies:
+// `corners_m`, `hole`, `colors`, `origin_m`, `cell_m`, `nx`/`nz`, the carrier translation.
+// What the code reads: exactly that list — a variable in one list and not the other is a bug
+// (`docs/lessons/fixtures.md`).
+// ---------------------------------------------------------------------------------------------
+
+use defeated_by_titan::render::terrain_mesh;
+use defeated_by_titan::shared::TerrainSheet;
+
+/// 2 x 2 cells (`n = 2` with disagreeing elements, per `docs/lessons/fixtures.md`), one hole,
+/// three colour bands, and a carrier that does NOT sit at the origin.
+fn two_by_two_sheet() -> TerrainSheet {
+    TerrainSheet {
+        origin_m: Vec2::new(-5.0, -5.0),
+        cell_m: 5.0,
+        nx: 2,
+        nz: 2,
+        // Row-major iz * 3 + ix. lo = -2, hi = 12, span 14 — every corner different, so an
+        // aggregate cannot hide a swapped index.
+        corners_m: vec![0.0, 1.0, 8.0, 2.0, 3.0, 9.0, 4.0, -2.0, 12.0],
+        // Cell (ix 1, iz 0) is the canal.
+        hole: vec![false, true, false, false],
+        colors: vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+    }
+}
+
+const CARRIER: Vec3 = Vec3::new(3.0, 7.0, -11.0);
+
+#[test]
+fn f003_the_terrain_mesh_walks_the_fixed_diagonal_and_leaves_the_hole_out() {
+    let mesh = terrain_mesh(&two_by_two_sheet(), CARRIER).expect("three cells give a mesh");
+    let Some(indices) = mesh.indices() else {
+        panic!("the terrain mesh is indexed");
+    };
+    let got: Vec<u32> = indices.iter().map(|i| i as u32).collect();
+    // Hand-derived, corner ids row-major over the 3 x 3 grid: cell (0,0) -> [0,4,1][0,3,4],
+    // cell (1,0) is the hole and contributes NOTHING, cell (0,1) -> [3,7,4][3,6,7],
+    // cell (1,1) -> [4,8,5][4,7,8]. This one assert pins four things at once: the triangle
+    // count (2 per non-hole cell), the hole cut, the FIXED diagonal (c00-c11, never c10-c01)
+    // and the CCW-from-above winding — the exact triangles `world::map::spawn_terrain` feeds
+    // avian and `TerrainField::height_at_m` evaluates.
+    assert_eq!(got, vec![0, 4, 1, 0, 3, 4, 3, 7, 4, 3, 6, 7, 4, 8, 5, 4, 7, 8]);
+
+    // 🔴 The control (`docs/lessons/fixtures.md`: delete what you measure): fill the hole and
+    // the count must MOVE. A counter that stays at 6 triangles either way counts nothing.
+    let mut filled = two_by_two_sheet();
+    filled.hole[1] = false;
+    let filled_mesh = terrain_mesh(&filled, CARRIER).expect("four cells give a mesh");
+    assert_eq!(
+        filled_mesh.indices().expect("indexed").len(),
+        24,
+        "filling the hole did not add its two triangles — the hole cut above was vacuous"
+    );
+}
+
+#[test]
+fn f003_the_terrain_vertices_are_local_to_the_carrier_not_the_world() {
+    let sheet = two_by_two_sheet();
+    let mesh = terrain_mesh(&sheet, CARRIER).expect("mesh");
+    let Some(VertexAttributeValues::Float32x3(positions)) =
+        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+    else {
+        panic!("positions are Float32x3");
+    };
+    assert_eq!(positions.len(), 9, "one vertex per corner of the 3 x 3 grid, shared, no dupes");
+    for iz in 0..=2usize {
+        for ix in 0..=2usize {
+            let want = [
+                sheet.origin_m.x + ix as f32 * sheet.cell_m - CARRIER.x,
+                sheet.corners_m[iz * 3 + ix] - CARRIER.y,
+                sheet.origin_m.y + iz as f32 * sheet.cell_m - CARRIER.z,
+            ];
+            assert_eq!(
+                positions[iz * 3 + ix], want,
+                "corner ({ix}, {iz}): the sheet speaks world space and the entity sits at \
+                 the centre of its own AABB (`shared::ground`) — a vertex that does not \
+                 subtract the carrier draws the field displaced by half its height range"
+            );
+        }
+    }
+}
+
+#[test]
+fn f003_the_terrain_normals_are_smooth_unit_length_and_match_the_analytic_slope() {
+    // A uniform slope: h = 0.2 * x_local, no holes. EVERY smooth normal on such a sheet —
+    // interior corner, edge corner, corner corner — is the same analytic plane normal
+    // normalize((-0.2, 1, 0)); a face-normal implementation would still pass a flat sheet,
+    // this one it cannot.
+    let sheet = TerrainSheet {
+        origin_m: Vec2::new(0.0, 0.0),
+        cell_m: 5.0,
+        nx: 2,
+        nz: 2,
+        corners_m: (0..9).map(|i| (i % 3) as f32 * 5.0 * 0.2).collect(),
+        hole: vec![false; 4],
+        colors: vec![[0.0, 1.0, 0.0]],
+    };
+    let mesh = terrain_mesh(&sheet, Vec3::ZERO).expect("mesh");
+    let Some(VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+    else {
+        panic!("normals are Float32x3");
+    };
+    let want = Vec3::new(-0.2, 1.0, 0.0).normalize();
+    for (i, n) in normals.iter().enumerate() {
+        let n = Vec3::from(*n);
+        assert!((n.length() - 1.0).abs() < 1e-5, "normal {i} is not unit length: {n:?}");
+        assert!(
+            n.distance(want) < 1e-5,
+            "normal {i} = {n:?}, analytic slope normal = {want:?} — a crease here is the \
+             terrace edge §5E deletes"
+        );
+    }
+}
+
+#[test]
+fn f003_a_corner_with_only_holes_around_it_gets_up_and_an_all_hole_sheet_gets_nothing() {
+    // 2 x 1 cells, left cell a hole: corners ix 0 touch no emitted triangle and must fall
+    // back to +Y instead of normalising a zero vector into a NaN.
+    let sheet = TerrainSheet {
+        origin_m: Vec2::new(0.0, 0.0),
+        cell_m: 5.0,
+        nx: 2,
+        nz: 1,
+        corners_m: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        hole: vec![true, false],
+        colors: vec![[0.0, 1.0, 0.0]],
+    };
+    let mesh = terrain_mesh(&sheet, Vec3::ZERO).expect("one emitted cell gives a mesh");
+    let Some(VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+    else {
+        panic!("normals are Float32x3");
+    };
+    for ix0 in [0usize, 3] {
+        assert_eq!(
+            normals[ix0], [0.0, 1.0, 0.0],
+            "corner {ix0} touches only the hole cell — its normal is the +Y fallback"
+        );
+        assert!(normals[ix0].iter().all(|c| c.is_finite()), "and never a NaN");
+    }
+
+    // And a sheet that is ALL hole is `None` — an empty mesh asset would still be uploaded,
+    // drawn as nothing and counted as something.
+    let all_hole = TerrainSheet { hole: vec![true, true], ..sheet };
+    assert!(terrain_mesh(&all_hole, Vec3::ZERO).is_none());
+}
+
+#[test]
+fn f003_each_corner_wears_the_colour_of_its_own_height_band() {
+    let sheet = two_by_two_sheet();
+    let mesh = terrain_mesh(&sheet, CARRIER).expect("mesh");
+    let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+    else {
+        panic!("colours are Float32x4");
+    };
+    // Hand-derived, NOT recomputed through the code's own formula (`docs/lessons/fixtures.md`:
+    // the re-derivation would be the same author twice). lo -2, hi 12, three bands of 14/3 m:
+    // band edges at 2.667 and 7.333. Heights 0,1,8,2,3,9,4,-2,12 -> bands 0,0,2,0,1,2,1,0,2.
+    // The lowest corner (-2) wears colors[0] and the highest (12) colors[2] — the top band
+    // exists on the field's OWN range, not on the map's allowance.
+    let want_bands = [0usize, 0, 2, 0, 1, 2, 1, 0, 2];
+    for (i, want_band) in want_bands.iter().enumerate() {
+        let [r, g, b] = sheet.colors[*want_band];
+        assert_eq!(
+            colors[i], [r, g, b, 1.0],
+            "corner {i} (height {}) belongs to band {want_band}",
+            sheet.corners_m[i]
+        );
+    }
+}
+
+#[test]
+fn f003_the_terrain_system_hangs_the_mesh_on_the_sheet_in_the_real_app() {
+    // The free function is what the five tests above hold; this one proves the SYSTEM is
+    // registered and wired: a `TerrainSheet` entity in the real headless app gets its
+    // `Mesh3d` within one update, and the asset behind the handle is the function's mesh.
+    let mut app = app();
+    let sheet = two_by_two_sheet();
+    let id = app.world_mut().spawn((sheet, Transform::from_translation(CARRIER))).id();
+    app.update();
+    let mesh3d = app
+        .world()
+        .get::<Mesh3d>(id)
+        .expect("build_terrain_meshes dresses a TerrainSheet entity within one update")
+        .clone();
+    let meshes = app.world().resource::<Assets<Mesh>>();
+    let mesh = meshes.get(&mesh3d.0).expect("the handle points at a live asset");
+    assert_eq!(
+        mesh.indices().expect("indexed").len(),
+        18,
+        "three non-hole cells, two triangles each — the same buffer the free function builds"
+    );
+    let material = app
+        .world()
+        .get::<MeshMaterial3d<StandardMaterial>>(id)
+        .expect("and a material beside it")
+        .clone();
+    let materials = app.world().resource::<Assets<StandardMaterial>>();
+    let m = materials.get(&material.0).expect("live material");
+    assert_eq!(
+        m.base_color,
+        Color::WHITE,
+        "the material is white — the colour lives in the vertices, a tinted base would \
+         multiply every band"
+    );
+}
