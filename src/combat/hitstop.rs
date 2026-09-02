@@ -90,7 +90,7 @@
 //! So the reaction happens in `Spatial`, the **first** stage of the next tick, which is
 //! deterministic and is the same tick `titan::brain::receive_hits` reacts in.
 
-use avian3d::prelude::{DistanceJoint, JointDisabled, RigidBodyDisabled};
+use avian3d::prelude::{ColliderDisabled, DistanceJoint, JointDisabled, RigidBodyDisabled};
 use bevy::prelude::*;
 
 use crate::data::GameData;
@@ -258,6 +258,25 @@ fn freeze(
     for joint in joints_of(entity, joints) {
         commands.entity(joint).insert(JointDisabled);
     }
+    // **And the CONTACTS get the same treatment as the joints, for the same reason** (B-042
+    // fix round, 2026-09-02). `RigidBodyDisabled`'s island observer tears the frozen body's
+    // island down, and avian's teardown no more unlinks a CONTACT edge than it unlinked B-004's
+    // joint: a body frozen **while touching something** leaves `contact.island` pointing at the
+    // dead island, and the unfreeze aborts the process in avian's narrow phase
+    // (`debug_assert!(contact.island.is_none())`, `islands/mod.rs:518`, reached from
+    // `narrow_phase/system_param.rs:343`). Nobody hit it while the titan's registering surface
+    // was a fat axis capsule nothing ever touched mid-cut; the pose-true B-042 colliders make
+    // "brushing the flesh while the blade books" the NORMAL kill pass, and the very first jaw
+    // pass of `scripts/b042-titan-hitzone.txt` crashed on it.
+    //
+    // `ColliderDisabled` **before** `RigidBodyDisabled`: its observer
+    // (`remove_collider_on::<Add, ColliderDisabled>`) removes every contact edge of this body
+    // from the graph and unlinks each from its island **while the island is still alive** —
+    // so the island teardown that follows has no contact left to corrupt. On the way out,
+    // [`advance`] removes it after `RigidBodyDisabled`, and the fresh contacts are created
+    // clean (`STARTED_TOUCHING`, island `None`). A frozen body does not move, so two ticks
+    // without a contact patch change nothing the eye or the solver can see.
+    commands.entity(entity).insert(ColliderDisabled);
     // Idempotent: inserting a marker that is already there costs one archetype check and
     // nothing else, and it saves an `Option<&RigidBodyDisabled>` in the query above.
     commands.entity(entity).insert(RigidBodyDisabled);
@@ -286,11 +305,14 @@ pub fn advance(
         if stop.tick() == 0 {
             // `B-004`, and **the mirror image of `freeze`**: the body first, so that it has an
             // island again before the joint is put back into one. A joint whose ends are both
-            // island-less panics in `merge_islands` instead.
+            // island-less panics in `merge_islands` instead. The collider comes back after the
+            // body for the same mirror-image reason it went away before it — the re-added
+            // `BodyIslandNode`'s own observer runs a contact sweep that must find nothing.
             commands
                 .entity(entity)
                 .remove::<HitStop>()
-                .remove::<RigidBodyDisabled>();
+                .remove::<RigidBodyDisabled>()
+                .remove::<ColliderDisabled>();
             for joint in joints_of(entity, &joints) {
                 commands.entity(joint).remove::<JointDisabled>();
             }
