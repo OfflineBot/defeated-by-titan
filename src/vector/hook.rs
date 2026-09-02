@@ -67,7 +67,10 @@
 //!    rays and publishes a resolved target per side (`F-023`'s hemisphere split); this file
 //!    re-casts nothing at fire time, so the marker the HUD draws and the point the rope flies
 //!    to are the same number by construction — *„und dann muss das seil auch dahin!!"*.
-//!    [`AimPoint`] is still read by the crosshair, and nowhere here.
+//!    [`AimPoint`] is still read by the crosshair, and nowhere here. Since the `B-041` fix
+//!    that number is also FRESH: `vector::aim::pre_fire_aim` re-resolves [`ArmAim`] in
+//!    `SimulationSystems::World` with this tick's look before `Intent` reads it — the assist
+//!    still resolves once, in `aim.rs`, and this file still re-casts nothing at fire time.
 //!
 //! The picture and the run that belong to this file: `scripts/f-001-hooks.txt` and
 //! `docs/images/f-001-hooks.png`; the tests are in `tests/vector_hooks.rs`.

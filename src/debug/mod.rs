@@ -360,8 +360,9 @@ fn run_script(mut run: ResMut<ScriptRun>, tick: Res<Tick>, time: Res<Time<Fixed>
                 }
             }
             // ⚠️ Applied **immediately**, not deferred: `run_script` is in `FixedPreUpdate`
-            // and `vector::aim` reads the settings in `SimulationSystems::World` of the same
-            // tick, so a `settings` line bites on the tick after the line — the same one-tick
+            // and `vector::aim::pre_fire_aim` reads the settings in
+            // `SimulationSystems::World` of the same tick, so a `settings` line bites on the
+            // tick after the line — the same one-tick
             // latency `look` has. It is logged because a knob nobody can see in the run log is
             // a knob nobody can tell was set.
             ScriptCommand::Settings { key, value } => {

@@ -473,6 +473,44 @@ pub fn aim(
     }
 }
 
+/// **The second instance of [`aim`] — the `B-041` fix (candidate D).** Registered in
+/// `SimulationSystems::World`; [`aim`] itself stays in `PostStep`.
+///
+/// A wrapper and not a second registration of the same `fn`, because a distinct function
+/// item is a distinct `SystemTypeSet`: the forced-aim harnesses in `tests/vector_hooks.rs`
+/// and `tests/vector_rope.rs` order against **this** instance alone
+/// (`.after(pre_fire_aim)`, inside the `World` set — never `.after(aim)`, which crosses the
+/// chained stages backwards and is the exact shape of the `B-030` cycle OOM).
+///
+/// Per tick: this instance resolves with THIS tick's delivered look on the
+/// end-of-last-tick `Transform` — the same `Vec3` the drawn frame used, because nothing
+/// writes a player's `Transform` between `PostStep` and `Intent` (`Integrate` is the only
+/// writer). `hook::update_hooks` in `Intent` therefore consumes a direction-fresh
+/// [`ArmAim`] instead of the previous tick's (`B-041`: a hook in the same tick as a `look`
+/// flew along the OLD look). The `PostStep` instance then overwrites for the HUD exactly
+/// as before — the pixel-exact marker of FIND-217/FIND-219 is untouched. When the look did
+/// not change, the inputs are bit-identical through the same code and `set_if_neq` elides
+/// the write: the behavioural delta is confined to ticks where the look moved.
+pub fn pre_fire_aim(
+    data: Res<GameData>,
+    settings: Option<Res<PlayerSettings>>,
+    hookable: Res<HookableSurfaces>,
+    space: SpatialQuery,
+    bodies: Query<(&Body, Option<&BodyId>)>,
+    players: Query<(
+        Entity,
+        &Intent,
+        &Transform,
+        &Velocity,
+        &mut AimPoint,
+        &mut ArmAim,
+        Option<&Hook>,
+        Has<LocalPlayer>,
+    )>,
+) {
+    aim(data, settings, hookable, space, bodies, players);
+}
+
 /// The eye point: the origin sits **between the feet**, the eye `eye_height_m` above it.
 ///
 /// One line, one place — `render` hangs the camera on the same number, and two spellings of

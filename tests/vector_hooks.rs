@@ -120,8 +120,16 @@ fn app() -> App {
         .resource_mut::<defeated_by_titan::shared::PlayerSettings>()
         .hook_fire = defeated_by_titan::shared::settings::HookFire::Hold;
     app.init_resource::<HookLog>();
-    // No `.after(aim)` — see the module header, `B-030`. `aim` runs in `PostStep`.
-    app.add_systems(FixedUpdate, force_aim.in_set(SimulationSystems::World));
+    // No `.after(aim)` — see the module header, `B-030`. `aim` runs in `PostStep`. The edge
+    // below targets `pre_fire_aim`, the SECOND aim instance (the `B-041` fix), which lives in
+    // this same `World` set: it must run first so the forced aim overwrites its resolution
+    // before `Intent` reads `ArmAim` — and an ordering inside one set closes no cycle.
+    app.add_systems(
+        FixedUpdate,
+        force_aim
+            .in_set(SimulationSystems::World)
+            .after(defeated_by_titan::vector::aim::pre_fire_aim),
+    );
     app.add_systems(Last, collect_messages);
     schedules_build_or_explain(&mut app);
     app.update(); // Startup: the city and the local player come into being

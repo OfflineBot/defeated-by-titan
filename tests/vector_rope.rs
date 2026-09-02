@@ -109,8 +109,15 @@ fn app() -> App {
     // formatting **every simple cycle in the component** into one `String`, which on
     // 2026-09-01 was a 4.63 GB allocation and an OOM kill (`B-030`, `FIND-218`).
     // `World` is the stage before `Intent`, so it already is the last writer before the hooks
-    // read. The edge bought nothing and cost the machine.
-    app.add_systems(FixedUpdate, force_aim.in_set(SimulationSystems::World));
+    // read — provided it runs AFTER `pre_fire_aim`, the second aim instance the `B-041` fix
+    // put into this same `World` set: the edge below is inside one set and closes no cycle,
+    // and without it `pre_fire_aim` could overwrite the forced aim before `Intent` reads it.
+    app.add_systems(
+        FixedUpdate,
+        force_aim
+            .in_set(SimulationSystems::World)
+            .after(defeated_by_titan::vector::aim::pre_fire_aim),
+    );
     // `PostStep`, so that a release written in `Intent` of the same tick is already in.
     app.add_systems(FixedUpdate, collect_releases.in_set(SimulationSystems::PostStep));
     app.update(); // Startup: the city and the local player come into being
