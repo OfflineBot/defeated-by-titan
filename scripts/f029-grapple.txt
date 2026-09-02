@@ -9,6 +9,24 @@
 #         z offset = set-back 1.10 + whatever this file already added  (was 0.55)
 #       Nothing here was re-aimed; one input moved and the aim follows it.
 #
+# RE-AIMED 2026-09-02 (ACT 1 only) — pose-true registration, `docs/FINDINGS.md` FIND-229:
+# `titan.ron: drawn_poses` landed today and the husk lost his fat axis-centred barrel (it
+# stood 1.27 m proud of the axis). ACT 1's horizontal ray at y 63 used to cross the axis
+# 3.0 m over his feet — SHIN height, where the drawn legs stand off-axis and the honest
+# surface misses the ray by 0.67–1.04 m — so the hook ended with no anchor and both
+# `assert rope == 1` went red. The aim and the warp are untouched; the SPAWN drops 10 m
+# (60 → 50) so the same ray crosses 63 − 50 = 13.0 m over his feet, mid-torso:
+#   torso capsule (model units) a (0, 5.10, 0.10) .. b (0, 8.20, −0.42), r 0.64,
+#   × 2.0 (= scale.ron cortex_height_m 17.8 / drawn_poses cortex_y 8.9)
+#   → real band y 10.20 .. 16.40 over his feet, r 1.28 m;
+#   at the crossing (model y 6.5) the axis sits at real z −0.27, so the ray at z 0 passes
+#   0.27 m off a 1.28 m radius — 1.01 m of honest capsule to bite. FIND-229's probe
+#   anchored a torso-height ray at axis − 1.43 m. The world anchor therefore stays at
+#   (~58.6, 63, 0), centimetres from the old barrel bite (58.73, 62.99, 0.00, measured in
+#   `scripts/q078-fling.txt` ACT 3, same geometry) — the ride's rope length is preserved.
+# ACT 2 needed nothing: its 82°-down aim crosses the HEAD band and anchored at 19.46 m
+# over his feet on the honest husk (FIND-229: head band bites at y 19.5 over feet).
+#
 #   cargo run -q -- --headless --script scripts/f029-grapple.txt --ticks 900
 #
 # and, as a SEPARATE run, the one that returns a usable exit code:
@@ -101,7 +119,9 @@
 wait 1.5
 
 # ---- Act 1: hook a walking titan and stay on him --------------------------------------
-spawn titan husk 60 60 0
+# Feet at y 50: the horizontal ray at y 63 crosses him 13.0 m over his feet, inside the
+# drawn torso band (real y 10.20..16.40, r 1.28 m) — the RE-AIMED paragraph in the header.
+spawn titan husk 60 50 0
 warp 46 63 0
 look -90 0
 wait 0.30

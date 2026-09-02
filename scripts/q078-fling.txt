@@ -24,6 +24,34 @@
 # (`docs/NEXT.md` §3G). The asserts are therefore written around the **guards**, which are not
 # provisional — `speed < 75` is `max_speed_m_s` out of the file — and the measured readings
 # stand in the comments, not in the brackets, wherever a fall time decides them.
+#
+# PINS: the guards — every bracket is a value out of the files (`vector.max_speed_m_s` 75
+#       above all), never a provisional feel number. Measured readings live in the comments
+#       and move when the world does; the brackets do not.
+#
+# RE-AIMED 2026-09-02 (ACT 3's titan hook only) — pose-true registration, `docs/FINDINGS.md`
+# FIND-229: `titan.ron: drawn_poses` landed today and the husk lost his fat axis-centred
+# barrel (it stood 1.27 m proud of the axis). ACT 3's horizontal ray at y 63 used to cross
+# the titan's axis 3.0 m over his feet — SHIN height, where the drawn legs stand off-axis
+# and the honest surface misses the ray by 0.67–1.04 m — so the left hook found nothing and
+# nine asserts cascaded red off that one miss. The aim and the warp are untouched; the SPAWN
+# drops 10 m (60 → 50) so the same ray crosses 63 − 50 = 13.0 m over his feet, mid-torso:
+#   torso capsule (model units) a (0, 5.10, 0.10) .. b (0, 8.20, −0.42), r 0.64,
+#   × 2.0 (= scale.ron cortex_height_m 17.8 / drawn_poses cortex_y 8.9)
+#   → real band y 10.20 .. 16.40 over his feet, r 1.28 m;
+#   at the crossing (model y 6.5) the axis sits at real z −0.27, so the ray at z 0 passes
+#   0.27 m off a 1.28 m radius — 1.01 m of honest capsule to bite. FIND-229's probe
+#   anchored a torso-height ray at axis − 1.43 m. The world anchor therefore stays at
+#   (~58.6, 63, 0), centimetres from the old barrel bite (58.73, 62.99, 0.00), so ACT 3's
+#   whole downstream measurement — rope length, the two-rope equilibrium at ~50.3 m — is
+#   preserved by construction. `scripts/f029-grapple.txt` ACT 1 carries the same re-aim.
+#
+# ⚠️ EXPECTED RED (2026-09-02, terrain round live): ACT 1's `assert height > 1.0` (line 90
+# here; the terrain commission knows it as line 62, pre-re-aim numbering) reads
+# −1.000 — the street ACT 1 reels into moved under the live terrain round (the pavement top
+# was 1.500, the anchor line now reads y −1.00). That leg is the terrain round's to settle,
+# not this file's; it is deliberately left untouched and red until that round lands its own
+# numbers here.
 
 wait 1.5
 
@@ -106,8 +134,16 @@ wait 1.5                 # and again: ACT 3's left shot needs a fresh edge
 # straight down into the city 46 m below — which is where the two anchors start pulling apart,
 # one of them walking and one of them a building.
 #
-# Measured: left on body 2902 (the titan) at (58.73, 62.99, 0.00), right on body 150 (a roof)
-# at (56.11, 4.21, -1.00). Over the next 5.5 s, with the husk walking the whole time:
+# The titan's feet stand at y 50 (not 60) since the 2026-09-02 re-aim — the header paragraph
+# has the arithmetic: the horizontal ray at y 63 crosses him 13.0 m over his feet, inside the
+# drawn torso band (real y 10.20..16.40, r 1.28 m), where the honest husk actually bites.
+#
+# Measured 2026-09-02 (pose-true husk, feet at 50, pinned binary + shadow data): left on the
+# titan at (58.69, 62.99, 0.00) — 4 cm from the old bite — right on the roof at
+# (56.12, 4.27, -1.00); every band below held. The table keeps the 2026-08-28 readings
+# (old barrel, feet at 60): left on body 2902 (the titan) at (58.73, 62.99, 0.00), right on
+# body 150 (a roof) at (56.11, 4.21, -1.00). Over the next 5.5 s, with the husk walking the
+# whole time:
 #
 #   t=192   rope 2   speed 12.547   height 50.278
 #   t=284   rope 2   speed  3.580   height 50.318
@@ -117,7 +153,7 @@ wait 1.5                 # and again: ACT 3's left shot needs a fresh edge
 # **7 cm of height drift in 5.5 s, both ropes alive, speed under 5 m/s.** A moving anchor
 # against a static one does not resonate, does not fling and does not break the joint. That is
 # the answer to the open question in Q-078, and it is a measurement rather than an argument.
-spawn titan husk 60 60 0
+spawn titan husk 60 50 0
 warp 46 63 0
 look -90 0
 wait 0.30
