@@ -2336,3 +2336,19 @@ touching the winch. `S` planted and the §3F joint are untouched by either.
 **Related:** FIND-226 · FIND-172 · Q-056 (superseded) · `docs/NEXT.md` §5D/§5E-b
 
 ## Q-095 — reserved by the hook-toggle round 2026-09-01 (claimed, in work)
+
+### Q-086 · The evidence is on disk now (2026-09-02, §5E landed) — pick a number
+
+The ground is a continuous field with ONE gain knob, `maps.ron: elevation_m`, and the
+relief scales exactly linearly (measured: the same hollow is −12.05 m at 24 and −24.10 m
+at 48 — factor 2.0001). Four photographs, same route, same ticks:
+`docs/images/f003-field-street-24.png` / `-48.png` and `f003-field-aerial-24.png` /
+`-48.png`. What the pixels say (verified, not hoped): both streets show smooth grass with
+zero step edges; at 48 the ridge behind the house row doubles and reads like a real
+hillside — but houses sink to the eaves and the aerial reads as dunes over ruins. The
+street shots are the honest witness (fog eats far relief in the aerials).
+**ASSUMPTION the work continues under:** ship `elevation_m: 24.0` (what maps.ron carries
+now). **Rollback / change:** one number — plus the coupled pair `max_rise_m ≥ 1.32 ×
+elevation_m` and a deeper `base_m` (64 / −60 measured working at 48). A middle value
+(~36) was NOT photographed; say a number and it can be shot the same way. If you pick 48,
+the house-burial question (plinth vs moat, FIND-231) needs a ruling first.

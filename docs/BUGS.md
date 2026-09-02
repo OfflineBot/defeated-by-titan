@@ -745,6 +745,12 @@ triangle surface under a `max_grade` guard, so the step-wall CLASS loses its car
 §5E lands, B-018 is retired with it; if §5E is ever rolled back, this paragraph is the
 pointer to rebuild the entry from FIND-214.
 
+**RETIRED 2026-09-02 evening: §5E landed.** The risers are gone — the ground is one
+triangle surface, every corner-grid edge asserted ≤ `max_grade`·cell (worst excess
+0.0000 m on shipped Ashgate), and the climb evidence B-018 demanded now lives in
+`scripts/w2-terrain-walk.txt`'s re-pinned 18–22 s leg (+3.88 m on foot at gravity −32,
+8/8 green). FIND-214's riser table stays archived as the record of the dissolved class.
+
 ## B-041 — a hook pressed in the same tick as a `look` fires along the PREVIOUS look (2026-09-02, FIXED the same day — candidate D, adversarially confirmed)
 
 **Closed 2026-09-02 evening:** one added registration (`vector::aim::pre_fire_aim` in the

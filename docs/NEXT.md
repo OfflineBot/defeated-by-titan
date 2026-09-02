@@ -1215,7 +1215,12 @@ anchor fails the gate regardless of feel:
    instrument, rebuilt in-repo this time); attribute his sighting to envelope debt vs
    B-041 staleness vs titan colliders; deliverable is the attribution + worst-offender
    table.
-3. Then §5E smooth terrain (plan stands in docs/PLAN.md).
+3. ~~Then §5E smooth terrain~~ **LANDED 2026-09-02 evening** (FIND-231): one trimesh,
+   elevation_m the single knob, Q-086 awaits his pick (24 shipped as ASSUMPTION, four
+   photographs on disk). New follow-ups: (a) land the five prop hull rows — the world
+   guard now tolerates compounds (art.ron, small); (b) probe the −9.440 m street
+   obstruction at x −204..−200, z 210 (FIND-231, world owner's eye); (c) corpus
+   attribution of the terrain redistribution class.
 
 ## Small rulings queued 2026-09-02 evening (before or alongside the terrain round)
 
@@ -1227,12 +1232,15 @@ anchor fails the gate regardless of feel:
 2. **f-001-hooks attribution (FIND-230)**: tree measures 10 of 14 held, documentation
    says 12; the four reds are Speed/Height legs and predate B-041. Attribute against
    gravity −32 / B-040 pull / §5D drive before anyone re-pins.
-3. **The prop hulls (B-043 leftover)**: five validated rows wait in
-   tools/fleet/validate.py behind tests/world.rs f003_the_colliders_carry_the_half_edge
-   _from_the_file, which requires placed blocks to be plain cuboids. One world-owner
-   adjustment (tolerate compounds, keep the factor-2 invariant), then land the rows.
+3. ~~The prop hulls guard~~ **UNBLOCKED 2026-09-02 evening** — the terrain round's B
+   rewrote the guard to the real invariant; the five rows in tools/fleet/validate.py can
+   land now (art.ron, small, with a fleet spot-check).
 4. **b046 flake**: tests/hud.rs f177 board prompt empty ~1 in 5 — find the writer, prove
    with 30 consecutive greens.
-5. **Corpus delta attribution (FIND-229 amendment)**: q078-fling 1→10 red, f004-towers
-   and w5-lane +1 each, f029-grapple newly 2/6 (predicted, geometry-honest). One read-only
-   agent on the PINNED evening binary; no re-pins before attribution.
+5. ~~Corpus delta attribution~~ **PAID 2026-09-02 evening** (FIND-229 second amendment):
+   nothing unexplained. Follow-ups it unlocked: (a) q078-fling and f029-grapple may be
+   re-aimed at pose-true titan bands (torso/head), arithmetic in the header — small
+   script round; (b) ruling 1 gains a measured cause: the flat chain shot catches river
+   tower body 79 at 345.11 m dead ahead instead of the lane beam at z 231.5 (predates
+   today, 78e5c87); (c) w5 gallery drift (lines 329/332) joins ruling 2's speed-envelope
+   attribution debt.

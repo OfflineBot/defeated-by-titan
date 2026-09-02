@@ -1966,3 +1966,83 @@ shin height"* — geometry-honest, re-pin after a ruling, not before.
 in that script now anchor where they aim, changing every fling number — but suspicion is
 not attribution), plus `f004-towers` 13→14 and `w5-lane` 13→14 (±1 each). Measured against
 the pinned 2026-09-02-evening binary before anything else lands.
+
+### FIND-229 · The owed attribution is PAID (2026-09-02 evening, pinned binary + shadow assets, A/B controls)
+
+Every moved corpus line lands on a known cause — none unexplained:
+- **q078-fling 1→10: B-041 REFUTED twice** (no same-tick look+hook exists in the script,
+  and the pre-fix binary reproduces the identical 10 lines with identical values). Cause:
+  the titan pose-true registration — the fixture hooks at shin height ON THE AXIS, where
+  the honest surface misses the ray by 0.67–1.04 m (old barrel: 1.27 m proud of the
+  axis); torso-height probe anchors fine, titan-less control proves `SurfaceHoldsNothing`
+  never named the titan. The 9 extra reds are that one miss cascading.
+- **f029-grapple 2/6: the titan round's prediction CONFIRMED with the same arithmetic.**
+  Head-height aim anchors (body at y 19.5 over feet), `BodyGone` on death still releases.
+- **f004-towers and w5-lane +1 each: B-041-explained** — the flipped leg-2 assert
+  (`look 0 33` + `hook` same tick) only ever passed via the stale look firing FLAT down
+  the lane and catching a body 331.77 m out. The accident is gone; the assert was never
+  measuring the chain.
+- **Pre-existing, now measured (feeds NEXT ruling 1):** the chain-start/arc flat shot
+  catches river tower body 79 at (0.00, 59.31, −87.61), 345.11 m dead ahead, instead of
+  the lane's own beam at z 231.5 — identical pre/post B-041, predates today (78e5c87).
+  THAT is the lane collapse behind FIND-228, with a body id on it.
+- **w5 gallery lines 329/332 drifted** (29.261→34.502 m · 34.450→42.152 m/s vs their
+  header record), red on both binaries, inside the morning 13 — same attribution debt
+  class as FIND-230's speed legs.
+**Re-pin ruling unblocked for q078/f029**: attribution done, the misses are
+geometry-honest — the fixtures may be re-aimed at pose-true bands (torso/head), each
+re-aim carrying the arithmetic in its header. f004/w5 leg-2 and the lane wait for the
+NEXT-1 content ruling.
+
+## FIND-231 — §5E landed: one triangle surface, one gain knob, and what the round learned (2026-09-02)
+
+The ground of a map is now ONE static trimesh (Ashgate: 19 881 vertices, ~39 000
+triangles, canal cells cut) built from the same fixed-diagonal corner grid the render
+mesh and `height_at_m` evaluate — collider, picture and oracle are one surface by
+construction (exact index-buffer equality test with a flipped-diagonal red control).
+~5 752 ground pads deleted; `elevation_m` is the single amplitude knob and the relief
+scales exactly linearly (−12.051 at 24 → −24.102 at 48, factor 2.0001), so Q-086 can be
+answered with any number without re-measurement fear — only `max_rise_m ≥ 1.32 ×
+elevation_m` and `base_m` must move with it (a promise over ALL seeds, not the shipped
+one: a foreign seed measured 25.43 m against the old cap 14).
+
+What the round caught on the way (each with a red-then-green or a doctored-input
+control): a y-span veto written as `[0, top]` silently became an EMPTY box when the field
+went below 0 — 17 houses reappeared under galleries ("any rule assuming buildings span
+upward from the plane is now suspect"); ring founding at `max_grade` 0.35 buried uphill
+houses up to ~15 m — a swallowed-whole rule now deletes fully-invisible buildings (ridge
+below the drawn footprint's surface minimum), partial plinth burial stays (35.1 %
+frontage broken vs 37.6 pre-round, ceiling 40 unchanged); the 50-house never-floats
+sweep reads a worst gap of 0.0000 m; and `tests/world.rs::f003_the_colliders_carry_the_
+half_edge_from_the_file` now states the real invariant (cuboids carry the file's half
+edge; compounds legal on dressed blocks) — **the five B-043 prop hull rows are
+UNBLOCKED**.
+
+**Open eye for the world owner:** a dead-flat top at exactly −9.440 m spans x −204..−200
+on the z=210 street centre, ~2.6 m proud of the ground — smooth noise cannot produce
+mm-identical samples over 4 m, so something generated or placed stands IN a street lane
+and the w2 walk climbs over it. Probe before trusting the street network.
+
+**Redistribution warning (A's find, corpus-relevant):** noise now samples corners, not
+cell centres — the relief is REDISTRIBUTED, not just smoothed. Every script that pins an
+absolute ground height moved legitimately; w2 was re-pinned by C (8/8), the rest gets
+attributed at the corpus, not silently re-pinned.
+
+## FIND-232 — a fixture whose STANCE is checked can still break through its ARC, and the synthetic-anchor helper carries no rope (2026-09-02)
+
+Two traps out of the r7 repair after §5E:
+1. **The arc, not the stance.** r7's stance sat on pinned-flat ground and its anchor
+   angle held to half a degree (44.8° vs the comment's 44.2°) — and the test still broke,
+   because the A-key swing carries the body 31–46 m across the square, where the
+   redistributed field rose to +2.1…+3.3 m: ridden uphill INSIDE the rope sphere, the
+   straight-line distance closes in BOTH halves of the A/B (the giveaway that it was
+   geometry, not the winch — the winch break control closes only the pulled half).
+   Checklist addition: a movement fixture must own the ground under its whole TRAJECTORY,
+   not its start. r7 now stands on a synthetic slab at y = 100, above every roof.
+2. **`tests/player.rs::anchor_the_left_hook_on` builds no rope joint.** The forced-arm
+   pattern gives the winch its state but `player::rope::attach_ropes` builds the
+   `DistanceJoint` from the `HookAnchored` MESSAGE — first synthetic r7 run: S walked
+   +8.9 m past the radius, Ctrl reeled 0.000. Fine for f176's winch claims; any future
+   test borrowing the helper for JOINT/S-retreat/reel claims silently measures a
+   rope-less world. The message is the missing half, and r7's fixture comment now names
+   what the code reads.
