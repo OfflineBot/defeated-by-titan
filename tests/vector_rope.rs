@@ -91,6 +91,16 @@ fn app() -> App {
     // override this with [`select`], which is what that helper is for.
     app.world_mut().resource_mut::<GameData>().game.vector.rope_force_model =
         RopeForceModel::Pendulum;
+    // **`Hold`, pinned for the same reason as `Pendulum` above** (2026-09-01): this file's
+    // subject is the ROPE under a held-then-released trigger — `hang` presses the key and
+    // `f004_releasing_the_hook_removes_the_joint` releases it. The shipping default became
+    // `HookFire::Toggle`, under which a short press LATCHES (`net::local::HookLatch`) and the
+    // key-up releases nothing; the latch has its own tests (`tests/input.rs`,
+    // `scripts/f172-hook-toggle.txt`). What this file pins is the joint bookkeeping behind
+    // the bit, which never learns which mode produced it.
+    app.world_mut()
+        .resource_mut::<defeated_by_titan::shared::PlayerSettings>()
+        .hook_fire = defeated_by_titan::shared::settings::HookFire::Hold;
     app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
     app.init_resource::<Releases>();
     // 🔴 **No `.after(aim)`.** `aim` moved to `SimulationSystems::PostStep` (`FIND-217`,
@@ -1467,11 +1477,19 @@ fn f172_the_three_angles_between_the_rope_and_the_flight() {
         "holding nothing came out {nothing:.1}° off the rope against {unpulled:.1}° with the \
          idle pull switched off — „es zieht immer ran\" has to be visible in this number"
     );
-    // `W` is the straight line, and it is the one thing `FIND-153` bought that must survive.
+    // 🔴 **`W`'s band moved 15° → 30° on 2026-09-01, and that is §5D's trade, made once and
+    // named here.** The old drive chased the WHOLE velocity onto its target, so it also ate
+    // gravity's sag — and the same full-velocity chase is what strangled the pull
+    // (`FIND-196`). §5D rule 2 makes `W` a thrust along the look that never brakes another
+    // axis, so on this horizontal rope nothing opposes the fall any more and the flight sags
+    // `≈ atan(g·t_eff / drive_speed)`: measured 24.3° at gravity −32 after 0.5 s, against
+    // 8-12° under the old chase. His newest word wins (`Q-002`); whether 24° still FEELS
+    // „ziemlich gerade" is his to say at the controller — `docs/FINDINGS.md` FIND-223 carries
+    // the number for that conversation.
     assert!(
-        forward < 15.0,
-        "`W` left the player flying {forward:.1}° off his own rope — „ziemlich gerade\" \
-         (`FIND-153`)"
+        forward < 30.0,
+        "`W` left the player flying {forward:.1}° off his own rope — §5D's look thrust plus \
+         the winch owes ~24° at gravity −32, and past 30° one of the two has stopped pulling"
     );
     // And `D` beats the pull: more than 45° off the rope is *by definition* more sideways than
     // inward.
@@ -1700,25 +1718,28 @@ fn f153_under_drive_w_pulls_the_flight_onto_the_rope_line() {
     // `cargo test --test vector_rope f153 -- --nocapture`.
     println!("f153 angle to the rope after {ticks_n} ticks: Drive {drive:.1}° · Pendulum {pendulum:.1}°");
 
-    // ⚠️ **The band was 8° until `FIND-172` and it is 12° now — measured 2.2° at
-    // `(70, 0.08, ∞)` and 8.0° at `(52, 0.08, 250)`, and that is the WEIGHT, not a slipped
-    // number.** Straightening a flight that starts 40 m/s across its own rope is a 65 m/s change
-    // of velocity, and `drive_accel_max_m_s2` is precisely the rule that a big change of
-    // velocity costs time (*„es fühlt sich zu leicht an"*, 2026-08-26). A quarter second is the
-    // hardest moment there is for this number; by half a second the same flight is back inside
-    // 2°. 🔴 **If he ever says the drive bends instead of pulling, `drive_accel_max_m_s2` is
-    // the key — and raising it gives the weight back.**
+    // 🔴 **The band was 12° and it is 60° since 2026-09-01 — §5D's trade, the same one
+    // `f172_the_three_angles_between_the_rope_and_the_flight` names.** The 12° was bought by
+    // chasing the WHOLE velocity onto the rope line — `W` ate the 40 m/s of crossing momentum
+    // in a quarter second. That chase is also what strangled the pull (`FIND-196`), and §5D
+    // rule 2 replaced it: `W` thrusts along the look and touches no other axis, so the
+    // crossing momentum now decays only as the thrust outgrows it — measured 50.3° after a
+    // quarter second, from a 90° start. What the assert still owes FIND-153 is that `W`
+    // visibly BENDS the flight at the anchor inside that quarter second, and the control below
+    // is what separates bending from swinging. His newest word wins (`Q-002`); the felt
+    // difference is `docs/FINDINGS.md` FIND-223's to put in front of him.
     assert!(
-        drive < 12.0,
-        "a quarter second of `W` left the player flying {drive:.1}° off his own rope. He started \
-         90° off it (40 m/s of crossing momentum) and gravity pulls another `drive_ramp_s · g` \
-         out of the line — „ziemlich gerade\" is the instruction"
+        drive < 60.0,
+        "a quarter second of `W` left the player flying {drive:.1}° off his own rope, from a \
+         90° start — even §5D's pure look thrust owes ~50°, and past 60° W is not bending the \
+         flight at all"
     );
     // **The control that makes the number mean something.** A pendulum KEEPS the crossing
     // momentum — that is what a swing is — so if these two ever answer the same, this test is
-    // measuring the harness and not the force model.
+    // measuring the harness and not the force model. (2.0× until §5D; 1.5× now that the drive
+    // keeps the momentum too — 85.5° against 50.3° measured.)
     assert!(
-        pendulum > 2.0 * drive,
+        pendulum > 1.5 * drive,
         "the drive came out {drive:.1}° off the rope and the pendulum {pendulum:.1}° — those are \
          supposed to be different models"
     );
@@ -2077,10 +2098,32 @@ fn report(name: &str, cells: &[Cell]) -> Cell {
 ///
 /// `docs/measurements/rope-decision.md` records 2–5 mm of `DistanceJoint` error under load, and
 /// the drive presses against the limit at `drive_accel_max_m_s2` = 250 m/s² for as long as a key
-/// is held. **1 cm is the band, and it is not a tuning number:** the failures this test exists
-/// to catch are 29 m (`FIND-186` attempt 1: 40.00 → 69.33 m) and 45 m (`A`+`W` on HEAD:
-/// 51.55 → 96.75 m), i.e. three orders of magnitude away from it.
-const SOLVER_SLOP_M: f32 = 0.01;
+/// is held. **The band is measured, not tuned**, and the failures this test exists to catch are
+/// 29 m (`FIND-186` attempt 1: 40.00 → 69.33 m) and 45 m (`A`+`W` on HEAD: 51.55 → 96.75 m) —
+/// three orders of magnitude away from it.
+///
+/// ⚠️ **0.01 → 0.015 on 2026-09-01, and the movement is §5D rule 4's, measured before the band
+/// moved.** With `S` cancelling the pull, the `A+S` rows lost the winch's 12 m/s of inward
+/// relief while the lateral still presses the taut joint at the drive's own ceiling — worst
+/// cell `A+S`, 90°/20°, yaw 180°: **0.0112 m**. That it is SETTLING and not creep is the probe
+/// below: the same cell reads **0.0112 m at 90 ticks and 0.0112 m at 180** — a rope that were
+/// actually lengthening would double.
+const SOLVER_SLOP_M: f32 = 0.015;
+
+#[test]
+#[ignore = "a probe - creep-vs-settling for the A+S ground cell (B-037 investigation)"]
+fn probe_ground_matrix_excess_at_double_ticks() {
+    let g90 = two_anchor_matrix(RopeForceModel::Drive, "ground", GROUND_SPOT_M, 90, false);
+    let w90 = report("ground 90 ticks", &g90);
+    let g180 = two_anchor_matrix(RopeForceModel::Drive, "ground", GROUND_SPOT_M, 180, false);
+    let w180 = report("ground 180 ticks", &g180);
+    println!(
+        "probe: worst excess 90 ticks {:.4} m ({} {}deg/{}deg yaw {}) vs 180 ticks {:.4} m ({} {}deg/{}deg yaw {})",
+        w90.worst_excess_m, w90.combo, w90.separation_deg, w90.elevation_deg, w90.yaw_deg,
+        w180.worst_excess_m, w180.combo, w180.separation_deg, w180.elevation_deg, w180.yaw_deg
+    );
+}
+
 
 /// The band the two force models are allowed to differ by **with `Ctrl` held**, and it is a band
 /// on a DIFFERENCE, not on an excess.
@@ -2478,37 +2521,36 @@ fn distance_after_a_second_of(model: RopeForceModel, keys: &[KeyCode], hooked: b
     (before, (anchor - position(&app, e)).length())
 }
 
-/// `docs/NEXT.md` §3D **R1**, and it is the one the script can only see as a speed.
+/// `docs/NEXT.md` §5D **rule 4** — **`S` cancels the pull**, and this is the test that
+/// reversed for it.
 ///
-/// > *„wenn ich von seil weg gehe. also seil ist vorne und ich laufe zurück werde cih nicht ran
-/// > gezogen. sonst werde ich ranzeogen!"* — read in §3D as **"the pull is unconditional; `S`
-/// > is the one input that is allowed to fight it, and even then it may only slow the approach,
-/// > not reverse it into a retreat."**
+/// > *„aber wenn verbunden wird immer rangezogen … aber dennoch AUßER man drückt S dann nur
+/// > zur seite"* (the user, 2026-09-01, at the controller).
 ///
-/// Measured 2026-08-27 over one second of `S` from a taut 36.72 m rope:
+/// 🔴 **Until 2026-09-01 this test asserted the OPPOSITE** (`a_d < b_d` — "S may only slow the
+/// approach, never reverse it into a retreat", §3D R1 as read on 2026-08-27, measured
+/// 36.723 → 35.637 m). §5D rule 4 is his newer word and wins (`Q-002`): with `S` held the
+/// always-on pull is cancelled, so a taut-roped player holding `S` **stands** — the joint
+/// still forbids retreat (§3F: „aber NICHT das seil verlängern!!"), and the winch no longer
+/// hauls him in. `Q-061` is superseded a second time; the trail is in `docs/QUESTIONS.md`.
 ///
-/// | | before | after |
-/// |---|---|---|
-/// | `Drive` | 36.723 | **35.637** — slowed to a crawl and still closing |
-/// | `Pendulum` | 36.723 | 36.715 — he stops dead; **nothing pulls** |
-/// | `Drive`, no rope | 36.723 | 39.619 — a man walking away at `run_speed_m_s` |
-///
-/// 🔴 **The two models are NOT alike here and that is the point.** `Pendulum`'s rope is a
-/// constraint and nothing else, so `S` into a taut rope is a stand — which satisfies
-/// `scripts/f176-pull.txt`'s `assert Speed < 2` and fails §3D R1. `Drive` keeps `FIND-172`'s
-/// always-on pull on top of the same constraint, so `S` is *slowed approach* and not *retreat*,
-/// which is R1 verbatim and reads 7.63 m/s on that same assert. **The assert cannot tell an
-/// escape at 6 m/s from a haul at 12 m/s** — `CLAUDE.md` §6 rule 5, second half — and this test
-/// is what tells them apart. → `docs/FINDINGS.md` FIND-192.
+/// What the fixture varies: the held key (`S` / `Space`), the model, and the rope's existence.
+/// What the code reads: `move_y` (`player::locomotion::pull_scale`'s S-cancel), the winch's
+/// `in_flight` gate, and the joint. `Space` is the free-pull control because it takes the
+/// player off his legs without touching a movement axis — `S` used to be that proxy and rule 4
+/// is precisely what killed it (`FIND-196`, `tests/input.rs::r7_*`).
 #[test]
-fn f176_under_drive_walking_backwards_on_a_taut_rope_still_closes_on_the_anchor() {
+fn f176_under_drive_s_on_a_taut_rope_holds_position_instead_of_being_hauled() {
     let (b_d, a_d) = distance_after_a_second_of(RopeForceModel::Drive, &[KeyCode::KeyS], true);
     let (b_p, a_p) = distance_after_a_second_of(RopeForceModel::Pendulum, &[KeyCode::KeyS], true);
+    // The pull is still THERE and this fixture can see it: one jump hands him to the winch.
+    let (b_j, a_j) = distance_after_a_second_of(RopeForceModel::Drive, &[KeyCode::Space], true);
     // 🔴 **The control §6 rule 5 demands: delete the rope and check the number moves.**
     let (b_f, a_f) = distance_after_a_second_of(RopeForceModel::Drive, &[KeyCode::KeyS], false);
     println!(
-        "f176 one second of `S` from a taut rope, distance to the anchor: Drive {b_d:.3} → \
-         {a_d:.3} m · Pendulum {b_p:.3} → {a_p:.3} m · no rope {b_f:.3} → {a_f:.3} m"
+        "f176 one second on a taut rope, distance to the anchor: S under Drive {b_d:.3} → \
+         {a_d:.3} m · S under Pendulum {b_p:.3} → {a_p:.3} m · Space under Drive {b_j:.3} → \
+         {a_j:.3} m · S, no rope {b_f:.3} → {a_f:.3} m"
     );
 
     // One second of `run_speed_m_s` = 6 m at an angle to the rope, so the DISTANCE grows by
@@ -2520,19 +2562,29 @@ fn f176_under_drive_walking_backwards_on_a_taut_rope_still_closes_on_the_anchor(
          measuring a wall, not a rope",
         a_f - b_f
     );
-    // R1, and it is a SIGN: the distance may not grow. „aber NICHT das seil verlängern"
-    // (`§3F`) is the same sentence from the other side.
+    // 🔴 Rule 4, two-sided: `S` neither retreats (the joint) nor is hauled in (the cancel).
+    // The band is a sixth of a walk — above solver settling, far below anything felt.
     assert!(
-        a_d < b_d,
-        "one second of `S` on a taut rope took the player from {b_d:.3} m to {a_d:.3} m — §3D R1 \
-         is that `S` may only SLOW the approach, never reverse it into a retreat"
+        (a_d - b_d).abs() < 1.0,
+        "one second of `S` on a taut rope moved the player {:+.3} m along the rope — §5D rule 4 \
+         says S cancels the pull and the joint forbids retreat, so he STANDS",
+        a_d - b_d
     );
-    // And it is really the always-on pull doing it, not the constraint: the model that has the
-    // constraint and no pull does not close at all.
+    // The pull this fixture no longer sees under `S` is not gone: `Space` hands the same
+    // player to the winch and it closes. If this number stops moving, rule 4 has cancelled
+    // the pull for everyone instead of for `S`.
+    assert!(
+        a_j < b_j - 1.0,
+        "one jump on the same taut rope closed only {:.3} m — the always-on pull is supposed to \
+         survive rule 4 for every input except S",
+        b_j - a_j
+    );
+    // And the constraint-only model still stands dead, which is what makes the `S` number
+    // above the CANCEL's and not the joint's.
     assert!(
         (a_p - b_p).abs() < 1.0,
-        "under `Pendulum` the same second moved him {:.3} m — if the constraint alone closes the \
-         distance then the number above is not `FIND-172`'s pull and this test is mislabelled",
+        "under `Pendulum` the same second moved him {:.3} m — if the constraint alone moves the \
+         distance then the numbers above are not about the pull and this test is mislabelled",
         b_p - a_p
     );
 }
@@ -2554,6 +2606,11 @@ fn probe_ground_walk_on_a_rope() {
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(PROBE_KEY);
         println!("--- {model:?} {PROBE_KEY:?} start {start:?} ---");
         for t in 0..90 {
+            // ⚠️ The script's own look, every tick — without it `S` walks TOWARD the +Z anchor
+            // and this probe reports a different act than the one it is named after (the
+            // override is consumed per tick, `net::local::read_input` `take()`s it).
+            app.world_mut().resource_mut::<defeated_by_titan::shared::LookOverride>().0 =
+                Some((180.0f32.to_radians(), 66.6f32.to_radians()));
             app.update();
             if t % 9 != 0 { continue; }
             let st = *app.world().get::<defeated_by_titan::shared::MovementState>(e).unwrap();
@@ -2561,7 +2618,7 @@ fn probe_ground_walk_on_a_rope() {
             let here = position(&app, e);
             let max = arms(&mut app).first().map(|a| a.enforced_m.unwrap_or(f32::NAN)).unwrap_or(f32::NAN);
             let dist = arms(&mut app).first().map(|a| (a.anchor_m - here).length()).unwrap_or(f32::NAN);
-            println!("  t{t:3} {st:?} y {:7.3} |v| {:7.3} runaccel {:8.2} max {max:7.3} dist {dist:7.3}", here.y, velocity(&app, e).length(), ra.length());
+            println!("  t{t:3} {st:?} x {:7.3} y {:7.3} z {:8.3} |v| {:7.3} runaccel {:8.2} max {max:7.3} dist {dist:7.3}", here.x, here.y, here.z, velocity(&app, e).length(), ra.length());
         }
     }
 }

@@ -107,6 +107,18 @@ fn collect_messages(
 fn app() -> App {
     let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
     app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
+    // **`Hold`, on purpose, since 2026-09-01.** Every test in this file drives the real keys
+    // through `press`/`let_go` and asserts `vector::hook`'s held-bit contract — release the
+    // key, lose the rope. That contract is exactly `HookFire::Hold`. The shipping default is
+    // `Toggle`, where a sub-0.3 s press LATCHES (`net::local::HookLatch`), and under it every
+    // short `press → let_go` here would keep its rope and this whole file would measure the
+    // latch instead of the state machine. The latch has its own tests
+    // (`src/net/local.rs`, `tests/input.rs::the_hook_bit_stays_latched_...`) and its own
+    // running-game evidence (`scripts/f172-hook-toggle.txt`); what THIS file pins is the
+    // simulation behind the bit, which never learns which mode produced it.
+    app.world_mut()
+        .resource_mut::<defeated_by_titan::shared::PlayerSettings>()
+        .hook_fire = defeated_by_titan::shared::settings::HookFire::Hold;
     app.init_resource::<HookLog>();
     // No `.after(aim)` — see the module header, `B-030`. `aim` runs in `PostStep`.
     app.add_systems(FixedUpdate, force_aim.in_set(SimulationSystems::World));

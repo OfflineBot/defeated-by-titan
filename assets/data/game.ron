@@ -550,19 +550,21 @@
         //     exactly the 2026-08-25 feel back.
         // ⚠️ The winch (Ctrl) is deliberately NOT capped — see reel_speed_m_s and FIND-172.
         drive_accel_max_m_s2: 250.0,
-        // FIND-172. How much of the RADIAL pull survives while A or D is held, 0..1.
+        // NEXT.md §5D rule 3 (2026-09-01). The |move_x| = 1 ENDPOINT of the pull's lateral
+        // ramp, 0..1 exclusive — how much of the always-on pull survives FULL A or D.
         //
-        // „nur wenn ich a oder d druecke dass es staerker zur seite geht als rangezogen!"
-        //   - raising drive_lateral_m_s past drive_speed_m_s does NOT do this: the two share
-        //     one cap (locomotion::rope_drive), so a bigger lateral brakes the flight instead
-        //     of turning it — Q-050's bug in a new key;
-        //   - what is scaled is the rope axis's DIRECTION WEIGHT, never the target speed. With
-        //     W+D held the target points atan(30 / (70*0.35)) = **50.7 deg** off the rope, and
-        //     it is still driven at the full drive speed. Steering TURNS the drive, it does not
-        //     slow it;
-        //   - 0.35 makes the sideways component 1.22x the radial one at full W+D. With W
-        //     released the radial pull is only drive_idle_speed_m_s and the ratio is 2.5x.
-        //     LOWER = A/D wins harder; 1.0 is the 2026-08-25 behaviour, where the radial won.
+        // „wenn verbunden wird immer rangezogen so stark wie man zur seite geht desto weniger"
+        //   - the curve is a LINE (locomotion::pull_scale): scale = 1 − (1 − this)·|move_x|,
+        //     so half a stick keeps 0.675 of the pull at 0.35. Measured at 0/¼/½/¾/1:
+        //     1.0000 · 0.8375 · 0.6750 · 0.5125 · 0.3500;
+        //   - it scales the WINCH (drive_idle_speed_m_s), not the drive: at 0.35 a full
+        //     lateral is 24 m/s sideways against 12·0.35 = 4.2 m/s of pull — „stärker zur
+        //     seite als rangezogen" by 5.7x;
+        //   - NEVER 0: „desto weniger" is not „bis nichts" — only S cancels (§5D rule 4,
+        //     pull_scale's move_y < 0 branch). tests/player.rs holds 0 < this < 1.
+        //     LOWER = A/D silences the pull harder; 1.0 would make the lateral not scale it
+        //     at all (the rejected pre-FIND-172 behaviour). Until 2026-09-01 this was a
+        //     binary switch on the drive's direction blend; §5D made it this ramp.
         drive_steer_pull_fraction: 0.35,
         // FIND-172. THE ALWAYS-ON PULL, in m/s of closing speed along the rope.
         //
@@ -967,6 +969,13 @@
         //
         // The 22 -> 75 span is 53 m/s wide and covers 30 degrees of FOV, i.e. 0.57 deg per m/s.
         fov_speed_from_m_s: 22.0,
+        // The FOV slew (user, 2026-09-01: „nicht instant … langsamer wieder zurückgeht. also
+        // ein kleiner übergang."). Opening is quick — 30° of widening in 0.3 s — because the
+        // punch of speed IS F-017; the RETURN is the slow one, 30° in 1.2 s, because the drop
+        // is what he reported („sehr sudden drop. nicht gut!"). PROVISIONAL: derived from his
+        // sentence, not from a number he gave; his next word beats both (Q-002 precedence).
+        fov_widen_deg_s: 100.0,
+        fov_return_deg_s: 25.0,
         mouse_deg_per_px: 0.08,
         pitch_limit_deg: 89.0,
         smoothing_half_life_s: 0.05,
@@ -1058,5 +1067,24 @@
         peer_timeout_s: 5.0,
         // Bible F-158a, and it is a spec and not a taste: the seat stays his for two minutes.
         slot_hold_s: 120.0,
+    ),
+    // What the HUD draws with. Sizes only — the colours live in maps.ron: signals.
+    hud: (
+        // The X crosshair at 100 % size (user, 2026-09-01: „sollen 4 striche wo in der mitte
+        // nichts und 45deg rotiert und gröse eher mittel bis klein. aktuell ist mittel bis
+        // groß. größe einstellbar und farbe auch!"). The old ticks reached 151 px from the
+        // centre (measured, tests/hud.rs::the_x_crosshair_hugs_the_centre_...); these numbers
+        // put the whole Free X inside 23 px and the widest state (Cortex, marks out) inside
+        // 41 px. The player's size slider (50-200 %) scales them; the gap is floored in code
+        // so the sight core (arm_aim::SIGHT_CORE_PX) stays clear at every size.
+        crosshair: (
+            stroke_len_px: 12.0,
+            stroke_thick_px: 2.0,
+            gap_px: 10.0,
+            anchor_len_px: 16.0,
+            anchor_thick_px: 3.0,
+            mark_len_px: 6.0,
+            mark_gap_px: 4.0,
+        ),
     ),
 )

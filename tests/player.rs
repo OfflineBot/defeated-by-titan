@@ -42,10 +42,11 @@ use avian3d::prelude::{
 };
 use bevy::prelude::*;
 use bevy::time::TimeUpdateStrategy;
-use defeated_by_titan::data::GameData;
+use defeated_by_titan::data::{GameData, RopeForceModel};
 use defeated_by_titan::player::integrator::movement_state;
 use defeated_by_titan::player::locomotion::{
-    DriveTuning, SteerTuning, WinchTuning, air_thrust, rope_drive, rope_steer, rope_winch,
+    DriveTuning, SteerTuning, WinchTuning, air_thrust, ground_pull_live, pull_scale, rope_drive,
+    rope_steer, rope_winch,
 };
 use defeated_by_titan::player::spawn_player;
 use defeated_by_titan::player::swim::{depth_in, swim_step};
@@ -1707,7 +1708,6 @@ fn drive_tuning(d: &GameData) -> DriveTuning {
         lateral_m_s: d.game.vector.drive_lateral_m_s,
         ramp_s: d.game.vector.drive_ramp_s,
         accel_max_m_s2: d.game.vector.drive_accel_max_m_s2,
-        steer_pull_fraction: d.game.vector.drive_steer_pull_fraction,
     }
 }
 
@@ -1733,10 +1733,25 @@ fn f149_a_hooked_player_who_holds_nothing_is_not_driven_at_all() {
     // `S` is the rope's tension key and never a thrust (`docs/NEXT.md` §1A requirement 7).
     let s_key = rope_drive(&[ahead], look, 0.0, 0.0, -1.0, falling, t);
     assert_eq!(s_key, Vec3::ZERO, "`S` drove the player at {s_key:?} — it tensions, it never hauls");
-    // And looking away from the anchor is the same answer, with `W` held: the look gate is
-    // `max(0, l̂·r̂)`, so there is no angle at which a rope behind you drags you backwards.
+    // 🔴 **Reversed by §5D rule 2 (2026-09-01): `W` goes where the LOOK goes, rope or no
+    // rope behind it.** *„es geht danach wie der character schaut. aber w geht in die
+    // richtung"* — the drive is a thrust along the look, and the rope's direction is the
+    // WINCH's business (`rope_winch`), not this function's. Until §5D the look gate
+    // `max(0, l̂·r̂)` returned exactly ZERO here, which was also the gate that strangled the
+    // pull (`FIND-196`).
     let behind = rope_drive(&[anchor_at(std::f32::consts::PI, 40.0)], look, 0.0, 0.0, 1.0, falling, t);
-    assert_eq!(behind, Vec3::ZERO, "a rope 180° behind the look drove the player at {behind:?}");
+    assert!(
+        behind.dot(look) > 0.0,
+        "`W` with the rope 180° behind the look gave {behind:?} — §5D rule 2 says W thrusts \
+         along the look, and the old ZERO here was the look-gate FIND-196 closed"
+    );
+    // And no part of it points at the rope: the drive owes the LOOK axis and nothing else.
+    let toward_rope = Vec3::Z; // the anchor sits at +Z here, behind the −Z look
+    assert!(
+        behind.dot(toward_rope) <= 0.0,
+        "`W` with the rope behind still pushed {behind:?} toward the anchor — the radial pull \
+         belongs to the winch alone (§5D rule 1)"
+    );
 }
 
 #[test]
@@ -1768,11 +1783,17 @@ fn f149_the_drive_chases_a_speed_instead_of_building_one() {
         "a player already travelling at the drive speed was still accelerated at {arrived:?} — \
          then it is a thrust and `drive_speed_m_s` means nothing"
     );
-    // Past the target it BRAKES, which is the same rule read from the other side.
+    // 🔴 **Past the target it LETS GO — it never brakes.** Reversed by §5D (2026-09-01):
+    // the drive is a thrust ON TOP of the pull (*„aber w geht in die richtung"*), and a term
+    // that brakes anything above its own speed is `Q-050`'s air brake in the one key that is
+    // supposed to fly you. The same `max(0, …)` rule as `rope_winch`'s property 1: a flight
+    // already faster than the chase is left alone.
     let too_fast = rope_drive(&[ahead], look, 0.0, 0.0, 1.0, target * 1.5, t);
-    assert!(
-        too_fast.dot(Vec3::NEG_Z) < 0.0,
-        "at 1.5x the drive speed the drive still pushed forward ({too_fast:?})"
+    assert_eq!(
+        too_fast,
+        Vec3::ZERO,
+        "at 1.5x the drive speed the drive answered {too_fast:?} — §5D makes W a thrust on top \
+         of the pull, and a thrust never brakes (Q-050, rope_winch property 1)"
     );
     // One ramp of explicit integration closes 1 − 1/e of the gap, and that is the number the
     // user is being asked to feel. **The band is wide because the tick is coarse against a
@@ -1904,12 +1925,15 @@ fn f149_the_drive_numbers_are_the_ones_the_file_can_defend() {
         t.accel_max_m_s2,
         t.speed_m_s / t.ramp_s
     );
-    // A steer that keeps the whole radial pull is the behaviour he asked to be changed; one
-    // that keeps none of it turns `W`+`D` into a pure strafe.
+    // §5D rule 3: the fraction is `pull_scale`'s |move_x| = 1 endpoint. At 1.0 the lateral
+    // never scales the pull (the pre-`FIND-172` behaviour he rejected); at 0.0 full lateral
+    // silences the pull entirely, and „desto weniger" is never „bis nichts" — only `S` may
+    // cancel (rule 4).
+    let fraction = d.game.vector.drive_steer_pull_fraction;
     assert!(
-        (0.0..1.0).contains(&t.steer_pull_fraction),
-        "drive_steer_pull_fraction is {} — 1.0 is the pre-`FIND-172` behaviour the user rejected",
-        t.steer_pull_fraction
+        fraction > 0.0 && fraction < 1.0,
+        "drive_steer_pull_fraction is {fraction} — it must stay inside (0, 1): 1.0 is the \
+         rejected pre-`FIND-172` behaviour, 0.0 hands `S`'s cancel (§5D rule 4) to `A`/`D`"
     );
     // The always-on pull. Above the winch it would make `Ctrl` pointless, and it has to stay
     // under the drive so that `W` is still the thing that flies.
@@ -2040,54 +2064,188 @@ fn f172_reversing_a_fast_flight_costs_more_time_than_starting_one_and_that_is_th
 
 #[test]
 fn f172_a_or_d_turns_the_drive_further_sideways_than_the_rope_pulls_it_in() {
-    // *„nur wenn ich a oder d drücke dass es stärker zur seite geht als rangezogen!"* — measured
-    // as the two components of the velocity the drive is chasing: across the rope against along
-    // it. Flown, not read off the target, so the cap and the ramp are both in the number.
+    // *„nur wenn ich a oder d drücke dass es stärker zur seite geht als rangezogen!"*
+    // (2026-08-26), and since §5D the two contestants are DIFFERENT TERMS: „zur seite" is the
+    // drive's lateral chase, „rangezogen" is the winch scaled by `pull_scale` — the exact
+    // composition `air_control` adds up. Flown for half a second so the ramps, the ceilings
+    // and the scale are all in the number.
+    //
+    // Fixture varies: `move_x`, and the fraction (the deletion control). Code reads: both,
+    // plus the two tunings. The anchor is straight ahead along −Z at the look, so „sideways"
+    // is +X and „inward" is −Z and neither needs a projection to be read.
     let d = game_data();
     let t = drive_tuning(&d);
+    let f = d.game.vector.drive_steer_pull_fraction;
     let dt = 1.0 / d.game.simulation_hz as f32;
-    // The anchor straight ahead along −Z at the look, so „sideways" is +X and „inward" is −Z
-    // and neither needs a projection to be read.
     let ahead = anchor_at(0.0, 40.0);
     let look = Intent::default().look_dir();
 
-    let fly = |t: DriveTuning, move_x: f32| {
+    let fly = |move_x: f32, fraction: f32| {
+        let w = WinchTuning {
+            speed_m_s: d.game.vector.drive_idle_speed_m_s,
+            min_rope_m: d.game.vector.min_rope_m,
+            ramp_s: d.game.vector.drive_idle_ramp_s,
+            accel_max_m_s2: d.game.vector.drive_idle_speed_m_s / d.game.vector.drive_idle_ramp_s,
+        }
+        .scaled(pull_scale(move_x, 0.0, fraction));
         let mut v = Vec3::ZERO;
         for _ in 0..30 {
-            v += rope_drive(&[ahead], look, 0.0, move_x, 1.0, v, t) * dt;
+            let a = rope_drive(&[ahead], look, 0.0, move_x, 0.0, v, t)
+                + rope_winch(&[ahead], v, w);
+            v += a * dt;
         }
         v
     };
 
-    let straight = fly(t, 0.0);
-    let steered = fly(t, 1.0);
+    let steered = fly(1.0, f);
     let sideways = steered.x;
     let inward = steered.dot(Vec3::NEG_Z);
     println!(
-        "f172 W+D after 0.5 s: {sideways:.2} m/s sideways vs {inward:.2} m/s inward          ({:.1}° off the rope) · W alone {:.1}°",
+        "f172 D after 0.5 s: {sideways:.2} m/s sideways vs {inward:.2} m/s inward \
+         ({:.1}° off the rope)",
         steered.angle_between(Vec3::NEG_Z).to_degrees(),
-        straight.angle_between(Vec3::NEG_Z).to_degrees()
     );
     assert!(
         sideways > inward,
-        "`W`+`D` drove {sideways:.2} m/s across the rope against {inward:.2} m/s along it —          „stärker zur seite als rangezogen\" is the instruction and it is this comparison"
+        "`D` drove {sideways:.2} m/s across the rope against {inward:.2} m/s along it — \
+         „stärker zur seite als rangezogen\" is the instruction and it is this comparison"
     );
-    // **The control, and it is the one line that used to be the whole behaviour.** With the
-    // fraction back at 1.0 the radial wins, which is what he was complaining about.
-    let old = fly(DriveTuning { steer_pull_fraction: 1.0, ..t }, 1.0);
+    // §5D rule 3's floor: „desto weniger", never nothing — the scaled pull still closes.
     assert!(
-        old.dot(Vec3::NEG_Z) > old.x,
-        "with `drive_steer_pull_fraction` at 1.0 the drive came out {:.2} m/s sideways and {:.2}          inward — the radial is supposed to win there, or this test is not measuring the key",
-        old.x,
-        old.dot(Vec3::NEG_Z)
+        inward > 0.5,
+        "at full lateral the pull closed at only {inward:.2} m/s — the ramp's endpoint is \
+         `drive_steer_pull_fraction`, not zero; only `S` may cancel (rule 4)"
     );
-    // And the steer must not be a brake (`Q-050`): turning costs direction, never speed.
+    // **The deletion control**: with the fraction at 1.0 the lateral does not scale the pull
+    // at all — the inward number has to move, or this test is not measuring `pull_scale`.
+    let unscaled = fly(1.0, 1.0);
     assert!(
-        steered.length() > 0.9 * straight.length(),
-        "`W`+`D` reached {:.2} m/s against `W` alone at {:.2} — steering is supposed to turn the          drive, not slow it",
-        steered.length(),
-        straight.length()
+        unscaled.dot(Vec3::NEG_Z) > inward * 1.5,
+        "with the fraction at 1.0 the pull closed at {:.2} m/s against {inward:.2} with it at \
+         {f} — `drive_steer_pull_fraction` is not being read by the composition",
+        unscaled.dot(Vec3::NEG_Z)
     );
+    // And the steer is still not a brake (`Q-050`): the lateral only ever touches ê_right.
+    let straight = fly(0.0, f);
+    assert!(
+        steered.x > straight.x,
+        "`D` moved the player {:.2} m/s sideways against {:.2} with no key — the lateral is \
+         supposed to be the one axis the key commands",
+        steered.x,
+        straight.x
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// `docs/NEXT.md` §5D — the model he refined at the controller on 2026-09-01, four rules,
+// verbatim: *„es sollte doch eigendlich so sein. dass es immer rangezogen wird standardmäßig.
+// und es geht danach wie der character schaut. aber w geht in die richtung etc. aber wenn
+// verbunden wird immer rangezogen so stark wie man zur seite geht desto weniger. aber dennoch
+// AUßER man drückt S dann nur zur seite"*
+//
+//   1. anchored ⇒ always pulled — the winch, look-blind (`rope_winch`, unchanged);
+//   2. `W` = thrust in the LOOK direction, on top of the pull (`rope_drive`);
+//   3. the lateral scales the PULL down proportionally — a ramp, never to zero on its own
+//      (`pull_scale`);
+//   4. `S` cancels the pull — only the lateral remains (`pull_scale`, and the app half in
+//      `tests/input.rs::r7_*` / `tests/vector_rope.rs::f176_*`).
+// ---------------------------------------------------------------------------------------
+
+#[test]
+fn f5d_w_thrusts_along_the_look_even_at_right_angles_to_the_rope() {
+    // **Rule 2, at the angle the old model zeroed.** The rope hangs 90° off the look: the old
+    // look gate `max(0, l̂·r̂)` is 0 there, so the old drive returned ZERO and `W` was dead the
+    // moment you looked across your own rope. §5D: the look is the thrust's direction, the
+    // rope is the winch's business.
+    //
+    // Fixture varies: the rope's angle to the look. Code reads: `look_dir`, `move_y`,
+    // `velocity`, the tuning. The rope enters only the is-anchored guard.
+    let d = game_data();
+    let t = drive_tuning(&d);
+    let look = Intent::default().look_dir(); // −Z
+    let rope_to_the_side = anchor_at(std::f32::consts::FRAC_PI_2, 40.0);
+
+    let w = rope_drive(&[rope_to_the_side], look, 0.0, 0.0, 1.0, Vec3::ZERO, t);
+    assert!(
+        w.dot(look) > 0.0,
+        "`W` with the rope 90° off the look gave {w:?} — §5D rule 2: „aber w geht in die \
+         richtung\" (the look's), and the old ZERO here is FIND-196's gate"
+    );
+    // The thrust is the look axis and nothing else — no hidden radial component.
+    assert!(
+        w.cross(look).length() < 1e-4,
+        "`W`'s thrust {w:?} is not parallel to the look — the radial pull belongs to the winch \
+         (§5D rule 1)"
+    );
+    // And it is the same chase it always was: from rest, the ceiling; near the target, the
+    // ramp alone (the FIND-172 weight survives the reorientation).
+    assert!(
+        (w.length() - t.accel_max_m_s2.min(t.speed_m_s / t.ramp_s)).abs() < 1e-3,
+        "from rest the look thrust is {:.1} m/s² — expected min(speed/ramp, accel_max)",
+        w.length()
+    );
+    // The control (`CLAUDE.md` rule 5): no rope, no drive — the guard is the arms, even
+    // though their geometry no longer steers anything.
+    let unhooked = rope_drive(&[], look, 0.0, 0.0, 1.0, Vec3::ZERO, t);
+    assert_eq!(unhooked, Vec3::ZERO, "the drive ran without a rope: {unhooked:?}");
+}
+
+#[test]
+fn f5d_the_lateral_scales_the_pull_in_a_ramp_not_a_switch() {
+    // **Rule 3.** *„so stark wie man zur seite geht desto weniger"* — proportional, so the
+    // curve is a LINE from 1.0 at |move_x| = 0 to `drive_steer_pull_fraction` at |move_x| = 1:
+    //
+    //     scale(mx) = 1 − (1 − fraction) · |mx|
+    //
+    // The two endpoints are the RON's: 1.0 is rule 1 itself (anchored ⇒ always pulled — a
+    // tunable there would let the file contradict the rule), `drive_steer_pull_fraction` is
+    // `game.ron`'s. Until 2026-09-01 this was a binary switch (`mx == 0 ? 1 : fraction`),
+    // measured and rejected in §5D.
+    //
+    // Fixture varies: `move_x` in fifths, `move_y` ∈ {0, −1}, and the fraction (endpoint
+    // control). Code reads: exactly those three. Both lists in one place, nothing hidden.
+    let d = game_data();
+    let f = d.game.vector.drive_steer_pull_fraction;
+
+    let sweep: Vec<f32> = [0.0, 0.25, 0.5, 0.75, 1.0]
+        .iter()
+        .map(|mx| pull_scale(*mx, 0.0, f))
+        .collect();
+    println!(
+        "f5d pull ramp at |move_x| = 0, ¼, ½, ¾, 1: {:.4} · {:.4} · {:.4} · {:.4} · {:.4} \
+         (fraction {f})",
+        sweep[0], sweep[1], sweep[2], sweep[3], sweep[4]
+    );
+    for (i, mx) in [0.0f32, 0.25, 0.5, 0.75, 1.0].iter().enumerate() {
+        let expected = 1.0 - (1.0 - f) * mx;
+        assert!(
+            (sweep[i] - expected).abs() < 1e-6,
+            "pull_scale({mx}, 0, {f}) = {:.4}, expected the line 1 − (1 − f)·|mx| = {expected:.4} \
+             — „so stark wie man zur seite geht desto weniger\" is proportional, not a switch",
+            sweep[i]
+        );
+    }
+    // Never to zero on its own (rule 3's second half) — guarded on the file's value in
+    // `f149_the_drive_numbers_are_the_ones_the_file_can_defend`, asserted here on the ramp.
+    assert!(
+        sweep[4] > 0.0 && (sweep[4] - f).abs() < 1e-6,
+        "at full lateral the pull is {:.4} — the endpoint is the file's fraction and it is \
+         never zero on its own",
+        sweep[4]
+    );
+    // Left and right are one key: the ramp runs on |move_x|.
+    assert_eq!(pull_scale(-0.5, 0.0, f), pull_scale(0.5, 0.0, f), "A and D scale alike");
+    // **Rule 4: `S` cancels the pull outright** — at every lateral, not only alone.
+    for mx in [0.0, 0.5, 1.0] {
+        assert_eq!(
+            pull_scale(mx, -1.0, f),
+            0.0,
+            "with S held (move_y −1, move_x {mx}) the pull must be 0 — „AUßER man drückt S \
+             dann nur zur seite\""
+        );
+    }
+    // And `W` does not touch the ramp: the forward axis has its own term (rule 2).
+    assert_eq!(pull_scale(0.5, 1.0, f), pull_scale(0.5, 0.0, f), "W neither feeds nor starves the pull");
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2167,9 +2325,15 @@ fn f153_a_second_rope_does_not_halve_the_drive() {
         single.length(),
         pair.length()
     );
-    assert!(
-        pair.x > 0.0 && pair.z < 0.0,
-        "two anchors 60° apart drove the player at {pair:?} instead of between them"
+    // 🔴 **Since §5D the two are IDENTICAL, and the blend is gone on purpose.** `W` thrusts
+    // where the look points (*„aber w geht in die richtung"*), so the arms' directions are no
+    // longer in the drive at all — the per-arm radial work is the winch's
+    // (`rope_winch` blends the arms, and the joint constrains each one). `assert_eq!` and not
+    // an epsilon: the second anchor must not enter this function's arithmetic anywhere.
+    assert_eq!(
+        pair, single,
+        "two anchors drove the player differently from one ({pair:?} vs {single:?}) — since \
+         §5D the drive follows the LOOK and only the winch reads the arms"
     );
 }
 
@@ -2263,15 +2427,25 @@ fn f010_a_slide_below_the_floor_is_lifted_to_it_and_holds_its_direction() {
     let mut app = app();
     let e = me(&mut app);
     let d = data(&app);
-    // Below `slide_speed_m_s` (12) and above `slide_min_speed_m_s` (3): the floor has to lift.
-    launch_on_the_ground(&mut app, e, 6.0);
+    // Between the two file numbers, DERIVED — the midpoint of (`slide_min_speed_m_s`,
+    // `slide_speed_m_s`), whatever they are today. A literal 6.0 stood here until 2026-09-01,
+    // when `slide_min_speed_m_s` moved 3.0 → 9.0 (his floor-9 ruling) and the fixture's
+    // premise "above the minimum" silently went false: no slide started and the assert
+    // measured a walking player. The code reads both keys; now the fixture does too.
+    let launch = (d.game.player.slide_min_speed_m_s + d.game.player.slide_speed_m_s) / 2.0;
+    assert!(
+        launch < d.game.player.slide_speed_m_s,
+        "slide_min_speed_m_s >= slide_speed_m_s in game.ron — there is no below-the-floor \
+         speed left for this test to launch at"
+    );
+    launch_on_the_ground(&mut app, e, launch);
 
     hold(&mut app, KeyCode::KeyC);
     app.update();
     let during = ground_speed(&app, e);
     assert!(
         (during - d.game.player.slide_speed_m_s).abs() < 0.5,
-        "a 6 m/s slide came out at {during:.2}; the floor is {}",
+        "a {launch:.1} m/s slide came out at {during:.2}; the floor is {}",
         d.game.player.slide_speed_m_s
     );
     // And it goes where he was going (+Z), not where the camera or the stick points.
@@ -2366,10 +2540,14 @@ fn f010_the_cooldown_is_measured_from_the_start_and_includes_the_slide() {
     let mut app = app();
     let e = me(&mut app);
     let d = data(&app);
-    // 8 m/s and not 25: at 25 the slide covers 13.75 m and the graybox has buildings in it,
-    // so the second half of this test would be measuring what he ran into rather than the
-    // clock. The cooldown does not care how fast the slide was.
-    launch_on_the_ground(&mut app, e, 8.0);
+    // Just above `slide_min_speed_m_s` and not 25: at 25 the slide covers 13.75 m and the
+    // graybox has buildings in it, so the second half of this test would be measuring what he
+    // ran into rather than the clock. The cooldown does not care how fast the slide was.
+    // DERIVED since 2026-09-01: a literal 8.0 stood here and the floor-9 ruling
+    // (`slide_min_speed_m_s` 3.0 → 9.0) put it under the gate — no first slide, and the
+    // panic was about the clock while the cause was the fixture's own launch speed.
+    let launch = d.game.player.slide_min_speed_m_s + 1.0;
+    launch_on_the_ground(&mut app, e, launch);
 
     // ⚠️ **A held `C` fires ONCE.** `net::local::DodgeTap::feed` makes both routes to
     // `Buttons::DODGE` an EDGE — a held key that produced sixty dodges a second would empty a
@@ -2378,10 +2556,10 @@ fn f010_the_cooldown_is_measured_from_the_start_and_includes_the_slide() {
     hold(&mut app, KeyCode::KeyC);
     // **`W` as well, and it is not decoration.** Without it the first run of this test was red
     // for a reason that has nothing to do with the cooldown: after the slide ends, `ground_step`
-    // brakes an unsteered player at μg = 20 m/s², so 25 m/s is gone in 75 ticks — and by the
-    // time the 54-tick cooldown is up he is below `slide_min_speed_m_s` (3) and could not have
-    // slid again whatever the cooldown said. Holding `W` keeps him at `run_speed_m_s`, which is
-    // above the floor, so the only thing left that can refuse the second slide is the clock.
+    // brakes an unsteered player at μg, and a player under `slide_min_speed_m_s` could not have
+    // slid again whatever the cooldown said. `W` slows that decay; since the floor-9 ruling it
+    // can no longer PREVENT it (`run_speed_m_s` 6 < `slide_min_speed_m_s` 9), which is why the
+    // speed is re-armed by hand right before the second press below.
     hold(&mut app, KeyCode::KeyW);
     app.update();
     let first = slide_of(&app, e).started_at_tick.expect("the first slide started");
@@ -2408,6 +2586,12 @@ fn f010_the_cooldown_is_measured_from_the_start_and_includes_the_slide() {
         (d.game.player.slide_cooldown_s * d.game.simulation_hz as f32).round() as u64;
     release(&mut app, KeyCode::KeyC);
     ticks(&mut app, cooldown_ticks);
+    // Re-arm the speed before the second press. Since the floor-9 ruling `slide_min_speed_m_s`
+    // (9) sits ABOVE `run_speed_m_s` (6), so the held `W` can no longer keep him slide-fast —
+    // the ground brakes him to 6 within ~18 ticks of the slide ending, and the second press
+    // would be refused for SPEED whatever the clock said. The test is about the clock, so the
+    // speed is set, exactly as `launch_on_the_ground` sets it.
+    app.world_mut().get_mut::<LinearVelocity>(e).unwrap().0 = Vec3::new(0.0, 0.0, launch);
     hold(&mut app, KeyCode::KeyC);
     ticks(&mut app, 2);
     assert!(
@@ -2660,34 +2844,65 @@ fn f005_ctrl_never_adds_an_acceleration_to_the_body_under_either_model() {
     // the claim this test can still make is a claim about `air_control` and nothing else.
     //
     // Red by putting `grant.reel_in` back into the winch's `match` in `air_control`.
+    //
+    // ⚠️ **Re-derived under §5E-b (2026-09-01): the baseline is not ZERO any more.** This
+    // fixture is a STANDING player with an anchored rope, and since the third ruling on the
+    // ground gate that player is being pulled — `RunAccel` carries the winch the moment the
+    // arm holds (measured here: 32.7 m/s² along the rope, under `Drive`). So the claim
+    // "`Ctrl` adds nothing" is now an A/B: the same deterministic fixture twice, one holding
+    // `Ctrl`, and `RunAccel` has to come out **bit-identical** tick for tick — on top of a
+    // live pull, not on top of silence, which is the stronger statement.
     for model in [
         defeated_by_titan::data::RopeForceModel::Drive,
         defeated_by_titan::data::RopeForceModel::Pendulum,
     ] {
-        let mut app = app();
-        app.world_mut().resource_mut::<GameData>().game.vector.rope_force_model = model;
-        ticks(&mut app, 30); // the player lands and settles on the graybox floor
-        let e = me(&mut app);
-        let d = data(&app);
-        assert_eq!(
-            state(&app, e),
-            MovementState::Grounded,
-            "{model:?}: the fixture is a player STANDING — if he is airborne this proves nothing"
-        );
-        // ⚠️ **A rope with room left in it.** A rope already at `min_rope_m` would make the
-        // assertion pass whatever the `match` says — the helper asserts that itself.
-        let to_anchor = anchor_on_a_body_with_rope_left(&mut app, e, &d);
-        hold(&mut app, KeyCode::ControlLeft);
-        app.update();
-
-        assert_eq!(
-            run_accel(&app, e),
-            Vec3::ZERO,
-            "{model:?}: `Ctrl` on a {:.1} m rope put an acceleration on the BODY. The reel is a \
-             change of `limits.max` and `player::rope::shorten_ropes` is its one writer — a \
-             second, additive haul here pays it once and delivers it twice",
-            to_anchor.length()
-        );
+        let build = |ctrl: bool| {
+            let mut app = self::app();
+            app.world_mut().resource_mut::<GameData>().game.vector.rope_force_model = model;
+            ticks(&mut app, 30); // the player lands and settles on the graybox floor
+            let e = me(&mut app);
+            let d = data(&app);
+            assert_eq!(
+                state(&app, e),
+                MovementState::Grounded,
+                "{model:?}: the fixture is a player STANDING — if he is airborne this proves \
+                 nothing"
+            );
+            // ⚠️ **A rope with room left in it.** A rope already at `min_rope_m` would make
+            // the assertion pass whatever the `match` says — the helper asserts that itself.
+            anchor_on_a_body_with_rope_left(&mut app, e, &d);
+            if ctrl {
+                hold(&mut app, KeyCode::ControlLeft);
+            }
+            (app, e)
+        };
+        let (mut without, e_a) = build(false);
+        let (mut with, e_b) = build(true);
+        let mut pull_seen = Vec3::ZERO;
+        for tick in 0..5 {
+            without.update();
+            with.update();
+            let a = run_accel(&without, e_a);
+            let b = run_accel(&with, e_b);
+            assert_eq!(
+                a, b,
+                "{model:?}, tick {tick}: `Ctrl` changed the BODY's acceleration from {a:?} to \
+                 {b:?}. The reel is a change of `limits.max` and `player::rope::shorten_ropes` \
+                 is its one writer — a second, additive haul here pays it once and delivers it \
+                 twice"
+            );
+            pull_seen = a;
+        }
+        // The control that the A/B is measured under load and not on two silent bodies: under
+        // `Drive` the standing bite IS pulled since §5E-b (`ground_pull_live`), so a ZERO here
+        // means the fixture lost its rope and the equality above proved nothing.
+        if model == defeated_by_titan::data::RopeForceModel::Drive {
+            assert!(
+                pull_seen.length() > 1.0,
+                "the Drive fixture's RunAccel is {pull_seen:?} — no live pull in the frame, \
+                 the Ctrl A/B compared two idle bodies"
+            );
+        }
     }
 }
 
@@ -4502,4 +4717,415 @@ fn f003_a_hook_fired_from_inside_the_water_still_finds_the_quay_above_it() {
         "a hook fired from inside the water anchored nothing — the river has become a wall the \
          rope cannot get through"
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// §5E-b (2026-09-01) — the hook pulls IMMEDIATELY, ground included. Third ruling on the
+// ground gate: FIND-172 built the always-on pull, Q-055/Q-056 gated it `in_the_air`, the
+// user overturned the gate: „und aktuell wenn cih mich hooke werde ich nicht autmoatisch
+// rangezogen! das fehlt noch! aktuell muss ich noch in die richtung schauen bewegen!"
+//
+// What the rule under test reads: RopeForceModel (Drive), drive_idle_speed_m_s,
+// drive_idle_ramp_s, min_rope_m, drive_steer_pull_fraction, move_x/move_y (pull_scale),
+// the anchored arms' tips, MovementState, gravity and the ground contact.
+// What these fixtures vary: anchor elevation (the contact-break axis), rope length (the
+// min_rope_m floor and the height axis), the keys (none / S), arm count (n = 2), and the
+// pull's own existence (the deletion control).
+// What they hold constant: map (graybox), the spawn spot, the anchor azimuth (+Z, the
+// measured clear runway), and a motionless anchor body.
+// ---------------------------------------------------------------------------------------
+
+/// Anchors the left arm on a phantom index body so that its tip sits exactly at `anchor_m`
+/// — [`anchor_the_left_hook`] with the point chosen instead of inherited from a map body.
+/// The index is incremental (`world::index::maintain_index` only strikes out what an
+/// observer removed), so the entry persists and `update_hooks` keeps the tip in place.
+fn anchor_the_left_hook_on(app: &mut App, e: Entity, anchor_m: Vec3) {
+    use defeated_by_titan::shared::{BodyMask, IndexEntry};
+    let body = BodyId(90_001 + app.world().get::<Hook>(e).map_or(0, |h| h.anchored_count() as u32));
+    let center = anchor_m + Vec3::Y * 2.0;
+    app.world_mut().resource_mut::<SpatialIndex>().insert(IndexEntry {
+        id: body,
+        center_m: center,
+        half_size_m: Vec3::splat(2.0),
+        mask: BodyMask::SOLID.with(BodyMask::ANCHORABLE),
+    });
+    hold(app, KeyCode::KeyQ);
+    let mut hook = app.world_mut().get_mut::<Hook>(e).expect("the player carries a Hook");
+    let arm = &mut hook.arms[Side::Left.index()];
+    arm.state = HookState::Anchored { body, local_m: anchor_m - center };
+    arm.tip_m = anchor_m;
+}
+
+/// Lands the player on his legs and bites an anchor `rope_m` metres from the hand, at
+/// `elevation_deg` above the horizon, along +Z (clear for ~22 m from the origin — the same
+/// measured runway `launch_on_the_ground` documents). Returns his standing y.
+fn stand_and_bite(app: &mut App, e: Entity, elevation_deg: f32, rope_m: f32) -> f32 {
+    ticks(app, 120); // land first — MovementState::Grounded out of real contacts
+    assert_eq!(state(app, e), MovementState::Grounded, "the claim is about a STANDING player");
+    let stand_y = at(app, e).y;
+    let hand = at(app, e) + Vec3::Y * data(app).game.player.eye_height_m;
+    let (s, c) = elevation_deg.to_radians().sin_cos();
+    anchor_the_left_hook_on(app, e, hand + Vec3::new(0.0, s, c) * rope_m);
+    stand_y
+}
+
+/// How many ticks from the bite until the feet leave the ground, or `None` within `limit`.
+/// "Off the ground" is 0.2 m of real rise — ten times the solver's settling noise, a fifth
+/// of a jump — so a contact flicker cannot pass for a lift.
+fn ticks_to_airborne(app: &mut App, e: Entity, stand_y: f32, limit: u64) -> Option<u64> {
+    for tick in 1..=limit {
+        ticks(app, 1);
+        if at(app, e).y > stand_y + 0.2 {
+            return Some(tick);
+        }
+    }
+    None
+}
+
+#[test]
+fn f176_a_hook_bitten_while_standing_pulls_the_player_off_the_ground_at_once() {
+    // §5E-b's headline. The anchor stands 40 m straight overhead — the steepest geometry,
+    // where the winch's whole ceiling (drive_idle_speed_m_s / drive_idle_ramp_s = 34.29
+    // m/s²) works against gravity (32) and nothing else. Under the old `in_the_air` gate
+    // this player stands forever: the winch never runs for MovementState::Grounded at
+    // walking speed, however perfect the geometry — that is exactly „aktuell muss ich noch
+    // in die richtung schauen bewegen".
+    let mut app = app();
+    let e = me(&mut app);
+    let stand_y = stand_and_bite(&mut app, e, 90.0, 40.0);
+
+    let airborne = ticks_to_airborne(&mut app, e, stand_y, 90);
+    println!("f176 §5E-b: anchor 90° overhead, no key held — airborne after {airborne:?} ticks");
+    let Some(n) = airborne else {
+        panic!(
+            "90 ticks after a hook bit 40 m straight overhead the standing player has not \
+             left the ground (y still ≈ {:.3}) — the always-on pull is still gated \
+             `in_the_air` (FIND-172/Q-056) and §5E-b overturned that gate: the bite yanks, \
+             ground included",
+            at(&app, e).y
+        );
+    };
+    // And the state machine agrees it is the rope that has him, not a jump nobody pressed.
+    assert_eq!(
+        state(&app, e),
+        MovementState::Tethered,
+        "he left the ground on a live rope — that is Tethered, not {:?}",
+        state(&app, e)
+    );
+    // The deletion control (fixtures lesson 1): the same stance with the pull deleted has
+    // to stand still, or this test would pass on any stray upward force.
+    let mut control = self::app();
+    let e2 = me(&mut control);
+    without_the_always_on_pull(&mut control);
+    let stand2 = stand_and_bite(&mut control, e2, 90.0, 40.0);
+    assert!(
+        ticks_to_airborne(&mut control, e2, stand2, n + 30).is_none(),
+        "with drive_idle_speed_m_s = 0 the same bite still lifted the player — whatever \
+         moved him above was not the always-on pull, and the headline measures nothing"
+    );
+}
+
+/// Horizontal distance travelled toward the anchor's ground point since the bite — the drag
+/// axis, for the elevations where the winch cannot out-lift gravity.
+fn dragged_m(app: &App, e: Entity, start: Vec3) -> f32 {
+    let now = at(app, e);
+    (now - start).xz().length()
+}
+
+#[test]
+fn f176_the_contact_break_threshold_is_the_derived_69_degrees() {
+    // **The threshold is arithmetic, and the sweep's job is to catch the arithmetic lying.**
+    // The winch's ceiling is `drive_idle_speed_m_s / drive_idle_ramp_s` = 12/0.35 = 34.286
+    // m/s² (`WinchTuning::idle`); its vertical share at elevation θ is `·sin θ`; the ground
+    // lets go when that beats `-gravity_m_s2` = 32. So the clean-lift line is
+    // `asin(32/34.286)` ≈ 68.96°, and it is DERIVED — moving any of the three file numbers
+    // moves it, and this test recomputes it from the same file instead of hard-coding 69.
+    //
+    // Below the line the pull cannot lift a standing start — §5E-b's teeth demand it must
+    // not buzz in place either: friction is 0.0, the legs have let go (`ground_pull_live`),
+    // so the SAME acceleration drags the body along the ground toward under the anchor,
+    // where the geometry steepens and the lift finally wins. That is the honest shape:
+    // a bite always moves you, the elevation only decides lift-now or drag-then-lift.
+    //
+    // The instrument prints EVERY row, `None` included (fixtures lesson 6): an elevation
+    // where nothing happened shows as `airborne None · dragged 0.0 m`, not as a skipped row.
+    let d = {
+        let probe = self::app();
+        data(&probe)
+    };
+    let ceiling = d.game.vector.drive_idle_speed_m_s / d.game.vector.drive_idle_ramp_s;
+    let threshold_deg = (-d.game.gravity_m_s2 / ceiling).asin().to_degrees();
+    println!(
+        "f176 sweep: ceiling {ceiling:.3} m/s² vs gravity {} — derived clean-lift line \
+         {threshold_deg:.2}°",
+        -d.game.gravity_m_s2
+    );
+    assert!(
+        (threshold_deg - 68.96).abs() < 1.0,
+        "the derived threshold moved to {threshold_deg:.2}° — game.ron changed under this \
+         sweep; re-derive the elevations below before trusting them"
+    );
+
+    let rope_m = 18.0; // horizontal reach ≤ 17.8 m at 8° — inside the measured 22 m runway
+    let mut rows = Vec::new();
+    for elevation_deg in [90.0_f32, 80.0, 72.0, 70.0, 69.0, 68.0, 60.0, 45.0, 30.0, 8.0] {
+        let mut app = self::app();
+        let e = me(&mut app);
+        let stand_y = stand_and_bite(&mut app, e, elevation_deg, rope_m);
+        let start = at(&app, e);
+        let mut airborne: Option<u64> = None;
+        let mut dragged_at_60 = 0.0;
+        for tick in 1..=240u64 {
+            ticks(&mut app, 1);
+            if tick == 60 {
+                dragged_at_60 = dragged_m(&app, e, start);
+            }
+            if airborne.is_none() && at(&app, e).y > stand_y + 0.2 {
+                airborne = Some(tick);
+            }
+        }
+        let dragged_at_240 = dragged_m(&app, e, start);
+        println!(
+            "  elevation {elevation_deg:5.1}° · airborne {airborne:?} ticks · dragged \
+             {dragged_at_60:6.2} m @60 · {dragged_at_240:6.2} m @240"
+        );
+        rows.push((elevation_deg, airborne, dragged_at_60, dragged_at_240));
+    }
+
+    for (elevation_deg, airborne, dragged_at_60, dragged_at_240) in rows {
+        if elevation_deg >= threshold_deg + 10.0 {
+            // Clearly above the line: the bite lifts a standing start, promptly. 90 ticks is
+            // three times the measured 31 at 90° — margin for the asymptotic approach.
+            let n = airborne.unwrap_or_else(|| {
+                panic!(
+                    "at {elevation_deg}° — {:.0}° above the derived clean-lift line — the \
+                     bite never lifted the standing player in 240 ticks",
+                    elevation_deg - threshold_deg
+                )
+            });
+            assert!(
+                n <= 90,
+                "at {elevation_deg}° the lift took {n} ticks — a bite that needs more than \
+                 1.5 s to break contact is not „rangezogen, sofort\""
+            );
+        } else if elevation_deg <= threshold_deg - 10.0 {
+            // Clearly below: no buzz. The body must MOVE toward the anchor immediately —
+            // 2 m in the first second is a sixth of what the unclamped drag would give,
+            // and two orders of magnitude above solver settling.
+            assert!(
+                dragged_at_60 >= 2.0,
+                "at {elevation_deg}° the pull moved the standing player only \
+                 {dragged_at_60:.2} m in 60 ticks — that is the buzz §5E-b forbids: a pull \
+                 too weak to break contact has to DRAG, not grind in place"
+            );
+            // And the drag ends in a lift once the geometry steepens — the drag is a route
+            // to the air, not a state of its own.
+            assert!(
+                airborne.is_some() || dragged_at_240 >= rope_m * 0.5,
+                "at {elevation_deg}° after 4 s: neither airborne nor even halfway to under \
+                 the anchor ({dragged_at_240:.2} m of {rope_m}) — the drag stalled"
+            );
+        }
+        // The band between (θ* ± 10°) is printed, not asserted: the lift there is
+        // asymptotic (net vertical ≈ 0), and a tick bound on an asymptote is a number
+        // nobody can defend. The boundary itself is sampled at the pure function below.
+    }
+}
+
+#[test]
+fn f176_s_on_the_ground_keeps_the_legs_and_the_bite_takes_them_only_without_it() {
+    // §5D rule 4 on the ground (S = no pull) — and the pair is ONE fixture, so the S half
+    // cannot pass by measuring a different stance than the yank half.
+    let mut app = self::app();
+    let e = me(&mut app);
+    hold(&mut app, KeyCode::KeyS);
+    ticks(&mut app, 2); // the intent has to carry move_y < 0 BEFORE the bite
+    let stand_y = stand_and_bite(&mut app, e, 90.0, 40.0);
+
+    let mut rose = 0.0_f32;
+    for _ in 0..120 {
+        ticks(&mut app, 1);
+        rose = rose.max(at(&app, e).y - stand_y);
+        assert_eq!(
+            state(&app, e),
+            MovementState::Grounded,
+            "S is held: the pull is cancelled and the ground owns him — §5D rule 4"
+        );
+    }
+    assert!(
+        rose < 0.2,
+        "holding S through a 90° bite still lifted the player {rose:.3} m — the cancel is \
+         not reaching the ground pull"
+    );
+    // The control that the legs really work (not a body pinned by something else): the same
+    // held S is a walk, at the file's own run speed. (The joint's half of the S stance —
+    // „aber NICHT das seil verlängern" — is `tests/vector_rope.rs::f176_*`, on a real rope;
+    // this fixture's phantom anchor builds no joint on purpose, so the walk is unbounded.)
+    let v = ground_speed(&app, e);
+    let d = data(&app);
+    assert!(
+        (v - d.game.player.run_speed_m_s).abs() < 0.1,
+        "the S-holder walks at {v:.3} m/s instead of run_speed_m_s = {} — his legs were \
+         taken even though the pull is cancelled",
+        d.game.player.run_speed_m_s
+    );
+}
+
+#[test]
+fn f176_a_bite_inside_the_rope_floor_pulls_nothing_and_keeps_the_legs() {
+    // Property 3's floor, on the ground: an arm inside `min_rope_m` (3.0) contributes no
+    // pull, so it must not take the legs either — `ground_pull_live`'s fourth condition.
+    // 2.9 m sits under the floor; the 6.0 m control is the same stance past it.
+    let mut app = self::app();
+    let e = me(&mut app);
+    let stand_y = stand_and_bite(&mut app, e, 90.0, 2.9);
+    assert!(
+        ticks_to_airborne(&mut app, e, stand_y, 120).is_none(),
+        "a bite 2.9 m overhead — inside min_rope_m = 3.0 — lifted the player; the floor \
+         that stops the winch has to stop the ground handover too"
+    );
+    assert_eq!(state(&app, e), MovementState::Grounded, "inside the floor he is standing");
+
+    let mut control = self::app();
+    let e2 = me(&mut control);
+    let stand2 = stand_and_bite(&mut control, e2, 90.0, 6.0);
+    let lifted = ticks_to_airborne(&mut control, e2, stand2, 120);
+    println!("f176 floor: 2.9 m bite planted · 6.0 m bite airborne after {lifted:?} ticks");
+    assert!(
+        lifted.is_some(),
+        "the 6.0 m control never lifted — the floor test would pass on a dead winch"
+    );
+
+    // The boundary itself, at the pure function, ±1 mm and dead on (fixtures lesson 5).
+    let d = data(&app);
+    let t = WinchTuning::idle(&d.game.vector);
+    let f = d.game.vector.drive_steer_pull_fraction;
+    let m = d.game.vector.min_rope_m;
+    let up = |len: f32| [Vec3::Y * len];
+    assert!(!ground_pull_live(RopeForceModel::Drive, &up(m - 0.001), 0.0, 0.0, t, f));
+    assert!(!ground_pull_live(RopeForceModel::Drive, &up(m), 0.0, 0.0, t, f)); // > , not >=
+    assert!(ground_pull_live(RopeForceModel::Drive, &up(m + 0.001), 0.0, 0.0, t, f));
+    // And the other three switches, each alone (delete the thing you measure):
+    assert!(!ground_pull_live(RopeForceModel::Pendulum, &up(m + 1.0), 0.0, 0.0, t, f));
+    assert!(!ground_pull_live(RopeForceModel::Drive, &up(m + 1.0), 0.0, -1.0, t, f)); // S
+    let off = WinchTuning { speed_m_s: 0.0, ..t };
+    assert!(!ground_pull_live(RopeForceModel::Drive, &up(m + 1.0), 0.0, 0.0, off, f));
+}
+
+#[test]
+fn f176_two_arms_blend_the_ground_pull_the_way_the_winch_blends_them() {
+    // The n = 2 case, elements disagreeing (fixtures lesson 3): a steep arm (90°, clean
+    // lift in ~31 ticks) and a shallow arm (8°, drag-forever regime) — `rope_winch` pulls
+    // along `unit(r̂₁ + r̂₂)` ≈ 49°, strictly BETWEEN its members, so the pair's trajectory
+    // has to sit between the two arms run alone. THREE legs, one varied variable.
+    //
+    // What the code reads (`rope_winch`): each arm's direction and its length against
+    // `min_rope_m`, the body's velocity, `speed_m_s`, `ramp_s`, `accel_max_m_s2` — the
+    // tunables all out of game.ron, identical across the legs. What the fixture varies:
+    // ONLY the set of anchored arms — steep alone, shallow alone, both. Same stand, same
+    // 18 m rope, same +Z azimuth, no movement keys. The difference between the two lists
+    // is empty, which is the point: any trajectory difference between the legs is the arm
+    // set's doing and nothing else's.
+    //
+    // 2026-09-02, refuted and rebuilt: the old two-half version ("slower than the steep
+    // arm alone, or still drags ≥ 2 m") was PASSED by a winch mutated to read only the
+    // LAST anchored arm (`blend = direction`) — its pair ran the shallow arm's own
+    // trajectory (never lifts, drags ~17.5 m) straight into the drag fallback. Hence the
+    // shallow-alone leg: the pair must also BEAT the shallow arm by itself — lift when it
+    // cannot, lift earlier when it can, drag measurably less over the identical window
+    // when neither lifts. A last-arm winch reproduces the shallow leg and fails that; a
+    // first-arm winch reproduces the steep leg and fails `t > alone`; per-arm full
+    // strength out-lifts the steep arm alone and fails `t > alone` too.
+    let mut steep = self::app();
+    let e1 = me(&mut steep);
+    let stand1 = stand_and_bite(&mut steep, e1, 90.0, 18.0);
+    let alone = ticks_to_airborne(&mut steep, e1, stand1, 240);
+
+    // The shallow arm ALONE — the same 8°/18 m geometry the pair's right arm gets, over
+    // the same 240-tick window. `ticks_to_airborne` stops at the lift, so on a `None` its
+    // drag is the full window's, comparable one-to-one with the pair's `None` below.
+    let mut shallow = self::app();
+    let e3 = me(&mut shallow);
+    let stand3 = stand_and_bite(&mut shallow, e3, 8.0, 18.0);
+    let start3 = at(&shallow, e3);
+    let shallow_alone = ticks_to_airborne(&mut shallow, e3, stand3, 240);
+    let shallow_dragged = dragged_m(&shallow, e3, start3);
+
+    let mut pair = self::app();
+    let e2 = me(&mut pair);
+    let stand2 = stand_and_bite(&mut pair, e2, 90.0, 18.0);
+    // The right arm, by hand on a second phantom body — same shape as the left helper.
+    {
+        use defeated_by_titan::shared::{BodyMask, IndexEntry};
+        let hand = at(&pair, e2) + Vec3::Y * data(&pair).game.player.eye_height_m;
+        let (s, c) = 8.0_f32.to_radians().sin_cos();
+        let anchor = hand + Vec3::new(0.0, s, c) * 18.0;
+        let body = BodyId(90_101);
+        let center = anchor + Vec3::Y * 2.0;
+        pair.world_mut().resource_mut::<SpatialIndex>().insert(IndexEntry {
+            id: body,
+            center_m: center,
+            half_size_m: Vec3::splat(2.0),
+            mask: BodyMask::SOLID.with(BodyMask::ANCHORABLE),
+        });
+        hold(&mut pair, KeyCode::KeyE);
+        let mut hook = pair.world_mut().get_mut::<Hook>(e2).expect("hook");
+        let arm = &mut hook.arms[Side::Right.index()];
+        arm.state = HookState::Anchored { body, local_m: anchor - center };
+        arm.tip_m = anchor;
+    }
+    let start = at(&pair, e2);
+    let mut together: Option<u64> = None;
+    for tick in 1..=240u64 {
+        ticks(&mut pair, 1);
+        if at(&pair, e2).y > stand2 + 0.2 {
+            together = Some(tick);
+            break;
+        }
+    }
+    let dragged = dragged_m(&pair, e2, start);
+    println!(
+        "f176 n=2: steep alone airborne {alone:?} · shallow alone airborne {shallow_alone:?} \
+         dragged {shallow_dragged:.2} m · together {together:?} ticks, dragged {dragged:.2} m"
+    );
+    let alone = alone.expect("the steep arm alone lifted in the headline test");
+    match together {
+        Some(t) => {
+            assert!(
+                t > alone,
+                "two arms whose blend points 49° up lifted in {t} ticks, the 90° arm alone \
+                 took {alone} — the blend is not blending (per-arm full strength, or a \
+                 first-arm-only winch?)"
+            );
+            if let Some(ts) = shallow_alone {
+                assert!(
+                    t < ts,
+                    "the pair lifted in {t} ticks, the shallow arm alone in {ts} — adding a \
+                     90° arm steepens the axis and must lift EARLIER, so the steep arm \
+                     never entered the blend (last-arm-only winch?)"
+                );
+            }
+        }
+        None => {
+            assert!(
+                dragged >= 2.0,
+                "the pair neither lifted nor dragged ({dragged:.2} m) — two anchored arms \
+                 produced less than either alone"
+            );
+            assert!(
+                shallow_alone.is_none(),
+                "the pair never lifted in 240 ticks but the shallow arm ALONE lifted in \
+                 {shallow_alone:?} — two arms produced less lift than the shallower one by \
+                 itself"
+            );
+            assert!(
+                dragged <= 0.9 * shallow_dragged,
+                "the pair dragged {dragged:.2} m in 240 ticks, the shallow arm alone \
+                 dragged {shallow_dragged:.2} m over the identical window — a genuine blend \
+                 points ~49° up (cos 49° ≈ 0.66 of the shallow arm's horizontal pull) and \
+                 must drag measurably less; matching the shallow leg to within this margin \
+                 is a winch that reads only the last anchored arm"
+            );
+        }
+    }
 }

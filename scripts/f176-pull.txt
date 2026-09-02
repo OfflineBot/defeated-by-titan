@@ -1,183 +1,159 @@
-# f176-pull — docs/NEXT.md §3D: THE ROPE PULLS FROM EVERY KEY, AND THE LEGS CANNOT WALK OUT OF IT.
+# f176-pull — docs/NEXT.md §5D + §5E-b: THE PULL IS THE DEFAULT — GROUND INCLUDED — AND S IS
+# THE ONE KEY THAT CANCELS IT.
 #
-# 🔴 **STILL RED AT ACT 2, ON PURPOSE, AND THE REASON CHANGED ON 2026-08-27 — READ THIS FIRST.**
+# PINS: the stance — anchor body 149 at (45.00, 34.25, -29.00), the player at (45, ~0.3, -43),
+# so the rope is BORN TAUT at ~36.7 m and the anchor stands at 66.6 deg of elevation from the
+# hand — 2.4 deg BELOW the derived clean-lift line asin(32/34.286) = 68.96 deg, so a standing
+# bite here DRAGS first and lifts second (tests/player.rs::f176_the_contact_break_threshold_*).
+# `player.run_speed_m_s` = 6.0 is what every speed band below is derived from. Whoever moves
+# the map, the run speed, gravity or the idle-winch numbers re-derives ACT 3/4/5.
 #
-# It encodes the user's own words below as asserts. TWO attempts at the feature were built and
-# BOTH were refuted 2/2 by independent adversaries and reverted (`docs/FINDINGS.md` FIND-186).
-# Attempt 3 — `Q-058`, a real `DistanceJoint` on a `Drive` rope — landed on 2026-08-27.
+# 🔴 **RE-DERIVED 2026-09-01 FOR §5E-b — the THIRD ruling on the ground gate.** The user:
 #
-# ## What attempt 3 changed here, measured [offlinebot], debug build
+#   „und aktuell wenn cih mich hooke werde ich nicht autmoatisch rangezogen! das fehlt noch!
+#    aktuell muss ich noch in die richtung schauen bewegen! fixe das noch!"
 #
-# | assert | HEAD (no joint) | with the joint |
-# |---|---|---|
-# | ACT 2  `Speed < 2` | 6.000 ❌ | **7.630 ❌ — and it now means the OPPOSITE** |
-# | ACT 2b `Height < 1` | 0.000 ✅ | 17.999 ❌ → **re-derived below** |
-# | ACT 2b `Speed < 7`  | 0.000 ✅ | 49.313 ❌ → **re-derived below** |
-# | ACT 2b `Speed > 3`  | 0.000 ❌ | **49.313 ✅** |
+# FIND-172 built the always-on pull; Q-055/Q-056 gated it `in_the_air` (a hooked player on the
+# ground kept his legs); §5E-b overturns the gate: A BITE PULLS IMMEDIATELY, GROUND INCLUDED.
+# The old ACT order died with the gate: it bit the anchor and THEN pressed S, and under §5E-b
+# the 0.5 s between those two is a free pull that has already dragged the measurement away.
+# Now S is down BEFORE the bite for the planted act, and the yank gets an act of its own.
 #
-# The run is **1 of 9** red today, and the one red line is ACT 2's, deliberately.
-#
-# 🔴 **ACT 2's `Speed < 2` is the one that must NOT be quietly repaired, and it is left alone.**
-# It encodes *"on the ground, hooked, holding `S`, the player does not move"*. But
-# `docs/NEXT.md` §3D R1 does not say that — it says **"the pull is unconditional; `S` is the one
-# input that is allowed to fight it, and even then it may only SLOW the approach, not reverse it
-# into a retreat."** With the joint plus `FIND-172`'s always-on pull, one second of `S` from a
-# taut 36.72 m rope takes the player to **35.637 m** — he is still closing — while the same
-# second with the rope let go takes him to **39.619 m**. The assert reads 7.63 m/s and cannot
-# tell those two apart: **`assert speed` cannot tell an escape at 6 m/s from a haul at 12 m/s**
-# (`CLAUDE.md` §6 rule 5, second half), and the script harness has no distance metric to ask
-# with — `rope` is the anchored ARM COUNT (`src/debug/script.rs`), not a length.
-# **The measurement that CAN tell them apart is
-# `tests/vector_rope.rs::f176_under_drive_walking_backwards_on_a_taut_rope_still_closes_on_the_anchor`,
-# and it is green.** Whether this line should become a band around 12 m/s, or go, is the main
-# head's call and the user's — `docs/QUESTIONS.md` Q-061.
-#
-# ✅ **ACT 2b's two asserts WERE re-derived, 2026-08-27, and that is not a loosening.** The
-# header they replace said so itself: *"they were written against the reverted build to catch
-# its ground elevator … ACT 2b is currently measuring an accumulated state, not the property it
-# names. Whoever builds attempt 3 should re-derive it from a clean stance."* The clean stance is
-# `tests/vector_rope.rs::probe_ground_walk_on_a_rope`. What it shows is that `height < 1` was
-# never a property of this stance at all: the anchor is **34 m above and 14 m behind**, the rope
-# is born **taut at 36.72 m**, and `A` is therefore a movement on a sphere whose centre is over
-# the player's head. **Going sideways on that sphere goes UP.** That is §3F verbatim — *„zur
-# seite gehen … aber NICHT das seil verlängern"* — and a 1 m ceiling forbids the feature.
-#
-#
-# The user, 2026-08-26, verbatim:
-#
-#   „ok wichtig: wenn ich von seil weg gehe. also seil ist vorne und ich laufe zurueck werde
-#    cih nicht ran gezogen. sonst werde ich ranzeogen! wenn ich a oder d druecke zur seite soll
-#    ich auch noch rangezogen werden! AUCH. aber weniger! aktuell kann ich a druecekn und w und
-#    ich gehe in einer geraden linie weg von dem ankerpunkt (nicht gut). wenn das seil shcon
-#    eingezogen wurde soll es erstmal nicht laenger werden!"
-#
-#   ./target/debug/defeated_by_titan --headless --script scripts/f176-pull.txt --ticks 900
-#
-# and, as a SEPARATE run, the one that returns a usable exit code:
-#
-#   ./target/debug/defeated_by_titan --headless --script scripts/f176-pull.txt --ticks 900 >/dev/null 2>&1; echo $?
+# The history of the S band, because that line has now meant three different things:
+#   2026-08-26  "S-holder does not move" — RED: the pull hauled him at 7.63 m/s (measured).
+#   2026-08-27  left red on purpose — the Q-061 reading (S may slow, never stop).
+#   2026-09-01  §5D rule 4 reverses Q-061: S CANCELS the pull. The stand is a SWING on the
+#               taut sphere (the walk oscillates, |v| cycles 0.5..5.9), so the band is 6.5,
+#               not 2 — and the haul it still separates read 7.63 m/s pre-rule-4.
 #
 # ## What this run can measure and what it cannot
 #
-# ⚠️ **The script harness has no anchor-distance metric** (`speed`, `height`, `gas`, `titans`,
-# `tick`, `health`, `kills`, `phase`, `rope`, `blades`, `sharpness` — `src/debug/script.rs`;
-# `rope` is the anchored ARM COUNT, not a length), and §3D's and §3F's acceptance IS a distance.
-# **So the matrix is a test, not a run:**
-# `tests/vector_rope.rs::f3f_two_anchors_and_no_arm_ever_gets_further_from_its_own_anchor_than_its_rope_allows`
-# and its `..._standing_on_the_ground` sibling — 288 cells each (4 separations × 2 elevations ×
-# 4 yaws × 9 key combos), worst excess **0.0050 m** against **+51.1978 m** before the joint.
+# ⚠️ The harness has no anchor-distance metric (`src/debug/script.rs`; `rope` is the anchored
+# ARM COUNT), so the §3D/§3F distance matrix stays a test:
+# `tests/vector_rope.rs::f3f_two_anchors_and_no_arm_ever_gets_further_*` (288 cells each) and
+# `f176_under_drive_s_on_a_taut_rope_holds_position_instead_of_being_hauled`. The ground yank's
+# tick-by-tick truth is `tests/player.rs::f176_*` (elevation sweep, floor, n = 2, S pair).
+# What THIS run measures is the half a SPEED and a HEIGHT can see, in the running game:
 #
-# What THIS run measures is the half a SPEED can see:
+#   ACT 2 · the control: S with no rope is a walk at run speed (the legs work).
+#   ACT 3 · §5D rule 4: S held THROUGH the bite ⇒ planted — the joint forbids, the cancel
+#           keeps the pull off him.
+#   ACT 4 · §3F: A on the taut rope is a swing, bounded by the drive's own numbers.
+#   ACT 5 · §5E-b: the SAME stance, hook, NO key ⇒ he leaves the ground. This stance is BELOW
+#           the clean-lift line, so the shape is drag-then-lift and it is SLOW — measured
+#           2026-09-01 (ticks after the bite → height): +97: 0.16 · +159: 0.89 · +221: 1.72 ·
+#           +283: 2.54 · +345: 3.37, a steady ~0.8 m/s climb once the drag reaches the tower
+#           base. Under the old gate this act reads 0.142 FOREVER — captured red, the exact
+#           „muss ich noch in die richtung schauen bewegen". The steep-geometry yank (31
+#           ticks at 90°) is `tests/player.rs::f176_a_hook_bitten_while_standing_*`'s to pin;
+#           a script warp cannot place an anchor, so this run owns the shallow one.
 #
-#   **R1 · on the ground, hooked, holding `S`, the player is not carried away from his anchor.**
+#   ./target/debug/defeated_by_titan --headless --script scripts/f176-pull.txt --ticks 1000
 #
-# Before 2026-08-26 he walked out of his own rope at `player.run_speed_m_s` = 6 m/s, because
-# `air_control`'s always-on pull is gated on `in_flight` and a hooked player standing up is
-# `Grounded` (`player::integrator::movement_state`). Since `Q-058` the **joint** is what stops
-# the walk: the rope is born taut at 36.72 m and `limits = (0, L)` corrects the moment the
-# distance would exceed it.
+# and, as a SEPARATE run, the one that returns a usable exit code:
 #
-# 🔴 **THE CONTROL, and without it ACT 2's number is worthless** — a player who is simply stuck
-# on a wall also reads 0 m/s. ACT 3 lets go of the hook and holds the SAME key: it has to come
-# back at the full run speed. One run, both numbers, no second binary.
-#
-# Measured 2026-08-27 [offlinebot], debug build, as the DISTANCE the speed is a proxy for
-# (`tests/vector_rope.rs::f176_under_drive_walking_backwards_on_a_taut_rope_still_closes_on_the_anchor`):
-#
-#   one second of S from a taut 36.723 m rope     after
-#   Drive, hooked                                 35.637 m   <- still closing (R1)
-#   Pendulum, hooked                              36.715 m   <- stands; nothing pulls
-#   Drive, rope let go                            39.619 m   <- a man walking away (the control)
+#   ./target/debug/defeated_by_titan --headless --script scripts/f176-pull.txt --ticks 1000 >/dev/null 2>&1; echo $?
 
 wait 1.5                # world, camera, meshes and the render pipelines come up (90 ticks)
 
-# ---- ACT 1 · get him onto his legs with a rope in front of him ------------------------------
-# The same clear ground `scripts/game-full.txt` ACT 1 starts on, and for its reason: it was
-# checked rather than assumed (the market hall covers x −47..−15, z −13..13, this does not), and
-# a hook fired from here really bites. `look 180 66.6` puts the anchor **up and behind him at
-# yaw 180 = +Z**, so `S` walks him straight away from it — which is §3D's own sentence.
-# ⚠️ **`S` points at −Z from here and that is deliberate**: measured 2026-08-26, the +Z side of
+# ---- ACT 1 · get him onto his legs with a rope spot in front of him --------------------------
+# The same clear ground `scripts/game-full.txt` ACT 1 starts on: the market hall covers
+# x -47..-15, this does not, and a hook fired from here really bites. `look 180 66.6` puts the
+# anchor **up and behind him at yaw 180 = +Z**, so `S` walks him straight away from it.
+# ⚠️ **`S` points at -Z from here and that is deliberate**: measured 2026-08-26, the +Z side of
 # this spot is blocked (a walk into it reads 0.915 m/s instead of 6.000), so a run that walked
-# the other way would report the wall and call it the rope. The anchor this bites — body 149 at
-# (45.00, 34.25, −29.00) — is up and at +Z, so „weg vom Anker" IS the clear direction.
+# the other way would report the wall and call it the rope.
 look 180 66.6
 warp 45 0 -43
 wait 0.5                # the warp takes effect one tick later than it is written
 mark f176-standing
-assert speed < 7        # on his LEGS, not still falling: this is the state R1 is about
+assert speed < 7        # on his LEGS, not still falling: this is the state the acts start from
+assert height < 1.0     # and ON the ground (y ~ 0.3) — ACT 5's yank is measured against this
 
-# ⚠️ **Held for exactly as long as ACT 2 needs it.** The `hook` command's second number is how
-# long the trigger stays down, and letting it go IS this run's control — 0.5 s of settling plus
-# ACT 2's second, and no more (`scripts/f006-drive.txt` learned the other half of this the hard
-# way: an act that outlives its trigger measures a free fall).
-# ⚠️ **3.0 s and not 1.6 since 2026-08-26**: ACT 2b was added between ACT 2 and ACT 3 and it
-# needs the rope for another 1.3 s. The release still lands before ACT 3 asks for it.
-hook right 3.0
-wait 0.5
-mark f176-hooked
-assert rope > 0         # it bit; the log line above says on which body and at what distance
-
-# ---- ACT 2 · R1 · „seil ist vorne und ich laufe zurueck" ------------------------------------
-# ⚠️ **1.5 s of key for 1.0 s of measurement, and that is not slack.** `ground_step` returns the
-# desired velocity directly below the run speed, so a walk stops in the SAME tick the key does —
-# a first version held `S` for exactly 1.0 s and both marks landed two ticks after it, measuring
-# a player who had already stopped. ACT 3 read 0.000 m/s and caught it (§6 rule 5).
-# ⚠️ **And it must not reach INTO act 3 either.** A second version held 1.5 s in both acts, so
-# ACT 2's release landed inside ACT 3's hold and cancelled it — 0.000 m/s again, from the
-# opposite mistake. 1.2 s covers the mark at +1.0 s and is over before the next `key` is written.
-key S 1.2
-wait 1.0
-mark f176-a-second-of-s-on-the-rope
-# The whole claim in one band. `run_speed_m_s` is 6.0, so anything at or over it is a player who
-# walked straight out of his own rope — which is what this used to read.
-assert speed < 2.0
-assert rope > 0         # and the rope is still there: R1 is a clamp on the legs, not a release
-
-# ---- ACT 2b · §3F · „zur seite gehen" ON A TAUT ROPE, AND IT IS A SWING -----------------------
-# 🔴 **RE-DERIVED 2026-08-27, and the header above says why it had to be.** This act used to
-# assert `height < 1` and `speed < 7` — *"a walking man"* — written against the reverted build
-# to catch `FIND-182`'s ground elevator (`player::locomotion::rope_taut_brake`, 250 m/s² straight
-# UP the rope, gone since 2026-08-26). **The elevator it was aimed at no longer exists**, and the
-# ceiling it left behind forbids the feature `Q-058` was built for.
-#
-# The stance, spelled out: the anchor is body 149 at (45.00, 34.25, −29.00), the player stands at
-# (45, ~0.3, −43). That is **34.0 m up and 14.0 m along +Z, i.e. 36.72 m away — and the rope is
-# born at exactly that distance**, so it is TAUT on the first tick. Pressing `A` therefore moves
-# him along a sphere centred 34 m over his head. **Sideways on that sphere is upwards.** The
-# joint holds the radius to the millimetre (288-cell matrix: worst excess 0.0050 m), which is
-# *„aber NICHT das seil verlängern!!"* met exactly — and the height is a consequence of the
-# geometry, not a leak.
-#
-# Measured 2026-08-27 [offlinebot], debug build, one second of `A` from a CLEAN taut stance
-# (`tests/vector_rope.rs::probe_ground_walk_on_a_rope`, no `key S` before it):
-#
-#                        y at +0.2 s      at +0.6 s        distance to the anchor
-#   Drive, this build     0.343 m          1.555 m          36.723 m, every tick, unchanged
-#   Pendulum, control     0.322 m          0.431 m          36.723 m, every tick, unchanged
-#
-# ⚠️ **What replaces the two lines is ONE assert, and it is derived from `game.ron`, not from the
-# measurement.** `rope_drive` clamps its target to `vector.drive_speed_m_s` = 52 m/s and the free
-# pull adds `drive_idle_speed_m_s` = 12 along the rope axis, so **55 m/s is the ceiling this
-# mechanism has.** A radial runaway of the `FIND-182` shape is an *acceleration* with no ceiling
-# at all — 250 m/s² held for a second is 250 m/s, which the avian clamp shows as
-# `vector.max_speed_m_s` = 75 — so this line still catches exactly the thing the old pair was
-# written for, and it stops forbidding the swing.
-wait 0.3                # ACT 2's `key S` is over at +1.7 s; this is +1.8 s
-key A 1.2
-wait 1.0
-mark f176-a-second-of-a-on-the-rope
-assert speed < 55       # 🔴 the DRIVE is what moves him: drive_speed_m_s 52 + drive_idle 12.
-                        #    An unbounded radial brake shows up here as max_speed_m_s = 75.
-assert speed > 3        # the control: he really is moving, he is not stuck against something
-assert rope > 0
-
-# ---- ACT 3 · THE CONTROL · the same key with nothing holding him ----------------------------
-# ⚠️ The trigger above ran out at the end of ACT 2b — the thing this number is supposed to be
-# measuring is now deleted (§6 rule 5, second half).
-wait 0.5
-assert rope < 1
+# ---- ACT 2 · THE CONTROL, FIRST · the same key with nothing holding him ----------------------
+# 🔴 Without this, ACT 3's number is worthless — a player who is simply stuck also reads slow.
+# It runs BEFORE any rope exists (re-derived for §5E-b: the old script put it last, but now a
+# release drops the player out of a live swing and the landing spot is nobody's pin).
+# ⚠️ 1.2 s of key for 1.0 s of measurement: `ground_step` stops a walk in the SAME tick the
+# key ends, and a first version measured a player who had already stopped (§6 rule 5).
 key S 1.2
 wait 1.0
 mark f176-the-same-second-of-s-with-no-rope
-# If this is not the run speed, ACT 2 was measuring a player who cannot walk at all.
-assert speed > 4.0
+assert rope < 1
+assert speed > 4.0      # if this is not near run speed, ACT 3 would measure a player who
+                        # cannot walk at all
+wait 0.4                # the key lapses; the walk stops the same tick
+look 180 66.6
+warp 45 0 -43           # back to the pinned stance (warp zeroes the velocity)
+wait 0.5
+
+# ---- ACT 3 · §5D rule 4 · S DOWN BEFORE THE BITE ⇒ planted ----------------------------------
+# ⚠️ **The order is the act.** Under §5E-b a bite with no key pulls IMMEDIATELY — the old
+# `hook, wait 0.5, key S` shape hands the free pull half a second of drag before the cancel
+# arrives. S goes down first (one tick ahead of the trigger), so there is no tick in which the
+# pull owns him, which is `tests/player.rs::f176_s_on_the_ground_keeps_the_legs_*` in game form.
+# ⚠️ Durations: S covers 0..2.2 s, the trigger 0..4.6 s. ACT 3 measures at +1.5 s (S and rope
+# both live); ACT 4 begins after S lapses and while the rope holds.
+key S 2.2
+hook right 4.6
+wait 1.5
+mark f176-a-second-of-s-on-the-rope
+# ⚠️ **The band is 6.5 and not 2**: the stand is a SWING, measured per tick 2026-09-01
+# (`tests/vector_rope.rs::probe_ground_walk_on_a_rope`) — S injects the walk (6.0 m/s) against
+# the taut sphere and |v| cycles 0.5..5.9 while the anchor distance holds to three decimals.
+# What the band separates is the HAUL: the pre-rule-4 behaviour read **7.63 m/s** through this
+# stance, 1.1 m/s above the band. An escape WITH the rope is the 288-cell matrix's to forbid.
+assert speed < 6.5
+assert rope > 0         # and the rope is still there: the cancel releases nothing (§3F)
+
+# ---- ACT 4 · §3F · „zur seite gehen" ON A TAUT ROPE, AND IT IS A SWING -----------------------
+# Sideways on a sphere centred 34 m over your head is upwards; the joint holds the radius
+# (288-cell matrix), which is „aber NICHT das seil verlängern!!" met exactly. Since §5D the
+# lateral also SCALES the pull (rule 3, `pull_scale`): what hauls him during this act is
+# `drive_idle_speed_m_s` x `drive_steer_pull_fraction`, not the full winch. S lapsed 0.1 s
+# before A lands — six ticks of full free pull, and that is §5E-b working, not slack.
+#
+# ⚠️ **ONE ceiling, derived from `game.ron`, not from a measurement**: `rope_drive` chases at
+# most `vector.drive_speed_m_s` = 52 and the pull is a FLOOR under the closing speed
+# (property 1 — it never adds to a faster approach), so 55 is this mechanism's ceiling with
+# 3 m/s of swing margin. A `FIND-182`-shaped radial runaway is an ACCELERATION with no ceiling
+# — the avian clamp shows it as `vector.max_speed_m_s` = 75, and this line catches it.
+wait 0.8                # S ended at +2.2 s; this is +2.3 s
+key A 1.2
+wait 1.0
+mark f176-a-second-of-a-on-the-rope
+assert speed < 55       # 🔴 the DRIVE is what moves him: drive_speed_m_s 52 + margin
+assert speed > 3        # the control: he really is moving, he is not stuck against something
+assert rope > 0
+
+# ---- ACT 5 · §5E-b · THE YANK · hook while standing, NO key ⇒ off his legs -------------------
+# The trigger lapsed at +4.6 s; the release drops him out of the swing. The warp catches him
+# (position pinned, velocity zeroed, ropes released — `player::mod::apply_warps`) and he
+# settles back onto his legs for the headline act.
+wait 1.4                # +4.7 s: the trigger is gone
+assert rope < 1
+look 180 66.6
+warp 45 0 -43
+wait 0.5
+mark f176-standing-again
+assert speed < 7
+assert height < 1.0     # the same stand ACT 1 pinned — this is what "off his legs" is against
+# NO key from here to the end of the run. Under the old `in_the_air` gate this is the exact
+# stance of his complaint: hooked, standing, looking at the anchor, and NOTHING happens. The
+# captured red for that gate is the TEST's (`f176_a_hook_bitten_while_standing_*`: „y still
+# ≈ -0.000" after 90 ticks, one flipped comparison in `ground_pull_live` re-reddens it); this
+# act's own first derivation also went red — `assert Height > 1.3 — measured 0.142` — but
+# that was a 2.0 s window against a ~3.5 s drag, the instrument's mistake, kept here so the
+# next re-derivation reads the curve below before trusting a shorter wait.
+# Derivation of the window: the stance is 2.4 deg below the clean-lift line (68.96 deg =
+# asin(32 / (12/0.35)), FIND-226), so the pull DRAGS him +Z first (friction 0, the legs let
+# go — `ground_pull_live`) and the lift wins late, at the tower base where the geometry is
+# near-vertical. Measured curve (ticks after the bite → height): +97: 0.16 · +159: 0.89 ·
+# +221: 1.72 · +283: 2.54 — the 4.5 s window (270 ticks, ~30 of them hook travel) sits a
+# full second past the measured 1.3 m crossing. The trigger holds 6.0 s so the release can
+# never land inside the measurement (a lapse under the toggle shim IS a release, §5E-c).
+hook right 6.0
+wait 4.5
+mark f176-the-bite-yanks-him-off-his-legs
+assert rope > 0         # the arm still holds — this height is the rope's doing
+assert height > 1.3     # a metre of real rise: he LEFT the ground, no key held (§5E-b)
