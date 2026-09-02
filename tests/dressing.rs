@@ -28,7 +28,9 @@ use avian3d::prelude::Collider;
 use bevy::prelude::*;
 use defeated_by_titan::data::GameData;
 use defeated_by_titan::shared::MODEL_FACES;
-use defeated_by_titan::world::map::{plan_blocks, BlockPlan, DRESSING, RUBBLE_KIT, RUIN_KIT};
+use defeated_by_titan::world::map::{
+    plan_blocks, BlockPlan, DRESSING, PLACED_DRESSING, RUBBLE_KIT, RUIN_KIT,
+};
 use std::f32::consts::FRAC_PI_2;
 use std::path::PathBuf;
 
@@ -327,3 +329,143 @@ fn b039_the_ridge_of_a_dressed_house_is_still_hookable() {
         "the old envelope's top corner is still solid — roofline bites would float again"
     );
 }
+
+/// The authored full extent over ALL four catalogues — [`authored_of`] plus the placed
+/// props, which grew hull rows with B-043 and are in none of the three generated kits.
+fn authored_of_any(model: &str) -> Option<[f32; 3]> {
+    authored_of(model).or_else(|| {
+        PLACED_DRESSING
+            .iter()
+            .find(|(name, _, _)| *name == model)
+            .map(|(_, _, size)| *size)
+    })
+}
+
+#[test]
+fn b043_every_hull_stays_inside_its_class_envelope() {
+    // ★ The conservative-index invariant B-039 relies on, stated over EVERY hulls row and
+    // not just the three houses: the spatial index (`Body`) stays the plan envelope, so a
+    // compound that reaches OUTSIDE the envelope is a surface the index cannot see — a
+    // hookable wall that a range query says is not there. Rounding is INWARD, always,
+    // even where the drawn mesh itself pokes out of its own hit pair (ruin_wall_corner's
+    // wall is drawn to x 4.42 against a ±3.24 envelope; its hull row is clamped, B-043).
+    //
+    // Fixture notes (fixtures.md #2): the code under test reads `art.ron: hulls` and the
+    // four catalogues; this test varies the model (every row that exists) and holds the
+    // envelope definition constant. It fails on any new row that copies mesh extents
+    // without clamping them.
+    let d = data();
+    assert!(
+        d.art.hulls.len() >= 17,
+        "only {} hulls rows — the B-043 set (3 houses + 14 remnant classes) is gone",
+        d.art.hulls.len()
+    );
+    for (model, hull) in &d.art.hulls {
+        let authored = authored_of_any(model)
+            .unwrap_or_else(|| panic!("art.ron: hulls[{model:?}] is in no catalogue"));
+        let (hx, hy, hz) = (authored[0] * 0.5, authored[1], authored[2] * 0.5);
+        let eps = 1e-3;
+        for w in &hull.walls {
+            assert!(
+                w.min_m.0 >= -hx - eps
+                    && w.max_m.0 <= hx + eps
+                    && w.min_m.1 >= -eps
+                    && w.max_m.1 <= hy + eps
+                    && w.min_m.2 >= -hz - eps
+                    && w.max_m.2 <= hz + eps,
+                "{model}: wall ({:?}..{:?}) leaves the ±{hx:.2} x 0..{hy:.2} x ±{hz:.2} \
+                 envelope — the spatial index would lose this surface",
+                w.min_m,
+                w.max_m
+            );
+            assert!(
+                w.min_m.0 < w.max_m.0 && w.min_m.1 < w.max_m.1 && w.min_m.2 < w.max_m.2,
+                "{model}: degenerate wall box {:?}..{:?}",
+                w.min_m,
+                w.max_m
+            );
+        }
+        for r in &hull.roof_rects {
+            assert!(
+                r.min_m.0 >= -hx - eps
+                    && r.max_m.0 <= hx + eps
+                    && r.min_m.1 >= -hz - eps
+                    && r.max_m.1 <= hz + eps
+                    && r.y_m >= -eps
+                    && r.y_m <= hy + eps,
+                "{model}: roof rect at y {:.2} leaves the envelope",
+                r.y_m
+            );
+        }
+        assert!(
+            !hull.walls.is_empty() || hull.roof_rects.len() >= 2,
+            "{model}: neither walls nor a wedge — an empty hull is a class nothing can hit"
+        );
+    }
+}
+
+/// A `ruin_wall_corner` at the origin exactly as `remnant_for` shapes one at scale 1.0:
+/// the box is the file's own hit extent (6.47 x 5.60 x 6.80), yaw 0, so the compound is
+/// turned by `MODEL_FACES` (pi) alone — authored (x, z) land on entity-local (-x, -z).
+fn corner_ruin_fixture() -> BlockPlan {
+    BlockPlan {
+        name: "ruin_fixture".into(),
+        center_m: Vec3::ZERO,
+        size_m: Vec3::new(6.47, 5.60, 6.80),
+        color: [0.5, 0.5, 0.5],
+        anchorable: true,
+        solid: true,
+        model: Some("ruin_wall_corner"),
+        yaw_rad: 0.0,
+    }
+}
+
+#[test]
+fn b043_a_remnant_ray_bites_the_drawn_wall_not_the_envelope() {
+    // ★ B-043 in miniature, on the collider avian actually raycasts. The drawn a-089
+    // L-wall's long face sits at authored z -0.22 (measured, 0.20 m voxel sweep of the
+    // glb, 2026-09-02); under the pi turn it lands at entity-local z +0.22. The old
+    // envelope face was at z 3.40 — 3.18 m of air, which is the fleet's "median 2.88 m"
+    // on this class and the reason `ruin_161_3` could anchor 4.23 m from anything drawn.
+    let d = data();
+    let c: Collider = corner_ruin_fixture().collider(&d);
+
+    // The wall band: entity-local y -2.0 is authored 0.8..3.6 territory (floor at -2.8).
+    // Authored x 0.35..3.22 lands at local x -3.22..-0.35; aim down the middle.
+    let hit = c
+        .cast_ray(Vec3::ZERO, Quat::IDENTITY, Vec3::new(-1.8, -1.0, 6.0), Vec3::NEG_Z, 12.0, true)
+        .expect("the drawn wall must stop the ray");
+    let z = 6.0 - hit.0;
+    assert!(
+        (z - 0.22).abs() < 0.05,
+        "the wall bites at local z = {z:.2} m — the drawn plane is 0.22, the envelope 3.40"
+    );
+}
+
+#[test]
+fn b043_the_phantom_band_of_the_corner_ruin_is_gone() {
+    // ★ Leg A of scripts/b043-air-anchor.txt as a unit test: authored x -1.85..-0.25 holds
+    // NO drawn triangle above the base spill (y 0.93+), yet the envelope was solid there —
+    // the in-game measurement put a bite on that face 4.23 m from any drawn surface. Under
+    // the pi turn the band is entity-local x 0.25..1.85; a ray down it must now fly through.
+    //
+    // The n = 2 companion (fixtures.md #1: delete the thing you measure and watch the
+    // number move): the same ray one metre further at local x -1.0 crosses the REAL wall
+    // and must still bite — "collide what is drawn", not "stop colliding".
+    let d = data();
+    let c: Collider = corner_ruin_fixture().collider(&d);
+    let phantom =
+        c.cast_ray(Vec3::ZERO, Quat::IDENTITY, Vec3::new(1.0, -1.0, 6.0), Vec3::NEG_Z, 12.0, true);
+    assert!(
+        phantom.is_none(),
+        "the empty -x band still collides at local x 1.0 (hit {phantom:?}) — the rope would \
+         anchor in open air exactly as B-043 reported"
+    );
+    let real =
+        c.cast_ray(Vec3::ZERO, Quat::IDENTITY, Vec3::new(-1.0, -1.0, 6.0), Vec3::NEG_Z, 12.0, true);
+    assert!(
+        real.is_some(),
+        "the drawn wall stopped colliding — the fix overshot from phantom into unhookable"
+    );
+}
+
