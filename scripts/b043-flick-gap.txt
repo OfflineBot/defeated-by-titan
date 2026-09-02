@@ -1,0 +1,59 @@
+# b043-flick-gap — how far "in der Luft" ONE tick of look staleness (B-041) puts an anchor
+# during a play-like flick. Measurement, not a pin: no assert can read an anchor position,
+# so the numbers live in the `anchored on body .. at x y z` log lines this run produces.
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/b043-flick-gap.txt --ticks 900
+#
+# Stance: the boulevard (0, ~0.05, -80) — cleared strip, no house between here and the great
+# wall. Target: the wall face at z = -100.155 (block_19, y 30..45), 35 m of ray. A yaw sweep
+# at 250 deg/s of mouse = 4.17 deg per 60 Hz tick (mouse_deg_per_px 0.08 x ~52 px/tick, an
+# ordinary flick, not a violent one) runs -20.85 -> 0 in six steps, one tick apart; the hook
+# on the SAME line as the last look fires along the PREVIOUS tick's aim (B-041), so its
+# anchor should sit ~4.17 deg to the -x side of where the crosshair points. The control leg
+# repeats the sweep and waits 0.3 s: its anchor is the fresh-aim reference. The angular gap
+# between the two logged anchors, seen from the eye, is the B-041 contribution; in metres it
+# is the lateral offset between the two anchor points on the wall.
+settings assist_catch 0
+settings assist_strength 0
+wait 1.0
+
+# leg 1: flick, hook in the same tick as the last look step. STALE today.
+warp 0 0.2 -80
+wait 1.0
+look -20.85 53.5
+wait 0.0167
+look -16.68 53.5
+wait 0.0167
+look -12.51 53.5
+wait 0.0167
+look -8.34 53.5
+wait 0.0167
+look -4.17 53.5
+wait 0.0167
+look 0 53.5
+hook right 0.6
+wait 0.5
+mark b043-flick-stale
+assert rope == 1
+wait 0.7
+
+# leg 2: same flick, 0.3 s settle — the fresh reference anchor.
+warp 0 0.2 -80
+wait 1.0
+look -20.85 53.5
+wait 0.0167
+look -16.68 53.5
+wait 0.0167
+look -12.51 53.5
+wait 0.0167
+look -8.34 53.5
+wait 0.0167
+look -4.17 53.5
+wait 0.0167
+look 0 53.5
+wait 0.3
+hook left 0.6
+wait 0.5
+mark b043-flick-fresh
+assert rope == 1
+wait 0.5

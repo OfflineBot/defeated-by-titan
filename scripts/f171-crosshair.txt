@@ -108,17 +108,18 @@ look 0 17
 wait 0.3
 mark f171-cortex
 assert titans == 1         # the husk is really standing there, and it is exactly one
-# ⚠️ **THE GROUND UNDER THIS STAND ROSE 1.5 m, AND THE CLAIM DID NOT** — repaired 2026-08-19.
-# The stand was `17.5 0.05 76.5` with the bracket `-0.10 .. 0.10` ("measured -0.000") from
-# before Ashgate had terrain. `maps.ron: ashgate.terrain` is `step_m: 1.5`, and this cell is
-# level 1, so `y = 0.05` is 1.45 m INSIDE the ground: avian spent the whole 0.3 s pushing the
-# capsule back out and the assert read **1.303** on the way up. Measured, not reasoned —
-# dropped from `y = 8` at this exact column the player comes to rest at **1.500** with speed
-# 0.000, which is `1 * step_m` to the millimetre.
+# ⚠️ **THE GROUND UNDER THIS STAND HAS MOVED TWICE, AND THE CLAIM NEVER DID** — repaired
+# 2026-08-19 (five terraces, rest 1.500) and again 2026-09-02: `a9cf22e` made the ground a
+# continuous field (`rise_m: 0.25`), this cell now plans at **-0.250**, and the old
+# `wait 0.3` no longer covered the drop from the stale warp height — the red read `-0.058`
+# MID-FALL, which is the instrument measuring its own impatience (B-043 round, refuted the
+# quarter-turn suspicion: nearest dressed block is 6.05 m away, nothing entered or left this
+# column). Drop-tested 2026-09-02: rest at exactly **-0.250**, speed 0.000.
 # The claim is unchanged: *the stand is bare ground, not a lot.* A lot here would be a house
 # roof, metres higher and a different number. Only the ground moved, so only the number did.
-assert height > 1.40       # bare ground, one terrace step up: measured 1.500
-assert height < 1.60
+wait 0.4
+assert height > -0.35      # bare ground, continuous-field cell: measured -0.250
+assert height < -0.15
 
 # ---- 4: and the ANCHOR panel is not a lie ------------------------------------------------
 #

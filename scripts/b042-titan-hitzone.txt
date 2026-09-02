@@ -1,0 +1,68 @@
+# b042-titan-hitzone — THE PICTURE AND THE HITBOX ARE TWO DIFFERENT TITANS (B-042).
+#
+#   the verdict:  ./target/debug/defeated_by_titan --headless \
+#                     --script scripts/b042-titan-hitzone.txt --ticks 700
+#   the exit code needs its OWN run — a pipeline's $? is the LAST command's:
+#   ./target/debug/defeated_by_titan --headless --script scripts/b042-titan-hitzone.txt \
+#       --ticks 700 >/dev/null 2>&1; echo $?
+#
+# 🔴 RED TODAY, on purpose, at line 56: `assert sharpness < 1.0 — measured 1.000`.
+#
+# The user, 2026-09-01: "die hittboxen der titanen waren sehr schlecht. unmöglich diese
+# überhautp zu treffen." Measured cause: the five glb-dressed kinds (husk, errant, chorus,
+# scuttler, weaver) draw `a-042-koerpertyp-a-hager-*.glb` — a gaunt STRIDING figure — while
+# every hit registers only on the rig's axis-centred capsules (torso r = 0.10 x height,
+# neck r = 0.055 x height). At the doubled scale the drawn husk disagrees with the registering
+# surface by up to 2.4 m: the drawn jaw sits 2.0 m in FRONT of the axis where the neck
+# collider ends at 1.10 m, the striding knee reaches 3.84 m out (collider: nothing), and at
+# the waist the capsule (r 2.00) stands 0.9 m of visible AIR outside the drawn skin
+# (drawn half-width 1.14 m). scripts/b042-air-hit.txt pins the air half.
+#
+# ## ACT 1 — the defect: 0.6 m of DRAWN flesh registers nothing
+#
+# The player falls past the husk's drawn jaw (glb slab z -2.15..-1.35 rel, y 17.9..19.8,
+# x -1.01..0.7 in game frame after the cortex fit of 2.0000 and MODEL_FACES). The right blade
+# (reach 2.0 + thickness 0.2) covers rel x -2.6..-0.4 at rel z -1.75: it crosses the visible
+# face for its whole active window, 0.45 m clear of the nearest collider (neck r 1.10 at
+# axis distance 1.75 > 1.30). Contact speed ~12 m/s > min_speed 8.
+# CORRECT behaviour: a blade through the titan's visible flesh books a hit, so the pair
+# wears (gear.ron wear 0.12 x torso factor 0.5 = 0.06). Today the blade passes through the
+# picture and books nothing.
+#
+# ## ACT 2 — the control: the same blade kills where the RIG says the nape is
+#
+# The husk act of scripts/f030-hitbox.txt, verbatim (its lane, its derived warp): proves the
+# instrument — blade, wear, cortex sensor — works, so ACT 1 measures the picture/collider gap
+# and not a broken blade. GREEN today and after any fix.
+#
+# MEASURED on offlinebot, 2026-09-02 (binary of session-2026-08-09):
+#   ACT 1: no `cut titan` line at all; line 56 assert Sharpness < 1 — measured 1.000  RED
+#   ACT 2: tick 221 cut titan 2 Cortex at 20.80 m/s; both its asserts held
+#   exit code 1
+#
+# B-041: every look sits >= 0.3 s before the slash it aims.
+
+wait 1.5           # world and (in --offscreen) the render pipelines come up
+
+# --- ACT 1: the drawn jaw ----------------------------------------------------------------
+look 0 0
+wait 0.4
+spawn titan husk 0 0 18
+warp -2.6 19.5 16.25
+wait 0.225
+slash right 0.3
+wait 0.8
+mark b042-jaw
+assert sharpness < 1.0
+assert titans == 1
+
+# --- ACT 2: the control kill on the rig's own numbers (f030-hitbox husk act) --------------
+warp -302.150 23.091 -82.650
+look 0 0
+wait 0.446
+spawn titan husk -300 0 -83.75
+wait 0.06
+slash right 0.40
+wait 1.60
+mark b042-control
+assert titans == 1

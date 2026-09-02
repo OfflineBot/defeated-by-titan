@@ -807,3 +807,41 @@ foothold, none confirmed for his sighting:
 **First deliverable is attribution**: an in-repo fleet-style sweep measuring
 anchor-to-nearest-drawn-surface distance across remnants/props/titans, plus which of his
 plausible targets have envelope-only colliders.
+
+### B-042 · Attribution (2026-09-02, measurement round) — the zones are right, the DRAWING is elsewhere
+
+The rig is innocent: all seven kinds die to the rig-derived nape pass
+(`scripts/f030-hitbox.txt` green, cut lines at 20.80 m/s captured), the lurker registration
+boundary sits between 4.7 and 5.3 m where the arithmetic says 5.00, and the blade-reach
+worry cancels (reach 2.0 never scaled, but the neck shrank to head width in the same change
+— kill band +1.41..+1.86 m on every kind). **What is broken is the drawn pose vs the
+capsules on the five glb-dressed kinds**: drawn jaw 2.01 m in front of a 1.10 m neck
+collider (a blade through 0.6 m of drawn face books NOTHING — `scripts/b042-titan-hitzone.txt`
+RED, sharpness 1.000), striding knee 3.84 m out vs torso capsule 2.00, hanging hand 0.70 m
+outside, waist the OTHER sign: 0.86 m of registering air (`scripts/b042-air-hit.txt` RED —
+`Torso at 11.20 m/s` booked 0.78 m from any drawn flesh). Cortex window at doubled scale:
+tight on small kinds (scuttler crossing 3.4 ticks vs an 8.4-tick blade window opening 4.8
+ticks after the press) but workable; not the killer.
+**Separately: `f170-objective`'s `Kills == 1 — measured 0.000` is a STALE PASS, not this
+bug** — derived for gravity −20 and the 10 m husk; today the fall bounces off the doubled
+torso footprint (lane lateral 1.88 m < r 2.00) and deposits the player 15 m away, blade at
+5.7 m vs nape at 17.8 m. `game-full.txt` ACT 2 shares the same pass verbatim and is
+suspect. **Fix shape: pose-true per-limb hit capsules for the five glb kinds (the house
+hulls treatment on the titan rig), plus re-derived passes for f170/game-full.**
+
+### B-043 · Attribution (2026-09-02, measurement round) — 545 invisible boxes, one stale tick, and titan shins
+
+Worst-offender fleet (glb mesh under the exact `model_turn` vs plan envelope, 12×12 samples
+per face, **545/545 carriers measured, none skipped**): every ruin class median 1.14–2.88 m
+of air between anchor and anything drawn, worst **7.00 m** (`ruin_161_3`), rubble 0.59–0.74,
+props 0.16–0.81; confirmed in-game with a logged anchor **4.23 m** from any drawn triangle
+(`scripts/b043-air-anchor.txt` RED, exit 1). And the boxes are **mis-centred, not just
+fat**: drawn walls poke up to 1.85 m OUT of the collider, so a hook aimed square at a
+visible remnant wall passes through and anchors behind it. Second contributor `B-041`,
+bounded to exactly one tick: a 250°/s flick puts the anchor 1.02 m off at 14 m
+(= tan(4.17°) precisely) — 2.2–4.4 m at 30–60 m (`scripts/b043-flick-gap.txt`). Third,
+minor: titan capsules bite up to ~1.9 m beside the drawn shins (`scripts/b043-titan-side.txt`).
+Refuted: towers, wall modules, gates, bridge are honest by construction (drawn from the
+collider's own cuboid); stations/water not hookable; terrain divergence ≤ 0.25 m.
+**Fix shape: hulls rows for the ~14 remnant/rubble/prop model classes (the mechanism
+shipped with B-039 — data work, no new code), then re-run this fleet; B-041 separately.**

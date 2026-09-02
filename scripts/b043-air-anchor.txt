@@ -1,0 +1,60 @@
+# b043-air-anchor — the rope anchors in OPEN AIR on an envelope-only remnant (B-043 cand. 1).
+# The worst confirmed offender of the 2026-09-02 envelope-debt fleet: ruin_161_3
+# (ruin_wall_corner, box centre -286.03 -4.13 117.54, size 10.10 x 8.74 x 10.62, yaw 0).
+# The collider is the plan's envelope cuboid; the drawing is the a-089 L-wall turned by
+# `shared::model_turn` (pi + yaw). Whole bands of the box hold no drawn triangle at any
+# height, and the fleet (545 envelope-only carriers, glb mesh vs plan box) puts a face bite
+# on this box up to 7.0 m from the nearest drawn surface.
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/b043-air-anchor.txt --ticks 900
+#
+# PINS THE CORRECT BEHAVIOUR, so leg A is RED today: a ray into the box's empty -x band must
+# fly on into the sky (checked against every anchorable box in the shipped plan: with
+# ruin_161_3's envelope removed the ray hits nothing inside the 500 m hook range). Instead it
+# bites the invisible envelope at (-291.08, ~-3.5, 122.0) — measured in-game 2026-09-02:
+# anchor 4.2 m from the nearest drawn triangle, and any bite on that face patch
+# (y -6.5..-1, z 120.5..122.8) is >= 2.7 m from one, so a +-1 m settle error changes nothing.
+# Leg B (a ray that crosses a drawn wall triangle of the SAME ruin, 0.006 m off it) and
+# leg C (open sky) are the controls, green today; they hold the fix to "collide what is
+# drawn", not "stop colliding". Leg B's logged anchor is itself evidence: aimed square at
+# the drawn wall it anchors on the box face ~1.7 m from any drawn triangle.
+# B-041 note: every hook here sits >= 0.3 s after its look on purpose.
+settings assist_catch 0
+settings assist_strength 0
+wait 1.0
+
+# A: the phantom band. Stance on the slope west of the ruin (ground ~ -7.6, eye ~ -6.0).
+# Correct: NothingInRange. Today: the envelope bites. RED.
+warp -305 -6.5 122
+wait 1.0
+look -90 9
+wait 0.5
+hook right 0.6
+wait 0.5
+mark b043-a-phantom-band
+assert rope == 0
+wait 0.7
+
+# B: the drawn wall of the same ruin, from the north (the pi-turned wall band sits at
+# z 120.9..124.4, x -292.9..-284.2). The ray crosses a drawn triangle 0.006 m off its path —
+# a hook here must bite, before the fix (envelope) and after it (mesh). Green today.
+warp -288 -4.4 140
+wait 1.0
+look 0 1.2
+wait 0.5
+hook left 0.6
+wait 0.5
+mark b043-b-drawn-wall
+assert rope == 1
+wait 0.7
+
+# C: sky control from the leg-A stance — proves the instrument can say "no" at all.
+warp -305 -6.5 122
+wait 1.0
+look -90 73
+wait 0.5
+hook right 0.6
+wait 0.5
+mark b043-c-sky
+assert rope == 0
+wait 0.5

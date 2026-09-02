@@ -1,0 +1,33 @@
+# b042-air-hit — THE MIRROR HALF OF b042-titan-hitzone: a hit lands in VISIBLE AIR.
+#
+#   the verdict:  ./target/debug/defeated_by_titan --headless \
+#                     --script scripts/b042-air-hit.txt --ticks 400
+#   exit code on its own run:
+#   ./target/debug/defeated_by_titan --headless --script scripts/b042-air-hit.txt \
+#       --ticks 400 >/dev/null 2>&1; echo $?
+#
+# 🔴 RED TODAY, on purpose: `assert sharpness == 1.0 — measured 0.940`.
+#
+# The falling right blade's deepest point stops at rel x -1.85. The nearest DRAWN flesh of
+# the husk glb inside the blade's slab (|z| <= 0.4, y 12..15.5) is at x -1.07 — the blade
+# ends 0.78 m short of anything the player can see — and it still books a Torso/limb hit,
+# because the invisible torso capsule (r 2.00 at the doubled scale) fills that air. This is
+# the same gap the rope anchors into ("das seil war einfach in der luft verankert"): at
+# waist height the capsule stands 0.86 m outside the drawn skin.
+# CORRECT behaviour: a blade that visibly touches nothing books nothing.
+#
+# MEASURED on offlinebot, 2026-09-02:
+#   tick 138: cut titan 1 Torso at 11.20 m/s — through visible air
+#   line 32: assert Sharpness == 1 — measured 0.940  RED · exit 1
+
+wait 1.5
+look 0 0
+wait 0.4
+spawn titan husk 100 0 18
+warp 95.95 14.15 18
+wait 0.225
+slash right 0.3
+wait 0.8
+mark b042-air
+assert sharpness == 1.0
+assert titans == 1
