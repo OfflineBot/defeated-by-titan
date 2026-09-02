@@ -1536,7 +1536,21 @@ winch match in `src/player/locomotion.rs` (`RopeForceModel::Drive if anchored > 
 
 ---
 
-## Q-056 — on the ground the rope **forbids** instead of **hauls**, and that supersedes Q-055's assumption (2026-08-26)
+## Q-056 — ⛔ SUPERSEDED BY §5E-b · on the ground the rope **forbids** instead of **hauls**, and that supersedes Q-055's assumption (2026-08-26)
+
+**🔴 SUPERSESSION NOTE (2026-09-01, §5E-b — the THIRD ruling on this gate, newest word wins,
+`Q-002`):** the user overturned the `in_the_air` gate this entry defends, verbatim
+(`docs/NEXT.md` §5E-b): *„und aktuell wenn cih mich hooke werde ich nicht autmoatisch rangezogen!
+das fehlt noch! aktuell muss ich noch in die richtung schauen bewegen! fixe das noch!"* — a fresh
+bite pulls IMMEDIATELY, ground included. The hub worry weighed below is defused by his own toggle
+order: release is one tap of `Q`/`E` (`hook_fire` Toggle, the 2026-09-01 default). This entry's
+mechanism is gone twice over: `ground_desired_on_a_rope` was already replaced by the real joint
+(§3F — the joint forbids the retreat, no desired-clipping exists in the code any more), and now
+the gate itself is overturned. What stands instead: `player::locomotion::ground_pull_live` (ONE
+predicate, two readers — `air_control` runs the winch, `ground_locomotion` lets go of the legs),
+`S` still keeps the legs planted (§5D rule 4), and the contact-break line is DERIVED, not tuned.
+The record is `docs/FINDINGS.md` FIND-226; the open half (drag below the line) is `Q-094`.
+**This entry's rollback point no longer describes the code — do not roll back to it.**
 
 **🔴 This replaces the `ASSUMPTION:` written in `Q-055`.** That one said the pull would reach the
 ground and *„become a lean, not a drag"* — applying while the player produces no ground movement of
@@ -1616,6 +1630,18 @@ correct reference.
 **Related:** `Q-055` · `Q-050` · `FIND-182` · `FIND-183` · `FIND-184` · `FIND-181` · `FIND-172` ·
 `FIND-037` · `docs/NEXT.md` §3D · `F-004` `F-005` `F-006`
 
+**⛔ SUPERSEDED 2026-09-01 by §5E-b — the THIRD ruling on this gate, and the newest word wins
+(`Q-002`).** The user, at the controller (`docs/NEXT.md` §5E-b, verbatim): *„und aktuell wenn cih
+mich hooke werde ich nicht autmoatisch rangezogen! das fehlt noch! aktuell muss ich noch in die
+richtung schauen bewegen! fixe das noch!"* The `in_the_air` gate this entry defended is **gone**:
+a fresh bite pulls immediately, ground included, and the hub worry that motivated the gate is
+defused by his own toggle order — release is one tap of Q/E now. What decides ownership of a
+grounded body today is `player::locomotion::ground_pull_live` (Drive + live winch + `pull_scale`
+> 0 + an arm beyond `min_rope_m`), read by BOTH `air_control` and `ground_locomotion` so the legs
+and the rope cannot disagree. `S` on the ground still plants (§5D rule 4 — this entry's stand
+survives as one key instead of a gate). The trail, measurements and rollback point: `FIND-226` ·
+`Q-094` · `B-040` · `tests/player.rs::f176_*`.
+
 ---
 
 ## Q-059 — the hub line stands there for ever; should it step aside once you know it?
@@ -1655,6 +1681,21 @@ in a fight, and whatever it does will read as the house style for every hint aft
 ---
 
 ## Q-061 — `scripts/f176-pull.txt` ACT 2 asserts `Speed < 2`, and §3D R1 says the opposite
+
+**✅ ANSWERED 2026-09-01 — by him, at the controller, and it is the THIRD meaning `S` has had**
+(`docs/NEXT.md` §5D rule 4, verbatim: *„aber wenn verbunden wird immer rangezogen … aber dennoch
+AUßER man drückt S dann nur zur seite"*). **`S` CANCELS the pull** — neither „S spannt nur,
+bewegt nicht" (the 2026-08-27 answer below) nor §3D R1's „S only slows the approach". The
+ten-seconds-of-play question at the bottom of this entry was in effect answered **„planted"** —
+but by the CANCEL, not by the ground gate this entry proposed: the winch stays ungated and
+`player::locomotion::pull_scale` zeroes it while `move_y < 0`. ACT 2's `assert speed < 2` is
+**correct again and green**; the distance half is
+`tests/vector_rope.rs::f176_under_drive_s_on_a_taut_rope_holds_position_instead_of_being_hauled`
+(which asserted the opposite until today) and
+`tests/input.rs::r7_s_cancels_the_pull_and_only_the_lateral_remains`. **Rollback point** if he
+reverses again: `pull_scale`'s `move_y < 0` branch, the two tests named above, and
+`scripts/f176-pull.txt`'s ACT 2 header — one function and two test files, nothing else moved
+for the cancel. The rest of this entry is the 2026-08-27 state, kept as history. → `Q-091`.
 
 **Asked 2026-08-27**, by the agent that built `Q-058` (the `DistanceJoint` on a `Drive` rope).
 The run is **1 of 9 red** and this is the one red line. It is left red rather than repaired,
@@ -2172,3 +2213,126 @@ movement_state`'s threshold, and `scripts/f176-pull.txt` ACT 2's bracket. Whiche
 **What would answer it:** hook something in front of you, stand on the street, hold `S`. If the
 rope dragging you forward at walking pace is *right*, the pull wins and R1 goes. If it feels like
 the game ignoring your key, it does not.
+
+---
+
+## Q-092 — the crosshair colour he sets: may it repaint the ANCHOR and CORTEX states too?
+
+**2026-09-01, stream B.** He asked for the X crosshair with *„größe einstellbar und farbe
+auch!"*. Size is unambiguous. Colour is not: the crosshair's three states carry meaning in
+colour — neutral / **cyan** (anchorable) / **amber** (cortex in range) — and
+`docs/conventions.md` §3 reserves those two hues for exactly those signals.
+
+**ASSUMPTION the work continued under:** the picked colour paints the **Free state only**;
+Anchor stays cyan and Cortex stays amber over any pick. The palette
+(`shared::settings::CROSSHAIR_COLOURS`: white, green, magenta, black) deliberately contains
+none of the signal hues. Reasoning: `F-171`'s acceptance is that the states are told apart by
+SHAPE, so his colour never destroys information — but cyan/amber still ARE the two signals the
+HUD teaches, and letting a preference occupy them would give one hue two meanings at 40 m/s.
+
+**Rollback point if he wants his colour everywhere:** one match arm —
+`hud::crosshair::paint_crosshair` maps `Anchor`/`Cortex` to `signal(cyan/amber)`; replace both
+with `settings.crosshair_colour()` and the states still differ by geometry
+(`tests/hud.rs::f171_the_three_states_differ_in_shape_not_only_in_colour` keeps holding). The
+settings row's hint line (`menu::settings`, crosshair page) says the current rule out loud, so
+he will see it the first time he opens the page and can answer by playing.
+
+
+---
+
+## Q-091 — the hooked look clamp is built and tested, and its WIRING waits on one file two streams touched today
+
+**Asked 2026-09-01 · stream A (§5D) · decided under an `ASSUMPTION`, work continued**
+
+His instruction (§5C, verbatim): *„wenn man hoocked ist soll man auch nicht zu stark über 80deg
+links/rechts schauen. also schon einiges aber nicht zu viel drehen!"*
+
+**What exists now:** `render::camera::hooked_yaw_soft_clamp` + `direction_yaw` — pure, tested
+(4 tests under `--lib`). The edge is a **rubber band**: untouched inside ±limit, past it the
+excess is compressed through `limit + soft·tanh(excess/soft)` — slope 1 at the limit (no felt
+kink), asymptote at `limit + soft`, so ~80° is usable and ~90° is the wall nobody reaches.
+Stateless, so unhooking never snaps: clamping the ACCUMULATOR leaves it inside the band.
+
+**Who owns the yaw — measured, and the domain edge everyone feared does not exist.** The yaw
+is `net::local::read_input`'s `Local<Look>` (src/net/local.rs, the mouse branch). The clamp
+CANNOT live in `render::camera::rotate_camera`: the camera module's own contract is
+`Transform::forward() == intent.look_dir()` (`tests/render.rs`), so a camera-side clamp shows
+the player an image the aim ray contradicts — worse than no clamp. And it needs no
+`docs/architecture.md` line: the rope state is `shared::gear::Hook` (src/shared/gear.rs:90),
+and the allow table's first row (docs/architecture.md:17, "`crate::shared::*` — types that
+belong to nobody") already covers `net` reading it. The wiring is: `read_input` queries
+`(&PlayerId, &Hook, &Transform), With<LocalPlayer>`, computes the rope yaw via
+`direction_yaw(Σ unit(tip − hand))` (the winch's own blend axis), and passes `look.yaw`
+through `hooked_yaw_soft_clamp` in the MOUSE branch only — `LookOverride` (the script path)
+stays absolute, because reproducible runs are the instrument and an instrument that refuses an
+angle cannot measure the game (`f176-pull.txt` itself looks 180/66.6 while hooked).
+
+**Why it is NOT wired this round:** the numbers belong in `game.ron: camera`
+(`hooked_yaw_limit_deg: 80`, `hooked_yaw_soft_deg: 10` — rule 2, no `serde(default)`), which
+needs two fields in `CameraTuning` (src/data/mod.rs:640) — and **stream B holds
+`src/data/mod.rs` and `net::local` today** (keybinds F-172; the file changed under this round
+three times). Two writers on one file is the bb29c7c lesson.
+
+**ASSUMPTION:** the curve (rubber band, 80/10) is right and only the wiring is pending; the
+clamp is therefore NOT in the game he is playing tonight. **Rollback:** delete the two
+functions and their `mod tests` in src/render/camera.rs — nothing references them yet.
+**Next round:** one commission that owns src/data/mod.rs + assets/data/game.ron + src/net/local.rs
+wires it in ~15 lines and adds the script assert (`look 180 …` hooked, then `assert` on the
+clamped yaw once the harness can read one).
+
+**Related:** `Q-061` (superseded above) · `FIND-223` · `docs/NEXT.md` §5C/§5D rule 5
+
+---
+
+## Q-093 — which way should a house's FACADE face? (2026-09-01, OPEN)
+
+The quarter turn of 2026-09-01 (B-039) makes a z-fronting house's drawn EXTENTS match its
+collider — the transpose is gone and it is measured. What it does NOT decide is which of the
+two quarter turns to take, i.e. whether the drawn **door/facade face** ends up toward the
+street or toward the courtyard; the same ambiguity exists for plain houses (`facade_dir` ±1
+never reached the drawing, before or after). Nothing measurable in this round depends on it —
+the a-083 meshes are extent-symmetric about both axes to within the timber depth — but a
+player walking the street will eventually notice doors facing walls.
+
+**ASSUMPTION:** `yaw_rad = +FRAC_PI_2` for every z-fronting house and remnant, `0.0`
+otherwise; `facade_dir` is ignored by the drawing. **Rollback point:** the one `yaw_rad:`
+expression in `src/world/map.rs::plan_blocks` (grep `frontage_along_x { 0.0 } else`) and, if a
+facade-true turn is wanted, the yaw becomes a function of `(frontage_along_x, facade_dir)`
+plus one authored fact per model ("which authored side is the door") that belongs in
+`art.ron` beside the `hulls` row. `tests/dressing.rs` pins extents only, so it survives any
+answer.
+
+**Related:** B-039 · FIND-225 · Q-067/Q-078 (surface anchoring stays; no point lists)
+
+## Q-094 — below the contact-break elevation the ground pull is a drag, not a lift: is that the behaviour you want? (2026-09-01)
+
+**Context:** §5E-b — *„wenn cih mich hooke werde ich nicht autmoatisch rangezogen! das fehlt
+noch!"* — is built: a bite pulls immediately, ground included (`docs/FINDINGS.md` FIND-226).
+But the winch's ceiling is derived, `drive_idle_speed_m_s / drive_idle_ramp_s` = 34.286 m/s²,
+and gravity is 32 — so a standing bite breaks contact cleanly only when the anchor stands above
+**`asin(32/34.286)` ≈ 69° of elevation**. Below that line the same pull cannot out-lift gravity
+from a standstill; what it does instead is **DRAG**: friction is 0.0, the legs have let go
+(`ground_pull_live`), so the body slides along the ground toward under the anchor, the geometry
+steepens, and the lift wins late (measured: a 45° bite is airborne after ~1.5 s of slide, an 8°
+bite slides the whole way — `tests/player.rs::f176_the_contact_break_threshold_is_the_derived_69_degrees`).
+
+**The question that is yours:** hooking a wall anchor far away and near-horizontal — a low bite
+across a street — you will *slide standing up* toward it instead of being lifted. Honest physics,
+possibly odd feel. Is drag-then-lift right below the line, or should a low standing bite do
+something else (a small fixed hop to break contact, or a stronger ground winch)?
+
+**ASSUMPTION the work continues under:** drag-then-lift ships. It is the honest shape of the
+numbers you already tuned (12 / 0.35 / −32), it never grinds in place (the drag moves ≥ 2 m in
+the first second at every elevation below the line), and no new tunable was invented for it.
+
+**Rollback point if you decide otherwise:** the threshold lives nowhere in the code — it is
+arithmetic. To make every standing bite lift: raise `drive_idle_speed_m_s` or shorten
+`drive_idle_ramp_s` in `game.ron` until `idle/ramp > -gravity_m_s2` with margin (e.g. 12/0.30 =
+40 m/s² → clean-lift line drops to 53°); to add a contact-break hop instead: the one place is
+the `pulled` branch of `player::locomotion::ground_locomotion` (the `continue` after
+`ground_pull_live`), where a one-tick `velocity.y = jump_speed_m_s` would break contact without
+touching the winch. `S` planted and the §3F joint are untouched by either.
+
+**Related:** FIND-226 · FIND-172 · Q-056 (superseded) · `docs/NEXT.md` §5D/§5E-b
+
+## Q-095 — reserved by the hook-toggle round 2026-09-01 (claimed, in work)

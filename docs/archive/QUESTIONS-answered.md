@@ -874,6 +874,14 @@ Related: `Q-033` · `Q-044` · `Q-046` · `Q-017` · `docs/FINDINGS.md` FIND-158
 
 ## Q-055 — ⛔ SUPERSEDED BY `Q-056`, and the assumption in it was never implemented
 
+> **🔴 SECOND SUPERSESSION (2026-09-01, §5E-b — the THIRD ruling on this gate):** the user
+> overturned the `in_the_air` gate outright — *„und aktuell wenn cih mich hooke werde ich nicht
+> autmoatisch rangezogen! das fehlt noch!"* (`docs/NEXT.md` §5E-b). A fresh bite now pulls
+> IMMEDIATELY, ground included, through `player::locomotion::ground_pull_live`; `Q-056` carries
+> its own supersession note, and the current record is `docs/FINDINGS.md` FIND-226 / `Q-094`.
+> So this entry's *direction* (the pull reaches the ground) is now roughly what shipped — but
+> its mechanism, numbers and rollback point never were and still are not. Do not act on it.
+>
 > **Do not act on this entry.** It was written before the work landed and it describes a design
 > that was then not built: it assumed the `in_the_air` gate would be **deleted** so the pull
 > reaches the ground. That gate is **untouched**. What was built instead is a *forbid*, not a

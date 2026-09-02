@@ -8,6 +8,14 @@
 # 2D cone. **Do not re-aim it against today's snap** — that is the FIND-096 mistake. The chain's
 # numbers are unevidenced until the cause is settled. -> docs/FINDINGS.md FIND-145.
 #
+# 🔴 **12 OF 36 RED SINCE 2026-09-02, NEW PATTERN, ATTRIBUTED — STILL DO NOT RE-PIN.** Only
+# line 282 is the B-039 honest-collider re-cut (predicted bite 6.01, measured 6.01). The rest
+# is `B-041`: a hook in the same tick as a `look` fires along the PREVIOUS look, which is the
+# exact shape of legs 2..5 — half the `look` lines here are dead letters until that is fixed
+# (minimal repro: `scripts/b041-stale-look.txt`, 4/7 red). Plus: no crossbeam colliders at
+# x=0 over stations 1-2 today, and fresh 25–45° looks from the pavement at z=180 find
+# NothingInRange even at assist 100/100. -> docs/FINDINGS.md FIND-228.
+#
 #   ./target/debug/defeated_by_titan --headless --script scripts/f025-chain.txt --ticks 2400
 #   ./target/debug/defeated_by_titan --headless --script scripts/f025-chain.txt --ticks 2400 >/dev/null 2>&1; echo $?
 #

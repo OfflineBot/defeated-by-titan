@@ -243,3 +243,26 @@ where X is not there.
 
 This is the same family as the older lesson that a test which builds its own world proves nothing
 about the world the player is in — both are about the app under test not matching the claim.
+
+## Two sessions, one project dir, one journal — 2026-09-01
+
+After a host-process bounce, a SECOND interactive session opened on the same repo. Workflow run
+ids live in the shared project directory, so `resumeFromRunId` in either session resumes THE SAME
+journal: for one evening both sessions were unknowingly running duplicate executors of the same
+runs (`journal.jsonl` showed three `started` rows, no `result`, for one agent). The tells, in the
+order they appeared: task ids you did not start showing up in a peer's message; 'stopped' notices
+while `pgrep` counts 20 live cargo processes; files changing under a live fix agent.
+
+The protocol that worked, in one line each:
+- **Check `ListAgents` after every bounce** — a second session on the repo changes everything.
+- **File ownership is settled by message, not by assumption**, and the answer is written into
+  NEXT.md so the next session inherits it.
+- **The loser of a collision stops its writer IMMEDIATELY** (TaskStop before arguing) — the
+  argument goes to QUESTIONS.md, never into the tree.
+- **The design that ships is the one already consistent with the off-limits test**, not the one
+  a session is fond of.
+- **Commit order follows data dependency** (a fixture fix that reads an uncommitted .ron value
+  waits for that .ron's commit), one session holds the last commit and runs the ONE full
+  gate + corpus + push.
+- **A resumed agent whose journal shows started-without-result more than once is suspect**: let
+  the refuter measure the final tree, and the supervisor sanity-checks at landing anyway.

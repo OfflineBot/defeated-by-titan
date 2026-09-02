@@ -178,3 +178,40 @@ The six readers' raw maps and the questions as they stood are in
 ground is a continuous height field, the titans are twice the size, the wall is cut into modules,
 the river has water. Read them as a record of 2026-08-27, not as a description of the game.
 
+
+## §5E smooth terrain — the round plan (scouted 2026-09-02, runs after the 6-commit push)
+
+His words: "ok und die welt hat jetzt harte höhen. aber es soll smooth sein und mehr
+elevation! also richtiges terrain!" (§5E) · grass, "nicht verschiedene hardcoded stufen
+sondern wirklich terrain" (§5A).
+
+**Design (scout report, full version in the session scratchpad):** `shared::TerrainField`
+stays the ONE writer but stores f32 corner heights (quantised `step`/`rise_m` deleted). THE
+surface is the triangle mesh over that grid with the fixed diagonal (i,j)->(i+1,j+1);
+`height_at_m` evaluates the same triangulation — collider (one static trimesh per map, hole
+cells cut for the canal), render mesh and oracle are one surface from one
+`corner_heights()` slice. `data::Terrain` gets `elevation_m` (THE amplitude knob) and
+`max_grade` (~0.35 m/m ≈ 19°, under the 50° grounded limit); `amplitude_m` renamed to
+unitless `amplitude` so every stale RON crashes loud; `rise_m` deleted. Footings keep
+`lowest_over` (plinth-by-burial, ≤ ~1.9 m worst case) — terrace-cut rejected as circular
+and cascading. B-018 class dissolves under the max-grade guard.
+
+**Fan-out A → B → C, strict sequence, one writer per file:**
+- A (field): src/shared/terrain.rs · data/mod.rs Terrain block · maps.ron terrain blocks ·
+  tests/data.rs. Interface frozen before B: `corner_m`, `corner_heights`, `height_at_m`
+  (triangle-exact), `lowest_over_m`. Acceptance: --lib grade/pin/rim/seed tests, relief
+  grows with elevation_m (1x vs 2x).
+- B (world): world/map.rs · new shared/ground.rs (TerrainSheet component) · shared/mod.rs ·
+  tests/world.rs. Pads + greedy merge deleted, ONE terrain entity (trimesh + Body +
+  AnchorSurface + TerrainSheet). Acceptance: --test world grade invariant on Ashgate,
+  relief ≥ 30 m, pin sweep exact-zero, 50-house never-floats sweep; --lib; vector_aiming +
+  player untouched-green.
+- C (render+evidence): render/mod.rs (TerrainSheet->Mesh, same diagonal) ·
+  scripts/w2-terrain-walk.txt re-pins · two offscreen screenshot pairs at two elevation_m
+  values (street: no step edges visible; aerial: relief visibly doubles). Q-086 (how much
+  elevation) is answered by the two photographs, values 24/48 are proposals.
+
+**Risk lines the agents must carry:** trimesh internal-edge jitter (w2 walk is the
+detector, avian edge flags the fallback) · canal holes must be cut exactly or ground pokes
+through the water box · block-count tests move deliberately when ~6300 pads vanish ·
+titan-ring spawn at y=0 depends on the flat disc (assert map.rs:1285 guards it).

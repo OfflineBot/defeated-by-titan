@@ -1576,3 +1576,347 @@ the two predicates; `MovementState` itself was not sampled at that tick.**
 Two of the user's own instructions meet here and disagree: *„ich will dass es immer ranzieht. nicht
 nur wenn ich w drücke!"* (`FIND-172`) against §3F R1 *„seil ist vorne und ich laufe zurueck"*.
 → `docs/BUGS.md` B-034, `docs/QUESTIONS.md` Q-089.
+
+---
+
+## FIND-224 — Q/E toggle, keybinds (F-172), the X crosshair, FOV slew: the numbers, and three seams that are not mine
+
+**2026-09-01, stream B.** The features themselves are in the code and their evidence is in the
+commit; what belongs HERE is what somebody else has to act on.
+
+- **The old crosshair reached 151 px from the centre; the new X spans 9.2–21.9 px** (decoded
+  from `docs/images/f171-crosshair-x-free.png`: 104 non-sky pixels, 104/104 on the diagonals,
+  0 in the sight core, centre pixel is sky). Base numbers `game.ron: hud.crosshair`, player
+  scale 50–200 % (`crosshair_size_pct`), gap floored at `hud::crosshair::GAP_FLOOR_PX` (9.0 =
+  the sight core's corner at 6·√2 plus margin).
+- **The FOV step is gone**: `scripts/f017-fov-slew.txt` under `DBT_FOVTRACE=1` — at t=49 the
+  speed collapses 35.92→0.3 m/s and `want` (the old code's output) drops 67.88→60.00 in ONE
+  tick; the slewed lens eases 67.77→60.00 over t=49..68 at `camera.fov_return_deg_s` (25).
+  Opening runs at `fov_widen_deg_s` (100). Both PROVISIONAL, derived from his sentence.
+- **The hook tap/hold boundary is `net::local::HOOK_TAP_MAX_TICKS` = 18** (0.3 s at 60 Hz),
+  chosen between a human tap (3–9 ticks) and the shortest release-and-refire hold in the
+  corpus (0.52 s = 31 ticks, `scripts/f025-chain.txt`). That is what keeps every existing
+  `hook <side> <seconds>` line meaning what it meant. Control: the whole corpus, green after
+  the change.
+- 🔴 **`shared::settings::settings_path` re-spells `save::SaveDir::discover`'s three-step
+  contract** (env `DBT_SAVE_DIR` / test binary off / `<root>/saves/`) because `shared` cannot
+  import `save` and `PlayerSettings::from_world` (in `shared`) has to read the file before
+  `menu` runs. Two spellings of one decision is rule 5's corollary broken on purpose and said
+  out loud. **The fix is one move**: lift the discovery into `shared` and make `save::SaveDir`
+  read it — `save/` is not stream B's file, so it is written here instead of done.
+- **`hud::arm_aim`'s Q/E letters do not follow a rebind** — `B-038`, with the repro. Foreign
+  file (another stream is in `arm_aim.rs` today); `tests/hud.rs::
+  f171_the_marker_letters_are_the_keys_that_fire_the_arms` pins the letters to
+  `KeyBinds::DEFAULT` until it is fixed, and says so in its own comment.
+- **A bare `--offscreen --screenshot` run photographs no HUD**: with no other flag the run
+  opens on the title screen (`shared::cli::title_by_default`) and `hud::
+  hide_while_a_menu_is_up` hides every element. Any HUD evidence frame needs a `--script` (or
+  `--hub`); `scripts/f171-crosshair-shot.txt` says it in its header.
+
+
+---
+
+## FIND-223 — §5D rebuilt: the pull is the winch's alone, and every number that moved when the look let go of it
+
+**2026-09-01 · [offlinebot] · the r7 fixture (82.2 m rope, look 0 44), the pure functions, and the 288-cell matrix**
+
+### The re-measured FIND-196 table, 120 ticks on a taut rope (`tests/input.rs::r7_*`)
+
+| held | pull ON | pull deleted |
+|---|---|---|
+| nothing | +0.000 m (ground gate) | — |
+| `S` | **−0.157 m** (was **−11.937**: rule 4's cancel) | −0.157 m |
+| `A` | −0.014 m | −0.008 m |
+| `W` (stays grounded, walks) | −8.031 m | — |
+| `Space` (the free pull) | **−14.445 m** | −2.880 m |
+| `Space`+`W` | **−70.488 m** | — |
+| `Ctrl` (the reel, the instrument control) | — | −56.001 m |
+
+**FIND-196 is closed**: the forward key closes 56.0 m MORE than the free pull, where the old
+look-gated chase closed 0.667 m LESS. The winch is the only radial term, nothing look-gates it,
+and `rope_drive` can no longer brake any axis it does not own (`max(0, …)` on the look axis).
+⚠️ The pair that closes it is `Space+W` vs `Space` — `W` alone WALKS (the winch is ground-gated
+by design, `FIND-172`, and the same test asserts `idle = 0.000` for it).
+
+### Rule 3's ramp, measured (`tests/player.rs::f5d_the_lateral_scales_the_pull_in_a_ramp_not_a_switch`)
+
+`pull_scale` at |move_x| = 0, ¼, ½, ¾, 1: **1.0000 · 0.8375 · 0.6750 · 0.5125 · 0.3500**
+(linear, endpoint `drive_steer_pull_fraction` = 0.35; was a binary switch). Composition after
+0.5 s of `D`: **23.98 m/s sideways vs 3.23 m/s inward** (82.3° off the rope); the fraction=1.0
+control puts the inward number at 2.8× — the key is read.
+
+### 🔴 The trade §5D bought, named for the controller session
+
+`W` no longer chases the whole velocity, so it no longer eats what it does not own:
+
+| number | old chase | §5D thrust |
+|---|---|---|
+| angle off a horizontal rope, 0.5 s of `W`, g −32 | 8–12° | **24.3°** |
+| 40 m/s crossing momentum after 0.25 s of `W` | 8.0° | **50.3°** |
+
+Both asserts re-derived (`tests/vector_rope.rs::f172_the_three_angles…`, `f153_under_drive_w_…`),
+both printed for him: **if „ziemlich gerade" stops feeling right, the momentum-eating chase is
+the rollback — and it is the same mechanism that strangled the pull, so it cannot come back
+whole.** His §5D words are newer than the 2026-08-23 „ziemlich gerade" (Q-002).
+
+### The matrix stayed flat, and its band moved with a measurement
+
+`A+S` (rule 4: no winch relief, lateral still presses at the 250 m/s² ceiling) reads
+**0.0112 m** of joint residual — **identical at 90 and at 180 ticks**, so settling, not creep
+(`probe_ground_matrix_excess_at_double_ticks`). `SOLVER_SLOP_M` 0.01 → 0.015; the failures the
+guard exists for are 29–45 m.
+
+### Foreign territory, read and not touched
+
+- `src/vector/gas.rs::steer_has_effect` (:168) still grants the `W`-half only when
+  `look·rope > 0` for some arm — under §5D that look test no longer describes the effect.
+  → `docs/BUGS.md` B-037.
+- `src/data/mod.rs`'s doc for `drive_steer_pull_fraction` still says "direction weight"
+  (stream B holds the file today); `assets/data/game.ron`'s comment is the current one.
+- Stream B's Q/E toggle landed mid-round and `tests/vector_rope.rs::
+  f004_releasing_the_hook_removes_the_joint` ("release the key = release the rope") is theirs
+  to re-aim at the toggle's semantics — not re-encoded here to avoid guessing their spec.
+
+### Corpus, before → after [offlinebot]
+
+57 GREEN / 16 RED / 2 CUTOFF → **59 GREEN / 16 RED / 2 CUTOFF** (3 WINDOW — stream B added two
+windowed scripts). Deltas: `f176-pull` RED → **GREEN 9/9** (rule 4, ACT 2 band re-derived from
+the measured swing); `q048-one-point` GREEN → RED at ONE line — `assert height > 24` measured
+**23.800** (from 12 m: +11.8 m of climb against +12+ under the old chase). The claim around it
+(two ropes on one anchor still pull, no freeze, no launch) holds; the band encodes the OLD
+model's climb rate and its re-derivation belongs to that script's next owner — the file is not
+this round's.
+
+**Act on:** the two ⚠️ angle numbers go in front of him at the controller; B-037 to the vector
+owner; the stale data/mod.rs doc line to whoever holds the file next; `q048-one-point.txt:98`
+re-derived for the §5D climb rate.
+
+---
+
+### FIND-224 · Amendment (2026-09-02) — the "whole corpus green" control is stale
+
+The adversarial round found `scripts/f025-chain.txt` red **12/36 today with a NEW pattern**
+(legs 3–5 anchor nothing; the ACT-2 free-aim control anchors where a miss is documented) —
+different from the known-red pattern in its own header. An A/B with `settings hook_fire 0`
+reproduces the identical 12 failures, so the toggle stream is acquitted; the suspected cause
+was the B-039 collider re-cut — but the attribution round found only ONE leg is geometry;
+the dominant cause is a real bug, same-tick look+hook staleness (`B-041`,
+`scripts/b041-stale-look.txt`), full attribution in `FIND-228`. The script stays red and
+un-re-pinned until B-041 is ruled on; this entry's corpus claim describes the pre-B-039
+tree.
+
+## FIND-225 — house colliders vs the drawn mesh: the three offsets, measured and closed (2026-09-01)
+
+**The sentence:** *„zudem sind die anchor points bei häusern in der luft!"* (user, 2026-09-01).
+**The number:** 1584 bites on the 15 dressed houses, offset to the nearest DRAWN surface
+median **1.07 m**, p90 2.18 m, worst 2.84 m (the anchors-air measuring round). **The control
+that moves it:** quarter turn + mesh-derived compound colliders → same probes, same instrument:
+median **0.03 m**, p90 0.07 m, worst 1.21 m. **Act on:** nothing — B-039 carries
+the fix; Q-093 carries the one open decision (facade side).
+
+The three causes and their one-line fixes:
+
+| cause | measured | fix |
+|---|---|---|
+| orientation transpose (5/15 houses) | walls 1.57–1.82 m inside the collider, mesh 0.31 m out the other side | `BlockPlan::yaw_rad` (FRAC_PI_2 when `!frontage_along_x`) → `shared::ModelYaw`; `render::model` turns scene+anchors, `BlockPlan::collider` turns the compound — ONE quat |
+| envelope slack | authored `hit` pair 0.23–0.30 m outside the mesh, every side, every a-083 file | wall boxes at the area-weighted dominant wall planes (`art.ron: hulls`) |
+| roof shape | cuboid full-width to the ridge; drawn z-halfwidth 3.72 → ~0 (stadthaus) | convex ridge wedge through 2–3 measured roof rectangles |
+
+**Where the numbers in `art.ron: hulls` come from** (they are measurements, not tuning): 46
+horizontal cross-sections of each a-083 glb's triangles plus an area-weighted histogram of the
+near-vertical triangles per face; the wall plane is the outermost bin holding ≥ 15 % of the
+face's area. Dominant planes: klein x ±2.62 / z −3.31..+3.30 · stadthaus x −3.81..+3.82 /
+z −3.21..+3.25 · gross x ±3.45 / z −4.21..+4.20. Roof: stadthaus slope is linear at −1.72
+z-half per metre of height from the eaves rect (±4.25, ±3.72 at y 5.68) to ~0 at y 7.84; klein
+and gross carry a broken slope (a vertical upper gable face), hence the third rectangle.
+**Rounding is INWARD everywhere**: jetties (+0.24 m), porches (klein +z to 4.34), dormers and
+chimneys stand OUTSIDE the compound — a ray through them bites a hand's breadth under the
+drawn surface instead of hanging in the air. Derivation scripts (reusing the measuring round's
+own glb parser): session scratchpad `hull_slice.py`, `hull_planes.py`, `dressing-after/fleet2.py`.
+
+**What still assumes one box per house, checked one by one:** `Body`/spatial index — keeps the
+envelope, deliberately (conservative for range queries; `t036a` counts stay 1:1, green) · roof
+veto + terrain pin — read the PLAN box, unchanged · `tests/world.rs::
+f003_the_colliders_carry_the_half_edge_from_the_file` — read `.as_cuboid().expect(..)` over
+every block and had to learn that a compound exists (now `filter_map`, the factor-2 claim
+unchanged) · `debug::gizmo` anchor outlines — still draw the envelope box, cosmetic drift,
+listed in B-039 · blades cut only `HitZoneOf` limbs, water and stations carry no `Block` —
+untouched.
+
+**The after-fleet, all 8 probe scripts re-run against the pinned binary + pinned data
+(1145 bites kept on the same 15 houses; 4 stance artifacts excluded — a ray fired from a
+probe stance INSIDE a house anchors at its own eye, the class the before-round's face filter
+also skipped):**
+
+| | median | p90 | worst |
+|---|---|---|---|
+| before (1584 bites) | 1.07 m | 2.18 m | 2.84 m |
+| **after (1145 bites)** | **0.03 m** | **0.07 m** | **1.21 m** |
+
+Per face class after (orientation, face: n / median / worst): plain top 475/0.03/1.21 ·
+plain x± 62/≤0.02/0.37 · plain z± 143/0.01/0.73 · swapped top 306/0.03/0.54 · swapped x±
+117/0.01/0.27 · swapped z± 42/≤0.04/0.54. Every `n_after < n_before` is the phantom envelope
+gone: rays that used to bite the air over the roof now fly past the house. The whole residual
+tail sits on `house_large` tops (worst 1.21 m, bites > 0.5 m: 42 of 1145 = 4 %) — its broken
+−x roof slope and chimney band are approximated inward by the three-rect wedge; tightening it
+is one more `roof_rects` row in `art.ron: hulls`, if anyone ever aims there and feels it.
+The BEFORE per-house table is `anchors-air/fleet.json`; the AFTER one is
+`dressing-after/fleet2-final.txt` in the session scratchpad.
+
+**Evidence:** `tests/dressing.rs` (red 2026-09-01: *"the drawn mesh covers 10.10 x 8.77 m but
+the collider is 8.77 x 10.10 m"* · *"the +x wall bites at x = 3.95 m — the drawn plane is
+3.21"*; 6/6 green after; one-line break control re-reddens) · `scripts/f-dressing.txt` (8
+asserts, bite table in its header) · `docs/images/b039-rope-before.png` /
+`docs/images/b039-rope-after.png` (same stance, same aim).
+
+### FIND-225 · Amendment after the adversarial round (2026-09-02) — the fleet was a sample, and its instrument is gone
+
+The mechanism **held** under attack: the yaw break control reproduced the captured red with
+byte-identical restore; the script's three bite positions are exact to the cm; and a fresh
+house the round never featured (`house_23_3`, house_large, plain) was probed on five rays —
+all five exact to the millimetre against the `art.ron` hulls × scale (+x 3.107, −x −3.107,
++z 3.791, −z −3.782, ridge 4.934), asymmetric planes landing on the correct opposite world
+sides, which proves a true rotation and not a mirror. The composition arithmetic for
+`hook.l` of the town house lands on the turned ridge to 2 cm (un-turned it would be 4.2 m
+off), so the builder's admitted anchor blind spot is checked at the arithmetic level.
+
+But three sentences of this entry do not survive as written:
+- **"the 15 dressed houses of the shipped map" is false against the tree**: the shipped
+  plan contains **269 dressed houses (214 town / 55 large), 51 of them swapped** — the
+  fleet sampled ~6 %. The medians (1.07 → 0.03 m etc.) describe that 15-house sample, not
+  the map; "worst 1.21 m" and "the residual tail sits on house_large tops" are
+  sample-claims.
+- **The fleet's instrument and data are unauditable**: `fleet.json`, `fleet2-final.txt` and
+  the derivation scripts lived in a session scratchpad that was wiped overnight. The
+  numbers cannot be re-derived by anyone. The per-face table is at least self-consistent
+  (475+62+143+306+117+42 = 1145).
+- **The break control re-reddens 2 of 6 dressing tests**, not all: the four collider-fixture
+  tests hardcode their own yaw and are immune to the planner-level break. The quoted
+  "+x wall bites at x = 3.95" red belongs to the pre-hulls state, not to the yaw break.
+
+Also: `art.ron` carries a `house_small` hull row no house in the shipped map uses; and
+`scripts/f-dressing.txt` leg 4 (sky control) clears even the OLD envelope, so the
+discriminating evidence of legs 2/3 is the logged bite positions — which no assert checks.
+A collider regression that moves a bite by a metre would not turn the script red.
+
+**Stage after the round: the mechanism is 🟧; the fleet paragraph above is 🟨 and stays
+labeled a 15-house sample until someone re-measures with an in-repo instrument.**
+
+## FIND-226 — the ground gate on the always-on pull is gone; the contact-break line is derived, 68.96° (2026-09-01)
+
+**The rule:** §5E-b, the THIRD ruling on this gate (`FIND-172` built the pull, `Q-055`/`Q-056`
+gated it `in_the_air`, the user overturned the gate — newest word wins). A bite pulls
+immediately, ground included. One predicate decides ownership of a grounded body —
+`player::locomotion::ground_pull_live` (Drive · live winch · `pull_scale` > 0 · an arm beyond
+`min_rope_m`) — and BOTH `air_control` (runs the winch + flight controls) and
+`ground_locomotion` (lets go of the body) read it, so the legs and the rope cannot disagree
+(the `FIND-182` elevator was two systems disagreeing about exactly this). `S` on the ground
+stays planted (§5D rule 4); `OnWall`/`Downed` keep their states — the ruling overturned the
+GROUND gate, nothing else.
+
+**The number:** the winch's ceiling is derived, `drive_idle_speed_m_s / drive_idle_ramp_s` =
+12/0.35 = **34.286 m/s²**, against gravity **32** — so a standing bite lifts cleanly only above
+**`asin(32/34.286)` ≈ 68.96°** of anchor elevation. Below the line it must not buzz: friction
+is 0.0 and the legs have let go, so the same pull DRAGS the body toward under the anchor until
+the geometry steepens (the decision that this is the shipped shape is `Q-094`). Measured,
+standing start, rope 18 m, no key (`tests/player.rs::f176_the_contact_break_threshold_is_the_derived_69_degrees`):
+
+| elevation | 90° | 80° | 72° | 70° | 69° | 68° | 60° | 45° | 30° | 8° |
+|---|---|---|---|---|---|---|---|---|---|---|
+| bite → airborne (ticks) | 31 | 47 | 90 | 92 | 92 | 93 | 98 | 110 | >240 | >240 |
+| dragged @60 ticks (m) | 0.0 | 2.5 | 4.3 | 4.8 | 5.0 | 5.2 | 6.5 | 8.0 | 8.4 | 8.2 |
+
+Two arms blend before the threshold applies: a 90° arm (31 ticks alone) plus an 8° arm pulls
+along the blended axis ≈ 49° — airborne only after 210 ticks, dragged 10.7 m first
+(`f176_two_arms_blend_the_ground_pull_the_way_the_winch_blends_them`).
+
+**The controls that move it:** delete the pull (`drive_idle_speed_m_s: 0`) and the 90° bite
+stands forever; flip one comparison in `ground_pull_live` (`speed_m_s > 0.0` → `< 0.0`, the
+old gate's behaviour) and the headline test re-reddens with the captured message (`B-040`).
+
+**B-020, measured but NOT claimed:** bite-to-airborne from standing is 31 ticks (0.52 s) at
+90°, 47 at 80° — whether that beats three husks' kill window from inside melee is unmeasured
+(no husk in the fixture); if B-020 gets attacked, this is the escape to time first.
+
+**In the running game** (`scripts/f176-pull.txt` ACT 5, the 66.6° stance — 2.4° below the
+line, rope ~36.7 m): drag first, then a steady ~0.8 m/s climb from the tower base — height
+0.16 m at 97 ticks after the bite, 0.89 at 159, 1.72 at 221, 2.54 at 283. 14/14 asserts, exit 0.
+
+**Evidence:** `tests/player.rs::f176_*` (5 tests: headline + sweep + S-pair + floor + n=2) ·
+`tests/input.rs::r7_*` · `scripts/f176-pull.txt` ACT 5 · red/green trail in `B-040`.
+
+### FIND-226 · Amendment after the adversarial round (2026-09-02) — the line is a derivation, not an observation
+
+B-040 itself **held**: red/green trail reproduced exactly, break control re-reddens with the
+captured message, byte-identical restore, 14/14 in the running game. Two sub-claims did not:
+
+- **68.96° is a necessary condition on instantaneous lift-off, not an observable boundary.**
+  The measured data shows no discontinuity at the line (69°: 92 ticks to close vs 68°: 93) —
+  even 80° drags 2.48 m before lifting. No fixture samples the elevation boundary at ±ε;
+  the sweep's closing comment points at the `min_rope_m` boundary in the floor test, a
+  *different* boundary. The number reproduces to four digits from `game.ron`, but any
+  claimed line in ~59–79° would pass the same suite. Treat the 10-row table as the
+  behaviour; treat 68.96° as the formula's opinion.
+- **The n=2 blend guard was defeatable**: `blend = direction` (a winch reading only the
+  LAST anchored arm) passed the whole `--test player` (88) and `--test input` (28) suites
+  through the fallback branch. Strengthened 2026-09-02 (same-day fix round, see the test's
+  own comment for the red-under-mutation message). `vector_rope` was never swept under the
+  mutation — its two-arm fixtures are joint/pendulum-based and `rope_winch` is Drive-only,
+  so presume it blind to a last-arm winch until shown otherwise.
+
+Wording note: "S on the ground stays planted" blends two fixtures — vector_rope proves the
+taut-rope half (|Δdist| < 1 m), player.rs proves he keeps his legs and WALKS at run speed
+with a phantom anchor. Both are asserted; neither alone is the sentence.
+
+## FIND-227 — the centre marker assembly comes off the screen; only the X crosshair remains (2026-09-01; body written 2026-09-02 after the adversarial round)
+
+His words (§5E-c): *„die kreise können ganz weg! also in der mitte"*. The whole arm marker
+assembly — rings, Q/E letters, placement circles — is deleted, not hidden: `src/hud/arm_aim.rs`
+lost ~1 703 lines and `tests/hud.rs` ~2 197 with it. What remains in the centre is the X
+crosshair alone.
+
+**The numbers:** `tests/hud.rs::f170_nothing_covers_the_middle_of_the_screen` and
+`f171_the_centre_carries_nothing_but_the_x` assert the central 20 % × 20 % box
+((512, 288)..(768, 432) at 1280 × 720) carries nothing but the X. **The control that moves
+them:** a deliberately planted 20 × 20 px `hud_arm_glyph_control` at (627, 353) — both tests
+red with the box named in the message, measured 2026-09-02 08:2x; control removed, both green.
+Under `HookFire::Toggle`, `HOOK_TAP_MAX_TICKS = 18` (0.3 s): ≤ 18 ticks is a tap
+(anchor-and-stay; on an anchored arm, the re-fire), > 18 a hold that releases on key-up. The
+adversarial round measured the tap-refire release-to-fresh-bite gap at **6 ticks** in the
+`scripts/f172-hook-toggle.txt` log, and probed the miss-on-key-up path 3/3 sane at the real
+seam (pitch +88° over the boulevard: rope 0, latch self-clears, next tap fires).
+
+**One sentence to act on:** the centre is the X and nothing else; everything the circles used
+to say now has to be said elsewhere or not at all — if the user misses arm feedback, that is a
+new feature, not a revert.
+
+**Honest edges (adversarial round, 2026-09-02):** the f172 header's captured red against the
+pre-§5E-c binary (`assert rope == 1 — measured 0.000`) was never re-run by the refuter — it
+stands on the header's word. No test samples the tap boundary at exactly 18 vs 19 ticks (seam
+probes bracket it with ±1–2 ticks of slack; the code reads ≤ 18). The miss-on-refire path is
+unit-tested only. And the two `f171-crosshair-*.png` images predated the deletion — refreshed
+2026-09-02 by an evidence run before this entry's commit.
+
+**Evidence:** `tests/hud.rs::f170/f171` red-then-green via planted control ·
+`tests/latch.rs` (2) · `scripts/f172-hook-toggle.txt` · `docs/images/f171-crosshair-x.png`
+(post-deletion version).
+
+## FIND-228 — f025-chain's 12/36 attributed: one leg is B-039's honest wall, the rest is B-041 plus a lane that carries nothing (2026-09-02)
+
+The re-pin commission STOPPED itself, correctly: only **one** of the 12 reds is explained by
+the house re-cut. Line 282 (ACT3-behind) is exact — honest front wall at z = −54.26, first
+bite predicted 1.99 + 5.74·tan 35° = **6.01, measured 6.01**; the old 64° bite needed a face
+≥ 1.34 m OUTSIDE today's honest wall, exactly B-039's measured phantom. The dominant cause of
+the others is **B-041** (same-tick look+hook fires the previous look — double dissociation,
+1-tick window, both fire modes, see the repro script), which turns half the script's `look`
+lines into dead letters. On top: the header's lane prose does not match the world — no
+crossbeam colliders at x=0 over stations 1-2 (down-probes hit the street at y 0.05), and
+with FRESH looks + assist 100/100 pitches 25–45° from the pavement at z=180 find
+`NothingInRange`; if that lane is supposed to carry chains, the capability is gone
+regardless of f025. Lines 124/125 remain the documented gravity-drift red.
+
+**The rule this exercised:** attribution before re-pin, and a pin aimed at a bug is the
+FIND-096 mistake. `scripts/f025-chain.txt` stays untouched and red (12/36) until B-041 is
+ruled on; `scripts/b041-stale-look.txt` (4/7 red, captured) is the extracted minimal repro.
+Whether the staleness is a regression since 08-29 or long-standing-but-masked needs the
+08-29 binary or a bisect — open in B-041.

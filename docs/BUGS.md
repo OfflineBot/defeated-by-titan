@@ -583,3 +583,192 @@ lock in `src/save/`.
 not make it *right* — the slow writer still erases the fast one's spend, just cleanly.
 
 **Related:** `docs/multiplayer.md` (a second player makes this the common case) · `F-120` `F-125`
+
+---
+
+## B-038 — rebind the left hook and the HUD still says `Q`: the arm-marker letters ignore `PlayerSettings::binds`
+
+**2026-09-01, stream B.** `F-172` made the hook keys rebindable (`PlayerSettings::binds`,
+keybinds page, `saves/settings.ron`), and `net::local::read_input` fires off the bind —
+measured: `tests/input.rs::f172_a_rebound_key_fires_the_arm_and_the_old_key_is_dead` is green.
+**`hud::arm_aim` still hardcodes the letters** (`arm_aim::key_label(side)` returns `"Q"`/`"E"`
+as literals), so after a rebind the marker names a key that fires nothing — exactly the failure
+the old grep-test called *"worse than no label"*.
+
+**Repro** (unit-level, no window needed):
+1. `PlayerSettings::binds.set(BindAction::HookLeft, KeyCode::KeyM)` — the settings screen does
+   this on any rebind, and the file brings it back at every start.
+2. `arm_aim::key_label(Side::Left)` still answers `"Q"`; the letter drawn beside the left
+   marker is that answer.
+3. Meanwhile `M` fires the arm and `Q` is dead (`tests/input.rs`, above).
+
+**The fix is one read**: `arm_aim`'s label systems take `Res<PlayerSettings>` (`shared`, free
+for every domain) and answer `shared::settings::key_label(binds.hook_left)`. Not done by
+stream B because `src/hud/arm_aim.rs` is another stream's open file today. Until then
+`tests/hud.rs::f171_the_marker_letters_are_the_keys_that_fire_the_arms` pins the letters to
+`KeyBinds::DEFAULT` and carries this bug's number in its comment — whoever fixes it should
+point that test at the LIVE settings and watch it hold.
+
+**Related:** `F-172` · `FIND-224` · `docs/FINDINGS.md` FIND-129 (the marker's own contract)
+
+
+---
+
+## B-037 — under §5D, `W` while looking away from every anchor is a dead grant: no thrust, no bill
+
+**2026-09-01 · [offlinebot] · found reading `vector::gas` for the §5D rebuild · NOT fixed — foreign file**
+
+**Symptom.** Hooked, in flight, `W` held, every anchored arm behind the look (`l̂·r̂ ≤ 0` for
+all arms): the player gets `air_accel_m_s2` = 10 m/s² of free-air thrust and **none** of the
+drive's 52 m/s chase — and pays nothing. Under the old model that was correct (the drive's own
+look gate returned exactly `Vec3::ZERO` there, and the cost followed the effect). Under §5D
+rule 2 (*„aber w geht in die richtung"* — the LOOK's) the pure function
+`player::locomotion::rope_drive` thrusts along the look at ANY angle to the rope, so the grant
+is now refusing a key that would have an effect.
+
+**Cause, one line.** `src/vector/gas.rs::steer_has_effect` — the `move_y > 0` half requires
+`look_dir.dot(direction) > 0.0` for some anchored arm (the closing condition of the function,
+line ~168). That predicate was `rope_drive`'s old zero-set, copied so the bill matches the
+effect; `rope_drive`'s zero-set changed on 2026-09-01 and the predicate did not.
+
+**Repro.** Pure-function pair, no app needed:
+`rope_drive(&[anchor 180° behind the look], look, 0, 0.0, 1.0, v, t)` is **non-zero** since
+§5D (`tests/player.rs::f149_a_hooked_player_who_holds_nothing_is_not_driven_at_all`, the
+`behind` half measures it), while `steer_has_effect(same args…)` is **false** — the two
+answers about "does W do something" disagree. In the app: `air_control`'s Drive arm runs on
+`grant.steer || gas.is_empty()`, so the mismatch is visible as a `W` that works on an empty
+tank (the exception path) and dies the moment the tank refills.
+
+**The fix belongs to `vector`** (rule 3: one domain, one writer; and the header of
+`steer_has_effect` itself says the question is "whether `rope_drive` returns `Vec3::ZERO`").
+The §5D-true predicate for the `W` half: an anchored arm exists and the player is not already
+at `drive_speed_m_s` along the look — the angle test goes. ⚠️ Billing gets BROADER (W on a
+rope always costs), which is a gameplay change to name to him, not to sneak.
+
+**Related:** `FIND-223` · `FIND-150` (idle costs nothing — untouched: the winch is not billed)
+· `docs/NEXT.md` §5D rule 2
+
+---
+
+## B-039 — anchor points on dressed houses hang in the air (2026-09-01, FIXED)
+
+**2026-09-01, dressing stream — FIXED same day.** The user, at the controller: *„zudem sind
+die anchor points bei häusern in der luft! das passt nicht."* Measured before the fix (the
+anchors-air round, 1584 logged bites over the 15 dressed houses of the shipped map): offset
+from the bite to the nearest DRAWN surface **median 1.07 m, p90 2.18 m, worst 2.84 m**. Three
+causes, three fixes, one round:
+
+1. **Orientation transpose** — `plan_blocks` swaps frontage/depth for a house fronting along
+   z, `render::model` drew every model at one fixed yaw. On 5 of 15 houses two visible walls
+   stood 1.57–1.82 m INSIDE the collider, the mesh poked 0.31 m OUT through the other two.
+   Fixed by the quarter turn: `BlockPlan::yaw_rad` → `shared::ModelYaw` → scene, anchors AND
+   collider turn by one quat.
+2. **Envelope slack** — the authored `hit` pair sits 0.23–0.30 m outside the visible mesh on
+   every side of every a-083 file; the collider was that envelope.
+3. **Roof shape** — one cuboid at full width to the ridge under a roof that slopes in above
+   ~70 % of the height; roofline bites (the ones a player AIMS at) hung 1.3–2.8 m in the air.
+   2+3 fixed by mesh-derived compound colliders (`art.ron: hulls`: wall boxes at the dominant
+   wall planes + a convex ridge wedge), rounded INWARD on every disagreement.
+
+**Repro/red:** `tests/dressing.rs` — captured red 2026-09-01: *"house_39_6 (house_town, yaw
+0.00): the drawn mesh covers 10.10 x 8.77 m but the collider is 8.77 x 10.10 m"* and *"the +x
+wall bites at x = 3.95 m — the drawn plane is 3.21"*; fix removed for one run (yaw forced 0.0)
+→ same red; restored → 6/6 green. In-game: `scripts/f-dressing.txt`, 8 asserts held — the wall
+bite lands at x 51.90 (= the drawn plane to the centimetre), the old collider face was 52.67.
+**After-fleet (same probes, same instrument): median 0.03 m, p90 0.07 m, worst 1.21 m (1145 bites)** — see
+`docs/FINDINGS.md` FIND-225 for the per-face table. Pictures:
+`docs/images/b039-rope-before.png` (the anchor dot in open sky over the roof) vs
+`docs/images/b039-rope-after.png` (same stance, same aim, the dot ON the drawn roofline).
+
+**Still open in this bug's shadow:** remnants (ruin/rubble) and the 12 dressed props keep
+their envelope cuboids (no `hulls` rows yet — smaller, lower, no roofline lane); dormers and
+chimneys sit OUTSIDE the compound (conservative direction, a bite behind them lands a hand's
+breadth under the drawn surface); `debug::gizmo` still outlines the envelope `Body`, not the
+compound.
+
+**Related:** `FIND-225` · `Q-093` (which way the facade faces is still undecided) · Q-067/Q-078
+(the rejected candidate: NO return to hardcoded anchor lists)
+
+## B-041 — reserved by the hook-toggle round 2026-09-01 (unused unless something bug-shaped appears)
+
+### B-039 · Amendment (2026-09-02, adversarial round) — the red trail, stated precisely
+
+The yaw break control re-reddens **2 of 6** dressing tests (the two plan-level ones); the
+four collider-fixture tests hardcode their own yaw and are immune. And the quoted *"+x wall
+bites at x = 3.95"* red belongs to the **pre-hulls** state — the yaw-forced run cannot
+produce it. Both reds are real and both were reproduced by the adversary (the yaw red with
+byte-identical restore); they are two different controls for two different halves of the
+fix, and this entry originally let them read as one. Full amendment: `FIND-225` amendment
+in `docs/FINDINGS.md`.
+
+## B-040 — a hook bitten while standing pulled nobody: the always-on pull was gated `in_the_air` (2026-09-01, fixed the same day)
+
+**His report** (`docs/NEXT.md` §5E-b, verbatim): *„und aktuell wenn cih mich hooke werde ich
+nicht autmoatisch rangezogen! das fehlt noch! aktuell muss ich noch in die richtung schauen
+bewegen! fixe das noch!"* — hooked, standing, looking at the anchor, and nothing happens until
+he produces air time himself.
+
+**Cause, and it was a decision, not an accident:** `FIND-172`'s free pull was deliberately
+gated `in_the_air` (`Q-055`/`Q-056` — a hooked player in the hub keeps his legs), and
+`ground_locomotion` assigned the XZ velocity of every grounded player each tick, so even an
+ungated winch would have been erased (`FIND-182`'s elevator was that fight, won the wrong way
+around). §5E-b overturns the decision; the hub worry is defused by release being one tap of Q/E.
+
+**Repro/red — captured 2026-09-01, standing player, anchor 40 m straight overhead, no key:**
+`tests/player.rs::f176_a_hook_bitten_while_standing_pulls_the_player_off_the_ground_at_once` —
+*"90 ticks after a hook bit 40 m straight overhead the standing player has not left the ground
+(y still ≈ -0.000) — the always-on pull is still gated `in_the_air` (FIND-172/Q-056)"*.
+
+**Fix:** one predicate, two readers — `player::locomotion::ground_pull_live`; `air_control`
+runs the winch and flight controls for a grounded pulled body (`in_the_air || pulled`),
+`ground_locomotion` `continue`s past the same bodies so `ground_step` stops deleting what the
+winch builds. Green: airborne after **31 ticks**, `MovementState::Tethered`, and the deletion
+control (`drive_idle_speed_m_s: 0`) stands still.
+
+**One-line break control:** `ground_pull_live`'s `t.speed_m_s > 0.0` flipped to `< 0.0`
+(= the old gate's observable behaviour) re-reddens the headline test with the message above;
+restored, 5/5 `f176_*` green. `S` through the bite stays `Grounded` all 120 ticks and walks at
+6.0 m/s (§5D rule 4 survives).
+
+**Related:** `FIND-226` (the numbers, the 68.96° contact-break line) · `Q-094` (drag-not-lift
+below the line is a decision on his desk) · `B-020` (the 0.52 s standing escape is measured
+there, not claimed) · `scripts/f176-pull.txt` ACT 5.
+
+## B-018 — the step-walls entry was lost in a filing collision; the class dissolves under §5E (2026-09-02)
+
+The terrain-design scout of 2026-09-02 found that B-018 (terrain risers landing as
+unclimbable step-walls) has NO standalone entry left in this file: its number went under in
+the B-021 filing collision (see the note inside B-021, lines ~214-246), and the content now
+lives only in FIND-214 riser table and the NEXT.md §5E references. Disposition instead of
+restoration: the §5E smooth-terrain round replaces quantised risers with one continuous
+triangle surface under a `max_grade` guard, so the step-wall CLASS loses its carrier. When
+§5E lands, B-018 is retired with it; if §5E is ever rolled back, this paragraph is the
+pointer to rebuild the entry from FIND-214.
+
+## B-041 — a hook pressed in the same tick as a `look` fires along the PREVIOUS look (2026-09-02, OPEN)
+
+Found while attributing `f025-chain`'s 12/36 (FIND-228). For exactly ONE tick the gun and
+the eye disagree: `vector::aim::aim` runs in FixedUpdate `PostStep` (moved there by the
+2026-09-01 marker fix, FIND-222), and `vector::hook` consumes the previous tick's `ArmAim`
+and never re-casts (its own decision 6). A `hook` in the same tick as a `look` therefore
+flies along the OLD look; 3 ticks of separation already behaves fresh.
+
+**Repro:** `scripts/b041-stale-look.txt` — 4 of 7 asserts red today, exit 1, captured
+2026-09-02: legs A/C red in Toggle (`assert Rope == 0 — measured 1.000` at the wall the
+fresh 45° ray must clear; `assert Rope == 1 — measured 0.000` where the fresh level ray
+must bite), legs E/F the same under `hook_fire 0` — the staleness is not the toggle's.
+Waited controls (0.3 s) and the 3-tick window leg are green. Double dissociation, so it is
+the look's AGE and nothing else. The script pins the CORRECT behaviour and goes green only
+when this is fixed.
+
+**Blast radius:** every corpus script that puts `hook` on the line after `look` with no
+wait — the f025-chain legs 2..5 shape — and, in play, a hook clicked mid-flick lands where
+the camera was 16 ms ago while the marker (PostStep-exact since FIND-222) shows the NEW
+aim: what you see is not what you fire, one tick wide.
+
+**Fix warning:** the naive fix is re-ordering aim before hook inside one tick — schedule
+surgery in the exact class that produced the B-030 cycle OOM. `tools/test.sh` runs capped
+and `schedules_build_or_explain` guards it, but the fix round must treat the ordering as a
+claim and re-run `scripts/b041-stale-look.txt` (green = fixed) plus the f025 legs. Do NOT
+re-pin f025-chain first (FIND-228: half its `look` lines are dead letters under this bug —
+a pin would aim at the bug, the FIND-096 mistake).

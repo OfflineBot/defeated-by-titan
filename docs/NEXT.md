@@ -1102,3 +1102,101 @@ water and the towers, because the water's extent is a shape in the height field 
    files already naming it. The bindings live in `net::local`.
 5. **Crosshair: 4 Striche, Mitte leer, 45° rotiert (X), mittel-klein.** Today: circles with side
    ticks, mittel-groß. **Size AND colour settable.** `hud::crosshair::shape_of` owns the shape.
+
+## §5D — 🔴 HE REFINED §5C POINT 1 MID-ROUND, 2026-09-01, verbatim — and a round was stopped for it
+
+> *"obwohl es sollte doch eigendlich so sein. dass es immer rangezogen wird standardmäßig. und es
+> geht danach wie der character schaut. aber w geht in die richtung etc. aber wenn verbunden wird
+> immer rangezogen so stark wie man zur seite geht desto weniger. aber dennoch AUßER man drückt S
+> dann nur zur seite"*
+
+**This corrects the reading of §5C's „w soll ranziehen":** it was about the PULL, not about `W`.
+The model, in four rules:
+
+1. **Anchored ⇒ always pulled toward the anchor**, by default, independent of the look. (The
+   always-on winch — exists.)
+2. **`W` = thrust in the LOOK direction**, on top of the pull. („es geht danach wie der character
+   schaut. aber w geht in die richtung")
+3. **Lateral input scales the pull down PROPORTIONALLY** — „so stark wie man zur seite geht desto
+   weniger", but never to zero on its own. ⚠️ Today `drive_steer_pull_fraction` is **binary**
+   (`if move_x == 0.0 { 1.0 } else { fraction }`); he is asking for a ramp in `|move_x|`.
+4. **`S` is the one input that cancels the pull** — „AUßER man drückt S dann nur zur seite":
+   with `S` held, only the lateral remains. ⚠️ This supersedes `Q-061`'s „S spannt nur, bewegt
+   nicht" — newest word wins, and the third meaning `S` has had. The look-gate on the PULL goes;
+   `W`'s look-directed thrust stays.
+
+### §5D-b — two more from the controller, same session, verbatim
+
+> *"zudem sind die anchor points bei häusern in der luft! das passt nicht. und die fov effekte
+> sollen nicht instant da sien sondern langsamer wieder zurückgeht. also ein kleiner übergang."*
+
+- **Anchor points at houses hang in the air.** ⚠️ The authored anchor-point field was deleted
+  (`Q-067`) — what he SEES is where the ROPE bites. Likeliest cause: the hook bites the physics
+  **collider box**, while the dressed house draws a **glTF model of a different shape** — so the
+  bite point floats off the visible wall. That is a collider-vs-model alignment question
+  (`world`/`render`), same family as §3B's floating buildings. **Measure first**: hook a dressed
+  house at several points, log the bite coordinate, compare against the visible mesh.
+- **FOV: a small transition, and the RETURN slower than the onset.** „nicht instant … langsamer
+  wieder zurückgeht. also ein kleiner übergang" — an asymmetric slew: opening with speed may be
+  quick, the fall-back eases out.
+
+## §5E — 🔴 THE TERRAIN, THIRD PASS, 2026-09-01, verbatim:
+
+> *"ok und die welt hat jetzt harte höhen. aber es soll smooth sein und mehr elevation! also
+> richtiges terrain!"*
+
+The height field landed with 20.25 m of relief — but it is **quantised**: heights snap to
+step multiples per cell, and the field's own diagonal audit measured neighbouring cells
+**0.50 m apart as vertical faces**. He sees hard edges because they are hard edges.
+
+**Two demands:**
+1. **SMOOTH** — continuous interpolation between cells (bilinear or better), no visible steps.
+   ⚠️ This *dissolves* the `B-018` class (a 0.30 m step is a wall at −32) instead of tuning it:
+   a smooth slope has no step to refuse. The stair asserts and `stair_rise_m` machinery lose
+   their subject — remove with care, they guard walkability, and the guard becomes a MAX GRADE.
+2. **MORE ELEVATION** than 20.25 m. How much is his (`Q-086` already asks); build it adjustable
+   and photograph two settings rather than asking him to imagine a number.
+
+⚠️ Interactions the last two passes each got bitten by: the 245 placed blocks pin their cells
+flat (footings must stay planar under a smooth field — a house on a slope needs a terrace cut or
+a plinth); the water banks; the wall footings; the fence; `w2-terrain-walk` and `f003-ashgate`.
+⚠️ `src/world/map.rs` is owned by the LIVE dressing round — this waits for it.
+
+### §5E-b — the hook must pull IMMEDIATELY, ground included. Verbatim, 2026-09-01:
+
+> *"und aktuell wenn cih mich hooke werde ich nicht autmoatisch rangezogen! das fehlt noch!
+> aktuell muss ich noch in die richtung schauen bewegen! fixe das noch!"*
+
+**Cause: the always-on pull is gated `in_the_air` (`FIND-172`/`Q-056`) — deliberately, so a
+hooked player in the hub kept his legs.** Standing on the ground, a fresh hook does nothing until
+you get airborne; that is exactly his „muss erst schauen/bewegen". **He overturns that gate:
+hooking pulls, immediately, ground included** — the bite yanks you off your feet. The old
+hub-walkability worry is defused by his own earlier order: `Q`/`E` are a TOGGLE now, release is
+one tap. `Q-055`/`Q-056` superseded — third ruling on this gate, newest word wins.
+⚠️ The teeth this needs: the pull must actually BREAK ground contact (a force below the
+static-friction/step threshold would buzz in place), and `f176-pull`'s ground acts re-derive.
+
+### §5E-c — the circles go, and a tap re-fires. Verbatim, 2026-09-01:
+
+> *"die kreise können ganz weg! also in der mitte und wenn ich E drücke und toggelt. und später
+> nochmal e drücke soll das seil weg "neu" raus gehen und toggeln!"*
+
+1. **The centre circles go ENTIRELY.** The arm-aim marker assembly — the hollow rings, their
+   tether stubs and with them the `Q`/`E` letters — comes off the screen. The X crosshair is the
+   only thing in the middle. ⚠️ This retires the marker element `FIND-129` measured to 0.0 px and
+   supersedes his own 2026-08-19 *„genau da wo das seil landen würde"* — newest word wins, noted
+   with date. It also closes `B-038` as won't-fix (no letters, nothing to follow a rebind).
+2. **Tap-while-anchored = RE-FIRE, not release.** Press `E`: fires and toggles on. Press `E`
+   again later: *„das seil weg, neu raus, und toggeln"* — release the old rope and fire a fresh
+   one at the current aim, in one tap. **Pure release stays on the long press** (>0.3 s hold,
+   release on key-up — the latch's existing path), so both verbs exist without a new key.
+
+## Session split 2026-09-01 ~22:30 — two live sessions, ownership settled by message
+A second session (`defeated-by-titan-cf`) took over §5E-b (ground pull, B-040/FIND-226,
+f176-pull, tests/player.rs slide fixtures) and §5E-c (latch re-fire, press-edge design,
+src/net/local.rs, tests/latch.rs, f172). This session (`defeated-by-titan-82`) stopped its
+duplicate workflows for both and keeps ONLY the honest-house-boxes round (render/model.rs,
+shared/anchors.rs, world/map.rs, art.ron, tests/dressing.rs, f-dressing.txt, B-039) plus the
+uncommitted CONFIRMED controller batch. Commit order agreed: controller batch (game.ron etc.,
+WITHOUT net/local.rs) first, then the cf-session's streams on top. Full corpus/test gate only
+after house-boxes lands.

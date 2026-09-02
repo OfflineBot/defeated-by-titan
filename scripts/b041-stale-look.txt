@@ -1,0 +1,101 @@
+# b041-stale-look — a hook pressed in the SAME tick as a `look` fires along the PREVIOUS
+# tick's look. Repro for B-041 (docs/BUGS.md), found 2026-09-02 while attributing
+# f025-chain's 12/36 (FIND-228): `vector::aim::aim` runs in FixedUpdate PostStep (the
+# 2026-09-01 marker fix), `vector::hook` consumes the previous tick's `ArmAim` and never
+# re-casts (its own decision 6) — so for exactly ONE tick the gun and the eye disagree.
+#
+#   ./target/debug/defeated_by_titan --headless --script scripts/b041-stale-look.txt --ticks 1400
+#
+# PINS: the asserts pin the CORRECT behaviour (a hook flies along the look of ITS OWN
+# tick), so this script is RED — 4 of 7 asserts, both fire modes — until B-041 is fixed,
+# and turning green IS the fix's evidence. The waited legs (B, D, W) are the controls that
+# hold today: 3 ticks of separation is already fresh, so the window is exactly one tick.
+# Static player, assist off, centre ray only. Discriminator: wall base body 20 at
+# z = -100.15 — a level ray bites it at eye height (rope == 1), a 45 deg ray clears it
+# into open sky (rope == 0, NothingInRange).
+settings assist_catch 0
+settings assist_strength 0
+wait 1.0
+
+# A: level first, then 45 up + hook IMMEDIATELY (the f025-chain legs 2..5 shape).
+# Fresh look => sky. Stale look => wall. RED today: bites the wall.
+warp 0 30 100
+look 0 0
+wait 0.5
+look 0 45
+hook right 0.6
+wait 0.5
+mark stale-a-up-immediate
+assert rope == 0
+wait 0.7
+
+# B: same, but 0.3 s between look and hook — control, green today.
+warp 0 30 100
+look 0 0
+wait 0.5
+look 0 45
+wait 0.3
+hook left 0.6
+wait 0.5
+mark stale-b-up-waited
+assert rope == 0
+wait 0.7
+
+# C: reversed — 45 up first, then level + hook IMMEDIATELY.
+# Fresh look => wall. Stale look => sky. RED today: flies skyward.
+warp 0 30 100
+look 0 45
+wait 0.5
+look 0 0
+hook right 0.6
+wait 0.5
+mark stale-c-level-immediate
+assert rope == 1
+wait 0.7
+
+# D: control — level, waited 0.3 s. Green today.
+warp 0 30 100
+look 0 45
+wait 0.5
+look 0 0
+wait 0.3
+hook left 0.6
+wait 0.5
+mark stale-d-level-waited
+assert rope == 1
+wait 0.7
+
+# W: the window is ONE tick — 3 ticks of separation already behaves fresh. Green today.
+warp 0 30 100
+look 0 0
+wait 0.5
+look 0 45
+wait 0.05
+hook right 0.6
+wait 0.5
+mark stale-w-3-ticks
+assert rope == 0
+wait 0.7
+
+# E/F: A and C again under hook_fire 0 (Hold) — the staleness is not the toggle's.
+# Both RED today.
+settings hook_fire 0
+warp 0 30 100
+look 0 0
+wait 0.5
+look 0 45
+hook right 0.6
+wait 0.5
+mark stale-e-up-immediate-hold
+assert rope == 0
+wait 0.7
+
+warp 0 30 100
+look 0 45
+wait 0.5
+look 0 0
+hook left 0.6
+wait 0.5
+mark stale-f-level-immediate-hold
+assert rope == 1
+wait 0.7
