@@ -447,6 +447,64 @@
     cortex_tolerance_m: 0.15,
 
     // -----------------------------------------------------------------------------------
+    // hulls — the mesh-true collision silhouette per dressed class, in the FILE'S OWN
+    // authored metres. `world::map` builds a compound collider out of each row: one cuboid
+    // per `walls` entry, one convex wedge through the corners of all `roof_rects`.
+    //
+    // WHY (B-039, „die anchor points bei häusern sind in der luft"): the single envelope
+    // cuboid a dressed house used to carry was measured against its own drawn mesh on
+    // 2026-09-01 — 1584 bites over 15 houses, offset to the nearest visible surface median
+    // 1.07 m, worst 2.84 m. Two causes live in this file's numbers: the authored hit pair
+    // sits 0.23–0.30 m OUTSIDE the visible walls on every side of every a-083 file, and the
+    // box runs at full width to the ridge while the drawn roof slopes in above ~70 % of the
+    // height. (The third cause, the missing quarter turn on z-fronting houses, is
+    // `world::map::BlockPlan::yaw_rad`.)
+    //
+    // MEASUREMENTS OF FILES, NOT TUNING NUMBERS — read off horizontal cross-sections of the
+    // glb triangles (46 slices per file) and area-weighted wall-plane histograms; the slice
+    // tables stand in docs/FINDINGS.md FIND-225. ROUNDING IS INWARD on every disagreement:
+    // wall boxes stop at the dominant wall plane, so jetties (house_town +0.24 m at storey
+    // three), porches (house_small +z bay to 4.34) and dormers poke OUT of the collider and
+    // a bite behind them lands a hand's breadth under the drawn surface — never in the air.
+    // Chimneys (1.1 x 1.1 m stubs) are left out the same way.
+    hulls: {
+        // a-083-fachwerkhaus-klein — ridge along z, broken (half-hipped) on -x from y 3.49.
+        "house_small": (
+            walls: [
+                (min_m: (-2.61, 0.0, -3.31), max_m: (2.62, 2.50, 3.30)),
+            ],
+            roof_rects: [
+                (y_m: 2.50, min_m: (-3.05, -3.68), max_m: (3.05, 3.68)),
+                (y_m: 3.49, min_m: (-1.79, -3.68), max_m: (1.67, 3.68)),
+                (y_m: 4.28, min_m: (-1.79, -3.68), max_m: (0.24, 3.68)),
+            ],
+        ),
+        // a-083-fachwerkhaus-stadthaus — plain gable, ridge along x, eaves overhang 0.43 m.
+        "house_town": (
+            walls: [
+                (min_m: (-3.81, 0.0, -3.21), max_m: (3.82, 5.50, 3.25)),
+            ],
+            roof_rects: [
+                (y_m: 5.50, min_m: (-4.25, -3.72), max_m: (4.25, 3.72)),
+                (y_m: 5.68, min_m: (-4.25, -3.72), max_m: (4.25, 3.72)),
+                (y_m: 7.84, min_m: (-4.25, -0.15), max_m: (4.25, 0.15)),
+            ],
+        ),
+        // a-083-fachwerkhaus-gross — ridge along z, broken on -x from y 9.6 (vertical upper
+        // gable face at x = -2.20).
+        "house_large": (
+            walls: [
+                (min_m: (-3.45, 0.0, -4.21), max_m: (3.45, 7.90, 4.20)),
+            ],
+            roof_rects: [
+                (y_m: 7.90, min_m: (-3.92, -4.65), max_m: (3.92, 4.65)),
+                (y_m: 9.60, min_m: (-2.20, -4.65), max_m: (2.00, 4.65)),
+                (y_m: 11.23, min_m: (-2.20, -4.65), max_m: (0.22, 4.65)),
+            ],
+        ),
+    },
+
+    // -----------------------------------------------------------------------------------
     // lighting — the sun, the sky and the fog. **The one thing every number here exists
     // for: a roof, a wall in the sun and a wall in the shade have to be three different
     // values.** Measured before this block existed (docs/FINDINGS.md FIND-071): a vertical

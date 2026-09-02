@@ -208,6 +208,38 @@ pub struct Game {
     pub camera: CameraTuning,
     pub world: WorldTuning,
     pub net: NetTuning,
+    pub hud: HudTuning,
+}
+
+/// What the HUD draws with — sizes, not colours (colours live in `maps.ron: signals`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HudTuning {
+    pub crosshair: CrosshairTuning,
+}
+
+/// The X crosshair's base geometry at 100 % size (user, 2026-09-01: *„sollen 4 striche wo in
+/// der mitte nichts und 45deg rotiert und gröse eher mittel bis klein"*). The player's own
+/// size slider (`PlayerSettings::crosshair_size_pct`, 50–200 %) scales these; the shapes per
+/// state stay `hud::crosshair::shape_of`'s.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CrosshairTuning {
+    /// Length of one of the four strokes, `Free` state, logical px.
+    pub stroke_len_px: f32,
+    /// Its thickness.
+    pub stroke_thick_px: f32,
+    /// Empty middle: distance from the exact centre to a stroke's inner end, along the
+    /// diagonal. `hud::crosshair` floors the scaled value so the sight core stays clear.
+    pub gap_px: f32,
+    /// Stroke length and thickness in the `Anchor`/`Cortex` states — longer and thicker, so
+    /// the states differ in shape and not only in colour (`F-171`).
+    pub anchor_len_px: f32,
+    pub anchor_thick_px: f32,
+    /// The four outer marks only `Cortex` shows: their length and the gap past the stroke's
+    /// outer end.
+    pub mark_len_px: f32,
+    pub mark_gap_px: f32,
 }
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -652,6 +684,15 @@ pub struct CameraTuning {
     /// sells nothing — the effect has to mean *fast*, and the number is what says where fast
     /// begins.
     pub fov_speed_from_m_s: f32,
+    /// How fast the lens may **open** towards the speed target, in degrees per second — the
+    /// quick direction of the slew the user asked for on 2026-09-01 (*„die fov effekte sollen
+    /// nicht instant da sien"*). The consumer is `render::slewed_fov_deg`.
+    pub fov_widen_deg_s: f32,
+    /// How fast it may come **back**, in degrees per second. Slower than
+    /// [`Self::fov_widen_deg_s`] on purpose — *„sondern langsamer wieder zurückgeht. also ein
+    /// kleiner übergang."* — and `tests/render.rs::the_fov_opens_faster_than_it_returns` holds
+    /// the ordering.
+    pub fov_return_deg_s: f32,
     pub mouse_deg_per_px: f32,
     pub pitch_limit_deg: f32,
     pub smoothing_half_life_s: f32,
@@ -1941,6 +1982,54 @@ pub struct Art {
     pub cortex_tolerance_m: f32,
     /// Sun, sky, fog and exposure — `render::light` reads nothing else.
     pub lighting: Lighting,
+    /// **The mesh-true collision silhouette of a dressed class**, keyed like `models`, in the
+    /// file's own authored metres. `world::map::BlockPlan::collider` builds the compound out
+    /// of it: one cuboid per `walls` row, one convex wedge through all `roof_rects`.
+    ///
+    /// A model with **no row here keeps its envelope cuboid** — that is a statement, not a
+    /// default: the envelope is what the 12 hand-placed props and the 14 remnant classes
+    /// honestly are today. The map itself is mandatory (no `serde(default)`, rule 2): if it
+    /// is missing from `art.ron` the load crashes instead of quietly shipping floating
+    /// anchors again (B-039).
+    pub hulls: BTreeMap<String, Hull>,
+}
+
+/// One dressed class's collision silhouette — **measurements of a file, rounded inward**.
+///
+/// Every number is a plane read off the glb's own triangles (the derivation and the slice
+/// tables are in `docs/FINDINGS.md` FIND-225); where the mesh disagrees with itself the value
+/// rounds toward the **inside**, because the trade is asymmetric: a collider 10 cm inside the
+/// mesh costs a bite 10 cm under a drawn surface, a collider 10 cm outside hangs the rope in
+/// the air — which is the bug this type exists to kill.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Hull {
+    /// Axis-aligned cuboids in authored space, floor to the eaves, at the dominant wall
+    /// planes (jetties and porches deliberately poke out).
+    pub walls: Vec<HullBox>,
+    /// Horizontal rectangles, eaves to ridge, in ascending `y_m`; the collider is the convex
+    /// hull of all their corners. Two rects are a plain gable wedge, a third catches a broken
+    /// slope (mansard). Empty means "this class has no roof of its own".
+    pub roof_rects: Vec<HullRect>,
+}
+
+/// A full cuboid in the model's authored metres, as two corners.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HullBox {
+    pub min_m: (f32, f32, f32),
+    pub max_m: (f32, f32, f32),
+}
+
+/// A horizontal rectangle of the roof silhouette: its height, and its x/z corners.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HullRect {
+    pub y_m: f32,
+    /// (x, z) of the rectangle's low corner.
+    pub min_m: (f32, f32),
+    /// (x, z) of the rectangle's high corner.
+    pub max_m: (f32, f32),
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -48,7 +48,8 @@ use crate::shared::{MovementState, TitanKindName, TitanState};
 // The anchor contract lives in `shared/` and not here, because `titan` has to READ it: the
 // `cortex` empty out of the file is where the titan dies. See `shared::anchors`.
 pub use crate::shared::anchors::{
-    is_anchor_name, ModelAnchors, ModelName, ANCHOR_NAMES, CORTEX_ANCHOR, HOOK_PREFIX,
+    is_anchor_name, ModelAnchors, ModelName, ModelYaw, ANCHOR_NAMES, CORTEX_ANCHOR,
+    HOOK_PREFIX,
 };
 
 /// What [`spawn_models`] decided — and the whole point of the file: **both answers are
@@ -280,9 +281,9 @@ pub fn spawn_models(
     mut commands: Commands,
     data: Res<GameData>,
     assets: Res<ModelAssets>,
-    fresh: Query<(Entity, &ModelName), Without<ModelBody>>,
+    fresh: Query<(Entity, &ModelName, Option<&ModelYaw>), Without<ModelBody>>,
 ) {
-    for (entity, wanted) in &fresh {
+    for (entity, wanted, turned) in &fresh {
         let Some(model) = data.model(&wanted.name) else {
             warn!(
                 "model {:?} is not in art.ron — the entity keeps its primitive. \
@@ -315,7 +316,7 @@ pub fn spawn_models(
                 let scene = commands
                     .spawn((
                         Name::new(format!("model:{}", wanted.name)),
-                        model_transform(model.scale),
+                        model_transform(model.scale, turned.map_or(0.0, |y| y.yaw_rad)),
                     ))
                     .id();
                 if let Some(world) = assets.scenes.get(&wanted.name) {
@@ -353,14 +354,21 @@ pub fn spawn_models(
 /// **It belongs here and not in the files.** A model's authored axis convention is the seam
 /// between a file and the engine, which is exactly what this module is; and it is one property
 /// of one coherent export, not eight rows of RON that can drift apart.
-pub const MODEL_FACES: f32 = std::f32::consts::PI;
+// Since 2026-09-01 the constant itself lives in `shared::anchors` — the compound house
+// colliders made `world::map` its second reader, and two copies of one axis convention is
+// the drift rule 5 forbids. Re-exported here so every reader of `render::model::MODEL_FACES`
+// (tests/render.rs, the prose in `titan::rig` and `blades::hold`) keeps resolving.
+pub use crate::shared::MODEL_FACES;
 
 /// The model's own transform on the scene child: the drop's frame turned into the game's, at
 /// the size [`fit_to_class`] worked out.
-fn model_transform(scale: f32) -> Transform {
+/// `yaw_rad` is the placement's own quarter turn ([`ModelYaw`], `0.0` when absent): a house
+/// fronting along z has its **box** transposed by `world::map` and the drawing has to turn
+/// with it, or two walls stand 1.6 m inside their collider (B-039).
+fn model_transform(scale: f32, yaw_rad: f32) -> Transform {
     Transform {
         translation: Vec3::ZERO,
-        rotation: Quat::from_rotation_y(MODEL_FACES),
+        rotation: crate::shared::model_turn(yaw_rad),
         scale: Vec3::splat(scale),
     }
 }
@@ -667,13 +675,13 @@ pub fn read_the_models_anchors(
     parents: Query<&ChildOf>,
     transforms: Query<&Transform>,
     names: Query<&Name>,
-    owners: Query<(Entity, &ModelName, &ModelBody)>,
+    owners: Query<(Entity, &ModelName, Option<&ModelYaw>, &ModelBody)>,
 ) {
     let instance_root = ready.entity;
     // Who does this instance belong to? The scene sits on a child, the ModelName on its owner.
-    let Some((owner, wanted, _)) = owners
+    let Some((owner, wanted, turned, _)) = owners
         .iter()
-        .find(|(_, _, body)| matches!(body, ModelBody::Scene(e) if *e == instance_root))
+        .find(|(_, _, _, body)| matches!(body, ModelBody::Scene(e) if *e == instance_root))
     else {
         return;
     };
@@ -732,13 +740,17 @@ pub fn read_the_models_anchors(
     // second time. And it is added to the anchors *after* the scale, because it is already a
     // distance in the game's metres.
     let feet = feet_offset_m(&found, scale, wanted.feet_y_m);
-    let into_the_game = Quat::from_rotation_y(MODEL_FACES);
+    // **And the placement's quarter turn, both halves of it** — the same rule as the scale and
+    // the feet: what turns the mesh turns the anchors, or a `hook.*` empty detaches from the
+    // wall it annotates ([`ModelYaw`]).
+    let yaw_rad = turned.map_or(0.0, |y| y.yaw_rad);
+    let into_the_game = crate::shared::model_turn(yaw_rad);
     for anchor in found.values_mut() {
         *anchor = into_the_game * (*anchor * scale) + feet;
     }
     commands
         .entity(instance_root)
-        .insert(model_transform(scale).with_translation(feet));
+        .insert(model_transform(scale, yaw_rad).with_translation(feet));
 
     match found.get(CORTEX_ANCHOR) {
         // ⚠️ **Only for something that is supposed to have one.** `cortex_height_m` is `Some`

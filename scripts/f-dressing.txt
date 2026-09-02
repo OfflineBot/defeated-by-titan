@@ -1,0 +1,83 @@
+# f-dressing — a dressed house is hookable exactly where it is DRAWN (B-039).
+#
+# > „zudem sind die anchor points bei häusern in der luft! das passt nicht."
+# > — the user, 2026-09-01, at the controller
+#
+# The house under test is the swapped town house at (48.56, 21.40) — `house_town`, scale
+# 1.041, base -1.25, ridge 7.07, fronting along z (`BlockPlan::yaw_rad = FRAC_PI_2`). It is
+# the same house the measuring round photographed (its collider box was x 44.45..52.67,
+# z 16.67..26.14, and a roofline bite hung up to 2.35 m off the drawn slope).
+#
+# What holds since the compound colliders (art.ron: hulls) and the quarter turn —
+# measured 2026-09-01 [offlinebot], 8 asserts held, 627 ticks:
+#
+#   | leg | claim                        | the rope bit at |
+#   |---|---|---|
+#   | 1 | the WALL bites the drawn plane  | `(51.90, 1.35, 21.40)` — plane 48.56 + 3.21 x 1.041 = 51.90 exactly; the old collider face was 52.67 |
+#   | 2 | the ROOF SLOPE still bites, ON the slope | `(50.40, 5.89, 21.40)` — that point was 2.27 m of AIR outside the old box |
+#   | 3 | the RIDGE from above still bites | `(48.56, 6.91, 21.32)` — the drawn ridge line (authored 7.84 x 1.041 - 1.25) |
+#   | 4 | over the ridge is sky — CONTROL  | `found no anchor: NothingInRange` |
+#
+# The rope counts prove hold/no-hold; the POSITIONS stand in the `anchored on body ... at`
+# log lines (quote them against the numbers above) and, exactly, in tests/dressing.rs.
+#
+# ## Running it
+#
+#   cargo build
+#   ./target/debug/defeated_by_titan --headless --script scripts/f-dressing.txt --ticks 1200 \
+#       2>&1 | grep -E 'MARK|assert|script run finished|anchored on body|found no anchor'
+#   # the exit code needs its OWN run — a pipeline's $? is the last command's:
+#   ./target/debug/defeated_by_titan --headless --script scripts/f-dressing.txt \
+#       --ticks 1200 >/dev/null 2>&1; echo $?
+
+wait 1.5                        # world, meshes, models
+
+# ── leg 1 · the wall band, horizontal from the street on +x ──────────────────────────────
+warp 60 1.0 21.4
+look 90 0
+wait 0.5
+assert rope == 0                # baseline: nothing anchored before the trigger
+hook right 1.2
+wait 0.6
+mark wall-bite
+assert rope == 1
+wait 1.0
+
+# ── leg 2 · the roof slope, horizontal at eye ~5.9 (the band that was pure air) ─────────
+# The warp is followed by an IMMEDIATE shot: gravity pulls the stance down within half a
+# second, and leg 1 measured exactly that (a 0.5 s wait fired from street level again).
+look 90 0
+wait 0.5
+assert rope == 0
+warp 60 4.4 21.4
+wait 0.06
+hook right 1.2
+wait 0.6
+mark slope-bite
+assert rope == 1
+wait 1.0
+
+# ── leg 3 · the ridge, straight down over the house's centre line ───────────────────────
+look 0 -89
+wait 0.5
+assert rope == 0
+warp 48.56 10 21.4
+wait 0.06
+hook right 1.2
+wait 0.6
+mark ridge-bite
+assert rope == 1
+wait 1.0
+
+# ── leg 4 · the CONTROL: steeply up and over the ridge, into open sky ───────────────────
+look 90 60
+wait 0.5
+assert rope == 0
+warp 60 5.6 21.4
+wait 0.06
+hook right 1.2
+wait 0.6
+mark sky-control
+assert rope == 0
+wait 1.0
+mark end

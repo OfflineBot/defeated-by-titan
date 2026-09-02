@@ -76,6 +76,55 @@ impl ModelAnchors {
     }
 }
 
+/// **The pack faces backwards, and this is the one number that says so.**
+///
+/// `docs/conventions.md` and the titan rig agree that a body's forward is **-Z**; the 2026-08-18
+/// asset drop is authored the other way round (`eye` at z = +0.92 on `a-042`, +0.20 on `a-136`).
+/// Every consumer of a placed model turns it by this yaw about +Y — the full argument, with the
+/// two red tests that measured it, stands at `render::model` where the constant lived until
+/// 2026-09-01.
+///
+/// ## Why it moved to `shared/`
+///
+/// It moved the day it got a SECOND reader: `render::model` turns the drawn scene and the
+/// anchors, and since the compound house colliders (`world::map::BlockPlan::spawn`) the collider
+/// of a dressed block is cut from the same authored mesh — so `world` needs the same answer to
+/// "which way does the file face". Two copies of one axis convention is the drift rule 5 warns
+/// about (*"do not re-derive another domain's decision — read it"*); `shared` is the one place
+/// both may read (`docs/architecture.md`). `render::model` re-exports it, so every old path
+/// still resolves.
+pub const MODEL_FACES: f32 = std::f32::consts::PI;
+
+/// **The quarter turn this entity's model wears in the world** — radians about +Y, on top of
+/// [`MODEL_FACES`].
+///
+/// A generated house is authored with its frontage along its own x axis, but half the district
+/// fronts along world z (`world::map::Footprint::frontage_along_x = false`): the *box* swaps its
+/// extents when it is planned, and until 2026-09-01 the *drawing* did not — on 5 of 15 dressed
+/// houses two visible walls stood 1.6–1.8 m inside their collider while the mesh poked 0.3 m out
+/// through the other two („die anchor points bei häusern sind in der luft!", B-039).
+///
+/// A sibling component and not a field of [`ModelName`] so that an entity without one simply
+/// faces the way the pack was authored — `render::model` reads it as `Option` and treats absence
+/// as `0.0`. **One writer: `world::map`** (`BlockPlan::yaw_rad`); it must turn the drawn scene,
+/// every [`ModelAnchors`] entry *and* the collider cut from the mesh, or the three drift apart.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Default)]
+pub struct ModelYaw {
+    pub yaw_rad: f32,
+}
+
+/// **The one composition of a placed model's rotation**: the pack's facing flip plus the
+/// placement's quarter turn.
+///
+/// One writer, two readers (rule 5: read the decision, do not re-derive it): `render::model`
+/// turns the drawn scene and every anchor by exactly this quat, `world::map` turns the
+/// compound collider cut from the same mesh. If the two composed it separately they could
+/// drift by a sign — and a sign here is a house facing backwards with its collider facing
+/// forwards, which no sweep would ever find because both halves would be "right".
+pub fn model_turn(yaw_rad: f32) -> Quat {
+    Quat::from_rotation_y(MODEL_FACES + yaw_rad)
+}
+
 /// "This entity is the logical model `name`." — **and since 2026-08-19 that includes a house.**
 ///
 /// ## Why this type moved out of `render/` on 2026-08-19
@@ -174,6 +223,24 @@ mod tests {
         for name in ["hook", "hooks.l", "Cube.003", "cortex.old", "Armature", ""] {
             assert!(!is_anchor_name(name), "{name:?} is not an anchor");
         }
+    }
+
+    #[test]
+    fn the_quarter_turn_puts_the_authored_frontage_on_world_z() {
+        // B-039 cause 3 in one assert: authored frontage runs along the file's x; a house
+        // fronting along world z carries `yaw_rad = FRAC_PI_2`, and the composed turn has to
+        // map authored +X onto a world Z axis (extents transposed) — while the plain turn
+        // (`MODEL_FACES` alone) keeps x on x, only mirrored.
+        let plain = model_turn(0.0);
+        let x = plain * Vec3::X;
+        assert!((x - Vec3::NEG_X).length() < 1e-6, "plain: authored +X must mirror to -X, got {x:?}");
+        let quarter = model_turn(std::f32::consts::FRAC_PI_2);
+        let x = quarter * Vec3::X;
+        assert!(
+            x.x.abs() < 1e-6 && (x.z.abs() - 1.0).abs() < 1e-6,
+            "quarter-turned: authored +X must land on world Z, got {x:?} — the drawn walls \
+             stand 1.6 m off the transposed collider otherwise (tests/dressing.rs)"
+        );
     }
 
     #[test]

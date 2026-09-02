@@ -77,7 +77,7 @@ use avian3d::prelude::{Collider, RigidBody};
 use bevy::prelude::*;
 
 use crate::data::{Damage, GameData, Map, ModelSource, Perimeter};
-use crate::shared::{AnchorSurface, Block, Body, CellRole, ModelName, Rng, TerrainField};
+use crate::shared::{AnchorSurface, Block, Body, CellRole, ModelName, ModelYaw, Rng, TerrainField};
 
 use super::index::mask_from;
 
@@ -381,6 +381,17 @@ pub struct BlockPlan {
     /// scale it is drawn at, so the collider, the anchor surface and the mesh are one box and
     /// not three.
     pub model: Option<&'static str>,
+    /// **The quarter turn the model wears**, radians about +Y on top of the pack's own facing
+    /// flip (`shared::MODEL_FACES`) — `FRAC_PI_2` for a house or remnant fronting along z,
+    /// `0.0` for everything else.
+    ///
+    /// The box already knew: a footprint with `frontage_along_x = false` swaps its extents
+    /// when it is planned (the `(depth_m, front_m, ..)` arm below). Until 2026-09-01 the
+    /// *drawing* did not turn with it, so on 5 of 15 dressed houses two visible walls stood
+    /// 1.6–1.8 m inside their collider and the roofline bites hung in the air (B-039). The
+    /// value travels as `shared::ModelYaw` and `render::model` turns the scene and the
+    /// anchors by it; [`BlockPlan::spawn`] turns the compound collider by the same quat.
+    pub yaw_rad: f32,
 }
 
 impl BlockPlan {
@@ -388,17 +399,88 @@ impl BlockPlan {
         self.size_m * 0.5
     }
 
+    /// **What avian gets to hit** — one cuboid for a bare box, the mesh-derived compound for a
+    /// dressed block whose model has a row in `art.ron: hulls`.
+    ///
+    /// The single envelope cuboid was measured against the drawn mesh on 2026-09-01 (1584
+    /// bites, 15 dressed houses): every authored `hit` envelope sits 0.23–0.30 m outside the
+    /// visible walls, and the box runs at full width to the ridge while the drawn roof slopes
+    /// in — so a clean mid-wall bite floated ~0.3 m and a roofline bite 1.3–2.8 m („die anchor
+    /// points bei häusern sind in der luft", B-039). The compound is the same authored mesh
+    /// the player sees, reduced to the numbers in `art.ron: hulls`: wall cuboids to the eaves
+    /// at the true wall planes, plus one convex wedge from the eaves rectangle to the ridge.
+    ///
+    /// Everything else the entity carries stays ONE thing: one `Body` (the envelope — the
+    /// spatial index stays conservative), one `BodyId`, one `Block`, one plan box for the
+    /// roof veto. Only the shape avian raycasts changed.
+    pub fn collider(&self, data: &GameData) -> Collider {
+        let Some(model) = self.model else {
+            return Collider::cuboid(self.size_m.x, self.size_m.y, self.size_m.z);
+        };
+        let (Some(hull), Some(authored_m)) = (data.art.hulls.get(model), authored_size_of(model))
+        else {
+            // A dressed block whose model has no hull row keeps the envelope — that is the
+            // honest state for the 12 hand-placed props and the 14 remnant classes today.
+            return Collider::cuboid(self.size_m.x, self.size_m.y, self.size_m.z);
+        };
+        // The same recipe the drawing gets (`render::model`): uniform scale to the box height,
+        // the pack's facing flip plus this block's quarter turn, feet on the box floor. The
+        // hull numbers are authored metres, so one transform serves all three files.
+        let scale = self.size_m.y / authored_m[1];
+        let turn = crate::shared::model_turn(self.yaw_rad);
+        let feet = Vec3::new(0.0, -self.size_m.y * 0.5, 0.0);
+        let mut parts: Vec<(Vec3, Quat, Collider)> = Vec::new();
+        for wall in &hull.walls {
+            let min = Vec3::new(wall.min_m.0, wall.min_m.1, wall.min_m.2);
+            let max = Vec3::new(wall.max_m.0, wall.max_m.1, wall.max_m.2);
+            let extent = (max - min) * scale;
+            let center = (min + max) * 0.5 * scale;
+            parts.push((
+                turn * center + feet,
+                turn,
+                Collider::cuboid(extent.x, extent.y, extent.z),
+            ));
+        }
+        let mut corners: Vec<Vec3> = Vec::new();
+        for rect in &hull.roof_rects {
+            for (x, z) in [
+                (rect.min_m.0, rect.min_m.1),
+                (rect.min_m.0, rect.max_m.1),
+                (rect.max_m.0, rect.min_m.1),
+                (rect.max_m.0, rect.max_m.1),
+            ] {
+                corners.push(turn * (Vec3::new(x, rect.y_m, z) * scale) + feet);
+            }
+        }
+        if !corners.is_empty() {
+            let wedge = Collider::convex_hull(corners).unwrap_or_else(|| {
+                panic!(
+                    "art.ron: hulls[{model:?}].roof_rects is degenerate — no convex wedge \
+                     comes out of it, and the roof would be unhookable"
+                )
+            });
+            parts.push((Vec3::ZERO, Quat::IDENTITY, wedge));
+        }
+        assert!(
+            !parts.is_empty(),
+            "art.ron: hulls[{model:?}] names neither walls nor roof_rects — an empty hull is \
+             a house nothing can hit"
+        );
+        Collider::compound(parts)
+    }
+
     /// The **only** place where a planned cuboid turns into an entity.
-    fn spawn(&self, commands: &mut Commands) {
+    fn spawn(&self, commands: &mut Commands, data: &GameData) {
         let mut e = commands.spawn((
             Name::new(self.name.clone()),
             // What `render` sees: full edge.
             Block { size: self.size_m, color: self.color },
             // What the spatial index sees: half edge.
             Body { half_size_m: self.half_size_m(), mask: mask_from(self.solid, self.anchorable) },
-            // What avian sees: the full edge again (see the module header).
+            // What avian sees: the mesh-true compound for a dressed house, the full edge
+            // otherwise ([`BlockPlan::collider`], and the module header for the factor of 2).
             RigidBody::Static,
-            Collider::cuboid(self.size_m.x, self.size_m.y, self.size_m.z),
+            self.collider(data),
             Transform::from_translation(self.center_m),
         ));
         if self.anchorable {
@@ -431,8 +513,31 @@ impl BlockPlan {
                 // (`shared::ModelName::feet_y_m`).
                 feet_y_m: Some(-self.size_m.y * 0.5),
             });
+            // The quarter turn rides beside the name — `render::model` turns the scene and
+            // the anchors by it, [`BlockPlan::collider`] already turned the compound.
+            e.insert(ModelYaw { yaw_rad: self.yaw_rad });
         }
     }
+}
+
+/// The authored full extent of a dressed class, x/y/z metres — the one lookup over the four
+/// catalogues, so the collider scale cannot disagree with the fit `render::model` computes
+/// (both are `box height / authored height`, and
+/// `tests/world.rs::f003_the_dressing_catalogue_is_what_the_glb_files_really_measure` pins the
+/// numbers to the files).
+fn authored_size_of(model: &str) -> Option<[f32; 3]> {
+    DRESSING
+        .iter()
+        .chain(RUIN_KIT.iter())
+        .chain(RUBBLE_KIT.iter())
+        .find(|(name, _)| *name == model)
+        .map(|(_, size)| *size)
+        .or_else(|| {
+            PLACED_DRESSING
+                .iter()
+                .find(|(name, _, _)| *name == model)
+                .map(|(_, _, size)| *size)
+        })
 }
 
 /// Builds the map out of `maps.ron: current` at `Startup`.
@@ -453,7 +558,7 @@ pub fn build_map(mut commands: Commands, data: Res<GameData>) {
     let plan = plan_blocks(&data, map);
     let anchorable = plan.iter().filter(|r| r.anchorable).count();
     for block in plan.iter() {
-        block.spawn(&mut commands);
+        block.spawn(&mut commands, &data);
     }
 
     info!(
@@ -791,6 +896,13 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                         Some(k) => k.model,
                         None => dress.map(|(name, _, _)| name),
                     },
+                    // **The quarter turn.** The `(depth_m, front_m, ..)` arms above put the
+                    // authored frontage on world z whenever the footprint fronts along z —
+                    // for the house and for its remnant alike — so the drawing (and the
+                    // compound collider) has to turn with it. Captured red on 2026-09-01:
+                    // "house_39_6: the drawn mesh covers 10.10 x 8.77 m but the collider is
+                    // 8.77 x 10.10 m" (tests/dressing.rs, B-039 cause 3).
+                    yaw_rad: if f.frontage_along_x { 0.0 } else { std::f32::consts::FRAC_PI_2 },
                 });
 
                 // **A dressed house grows no cap.** Two roofs on one building is the FIND-059
@@ -848,6 +960,8 @@ pub fn plan_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                             anchorable,
                             solid: true,
                             model: None,
+                            // A cap is a bare box; there is nothing to turn.
+                            yaw_rad: 0.0,
                         });
                     }
                 }
@@ -882,6 +996,9 @@ fn placed_blocks(data: &GameData, map: &Map) -> Vec<BlockPlan> {
                 Vec3::new(k.size_m.0, k.size_m.1, k.size_m.2),
                 &k.color,
             ),
+            // A hand-placed box is matched against the model at the authored orientation
+            // (`placed_dress_for` compares x to x), so it never turns.
+            yaw_rad: 0.0,
         })
         .collect()
 }
@@ -1298,6 +1415,7 @@ pub fn plan_terrain(
                 // The ground wears no model. The pack has street and stair pieces
                 // (`a-085-strasse-*`), and a hillside is not one of them.
                 model: None,
+                yaw_rad: 0.0,
             });
             cx = cx1 + 1;
         }

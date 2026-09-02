@@ -299,13 +299,14 @@ fn f003_the_colliders_carry_the_half_edge_from_the_file() {
     let mut q = app.world_mut().query::<(&Transform, &Block, &Body, &Collider)>();
     let all: Vec<(Vec3, Vec3, Vec3, Vec3)> = q
         .iter(app.world())
-        .map(|(t, b, k, c)| {
-            let form = c
-                .shape()
-                .as_cuboid()
-                .expect("every block is a cuboid — nothing here is rotated");
+        .filter_map(|(t, b, k, c)| {
+            // Since 2026-09-01 a dressed house carries a mesh-true COMPOUND instead of the
+            // envelope cuboid (B-039, `world::map::BlockPlan::collider`); those are measured
+            // by `tests/dressing.rs` against the drawn planes and drop out of this factor-2
+            // check, which is about the bare boxes the file states.
+            let form = c.shape().as_cuboid()?;
             let h = form.half_extents;
-            (t.translation, b.size, k.half_size_m, Vec3::new(h.x, h.y, h.z))
+            Some((t.translation, b.size, k.half_size_m, Vec3::new(h.x, h.y, h.z)))
         })
         .collect();
 

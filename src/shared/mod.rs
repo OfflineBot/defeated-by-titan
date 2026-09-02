@@ -56,7 +56,8 @@ pub use layers::{
     PLAYER_COLLIDES_WITH, AIM_RAY_SEES,
 };
 pub use anchors::{
-    is_anchor_name, ModelAnchors, ModelName, ANCHOR_NAMES, CORTEX_ANCHOR, HOOK_PREFIX,
+    is_anchor_name, model_turn, ModelAnchors, ModelName, ModelYaw, ANCHOR_NAMES, CORTEX_ANCHOR,
+    HOOK_PREFIX, MODEL_FACES,
 };
 pub use terrain::{CellRole, TerrainField};
 pub use water::{Submerged, WaterVolume};
