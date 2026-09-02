@@ -1233,3 +1233,6 @@ anchor fails the gate regardless of feel:
    adjustment (tolerate compounds, keep the factor-2 invariant), then land the rows.
 4. **b046 flake**: tests/hud.rs f177 board prompt empty ~1 in 5 — find the writer, prove
    with 30 consecutive greens.
+5. **Corpus delta attribution (FIND-229 amendment)**: q078-fling 1→10 red, f004-towers
+   and w5-lane +1 each, f029-grapple newly 2/6 (predicted, geometry-honest). One read-only
+   agent on the PINNED evening binary; no re-pins before attribution.

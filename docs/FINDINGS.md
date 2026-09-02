@@ -1953,3 +1953,16 @@ measured 13.176 has crossed to 29.016-class values in a sibling leg). The script
 documented state is "12 of 14 held". Either a landed round regressed the speed envelope
 (candidates: gravity −32, B-040 always-on pull, the §5D drive rework) or the doc line is
 stale. **Nobody may re-pin it before attributing which** — the FIND-228 rule.
+
+### FIND-229 · Corpus delta of the closing sweep (2026-09-02, 66G/16R/0C, was 59G/18R)
+
+Attributed: `b041-stale-look` and `f170-objective` and `f171-crosshair` RED→GREEN (the
+day's fixes); `f-flight-cut` 13→3 red asserts (fresh looks — legs written under the
+stale-look regime now fire where they aim); `f029-grapple` NEWLY red 2/6 — predicted
+verbatim by the titan round: *"the F-029 grapple fixtures aimed at shin height because the
+old barrel registered there; the pose-true surface honestly has nothing at the axis at
+shin height"* — geometry-honest, re-pin after a ruling, not before.
+**Attribution OWED (ruling 5 in NEXT.md): `q078-fling` 1→10 red** (same suspicion — hooks
+in that script now anchor where they aim, changing every fling number — but suspicion is
+not attribution), plus `f004-towers` 13→14 and `w5-lane` 13→14 (±1 each). Measured against
+the pinned 2026-09-02-evening binary before anything else lands.
