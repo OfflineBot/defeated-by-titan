@@ -1,0 +1,27 @@
+# f017-fov-slew — the lens follows |v| through the asymmetric slew instead of stepping
+# (user, 2026-09-01: „sehr sudden drop. nicht gut!" / „nicht instant … langsamer wieder
+# zurückgeht. also ein kleiner übergang.").
+#
+#   DBT_FOVTRACE=1 cargo run -q -- --headless --script scripts/f017-fov-slew.txt --ticks 500
+#
+# PINS: the two rates — `game.ron: camera.fov_widen_deg_s` (100) and `fov_return_deg_s` (25).
+# PINS: the stance and the stop: q078's pavement anchor, reeled into the street with `Ctrl`
+# PINS: until |v| collapses to ~0 in a handful of ticks — that collapse is the tick the old
+# PINS: code dropped the lens on, and the FOVTRACE lines show `want` stepping while `fov`
+# PINS: eases at 25°/s.
+
+warp 168.19 12.0 -50.12
+look 0 -90
+wait 0.2
+
+# Tap-anchor (Toggle default), then reel: |v| climbs past `fov_speed_from_m_s` (22) to the
+# 28 m/s reel and the lens opens; the street then stops him nearly instantly.
+hook left 0.1
+wait 0.3
+key Ctrl 2.0
+wait 2.5
+mark f017-standing
+assert speed < 1.0
+hook left 0.1
+wait 0.5
+end

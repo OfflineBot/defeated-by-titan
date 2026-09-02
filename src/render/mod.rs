@@ -245,6 +245,8 @@ fn attach_camera(
 fn apply_field_of_view(
     data: Res<GameData>,
     settings: Res<PlayerSettings>,
+    time: Res<Time>,
+    tick: Res<crate::shared::Tick>,
     players: Query<&LinearVelocity, With<LocalPlayer>>,
     mut cameras: Query<&mut Projection, With<Camera3d>>,
 ) {
@@ -255,27 +257,55 @@ fn apply_field_of_view(
     // meant the curve fires once, on the frame the slider moves, and never again. The write is
     // still guarded, one line down, by comparing the value: that is the guard that matters
     // (§6 rule 6), and it is the one that was doing the work all along.
+    //
+    // `|v|` and never a projected component — *„fov changes sollen nach geschwindigkeit egal
+    // welche richtung!"* (user, 2026-09-01). That half was already true; what his sentence
+    // found was the missing slew below.
     let speed_m_s = players.iter().next().map_or(0.0, |v| v.0.length());
-    let want = speed_fov_deg(
+    let want_deg = speed_fov_deg(
         settings.fov_deg,
         data.game.camera.fov_max_speed_deg,
         data.game.camera.fov_speed_from_m_s,
         data.game.vector.max_speed_m_s,
         speed_m_s,
         settings.speed_fov_pct,
-    )
-    .to_radians();
+    );
     for mut projection in &mut cameras {
         // Read through `&*` first: a `DerefMut` on a `Mut<Projection>` marks it changed even
         // when nothing is written, and the change would travel into the render world.
         let Projection::Perspective(current) = &*projection else {
             continue;
         };
-        if (current.fov - want).abs() <= 1e-6 {
+        // **The lens chases the target instead of being it** — `slewed_fov_deg` is the whole
+        // of *„nicht instant … langsamer wieder zurückgeht"*: opening fast, returning slow,
+        // both rates out of `game.ron: camera`. The frame clock and not the tick, because the
+        // slew is presentation — it has to be equally smooth at any frame rate, and it must
+        // not freeze when the simulation is paused mid-menu.
+        let current_deg = current.fov.to_degrees();
+        let next = slewed_fov_deg(
+            current_deg,
+            want_deg,
+            data.game.camera.fov_widen_deg_s,
+            data.game.camera.fov_return_deg_s,
+            time.delta_secs(),
+        )
+        .to_radians();
+        // The trace `docs/` quotes: target (the old code's output) against the slewed lens,
+        // one line per frame, only when asked. `want` is exactly what the pre-2026-09-01 code
+        // wrote into the projection, so the tick it drops on is in the same trace as the ease
+        // that replaced it.
+        if std::env::var_os("DBT_FOVTRACE").is_some() {
+            info!(
+                "FOVTRACE t={} speed={speed_m_s:.2} want={want_deg:.2} fov={:.3}",
+                tick.0,
+                next.to_degrees()
+            );
+        }
+        if (current.fov - next).abs() <= 1e-6 {
             continue;
         }
         if let Projection::Perspective(perspective) = &mut *projection {
-            perspective.fov = want;
+            perspective.fov = next;
         }
     }
 }
@@ -483,4 +513,45 @@ fn build_block_meshes(
         });
         commands.entity(e).insert((Mesh3d(mesh), MeshMaterial3d(material)));
     }
+}
+
+/// One frame of the FOV's approach to its target — **the slew, and it is asymmetric on
+/// purpose** (user, 2026-09-01, twice: *„wenn man seitlich geht ist der change sehr sudden
+/// drop. nicht gut!"* and *„die fov effekte sollen nicht instant da sien sondern langsamer
+/// wieder zurückgeht. also ein kleiner übergang."*).
+/// The target stays [`speed_fov_deg`] — an instant function of |v| — and the LENS follows it
+/// through here at a bounded rate: **opening** at `camera.fov_widen_deg_s` (quick, because the
+/// punch of speed is `F-017`'s whole point) and **returning** at `camera.fov_return_deg_s`
+/// (slow, because the return is where the drop lived: |v| dips whenever a swing changes
+/// direction, and an instant lens dipped with it in one frame).
+///
+/// Decisions, not arithmetic:
+/// - **Rate-limited, not half-life smoothed.** A fixed °/s reaches its target and stands
+///   still; an exponential never arrives and re-marks the projection changed forever (§6
+///   rule 6 — the write guard in [`apply_field_of_view`] only helps if the value settles).
+/// - **It never overshoots**: the step is clamped to the remaining distance.
+/// - **A non-finite target or dt returns the current value** — the same rule as
+///   [`speed_fov_deg`]'s own NaN guard, because a NaN fov is a black screen. A non-finite
+///   `current` yields the target, so one bad frame heals instead of sticking.
+/// - **A degenerate rate (0, negative, NaN) means "no slew in that direction"** — the value
+///   snaps, which is the old behaviour, visible and honest, rather than a freeze.
+pub fn slewed_fov_deg(
+    current_deg: f32,
+    want_deg: f32,
+    widen_deg_s: f32,
+    return_deg_s: f32,
+    dt_s: f32,
+) -> f32 {
+    if !want_deg.is_finite() || !dt_s.is_finite() {
+        return if current_deg.is_finite() { current_deg } else { 60.0 };
+    }
+    if !current_deg.is_finite() {
+        return want_deg;
+    }
+    let rate = if want_deg > current_deg { widen_deg_s } else { return_deg_s };
+    if !(rate > 0.0) {
+        return want_deg;
+    }
+    let step = (rate * dt_s.max(0.0)).min((want_deg - current_deg).abs());
+    current_deg + step * (want_deg - current_deg).signum()
 }

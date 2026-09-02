@@ -1,47 +1,30 @@
-# f026-turn — THE MARKER IN MOTION. One `look` per tick, so the trace has a frame-by-frame
-# yaw and not a warp between two stills.
+# f026-turn — a full-speed look sweep: still, slow pan, fast flick, and a boosted run under
+# a slow pan. Four paced phases, one `look` per tick.
 #
-# PINS: **degrees of yaw per tick** — 2.0 slow, 6.0 fast. `look <y> <p>` followed by `wait 0` is
-# exactly one simulation tick (`debug/mod.rs::run_script`: `wait_s > 0.0` is false at 0.0), so
-# every phase is as long as it has lines and the four marks land at fixed ticks: 122, 152, 212,
-# 252, 372. If `simulation_hz` moves, the degrees per SECOND move with it and the tick numbers do
-# not. Nothing here reads a tuning constant, so no `.ron` value can move a mark.
+# ⚠️ THE SUBJECT THIS FILE WAS BUILT FOR IS RETIRED. It measured THE MARKER IN MOTION —
+# `hud::arm_aim`'s landing preview against the crosshair, through the `DBT_AIMTRACE` trace.
+# On 2026-09-01 the user retired the whole marker assembly (`docs/NEXT.md` §5E-c: „die kreise
+# können ganz weg! also in der mitte" — `docs/FINDINGS.md` FIND-227), and the trace went with
+# the drawing it measured. What this file PROVED while it mattered is recorded in FIND-217 and
+# `docs/BUGS.md` B-029 (the aim published one schedule late; median 14.00 px / max 419.98 px of
+# glyph error under boost, 0.00/0.00/0.01 after the fix) — the fix in `vector::aim`'s schedule
+# placement is still in the tree and still matters to the ROPE, so the sweep stays in the
+# corpus as the standard turning exercise over the ashgate stand.
+#
+# PINS: **degrees of yaw per tick** — 2.0 slow, 6.0 fast. `look <y> <p>` followed by `wait 0`
+# is exactly one simulation tick (`debug/mod.rs::run_script`: `wait_s > 0.0` is false at 0.0),
+# so every phase is as long as it has lines and the marks land at fixed ticks: 122, 152, 212,
+# 252, 372. If `simulation_hz` moves, the degrees per SECOND move with it and the tick numbers
+# do not. Nothing here reads a tuning constant, so no `.ron` value can move a mark.
 #
 # The verdict run, and it returns a usable exit code:
 #
 #   ./target/debug/defeated_by_titan --headless --script scripts/f026-turn.txt --ticks 600
 #
-# ⚠️ **The trace itself needs `--offscreen` AND `--screenshot`, and that is not a preference.**
-# Without a render target `Camera::logical_viewport_size()` is `None`, `hud::arm_aim::place_arm_aim`
-# returns on its first guard, and the two markers stay on the placeholder percentages
-# `spawn_arm_aim` wrote — for the whole run, silently (`docs/FINDINGS.md` FIND-212 §3). A
-# `--headless` run of this file therefore measures the asserts and nothing about the marker:
-#
-#   DBT_AIMTRACE=1 ./target/debug/defeated_by_titan --offscreen --screenshot /tmp/x.png \
-#       --script scripts/f026-turn.txt --ticks 620 2>&1 | grep -E 'AIMTRACE|MARK'
-#
-# `AIMTRACE` prints, per frame and per arm: `dproj` (the arm's world point against the crosshair
-# — the aim's own error), `dglyph` (the drawn glyph centre against the crosshair — what the
-# player sees), `dgp` (glyph minus projection — what the layout rule adds) and `clamp` (`0` a real
-# pixel · `1` a bearing, the point is behind the near plane · `-` no target at all).
-#
-# ⚠️ **Read the whole boost, not the window between the marks.** `key W 3.0` at `mark
-# trace-moving` (t = 252) holds for 180 ticks, so phase D runs to **t = 432** while the last
-# `look` line lands at t = 372. A table that stops at the last mark stops 64 ticks early, and
-# those 64 ticks were where the number lived: median 23.98 px, max 419.98 px, measured
-# 2026-08-30 (`docs/FINDINGS.md` FIND-217). `--ticks 620` covers all of it.
-#
-# 🔴 **And `clamp` is why that table is trustworthy at all.** Until 2026-09-01 the trace printed
-# the literal `none` for `proj`, `dproj` and `dgp` whenever `Camera::world_to_viewport` refused
-# the point — which is precisely when the marker is at a screen edge and the error is largest. On
-# `scripts/f-001-hooks.txt --ticks 400`, **347 of 1650** samples were that case and the worst of
-# them stood **350.00 px** from the crosshair with nothing printed. An instrument that goes quiet
-# on its own worst case measures the samples that were already fine.
-#
-# The stand is `scripts/f-001-hooks.txt`'s ashgate stand (51, 0, 13) — the one place in this
-# repository where an anchor is measured rather than assumed. A full sweep from there crosses the
-# market-square church, open street and sky, so the trace covers `Ready` and `Free` without the
-# file having to know which yaw is which.
+# The stand is `scripts/f-001-hooks.txt`'s ashgate stand (51, 0, 13). A full sweep from there
+# crosses the market-square church, open street and sky, and phase D boosts through it with
+# `key W 3.0` — the phase that found B-029, and the one that runs 64 ticks past the last
+# `look` line (to t = 432), so `--ticks 600` covers all of it.
 
 warp 51 0 13
 look 0 0
@@ -317,8 +300,9 @@ look 360.0 0
 wait 0
 
 # ---- D: the same slow turn while MOVING FAST. The eye travels between the tick that -----
-# casts the ray and the frame that projects its answer, and this is the only phase that
-# can see it. Boost with W held; the arms stay idle, so the marker is still the preview.
+# casts the ray and the frame that projects its answer, and this was the only phase that
+# could see it. Boost with W held; the arms stay idle. (The marker this phase measured is
+# retired — the numbers below are its record, kept because the underlying B-029 fix stands.)
 #
 # This phase is the whole reason the file exists, and it is the one that was red. Over
 # t = 252..435, `dglyph` measured **median 14.00 px, p95 48.74, max 419.98**, with a 392.92 px

@@ -67,6 +67,64 @@ impl CameraKick {
     }
 }
 
+/// The yaw of a direction in [`Intent::look_dir`]'s own convention — the yaw at which a
+/// player with pitch 0 would look exactly along `dir`'s horizontal part.
+///
+/// `look_dir = (−sin y · cos p, sin p, −cos y · cos p)`, so the horizontal part is
+/// `(−sin y, −cos y)` and the inverse is `atan2(−x, −z)`. `None` for a vertical or zero
+/// direction — a rope straight above the player constrains no yaw at all.
+pub fn direction_yaw(dir: Vec3) -> Option<f32> {
+    if dir.x.abs() < 1e-6 && dir.z.abs() < 1e-6 {
+        return None;
+    }
+    Some((-dir.x).atan2(-dir.z))
+}
+
+/// §5C's look clamp — *„wenn man hoocked ist soll man auch nicht zu stark über 80deg
+/// links/rechts schauen. also schon einiges aber nicht zu viel drehen!"* — as a pure function.
+///
+/// ```text
+/// Δ = wrap_to_±π(yaw − rope_yaw)
+/// |Δ| ≤ limit          → yaw, untouched
+/// |Δ| > limit          → rope_yaw ± (limit + soft · tanh((|Δ| − limit) / soft))
+/// ```
+///
+/// **The edge is a RUBBER BAND, and the curve says exactly how.** Inside ±`limit` the clamp
+/// does not exist. Past it the excess is compressed through `tanh`: the slope is 1 at the
+/// limit (no kink to feel — resistance grows, it does not begin with a wall) and the yaw
+/// saturates asymptotically at `limit + soft`, which the view can therefore never pass. Hard
+/// stop and slow-return were both considered and rejected: a hard stop is a wall at exactly
+/// the angle he asked to still be usable („also schon einiges … drehen"), and a slow-return
+/// needs per-tick state plus a rate — two more numbers — where the band needs none.
+///
+/// **Stateless on purpose, and that decides where it must be wired.** Applied to the look
+/// ACCUMULATOR (`net::local::read_input`'s `Look`, the honest owner of yaw — see
+/// `docs/QUESTIONS.md` Q-091), the band holds while hooked and releasing the rope simply
+/// stops the clamping: the accumulator already IS inside the band, so nothing snaps. Applied
+/// to the camera instead it would make the image disagree with `intent.look_dir()` — the one
+/// equality this module's header defends (`tests/render.rs`) — which is why `rotate_camera`
+/// deliberately does NOT call it.
+///
+/// ⚠️ The 80° and 10° are game values and belong in `game.ron: camera` (rule 2); the keys do
+/// not exist yet because `src/data/mod.rs` is another stream's file today — Q-091 names them.
+/// This function takes radians and no defaults, so the wiring cannot forget the file.
+#[must_use]
+pub fn hooked_yaw_soft_clamp(yaw: f32, rope_yaw: f32, limit_rad: f32, soft_rad: f32) -> f32 {
+    use std::f32::consts::{PI, TAU};
+    // The offset from the rope, wrapped to ±π: yaw accumulates freely across turns
+    // (`net::local::Look` has no modulus), and an unwrapped subtraction would clamp a player
+    // whose yaw and rope only LOOK far apart by a winding.
+    let delta = (yaw - rope_yaw + PI).rem_euclid(TAU) - PI;
+    let excess = delta.abs() - limit_rad;
+    if excess <= 0.0 || !(soft_rad > 0.0) {
+        return yaw;
+    }
+    let allowed = limit_rad + soft_rad * (excess / soft_rad).tanh();
+    // Returned in the caller's own winding: shift by what the wrap took out, so the result is
+    // continuous in `yaw` even at the ±π seam.
+    yaw - delta + delta.signum() * allowed
+}
+
 /// Puts `yaw` and `pitch` out of the local player's [`Intent`] onto the camera.
 ///
 /// Runs in `Update` and not in the fixed step: presentation is not simulation, and a camera
@@ -142,6 +200,112 @@ pub fn rotate_camera(
         // again for every image (rule 6).
         if t.rotation != rotation {
             t.rotation = rotation;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // §5C's look clamp, pure math. What the fixture varies: the yaw offset from the rope, the
+    // limit and the softness. What the code reads: exactly those three plus the rope yaw. The
+    // WIRING — who owns the yaw and where the clamp acts on the real accumulator — is
+    // `docs/QUESTIONS.md` Q-091; these tests hold the curve itself.
+
+    const LIMIT: f32 = 80.0_f32 * std::f32::consts::PI / 180.0;
+    const SOFT: f32 = 10.0_f32 * std::f32::consts::PI / 180.0;
+
+    fn deg(d: f32) -> f32 {
+        d.to_radians()
+    }
+
+    #[test]
+    fn f5c_inside_the_limit_the_yaw_is_untouched() {
+        // „also schon einiges … drehen" — up to the limit the clamp must be invisible, and
+        // exactly at the limit too (the band starts past it, not on it).
+        for off in [0.0, 30.0, -60.0, 79.9, -80.0] {
+            let yaw = deg(off);
+            let out = hooked_yaw_soft_clamp(yaw, 0.0, LIMIT, SOFT);
+            assert!(
+                (out - yaw).abs() < 1e-6,
+                "{off}° off the rope was moved to {:.3}° — inside ±80° the clamp must not exist",
+                out.to_degrees()
+            );
+        }
+    }
+
+    #[test]
+    fn f5c_past_the_limit_the_band_resists_and_saturates() {
+        // „aber nicht zu viel drehen!" — the edge is SOFT: a rubber band, not a wall. Past the
+        // limit the excess is compressed through tanh, so the felt resistance grows smoothly
+        // (slope 1 at the limit — no kink to feel) and the yaw can NEVER pass limit + soft.
+        let at_100 = hooked_yaw_soft_clamp(deg(100.0), 0.0, LIMIT, SOFT);
+        let expected = LIMIT + SOFT * (deg(20.0) / SOFT).tanh();
+        assert!(
+            (at_100 - expected).abs() < 1e-5,
+            "100° off the rope came out {:.3}° — the band is limit + soft·tanh(excess/soft), \
+             which is {:.3}°",
+            at_100.to_degrees(),
+            expected.to_degrees()
+        );
+        // Monotone: pushing harder still moves the view, only ever less — a band, not a stop.
+        let at_120 = hooked_yaw_soft_clamp(deg(120.0), 0.0, LIMIT, SOFT);
+        assert!(
+            at_120 > at_100 && at_120 < LIMIT + SOFT,
+            "120° gave {:.3}° against {:.3}° at 100° — past the limit the band must keep \
+             giving ground, and never past limit + soft = {:.3}°",
+            at_120.to_degrees(),
+            at_100.to_degrees(),
+            (LIMIT + SOFT).to_degrees()
+        );
+        // And it is symmetric: the left edge is the right edge mirrored.
+        let left = hooked_yaw_soft_clamp(deg(-100.0), 0.0, LIMIT, SOFT);
+        assert!(
+            (left + at_100).abs() < 1e-5,
+            "−100° gave {:.3}° but +100° gave {:.3}° — the two edges are one curve",
+            left.to_degrees(),
+            at_100.to_degrees()
+        );
+    }
+
+    #[test]
+    fn f5c_the_clamp_is_relative_to_the_rope_not_to_north() {
+        // The user's 80° is measured FROM THE ROPE. Same 100° excess, rope at 90°: the answer
+        // is the rope's yaw plus the band, in the yaw's own winding.
+        let rope = deg(90.0);
+        let out = hooked_yaw_soft_clamp(rope + deg(100.0), rope, LIMIT, SOFT);
+        let expected = rope + LIMIT + SOFT * (deg(20.0) / SOFT).tanh();
+        assert!(
+            (out - expected).abs() < 1e-5,
+            "with the rope at 90° a look at 190° came out {:.3}° instead of {:.3}°",
+            out.to_degrees(),
+            expected.to_degrees()
+        );
+        // And the delta wraps: a look at −170° relative to a rope at 170° is 20° AWAY, not
+        // 340° — an unwrapped subtraction would clamp a player who is nearly aligned.
+        let near = hooked_yaw_soft_clamp(deg(-170.0), deg(170.0), LIMIT, SOFT);
+        assert!(
+            (near - deg(-170.0)).abs() < 1e-6,
+            "−170° against a rope at 170° is 20° of offset and was still moved to {:.3}°",
+            near.to_degrees()
+        );
+    }
+
+    #[test]
+    fn f5c_a_vertical_rope_constrains_no_yaw() {
+        // Straight up (or down), every yaw looks equally away from the rope — there is no
+        // angle to clamp against, and `direction_yaw` says so instead of inventing one.
+        assert_eq!(direction_yaw(Vec3::Y), None);
+        assert_eq!(direction_yaw(Vec3::new(0.0, -3.0, 0.0)), None);
+        // And the convention round-trips: a direction built from a yaw yields that yaw.
+        for y in [0.0_f32, 1.0, -2.5] {
+            let dir = Vec3::new(-y.sin(), 0.0, -y.cos());
+            let back = direction_yaw(dir).expect("horizontal");
+            assert!(
+                (back - y).abs() < 1e-5,
+                "yaw {y} round-tripped to {back} through direction_yaw"
+            );
         }
     }
 }

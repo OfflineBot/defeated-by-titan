@@ -2966,3 +2966,85 @@ fn f017_a_degenerate_span_or_a_nan_speed_falls_back_to_the_base() {
     assert_eq!(speed_fov_deg(base, max_deg, 22.0, top, f32::NAN, 100.0), base, "NaN speed");
     assert!(speed_fov_deg(base, max_deg, 22.0, top, 40.0, f32::NAN).is_finite());
 }
+
+// ---------------------------------------------------------------------------
+// The FOV slew — the return eases instead of stepping (user, 2026-09-01)
+// ---------------------------------------------------------------------------
+//
+// > „fov changes sollen nach geschwindigkeit egal welche richtung! weil wenn man seitlich
+// > geht ist der change sehr sudden drop. nicht gut!" and „die fov effekte sollen nicht
+// > instant da sien sondern langsamer wieder zurückgeht. also ein kleiner übergang."
+//
+// The speed half was already right — `apply_field_of_view` reads `LinearVelocity.length()`,
+// which is |v| whatever the direction. The DROP he saw is the missing slew: |v| dips when a
+// swing changes direction, and an FOV that is an instant function of speed dips with it in
+// one frame. So the target stays `speed_fov_deg` and the LENS follows it through
+// `render::slewed_fov_deg` — opening fast (`camera.fov_widen_deg_s`), returning slow
+// (`camera.fov_return_deg_s`), both out of `game.ron`.
+
+use defeated_by_titan::render::slewed_fov_deg;
+
+/// The two rates, from the file — the test pins the asymmetry the user asked for, not two
+/// literals somebody typed here.
+fn slew_knobs() -> (f32, f32) {
+    let d = GameData::load(&assets_dir().join("data"));
+    (d.game.camera.fov_widen_deg_s, d.game.camera.fov_return_deg_s)
+}
+
+#[test]
+fn the_fov_return_eases_instead_of_stepping() {
+    let (widen, return_rate) = slew_knobs();
+    // The strafe dip: the lens is out at 75° and the speed target collapses to 60° in one
+    // frame. The old code jumped the whole 15° in that frame — that IS the „sudden drop".
+    let dt = 1.0 / 60.0;
+    let next = slewed_fov_deg(75.0, 60.0, widen, return_rate, dt);
+    let step = 75.0 - next;
+    assert!(
+        step <= return_rate * dt + 1e-4,
+        "the return stepped {step:.3}° in one 60 Hz frame — the whole 15° drop at once is \
+         exactly the sudden drop he reported; at {return_rate}°/s it may move at most \
+         {:.3}°",
+        return_rate * dt
+    );
+    assert!(step > 0.0, "it has to move — a slew is not a freeze");
+}
+
+#[test]
+fn the_fov_opens_faster_than_it_returns() {
+    let (widen, return_rate) = slew_knobs();
+    assert!(
+        widen > return_rate,
+        "fov_widen_deg_s = {widen} <= fov_return_deg_s = {return_rate} — he asked for the \
+         opening to be quick and the RETURN to be the slow one, not the other way round"
+    );
+    let dt = 1.0 / 60.0;
+    // Same 15° of distance, both directions, one frame each.
+    let opened = slewed_fov_deg(60.0, 75.0, widen, return_rate, dt) - 60.0;
+    let returned = 75.0 - slewed_fov_deg(75.0, 60.0, widen, return_rate, dt);
+    assert!(
+        opened > returned,
+        "one frame opens {opened:.3}° but returns {returned:.3}° — the asymmetry is the \
+         feature"
+    );
+}
+
+#[test]
+fn the_fov_slew_arrives_and_never_overshoots() {
+    let (widen, return_rate) = slew_knobs();
+    let dt = 1.0 / 60.0;
+    // Accelerate-then-stop, as a trace: open towards 90, then return to 60.
+    let mut fov = 60.0;
+    for _ in 0..600 {
+        fov = slewed_fov_deg(fov, 90.0, widen, return_rate, dt);
+        assert!(fov <= 90.0 + 1e-4, "opened past the target to {fov}");
+    }
+    assert!((fov - 90.0).abs() < 1e-3, "after 10 s of full speed the lens is at {fov}, not 90");
+    for _ in 0..600 {
+        fov = slewed_fov_deg(fov, 60.0, widen, return_rate, dt);
+        assert!(fov >= 60.0 - 1e-4, "returned past the base to {fov}");
+    }
+    assert!((fov - 60.0).abs() < 1e-3, "after 10 s at rest the lens is at {fov}, not 60");
+    // And a degenerate frame cannot smuggle a NaN into the projection.
+    assert!(slewed_fov_deg(75.0, f32::NAN, widen, return_rate, dt).is_finite());
+    assert!(slewed_fov_deg(75.0, 60.0, widen, return_rate, f32::NAN).is_finite());
+}
