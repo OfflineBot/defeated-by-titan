@@ -745,7 +745,13 @@ triangle surface under a `max_grade` guard, so the step-wall CLASS loses its car
 §5E lands, B-018 is retired with it; if §5E is ever rolled back, this paragraph is the
 pointer to rebuild the entry from FIND-214.
 
-## B-041 — a hook pressed in the same tick as a `look` fires along the PREVIOUS look (2026-09-02, OPEN)
+## B-041 — a hook pressed in the same tick as a `look` fires along the PREVIOUS look (2026-09-02, FIXED the same day — candidate D, adversarially confirmed)
+
+**Closed 2026-09-02 evening:** one added registration (`vector::aim::pre_fire_aim` in the
+empty `World` set), zero new cross-set edges, zero latency. `scripts/b041-stale-look.txt`
+4/7 red → 7/7 green with a commented-out-registration break control; flick gap 1.02 m →
+0.00 m at 14 m; confinement and marker exactness proven by A/B (FIND-229 has all numbers).
+The entry below is the original report, kept verbatim.
 
 Found while attributing `f025-chain`'s 12/36 (FIND-228). For exactly ONE tick the gun and
 the eye disagree: `vector::aim::aim` runs in FixedUpdate `PostStep` (moved there by the

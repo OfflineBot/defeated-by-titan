@@ -7,12 +7,15 @@
 #   ./target/debug/defeated_by_titan --headless --script scripts/b041-stale-look.txt --ticks 1400
 #
 # PINS: the asserts pin the CORRECT behaviour (a hook flies along the look of ITS OWN
-# tick), so this script is RED — 4 of 7 asserts, both fire modes — until B-041 is fixed,
-# and turning green IS the fix's evidence. The waited legs (B, D, W) are the controls that
-# hold today: 3 ticks of separation is already fresh, so the window is exactly one tick.
-# Static player, assist off, centre ray only. Discriminator: wall base body 20 at
-# z = -100.15 — a level ray bites it at eye height (rope == 1), a 45 deg ray clears it
-# into open sky (rope == 0, NothingInRange).
+# tick). RED 4 of 7 until 2026-09-02 evening; GREEN 7/7 since B-041's fix (candidate D,
+# `pre_fire_aim` in the World set) — the flip of exactly legs A/C/E/F was the fix's
+# red-then-green, reproduced by an adversary with a break control. The waited legs
+# (B, D, W) are the controls that held throughout.
+# Static player, assist off, centre ray only. Discriminator: the wall at z ≈ -100 — a
+# level ray bites a wall face (rope == 1; measured: body 19 at y≈27 / body 69 at y≈20.5,
+# the player has sunk below the warp eye by hook time), a 45 deg ray clears everything
+# into open sky (rope == 0, NothingInRange). The original prose said "body 20 at eye
+# height" — the discrimination never depended on it.
 settings assist_catch 0
 settings assist_strength 0
 wait 1.0

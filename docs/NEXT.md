@@ -1216,3 +1216,20 @@ anchor fails the gate regardless of feel:
    B-041 staleness vs titan colliders; deliverable is the attribution + worst-offender
    table.
 3. Then §5E smooth terrain (plan stands in docs/PLAN.md).
+
+## Small rulings queued 2026-09-02 evening (before or alongside the terrain round)
+
+1. **The f025 chain lane**: B-041 is fixed and f025-chain's remaining 11 reds are the
+   ACT2 lane that carries nothing (no crossbeam colliders at x=0 over stations 1-2 —
+   FIND-228/229). Ruling needed: rebuild the ten crossbeams in maps.ron (main-head file)
+   or re-route the chain acceptance. The terrain round changes the ground anyway — decide
+   together with it.
+2. **f-001-hooks attribution (FIND-230)**: tree measures 10 of 14 held, documentation
+   says 12; the four reds are Speed/Height legs and predate B-041. Attribute against
+   gravity −32 / B-040 pull / §5D drive before anyone re-pins.
+3. **The prop hulls (B-043 leftover)**: five validated rows wait in
+   tools/fleet/validate.py behind tests/world.rs f003_the_colliders_carry_the_half_edge
+   _from_the_file, which requires placed blocks to be plain cuboids. One world-owner
+   adjustment (tolerate compounds, keep the factor-2 invariant), then land the rows.
+4. **b046 flake**: tests/hud.rs f177 board prompt empty ~1 in 5 — find the writer, prove
+   with 30 consecutive greens.

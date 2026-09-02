@@ -16,6 +16,14 @@
 # x=0 over stations 1-2 today, and fresh 25–45° looks from the pavement at z=180 find
 # NothingInRange even at assist 100/100. -> docs/FINDINGS.md FIND-228.
 #
+# 🔴 **B-041 IS FIXED (2026-09-02 evening) AND THIS SCRIPT IS STILL 12 OF 36 — but the SET
+# migrated exactly as FIND-228 predicted** (-> FIND-229): the gravity-drift legs 124/125 and
+# the honest-wall leg 282 are GREEN now; every remaining red is the dead ACT2 chain lane
+# (lines 132..174: Rope==0 / Speed==0 where the header promises crossbeams at x=0) plus
+# line 290. The aim staleness is gone from this file. What is left is a WORLD CONTENT
+# ruling — either the lane's crossbeams are rebuilt in maps.ron or the chain acceptance
+# gets a new route — queued in docs/NEXT.md; the re-pin waits for that ruling.
+#
 #   ./target/debug/defeated_by_titan --headless --script scripts/f025-chain.txt --ticks 2400
 #   ./target/debug/defeated_by_titan --headless --script scripts/f025-chain.txt --ticks 2400 >/dev/null 2>&1; echo $?
 #

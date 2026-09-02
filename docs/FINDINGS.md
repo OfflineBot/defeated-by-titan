@@ -1920,3 +1920,36 @@ FIND-096 mistake. `scripts/f025-chain.txt` stays untouched and red (12/36) until
 ruled on; `scripts/b041-stale-look.txt` (4/7 red, captured) is the extracted minimal repro.
 Whether the staleness is a regression since 08-29 or long-standing-but-masked needs the
 08-29 binary or a bisect — open in B-041.
+
+## FIND-229 — B-041 closed by candidate D, and every number moved the right way (2026-09-02)
+
+The fix is one added registration: `vector::aim::pre_fire_aim` in the previously EMPTY
+`SimulationSystems::World` set — the rope reads a direction-fresh `ArmAim`, the PostStep
+instance still owns the picture. Adversarially CONFIRMED, all six attacks held:
+- `scripts/b041-stale-look.txt` 4/7 red → **7/7 green** (break control: registration
+  commented out → the exact four lines red again, byte-identical restore, green).
+- The flick gap collapsed to zero: stale anchor was (1.02, 20.62, −94.00) vs fresh
+  (−0.00, 20.57, −94.00) at 14 m — after the fix both legs are **bit-identical**
+  (`scripts/b043-flick-gap.txt`, a pure harness, untouched).
+- Confinement proven by true A/B: `f176-pull` filtered output byte-identical between the
+  fixed and broken binary; `f017-fov-slew` sim-identical over 211 (tick, speed, want)
+  samples. Marker: `f002` prints worst **0.00 px**, verbatim the FIND-219 magnitude.
+- The one-tick boundary was ALREADY fresh pre-fix (bit-identical anchors on both
+  binaries) — the window really was same-tick delivery only, exactly as designed.
+- `f025-chain`: still 12/36 by count but the SET migrated as FIND-228 predicted — the
+  gravity-drift legs (124/125) and the honest-wall leg (282) are GREEN; every remaining
+  red is the dead ACT2 lane (`Rope==0`/`Speed==0`, no crossbeams at x=0) plus line 290.
+  The B-041 component of f025-chain is gone; what remains is world content.
+**Forward caveat (refuter's find):** pre_fire_aim resolves against the PRE-Integrate
+spatial tree, aim against POST — invisible while anchors are static; the day F-029 makes
+a titan limb an anchor, rope and picture can disagree by one tick of titan motion. Noted
+in the src/vector/mod.rs contract comment.
+
+## FIND-230 — f-001-hooks stands at 10 of 14, its documentation says 12, and B-041 is acquitted (2026-09-02, attribution owed)
+
+Measured identically BEFORE and AFTER the B-041 change (so not its doing): 4 asserts red
+(lines 108, 158, 160, 171 — Speed/Height legs, not Rope legs; line 108 `Speed < 20`
+measured 13.176 has crossed to 29.016-class values in a sibling leg). The script's
+documented state is "12 of 14 held". Either a landed round regressed the speed envelope
+(candidates: gravity −32, B-040 always-on pull, the §5D drive rework) or the doc line is
+stale. **Nobody may re-pin it before attributing which** — the FIND-228 rule.
