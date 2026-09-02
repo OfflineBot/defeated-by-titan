@@ -334,15 +334,22 @@ fn bindings_s_never_reels_and_still_walks_backwards() {
 ///    position on a taut rope; the joint still forbids retreat (§3F, „NICHT das seil
 ///    verlängern"). `Q-061` is superseded — see its entry in `docs/QUESTIONS.md`.
 ///
-/// The fixture is unchanged since meaning 1, so all three sentences were measured on the same
-/// 82.2 m of rope: from the market square at `(75, 2, -30)`, `look 0 44` puts the ray on the
-/// wall gallery 57.6 m away and 56 m up. 120 ticks of the old reel closed 56 m here.
+/// The GEOMETRY is unchanged since meaning 1, so all three sentences were measured on the
+/// same rope: `look 0 44`, 82.2 m from the hand — 83.32 m body-to-tip, 44.8° of elevation.
+/// What CARRIES that geometry moved on 2026-09-02: §5E (`FIND-231`) redistributed Ashgate's
+/// terrain and broke the market-square stance's ground, so the fixture now stands on its own
+/// slab with a synthetic anchor at the old numbers — the story is on
+/// [`taut_rope_then_hold`]. 120 ticks of the old reel closed 56 m here.
 ///
 /// # What the fixture varies and what the code reads (`docs/lessons/fixtures.md` rule 2)
 ///
 /// The fixture varies: the held key set, and `drive_idle_speed_m_s` (the deletion control).
+/// It pins: the graybox map, the slab the stance stands on, and the anchor's geometry
+/// (44°, 82.2 m — synthetic since 2026-09-02, see [`taut_rope_then_hold`]).
 /// The code reads: `move_x`/`move_y` (`pull_scale` — the S-cancel and the lateral ramp),
-/// `MovementState` (the winch's `in_flight` gate), the anchor geometry, and
+/// `MovementState` (the winch's `in_flight` gate), the anchor geometry, the
+/// `HookAnchored` message (`player::rope::attach_ropes` builds the `DistanceJoint` from it —
+/// the fixture has to send it, a forced arm state alone is a winch without a rope), and
 /// `drive_steer_pull_fraction`. The fraction is NOT varied here — its ramp is measured in
 /// `tests/player.rs::f5d_the_lateral_scales_the_pull_in_a_ramp_not_a_switch`.
 ///
@@ -368,7 +375,7 @@ fn bindings_s_never_reels_and_still_walks_backwards() {
 /// WALKED its 8.031 m. **§5E-b overturned that gate, third ruling, newest word wins:**
 /// *„wenn cih mich hooke werde ich nicht autmoatisch rangezogen! das fehlt noch!"* — a bite
 /// pulls immediately, ground included (`player::locomotion::ground_pull_live`). So `idle`
-/// now MEASURES the ground pull (14.832 m closed on this build, where the gate held it at
+/// now MEASURES the ground pull (14.714 m closed on this fixture, where the gate held it at
 /// 0.000), `W` rides pull + thrust from the bite tick, and the FIND-196 pair `Space`+`W`
 /// against `Space` still stands with the same `with_sw <= with_space + 0.05` bound.
 #[test]
@@ -443,8 +450,8 @@ fn r7_s_cancels_the_pull_and_only_the_lateral_remains() {
     );
     // `W` alone, since §5E-b: the bite hands the body to the rope on the spot, and `W` is
     // thrust plus drive ON TOP of the pull — so from a standing start it has to beat the
-    // free pull by a wide margin, not merely walk. Measured on this build: −69.386 m against
-    // the free pull's −14.832 — a 54 m gap; 10 m is the fat-margin floor under it.
+    // free pull by a wide margin, not merely walk. Measured on this fixture: −53.813 m
+    // against the free pull's −14.714 — a 39 m gap; 10 m is the fat-margin floor under it.
     assert!(
         with_w < with_space - 10.0,
         "W alone closed {:.3} m against the free pull's {:.3} m — thrust on top of the \
@@ -463,11 +470,17 @@ fn r7_s_cancels_the_pull_and_only_the_lateral_remains() {
     );
     // `A`, since §5E-b, hands the body to the rope too (the ramp never reaches zero) — and
     // the DISTANCE still has to stay flat in this stance, for a measured reason, not a gate:
-    // at 44° of elevation gravity's outward radial component (32·sin 44° ≈ 22 m/s²) beats
-    // the ramped pull's whole ceiling (0.35 · 34.29 = 12 m/s²), so the taut joint holds the
-    // radius while the lateral drive swings him across it. Measured −0.153 m with the pull
-    // on, −0.008 m without it. If `A` ever starts closing tens of metres here, the ramp
-    // (`pull_scale`) has fallen off and the full winch is running under a lateral key.
+    // at 44.8° of elevation gravity's outward radial component (32·sin 44.8° ≈ 22.5 m/s²)
+    // beats the ramped pull's whole ceiling (0.35 · 34.29 = 12 m/s²), so the taut joint
+    // holds the radius while the lateral drive swings him across it. The angle where that
+    // argument dies is asin(12/32) = 22.0° — this stance carries double it. And the ground
+    // under the whole swing arc is the fixture's own FLAT slab: the lateral drive carries
+    // the body 31–46 m across it in these 120 ticks (`drive_lateral_m_s: 24`), and on
+    // 2026-09-02 exactly that arc is what §5E's redistributed terrain broke under the old
+    // market stance — a hill ridden up INSIDE the sphere closed 1.310 m with the pull
+    // deleted. Measured on the slab: −0.072 m with the pull on, −0.008 m without it. If `A`
+    // ever starts closing tens of metres here, the ramp (`pull_scale`) has fallen off and
+    // the full winch is running under a lateral key.
     let reel_would_have = reel_speed_m_s() * 2.0;
     assert!(
         with_a > -reel_would_have / 100.0 && a_alone > -reel_would_have / 100.0,
@@ -480,7 +493,7 @@ fn r7_s_cancels_the_pull_and_only_the_lateral_remains() {
     // design where a hooked player standing still kept his legs. The user overturned it:
     // *„wenn cih mich hooke werde ich nicht autmoatisch rangezogen! das fehlt noch!"* — so
     // the key that takes him off his legs is now NO key, and a flat `idle` is the BUG this
-    // line guards against. Measured on this build: −14.832 m (the 44° anchor is below the
+    // line guards against. Measured on this fixture: −14.714 m (the 44.8° anchor is below the
     // 69° clean-lift line, so this closing is the DRAG — `player::locomotion::ground_pull_live`
     // and the elevation sweep in `tests/player.rs::f176_the_contact_break_threshold_*`).
     // −5 m is a third of the measurement and 60× the old residual noise.
@@ -518,21 +531,62 @@ fn reel_speed_m_s() -> f32 {
     v
 }
 
-/// Hooks the wall gallery from the market square, then holds `keys` for **120 ticks** and
-/// returns how much the distance to the anchor changed, in metres. Negative is towards it.
+/// Puts the player on a taut 82.2 m rope at 44° of elevation, then holds `keys` for
+/// **120 ticks** and returns how much the distance to the anchor changed, in metres.
+/// Negative is towards it.
 ///
-/// The manoeuvre is `scripts/f003-ashgate.txt` ACT 4 leg 1 with `S` where that script holds
-/// `Ctrl`: from `(75, 2, -30)`, `look 0 44` puts the ray on the gallery 57.6 m away and 56 m
-/// up — 82.2 m of rope, measured. `reel_speed_m_s` is 28, so 120 ticks of reeling are **56 m**,
-/// and that is exactly what this returned while `S` was a second binding for `REEL_IN`.
+/// # The stance is SYNTHETIC since 2026-09-02, and that is the fix for a real break
+///
+/// Until §5E (`FIND-231`) this manoeuvre was `scripts/f003-ashgate.txt` ACT 4 leg 1 flown
+/// from Ashgate's market square: warp to `(75, 2, -30)`, `look 0 44`, and the ray put the
+/// anchor on the wall gallery — measured on the last green run: 58.35 m away, 57.95 m up,
+/// **44.8° of elevation, 82.24 m of rope**. §5E redistributed the terrain, and what broke
+/// was NOT the stance or the angle (the ray re-hit the gallery at the same 44.8°): it was
+/// the ground under the `A` key's swing ARC. The lateral drive carries the body 31–46 m
+/// across the square in 120 ticks (`drive_lateral_m_s: 24`), the redistributed field rises
+/// to y ≈ +3.3 m out there, and a body ridden up a hill INSIDE the rope sphere closes the
+/// straight-line distance — 1.31 m with the pull deleted, against a 0.56 m bound that had
+/// measured 0.008 m on flat pads.
+///
+/// So the fixture now owns its ground the way it already owned its keys: the **graybox**
+/// (pinned for `tests/player.rs`'s reason — nothing here is a claim about a district), a
+/// **flat 300 × 300 m slab whose top is exactly y = 100** — above every graybox roof, the
+/// church (35 m) included, so no house can wander into the swing arc either — and the
+/// anchor placed **synthetically at the OLD geometry**: `look 0 44`'s direction, 82.2 m
+/// from the hand, on a phantom index body (the `tests/player.rs::stand_and_bite` pattern —
+/// `world::index::maintain_index` only strikes out what an observer removed, so the entry
+/// persists and `update_hooks` keeps the tip in place). Same elevation, same rope, same
+/// physics premise; the ground can no longer move because no generator owns it.
+///
+/// `reel_speed_m_s` is 28, so 120 ticks of reeling are **56 m**, and that is exactly what
+/// this returned while `S` was a second binding for `REEL_IN`.
 fn taut_rope_then_hold(keys: &[KeyCode]) -> f32 {
     taut_rope_then_hold_with_pull(keys, true)
 }
 
 fn taut_rope_then_hold_with_pull(keys: &[KeyCode], pull: bool) -> f32 {
-    use defeated_by_titan::shared::{LookOverride, PlayerId, WarpPlayer};
+    use avian3d::prelude::{Collider, RigidBody};
+    use defeated_by_titan::shared::{
+        BodyId, BodyMask, Hook, HookAnchored, HookState, IndexEntry, LookOverride, PlayerId,
+        Side, SpatialIndex, WarpPlayer,
+    };
+
+    // The old market-square ray, kept as numbers: `look 0 44` (yaw 0 is -Z, pitch up) and
+    // 82.2 m of rope hand-to-tip. The elevation carries the physics premise — see `r7_*`'s
+    // radius-holding argument — so whoever changes it re-derives that comment.
+    const PITCH_DEG: f32 = 44.0;
+    const ROPE_M: f32 = 82.2;
+    const SLAB_TOP_Y_M: f32 = 100.0;
 
     let mut app = defeated_by_titan::app(Cli { headless: true, ..default() });
+    // The graybox, not whatever `maps.ron: current` says — the same pinning argument as
+    // `tests/player.rs`: this file's claim is about keys and the rope force model, not about
+    // a district, and a level designer must not be able to move it.
+    app.world_mut().resource_mut::<GameData>().maps.current = "graybox".to_string();
+    assert!(
+        app.world().resource::<GameData>().current_map().is_some(),
+        "maps.ron lists no map \"graybox\" — the fixture would build an empty world"
+    );
     if !pull {
         app.world_mut().resource_mut::<GameData>().game.vector.drive_idle_speed_m_s = 0.0;
     }
@@ -541,6 +595,16 @@ fn taut_rope_then_hold_with_pull(keys: &[KeyCode], pull: bool) -> f32 {
     app.insert_resource(TimeUpdateStrategy::FixedTimesteps(1));
     app.update();
 
+    // The proving ground: one static slab, top at y = 100, big enough that the whole `A`
+    // swing circle (radius ROPE_M · cos 44° ≈ 59 m around under-anchor, z ∈ [-118, 0]) and
+    // the idle drag path stay on it with margin. `RigidBody::Static` + `Collider` is the
+    // exact component pair `world::map` gives a block's physics.
+    app.world_mut().spawn((
+        RigidBody::Static,
+        Collider::cuboid(300.0, 1.0, 300.0),
+        Transform::from_xyz(0.0, SLAB_TOP_Y_M - 0.5, -30.0),
+    ));
+
     let me = *app
         .world_mut()
         .query_filtered::<&PlayerId, With<LocalPlayer>>()
@@ -548,25 +612,70 @@ fn taut_rope_then_hold_with_pull(keys: &[KeyCode], pull: bool) -> f32 {
         .next()
         .expect("the local player must exist after startup");
 
-    app.world_mut().write_message(WarpPlayer { player: me, pos_x: 75.0, pos_y: 2.0, pos_z: -30.0 });
-    app.world_mut().resource_mut::<LookOverride>().0 = Some((0.0, 44.0_f32.to_radians()));
+    app.world_mut().write_message(WarpPlayer {
+        player: me,
+        pos_x: 0.0,
+        pos_y: SLAB_TOP_Y_M + 2.0,
+        pos_z: 0.0,
+    });
+    app.world_mut().resource_mut::<LookOverride>().0 = Some((0.0, PITCH_DEG.to_radians()));
     for _ in 0..90 {
         app.update();
     }
+    // Fixture health: he has to be STANDING ON THE SLAB, or every number below is a
+    // free-fall measurement wearing a stance's name.
+    let stand_m = player_pos(&mut app);
+    assert!(
+        (stand_m.y - SLAB_TOP_Y_M).abs() < 0.5,
+        "the player settled at y = {:.3} instead of on the slab top at {SLAB_TOP_Y_M} — the \
+         fixture's ground is not under his feet and nothing below measures a stance",
+        stand_m.y
+    );
 
     // The rope: `Q` is `HOOK_LEFT` and it stays **held** — releasing the key releases the
-    // anchor (`scripts/f003-ashgate.txt` ACT 4 relies on the same).
+    // anchor (`src/vector/hook.rs`, `ReleaseReason::Released`). The anchor itself is forced,
+    // not flown: a phantom body in the spatial index carries the tip at exactly the old
+    // ray's geometry, so the bite is tick-exact and the 120-tick window starts taut.
     app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyQ);
-    let mut anchored = false;
-    for _ in 0..180 {
-        app.update();
-        if distance_to_anchor(&mut app).is_some() {
-            anchored = true;
-            break;
-        }
+    let eye_m = app.world().resource::<GameData>().game.player.eye_height_m;
+    let (sin, cos) = PITCH_DEG.to_radians().sin_cos();
+    let anchor_m = stand_m + Vec3::Y * eye_m + Vec3::new(0.0, sin, -cos) * ROPE_M;
+    {
+        let entity = app
+            .world_mut()
+            .query_filtered::<Entity, With<LocalPlayer>>()
+            .iter(app.world())
+            .next()
+            .expect("the local player must exist");
+        let body = BodyId(90_001);
+        let center_m = anchor_m + Vec3::Y * 2.0;
+        app.world_mut().resource_mut::<SpatialIndex>().insert(IndexEntry {
+            id: body,
+            center_m,
+            half_size_m: Vec3::splat(2.0),
+            mask: BodyMask::SOLID.with(BodyMask::ANCHORABLE),
+        });
+        let mut hook = app.world_mut().get_mut::<Hook>(entity).expect("the player has a Hook");
+        let arm = &mut hook.arms[Side::Left.index()];
+        arm.state = HookState::Anchored { body, local_m: anchor_m - center_m };
+        arm.tip_m = anchor_m;
+        // And the MESSAGE a real bite sends: `player::rope::attach_ropes` builds the
+        // `DistanceJoint` out of `HookAnchored`, not out of the arm's state — without it the
+        // fixture has a winch but no rope, `S` walks 9 m past the radius and `Ctrl` reels
+        // nothing (measured on this fixture's first run, 2026-09-02).
+        let tick = app.world().resource::<Tick>().0;
+        app.world_mut().write_message(HookAnchored {
+            player: me,
+            side: Side::Left,
+            body,
+            point_x: anchor_m.x,
+            point_y: anchor_m.y,
+            point_z: anchor_m.z,
+            tick,
+        });
     }
-    assert!(anchored, "the hook never anchored — this run measures nothing about S");
-    let before = distance_to_anchor(&mut app).expect("anchored");
+    let before = distance_to_anchor(&mut app)
+        .expect("the forced anchor did not register — this run measures nothing about S");
 
     for key in keys {
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(*key);
@@ -578,6 +687,12 @@ fn taut_rope_then_hold_with_pull(keys: &[KeyCode], pull: bool) -> f32 {
         .expect("the rope has to still be anchored, or the measurement is void");
     println!("  {keys:?} held: {before:.3} m -> {after:.3} m to the anchor");
     after - before
+}
+
+/// The local player's position — the fixture's own measuring points.
+fn player_pos(app: &mut App) -> Vec3 {
+    let mut players = app.world_mut().query_filtered::<&Transform, With<LocalPlayer>>();
+    players.iter(app.world()).next().expect("the local player exists").translation
 }
 
 /// Distance from the local player to the tip of whichever arm is anchored, or `None` while
