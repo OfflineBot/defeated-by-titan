@@ -1,0 +1,18 @@
+# f171-crosshair-shot — the stance for the X-crosshair evidence frame (2026-09-01).
+#
+#   ./target/debug/defeated_by_titan --offscreen --screenshot docs/images/f171-crosshair-x.png \
+#       --script scripts/f171-crosshair-shot.txt --ticks 100
+#
+# PINS: the stance and the aim — f-001's ashgate stand (51, 0, 13), pitch -50 onto the paved
+# square, which is anchorable, so the X is in its ANCHOR state and cyan: decodable by hue
+# against the grey street, which a white Free X against a grey street is not.
+# A bare `--offscreen --screenshot` run cannot photograph the HUD at all: with no flags the
+# run opens on the title screen (`shared::cli::title_by_default`) and `hud::
+# hide_while_a_menu_is_up` hides every element — a `--script` run skips the front door.
+# The FREE-state frame, X only and nothing else near the centre, is the companion run
+# `scripts/f171-crosshair-sky.txt` -> `docs/images/f171-crosshair-x-free.png`.
+
+warp 51 0 13
+look 0 -50
+wait 5.0
+end

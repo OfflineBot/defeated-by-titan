@@ -1,0 +1,15 @@
+# f171-crosshair-sky — the X alone, FREE state, against the sky (2026-09-01).
+#
+#   ./target/debug/defeated_by_titan --offscreen --screenshot docs/images/f171-crosshair-x-free.png \
+#       --script scripts/f171-crosshair-sky.txt --ticks 100
+#
+# PINS: pitch 60 into open sky — no anchor, so every pixel near the centre belongs to the
+# CROSSHAIR alone. The street frame (`scripts/f171-crosshair-shot.txt`) shows the Anchor
+# state instead. Since §5E-c (2026-09-02) the marker assembly — rings, badges, letters —
+# is deleted entirely (FIND-227), so BOTH frames must show the four diagonal X strokes and
+# nothing else; the 2026-09-02 pixel sweep measured 0 axis-crossing pixels in each.
+
+warp 51 0 13
+look 0 60
+wait 5.0
+end

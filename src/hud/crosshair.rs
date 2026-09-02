@@ -1,33 +1,42 @@
-//! `F-171` — the dynamic crosshair: **four ticks around a hole**, in three shapes.
+//! `F-171` — the crosshair: **an X of four strokes around an empty middle**, in three shapes.
 //!
-//! # Why four nodes and not one
+//! # The shape is his sentence (2026-09-01)
 //!
-//! The claim of `F-170` is that no HUD node covers the central 20 % × 20 % of the screen —
-//! and the crosshair sits in the middle. One node with a dot in it would cover exactly the
-//! pixels the player is aiming at. So the crosshair is four ticks standing **outside** the
-//! keep-out box ([`KEEP_OUT_LOW_PCT`]..[`KEEP_OUT_HIGH_PCT`]), and the box itself is the hole.
+//! > *„mach zudem die verbindung zu einem einfachen crosshair und nicht so gkreise mit seiten
+//! > strichen etc. sollen 4 striche wo in der mitte nichts und 45deg rotiert und gröse eher
+//! > mittel bis klein. aktuell ist mittel bis groß. größe einstellbar und farbe auch!"*
 //!
-//! That sentence is the reason the box is 20 % and not 3 %: the number is **the crosshair's own
-//! reach**, and it is why FIND-098 exempted the two arm-aim glyphs from the box instead of
-//! shrinking it. Shrinking it to a width the resolved fan clears would have collapsed this
-//! element to a 44 px cross and moved every pixel of `F-171`'s photographed geometry.
+//! Four strokes on the diagonals ([`CrosshairPart::direction`]), rotated 45° so the element
+//! is an X and never a `+`; the exact middle stays empty ([`GAP_FLOOR_PX`] — the whole sight
+//! core, not just the centre pixel); the base sizes live in `game.ron: hud.crosshair` and the
+//! player scales them 50–200 % (`PlayerSettings::crosshair_size_pct`) and picks the colour
+//! (`PlayerSettings::crosshair_colour`, `shared::settings::CROSSHAIR_COLOURS`).
 //!
-//! That makes the crosshair wide — at 1280 × 720 the ticks stand 128 px left and right of
-//! centre and 72 px above and below, because 20 % of the width is not 20 % of the height. It
-//! is a deliberate consequence of the acceptance criterion, not an accident of layout.
+//! ## The keep-out box no longer applies to this element — its replacement claim is stronger
+//!
+//! Until 2026-09-01 the four ticks stood OUTSIDE `F-170`'s 20 % keep-out box (128 px from the
+//! centre at 1280 × 720 — measured 151 px to the far corner), because the box was defined as
+//! "the crosshair's own reach". A mittel-klein X lives INSIDE that box by definition, so the
+//! crosshair joins the arm markers (FIND-098/FIND-129) as a named exemption in
+//! `tests/hud.rs::f170_nothing_covers_the_middle_of_the_screen` — and what replaces the box
+//! for it is `the_x_crosshair_hugs_the_centre_and_keeps_the_aim_pixel_free`: every pixel
+//! within 60 px of the centre, the whole sight core empty, in every state, at 1 px sampling.
 //!
 //! # Why the three states differ in **geometry**
 //!
 //! `F-171`'s acceptance is "the states are distinguishable under colour blindness". Three
 //! colours on one node satisfy every screenshot and no colour-blind player. So:
 //!
-//! | state | ticks | corner marks | visible nodes |
+//! | state | strokes | outer marks | visible nodes |
 //! |---|---|---|---|
 //! | [`CrosshairState::Free`] | short, thin | — | 4 |
 //! | [`CrosshairState::Anchor`] | long, thick | — | 4 |
 //! | [`CrosshairState::Cortex`] | long, thick | four, further out | 8 |
 //!
-//! Colour rides on top (neutral / cyan / amber) and carries **no information of its own**.
+//! Colour rides on top and carries **no information of its own** — which is also why the
+//! player may recolour the Free state at will: [`paint_crosshair`] draws his choice there,
+//! and keeps cyan/amber for `Anchor`/`Cortex`, because those two ARE the signals
+//! (`docs/conventions.md` §3).
 //! `tests/hud.rs::f171_the_three_states_differ_in_shape_not_only_in_colour` forces all three
 //! `BackgroundColor`s equal and still has to be able to tell them apart.
 //!
@@ -41,9 +50,9 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::data::GameData;
-use crate::hud::{signal, HudElement, ShowWhileTuning, KEEP_OUT_HIGH_PCT, TUNING_Z};
-use crate::shared::{AimPoint, Intent, LocalPlayer, LAYER_TITAN_CORTEX};
+use crate::data::{CrosshairTuning, GameData};
+use crate::hud::{signal, HudElement, ShowWhileTuning, TUNING_Z};
+use crate::shared::{AimPoint, Intent, LocalPlayer, PlayerSettings, LAYER_TITAN_CORTEX};
 
 /// What the crosshair is looking at.
 ///
@@ -62,89 +71,126 @@ pub enum CrosshairState {
     Cortex,
 }
 
-/// Which of the eight nodes this is.
+/// Which of the eight nodes this is — four strokes, four outer marks, one per diagonal.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CrosshairPart {
-    Left,
-    Right,
-    Up,
-    Down,
-    CornerUpLeft,
-    CornerUpRight,
-    CornerDownLeft,
-    CornerDownRight,
+    StrokeUpLeft,
+    StrokeUpRight,
+    StrokeDownLeft,
+    StrokeDownRight,
+    MarkUpLeft,
+    MarkUpRight,
+    MarkDownLeft,
+    MarkDownRight,
 }
 
 impl CrosshairPart {
     pub const ALL: [CrosshairPart; 8] = [
-        CrosshairPart::Left,
-        CrosshairPart::Right,
-        CrosshairPart::Up,
-        CrosshairPart::Down,
-        CrosshairPart::CornerUpLeft,
-        CrosshairPart::CornerUpRight,
-        CrosshairPart::CornerDownLeft,
-        CrosshairPart::CornerDownRight,
+        CrosshairPart::StrokeUpLeft,
+        CrosshairPart::StrokeUpRight,
+        CrosshairPart::StrokeDownLeft,
+        CrosshairPart::StrokeDownRight,
+        CrosshairPart::MarkUpLeft,
+        CrosshairPart::MarkUpRight,
+        CrosshairPart::MarkDownLeft,
+        CrosshairPart::MarkDownRight,
     ];
 
-    pub const fn is_corner(self) -> bool {
+    pub const fn is_mark(self) -> bool {
         matches!(
             self,
-            CrosshairPart::CornerUpLeft
-                | CrosshairPart::CornerUpRight
-                | CrosshairPart::CornerDownLeft
-                | CrosshairPart::CornerDownRight
+            CrosshairPart::MarkUpLeft
+                | CrosshairPart::MarkUpRight
+                | CrosshairPart::MarkDownLeft
+                | CrosshairPart::MarkDownRight
         )
+    }
+
+    /// The unit vector from the screen centre along this part's diagonal, screen convention
+    /// (`+y` is down).
+    pub fn direction(self) -> Vec2 {
+        const D: f32 = std::f32::consts::FRAC_1_SQRT_2;
+        match self {
+            CrosshairPart::StrokeUpLeft | CrosshairPart::MarkUpLeft => Vec2::new(-D, -D),
+            CrosshairPart::StrokeUpRight | CrosshairPart::MarkUpRight => Vec2::new(D, -D),
+            CrosshairPart::StrokeDownLeft | CrosshairPart::MarkDownLeft => Vec2::new(-D, D),
+            CrosshairPart::StrokeDownRight | CrosshairPart::MarkDownRight => Vec2::new(D, D),
+        }
+    }
+
+    /// The node's rotation: a horizontal bar turned clockwise onto its own diagonal — that is
+    /// the „45deg rotiert" of the request, literally. `UL↔DR` lie on the `+45°` diagonal
+    /// (screen `y` is down), `UR↔DL` on `-45°`.
+    pub fn angle_deg(self) -> f32 {
+        match self {
+            CrosshairPart::StrokeUpLeft
+            | CrosshairPart::MarkUpLeft
+            | CrosshairPart::StrokeDownRight
+            | CrosshairPart::MarkDownRight => 45.0,
+            _ => -45.0,
+        }
     }
 }
 
-/// The geometry of one state. Every number in logical pixels or percent of the screen.
-///
-/// These are **shape constants, not balancing values** — they do not belong in RON any more
-/// than the fact that a bar is a rectangle does (`CLAUDE.md` rule 2 names "a titan type, a
-/// blade level, a gas cost"). What would belong in RON is a UI scale factor, and there is
-/// none yet.
+/// The geometry of one state, in logical pixels, already scaled by the player's size slider.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CrosshairShape {
-    /// Length of a tick along its long axis.
-    pub tick_len_px: f32,
-    /// Thickness of a tick.
-    pub tick_thick_px: f32,
-    /// Distance of the ticks from the keep-out box, in percent of the screen.
-    pub tick_gap_pct: f32,
-    /// Corner marks: edge length and distance from the box, or `None` when there are none.
-    pub corner: Option<(f32, f32)>,
+    /// Length of a stroke along its diagonal.
+    pub stroke_len_px: f32,
+    /// Thickness of a stroke.
+    pub stroke_thick_px: f32,
+    /// Distance from the exact centre to a stroke's inner end, along the diagonal — the
+    /// „in der mitte nichts", never under [`GAP_FLOOR_PX`].
+    pub gap_px: f32,
+    /// The outer marks: their length and the gap past the stroke's outer end, or `None`.
+    pub mark: Option<(f32, f32)>,
 }
 
-/// The one table. Change a number here and both the picture and the test move together.
-pub const fn shape_of(state: CrosshairState) -> CrosshairShape {
+/// The smallest the centre gap may become, at any size setting.
+///
+/// The whole sight core has to stay empty — [`super::arm_aim::SIGHT_CORE_PX`] (6) on each side
+/// of the aim pixel — and the nearest thing a diagonal stroke can offer the core is the
+/// projection of the core's own corner onto that diagonal: `6·√2 ≈ 8.49 px`. 9.0 clears it
+/// with margin, so `50 %` of a small base cannot drag a stroke over the pixel the player is
+/// aiming with. Guarded by `tests/hud.rs::the_x_crosshair_hugs_the_centre_and_keeps_the_aim_
+/// pixel_free`, which samples the core at 1 px pitch in every state.
+pub const GAP_FLOOR_PX: f32 = 9.0;
+
+/// The one table. `game.ron: hud.crosshair` holds the base numbers, the player's slider
+/// scales them, and this function is the only place the two meet — change either and the
+/// picture and the test move together.
+pub fn shape_of(state: CrosshairState, x: &CrosshairTuning, size_pct: f32) -> CrosshairShape {
+    // The slider's own window, repeated defensively: a NaN percentage must not become a NaN
+    // node (the same rule as `render::speed_fov_deg`'s pct guard).
+    let scale = if size_pct.is_finite() { (size_pct / 100.0).clamp(0.5, 2.0) } else { 1.0 };
+    let gap_px = (x.gap_px * scale).max(GAP_FLOOR_PX);
     match state {
         CrosshairState::Free => CrosshairShape {
-            tick_len_px: 10.0,
-            tick_thick_px: 2.0,
-            tick_gap_pct: 1.0,
-            corner: None,
+            stroke_len_px: x.stroke_len_px * scale,
+            stroke_thick_px: (x.stroke_thick_px * scale).max(1.5),
+            gap_px,
+            mark: None,
         },
         CrosshairState::Anchor => CrosshairShape {
-            tick_len_px: 22.0,
-            tick_thick_px: 3.0,
-            tick_gap_pct: 1.0,
-            corner: None,
+            stroke_len_px: x.anchor_len_px * scale,
+            stroke_thick_px: (x.anchor_thick_px * scale).max(1.5),
+            gap_px,
+            mark: None,
         },
         CrosshairState::Cortex => CrosshairShape {
-            tick_len_px: 22.0,
-            tick_thick_px: 3.0,
-            tick_gap_pct: 1.0,
-            corner: Some((12.0, 3.0)),
+            stroke_len_px: x.anchor_len_px * scale,
+            stroke_thick_px: (x.anchor_thick_px * scale).max(1.5),
+            gap_px,
+            mark: Some((x.mark_len_px * scale, x.mark_gap_px * scale)),
         },
     }
 }
 
 /// How many nodes a state shows. The first element of the tuple `F-171` compares.
 pub const fn node_count(state: CrosshairState) -> usize {
-    match shape_of(state).corner {
-        Some(_) => 8,
-        None => 4,
+    match state {
+        CrosshairState::Cortex => 8,
+        _ => 4,
     }
 }
 
@@ -170,80 +216,58 @@ pub fn spawn_crosshair(mut commands: Commands) {
             ShowWhileTuning,
             GlobalZIndex(TUNING_Z),
             BackgroundColor(NEUTRAL),
-            node_for(part, shape_of(CrosshairState::default())),
+            // The rotation is per PART and never per state, so it is set once at spawn —
+            // [`shape_crosshair`] writes `Node` only. Layout rotates a node about its own
+            // centre (`bevy_ui-0.19.0/src/layout/mod.rs:269,299` — `local_center` is added
+            // after the affine), which is what lets `node_for` place centres and this
+            // component tilt them in place.
+            UiTransform::from_rotation(Rot2::degrees(part.angle_deg())),
+            // The real geometry follows in the first `shape_crosshair` run — it needs
+            // `GameData` and the player's size, and a spawn that read both would draw the
+            // same node a second way.
+            Node { position_type: PositionType::Absolute, display: Display::None, ..default() },
         ));
     }
 }
 
-/// Where one part stands, for one shape.
+/// Where one part stands, for one shape — the node BEFORE its rotation.
 ///
-/// The insets are **percent of the screen** and the sizes are pixels: the hole then scales
-/// with the resolution while the ticks stay the same weight, which is what keeps the keep-out
-/// test true at any window size instead of only at 1280 × 720.
+/// Each part is a bar whose **centre** sits `d` pixels from the screen centre along the
+/// part's own diagonal; the spawn-time `UiTransform` then tilts it about that centre. The
+/// centre of the screen comes in as `left/top: 50 %` plus a pixel margin, so the element
+/// rides the resolution while the bar itself stays the same weight — same idea as the old
+/// percent insets, anchored on the middle instead of on a box.
 fn node_for(part: CrosshairPart, shape: CrosshairShape) -> Node {
     let mut node = Node { position_type: PositionType::Absolute, ..default() };
-    match shape.corner {
-        Some((size, gap)) if part.is_corner() => {
-            let inset = Val::Percent(KEEP_OUT_HIGH_PCT + gap);
-            node.width = Val::Px(size);
-            node.height = Val::Px(size);
-            match part {
-                CrosshairPart::CornerUpLeft => {
-                    node.right = inset;
-                    node.bottom = inset;
-                }
-                CrosshairPart::CornerUpRight => {
-                    node.left = inset;
-                    node.bottom = inset;
-                }
-                CrosshairPart::CornerDownLeft => {
-                    node.right = inset;
-                    node.top = inset;
-                }
-                _ => {
-                    node.left = inset;
-                    node.top = inset;
-                }
+    let (len, thick, d) = if part.is_mark() {
+        match shape.mark {
+            Some((mark_len_px, mark_gap_px)) => (
+                mark_len_px,
+                shape.stroke_thick_px,
+                shape.gap_px + shape.stroke_len_px + mark_gap_px + mark_len_px * 0.5,
+            ),
+            // No marks in this state: the four nodes stay, with no size at all.
+            // `Display::None` and not a despawn — an entity that comes and goes changes the
+            // archetype 60 times a second and would make the node count depend on when you
+            // look.
+            None => {
+                node.display = Display::None;
+                return node;
             }
         }
-        // No corner marks in this state: the four nodes stay, with no size at all.
-        // `Display::None` and not a despawn — an entity that comes and goes changes the
-        // archetype 60 times a second and would make the node count depend on when you look.
-        _ if part.is_corner() => {
-            node.display = Display::None;
-        }
-        _ => {
-            let inset = Val::Percent(KEEP_OUT_HIGH_PCT + shape.tick_gap_pct);
-            // Half the thickness back, so the tick is centred on the axis and not hanging
-            // off it — a 1.5 px offset nobody sees until the crops are laid on top of
-            // each other.
-            let half = Val::Px(-shape.tick_thick_px * 0.5);
-            match part {
-                CrosshairPart::Left | CrosshairPart::Right => {
-                    node.width = Val::Px(shape.tick_len_px);
-                    node.height = Val::Px(shape.tick_thick_px);
-                    node.top = Val::Percent(50.0);
-                    node.margin = UiRect::top(half);
-                    if part == CrosshairPart::Left {
-                        node.right = inset;
-                    } else {
-                        node.left = inset;
-                    }
-                }
-                _ => {
-                    node.width = Val::Px(shape.tick_thick_px);
-                    node.height = Val::Px(shape.tick_len_px);
-                    node.left = Val::Percent(50.0);
-                    node.margin = UiRect::left(half);
-                    if part == CrosshairPart::Up {
-                        node.bottom = inset;
-                    } else {
-                        node.top = inset;
-                    }
-                }
-            }
-        }
-    }
+    } else {
+        (shape.stroke_len_px, shape.stroke_thick_px, shape.gap_px + shape.stroke_len_px * 0.5)
+    };
+    let centre = part.direction() * d;
+    node.width = Val::Px(len);
+    node.height = Val::Px(thick);
+    node.left = Val::Percent(50.0);
+    node.top = Val::Percent(50.0);
+    node.margin = UiRect {
+        left: Val::Px(centre.x - len * 0.5),
+        top: Val::Px(centre.y - thick * 0.5),
+        ..default()
+    };
     node
 }
 
@@ -327,10 +351,17 @@ pub fn cortex_in_range(
     space.cast_ray(eye_m, direction, range_m, true, &filter).is_some()
 }
 
-/// Writes `Node` — **the shape and nothing else.**
-pub fn shape_crosshair(mut parts: Query<(&CrosshairPart, &CrosshairState, &mut Node)>) {
+/// Writes `Node` — **the shape and nothing else.** The rotation was set at spawn and never
+/// moves; the size slider flows in here, so a settings click reshapes the X on the next frame
+/// with no restart (`F-024`'s rule, applied to a picture).
+pub fn shape_crosshair(
+    data: Res<GameData>,
+    settings: Res<PlayerSettings>,
+    mut parts: Query<(&CrosshairPart, &CrosshairState, &mut Node)>,
+) {
+    let x = &data.game.hud.crosshair;
     for (part, state, mut node) in &mut parts {
-        let wanted = node_for(*part, shape_of(*state));
+        let wanted = node_for(*part, shape_of(*state, x, settings.crosshair_size_pct));
         if *node != wanted {
             *node = wanted;
         }
@@ -338,16 +369,19 @@ pub fn shape_crosshair(mut parts: Query<(&CrosshairPart, &CrosshairState, &mut N
 }
 
 /// Writes `BackgroundColor` — **the colour and nothing else**, and it carries no information
-/// the shape does not already carry.
+/// the shape does not already carry. The `Free` state is the player's own pick
+/// (*„farbe auch!"*); `Anchor`/`Cortex` stay cyan/amber over any pick, because those two
+/// states ARE the signals and a signal is not a preference (`docs/conventions.md` §3).
 pub fn paint_crosshair(
     data: Res<GameData>,
+    settings: Res<PlayerSettings>,
     mut parts: Query<(&CrosshairState, &mut BackgroundColor), With<CrosshairPart>>,
 ) {
     let cyan = signal(&data, "cyan");
     let amber = signal(&data, "amber");
     for (state, mut colour) in &mut parts {
         let wanted = match state {
-            CrosshairState::Free => NEUTRAL,
+            CrosshairState::Free => settings.crosshair_colour(),
             CrosshairState::Anchor => cyan,
             CrosshairState::Cortex => amber,
         };

@@ -15,7 +15,7 @@
 //! | blade pips, right | [`blade_pips`] | [`Blades`](crate::shared::Blades) | `blades` — the component exists, the wear does not |
 //! | health bar, bottom centre | [`health_bar`] | [`Health`](crate::shared::Health) | job R3-A — **absent today** |
 //! | crosshair, centre | [`crosshair`] | [`AimPoint`](crate::shared::AimPoint) | `vector::aim` — **exists** |
-//! | arm markers `Q`/`E`, below centre | [`arm_aim`] | [`Hook`](crate::shared::Hook), [`AimPoint`](crate::shared::AimPoint) | `vector` — **exists since 2026-08-10** |
+//! | ~~arm markers `Q`/`E`~~ | [`arm_aim`] | — | **RETIRED 2026-09-01** (§5E-c, FIND-227): the X is the only centre element |
 //! | objective line, top centre | [`objective`] | `KillTally`, `State<MissionPhase>` | `mission` — **exists since 2026-08-10** |
 //! | hit mark, above the crosshair | [`hit_mark`] | [`TitanHit`](crate::shared::TitanHit) | `blades::cut` — **exists**; the element is `F-043` and landed 2026-08-19 |
 //! | **search band**, level with the crosshair | [`catch_band`] | [`PlayerSettings`](crate::shared::PlayerSettings) | the player's own slider — the element is `F-016` and landed 2026-08-19 |
@@ -47,34 +47,25 @@
 //! crosshair four ticks around a hole instead of one node — `tests/hud.rs` computes every
 //! element's rect out of `ComputedNode` and falls over if one of them creeps inward.
 //!
-//! **One exception, and it is the aim itself**: the two arm markers, whenever they carry a
-//! *place* — an idle arm's landing preview, a tip in flight, or an anchor being held
-//! (FIND-098, FIND-129). Applying the box to any of them draws the marker somewhere the rope
-//! does not go — measured at **150 px / 47.7 m** — and the standing claim is that the rope and
-//! the marker are one number (the user, 2026-08-19: *„wichtig wäre nur dass diese auch genau da
-//! sind visuell wo das seil auch landen würde!"*). Those markers are held out of [`arm_aim::SIGHT_CORE_PX`] instead: the
-//! pixels the player is cutting, which is what the box was protecting in the first place.
-//! **And the second exception, on the same argument and no new one**: the
-//! [`catch_band`] — the aim assist's search extent, drawn level with the crosshair because that
-//! is where the sweep looks (`docs/FINDINGS.md` FIND-133: a 1D screen-horizontal line, 0.000006°
-//! of vertical deviation). Its position **is** an angle, and its whole range lives inside the
-//! box: at 1280 × 720 it reaches 227 px from centre at `assist_catch` 100 % but only 88 px at
-//! 40 %, against a box edge at 128 px. Held out of the box it would draw a **wider** search than
-//! the one running for every setting below about 55 % — FIND-129's lie with a different number
-//! on it. It gives up [`arm_aim::SIGHT_CORE_PX`] instead, and it gives it up by **not drawing**:
-//! a tick stands on its ray or it is absent, never moved.
+//! **One exception**: the [`catch_band`] — the aim assist's search extent, drawn level with
+//! the crosshair because that is where the sweep looks (`docs/FINDINGS.md` FIND-133: a 1D
+//! screen-horizontal line, 0.000006° of vertical deviation). Its position **is** an angle, and
+//! its whole range lives inside the box: at 1280 × 720 it reaches 227 px from centre at
+//! `assist_catch` 100 % but only 88 px at 40 %, against a box edge at 128 px. Held out of the
+//! box it would draw a **wider** search than the one running for every setting below about
+//! 55 % — FIND-129's lie with a different number on it. It gives up
+//! [`arm_aim::SIGHT_CORE_PX`] instead, and it gives it up by **not drawing**: a tick stands on
+//! its ray or it is absent, never moved.
 //!
-//! **There is no third case.** There used to be: `anchor_marks`, the `F-026` field, twelve rings
-//! standing on points out of `world::anchor::AnchorField`. It was deleted on 2026-08-28 — the
-//! user, 2026-08-27: *„es soll auf jeglicher oberflqche einhaken. nicht an hardcoded punkten
-//! etc!"*. A HUD that marks *authored places* is a HUD for a mechanic this game does not have,
-//! so the element lost its subject rather than its polish (`docs/BUGS.md` B-011 WONT FIX,
-//! `docs/PLAN.md` §0). What survives is the thing the player actually aims with: the two
-//! [`arm_aim`] markers, which stand on the point `vector::aim`'s **ray** found, and the
-//! [`catch_band`], which draws how far sideways that ray sweeps.
-//!
-//! Everything else — bars, pips, banner, letters, the crosshair, and a marker with **no** point
-//! of its own to be honest about — still obeys the full box.
+//! **There is no second case any more.** Two elements used to be: `anchor_marks` (twelve rings
+//! on authored points, deleted 2026-08-28 — *„es soll auf jeglicher oberflqche einhaken. nicht
+//! an hardcoded punkten etc!"*, B-011 WONT FIX) and the two [`arm_aim`] markers with a place
+//! (FIND-098, FIND-129 — retired whole on 2026-09-01, §5E-c / FIND-227: *„die kreise können
+//! ganz weg!"*). The crosshair is measured by its own stronger claim
+//! (`tests/hud.rs::the_x_crosshair_hugs_the_centre_and_keeps_the_aim_pixel_free`), and
+//! everything else — bars, pips, banner, panels — obeys the full box.
+//! `tests/hud.rs::f171_the_centre_carries_nothing_but_the_x` asserts the whole sentence:
+//! nothing but crosshair nodes touches the middle band, and no `hud_arm_*` node exists.
 //!
 //! ## The evidence
 //!
@@ -84,11 +75,7 @@
 //! | the three crosshair states, three crops | `scripts/f171-crosshair.txt` → `docs/images/f171-crosshair.png` |
 //! | the objective going `0/3` → `1/3` | `scripts/f170-objective.txt` → `docs/images/f170-objective-before.png`, `docs/images/f170-objective.png` |
 //! | the verdict, `WON` over the cleared field | `scripts/game-full.txt` → `docs/images/f071-won.png` |
-//! | the two arm markers, left arm anchored and right arm ready | `scripts/f-001-hooks.txt --ticks 400` → `docs/images/f171-aim.png`, and the same run with `arm_aim::spawn_arm_aim` unregistered → `docs/images/f171-aim-control.png` |
-//! | the same pair with nothing hookable (sky) and with the tower in range | `scripts/f171-crosshair.txt --ticks 126` → `docs/images/f171-aim-free.png`, `--ticks 188` → `docs/images/f171-aim-ready.png` |
-//! | the three of them stacked, 4x, around the crosshair | `docs/images/f171-aim-crop.png` |
-//! | **the landing preview on two different anchors**, `Q` on (41.91, 7.73, −1.00) and `E` on (60.09, 7.73, −1.00) | `docs/images/f171-preview-two-anchors.png` |
-//! | the same pair after 9° of yaw — both markers travelled, the crosshair did not | `docs/images/f171-preview-turned.png` |
+//! | ~~the arm markers / landing preview~~ | five rows of decoded evidence retired with the element, 2026-09-01 (§5E-c, FIND-227) — in history: `git log -- src/hud/mod.rs` |
 //! | **`F-043`, the kill** — `KILL  21.0 m/s` in amber over the husk whose nape was just cut | `scripts/f032-swords.txt --ticks 162` → `docs/images/f043-hit-mark-kill.png` |
 //! | the same run's **body cut**, smaller and crimson | `… --ticks 331` → `docs/images/f043-hit-mark-cut.png` |
 //! | and the same band 43 ticks after the kill — **empty** | `… --ticks 200` → `docs/images/f043-hit-mark-gone.png` |
@@ -114,17 +101,6 @@
 //! at 20°. The 0 % frame has **zero** changed pixels in the band's rows, which is the
 //! *"no search, no band"* half of the claim measured rather than asserted.
 //!
-//! The preview was decoded against the map instead of against a control run, which is the
-//! stronger check of the two: the two anchor coordinates come out of the game's own log, the
-//! projection was recomputed in Python from `maps.ron`'s block and `game.ron`'s `fov_deg: 60`,
-//! and the four predicted letter boxes land within **0.6, 2.4, 0.7 and 2.7 px** of the measured
-//! cyan. Between the two frames the `Q` marker moved **+114 px in x and +19 px in y** and the `E`
-//! marker **+135 px in x and −29 px in y** — different distances, opposite vertical directions,
-//! which no shared point and no fixed slot can produce. In the same pair of frames the four
-//! crosshair ticks changed **0 pixels**, and the `F-170` keep-out box holds **0 cyan pixels** in
-//! both. That is FIND-047 (*"the same pixels across four runs with four different aims"*)
-//! measured from the other side. Written up as `docs/FINDINGS.md` FIND-070.
-//!
 //! The objective line was decoded the same way the cyan was, against a control run of the same
 //! script **without `--mission`** — no mission, no `KillTally`, no line, everything else in the
 //! frame the same. In the top-centre band it accounts for 229 changed pixels in
@@ -133,15 +109,6 @@
 //! the `1/3` shot of one script exactly **9 × 13 px** change — one glyph cell, the leading
 //! digit. That is the sentence in `docs/PLAN-GAME.md` §1, measured.
 //!
-//! The arm markers were decoded against a control run of the **same** script with only
-//! `arm_aim::spawn_arm_aim` unregistered: they account for **735 changed pixels of 921 600**, all
-//! of them inside `x 571..708, y 468..507`, in exactly **five** connected components — the
-//! anchored disc 20 × 20, the ready ring 20 × 20, the tether 4 × 16, and the two letters. 482 of
-//! them are the cyan out of `maps.ron` (sRGB 63, 237, 249) against **3** in the control. The
-//! filled and the hollow glyph are told apart in the pixels and not in the source: the disc's
-//! centre pixel is that cyan and the ring's centre pixel is the roof grey the control has there
-//! too. Both bounding boxes are the tuples `tests/hud.rs` asserts, to the pixel, and the shot is
-//! bit-identical over two runs (`sha256 2c87b09e…`).
 //!
 //! Both were decoded, not assumed: against a control run with this plugin switched off, the
 //! HUD accounts for 6 368 changed pixels in `f170-hud.png`, 4 500 of them exactly the cyan out
@@ -180,7 +147,6 @@ impl Plugin for HudPlugin {
                 board::spawn_board_panel,
                 career::spawn_career_panel,
                 crosshair::spawn_crosshair,
-                arm_aim::spawn_arm_aim,
                 catch_band::spawn_catch_band,
                 hit_mark::spawn_hit_mark,
             ),
@@ -203,8 +169,8 @@ impl Plugin for HudPlugin {
                 // `progress::ledger` owns the words, exactly as `menu::lobby::entries` owns
                 // the mission list the element above draws.
                 career::update_career_panel,
-                // `F-043`: sense, then show — the same two-step split the crosshair and the
-                // arm markers use, and for the same reason. What a hit *is* (word, size,
+                // `F-043`: sense, then show — the same two-step split the crosshair
+                // uses, and for the same reason. What a hit *is* (word, size,
                 // colour) is then testable against a `HitFlash` set by hand, without a titan,
                 // a blade and a swept cast having to be arranged first.
                 (hit_mark::sense_hit_mark, hit_mark::show_hit_mark).chain(),
@@ -219,40 +185,18 @@ impl Plugin for HudPlugin {
                     crosshair::paint_crosshair,
                 )
                     .chain(),
-                // The same three-step split for the arm markers, and for the same reason: the
-                // shape is then testable against a state set by hand, and the colour can be
-                // neutralised without touching the geometry.
-                // `F-028`: the miss hint is sensed BEFORE the paint, because the paint reads
-                // `ArmMiss` — a colour that lagged its own cause by a frame would flash after
-                // the player had already pressed again.
-                (
-                    arm_aim::sense_arm_aim,
-                    arm_aim::sense_arm_miss,
-                    arm_aim::shape_arm_aim,
-                    arm_aim::paint_arm_aim,
-                    arm_aim::show_arm_miss,
-                )
-                    .chain(),
             ),
         )
-        // **The one HUD system that is not in `Update`**, and it has to be here. It projects a
-        // world point through the camera, so it needs the camera's `GlobalTransform` (written in
-        // `TransformSystems::Propagate`) and its viewport size (written in
-        // `CameraUpdateSystems`) — both are `PostUpdate`. Placed in `Update` it would draw the
-        // marker one frame behind the image: invisible standing still, and very visible
-        // mid-swing, which is the only moment the element has to be trusted.
+        // **The one HUD system that is not in `Update`**, and it has to be here. It projects
+        // world points through the camera, so it needs the camera's `GlobalTransform` (written
+        // in `TransformSystems::Propagate`) and its viewport size (written in
+        // `CameraUpdateSystems`) — both are `PostUpdate`. Placed in `Update` it would draw one
+        // frame behind the image: invisible standing still, very visible mid-swing.
+        // (Until 2026-09-01 `arm_aim::place_arm_aim` and the `DBT_AIMTRACE` trace ran here
+        // too — retired with the markers, §5E-c / FIND-227.)
         .add_systems(
             PostUpdate,
-            (
-                arm_aim::place_arm_aim,
-                catch_band::place_catch_band,
-                // The motion trace of `F-026`, off unless `DBT_AIMTRACE` is set. `.after` and
-                // not `.chain()`: it reads the nodes the placement wrote, and it must not put
-                // an order between the two placements that did not exist before it.
-                arm_aim::trace_arm_aim
-                    .after(arm_aim::place_arm_aim)
-                    .run_if(|| std::env::var_os("DBT_AIMTRACE").is_some()),
-            )
+            catch_band::place_catch_band
                 .after(bevy::transform::TransformSystems::Propagate)
                 .after(bevy::camera::CameraUpdateSystems)
                 .before(bevy::ui::UiSystems::Layout),
@@ -338,7 +282,7 @@ fn hide_while_a_menu_is_up(
 /// **Two elements carry it and no more**: [`catch_band`] — the search extent, which is the
 /// number the `Aim assist reach` row writes — and [`crosshair`], because the band is a ruler
 /// **measured from the crosshair** and a ruler with no origin cannot be read. The bars, the
-/// pips, the objective line, the hit mark and the arm markers report the *fight*, and there is
+/// pips, the objective line and the hit mark report the *fight*, and there is
 /// no fight while a menu is up; they stay hidden.
 ///
 /// It buys nothing on the pause plate or in the lobby, so it is not given there: neither screen
